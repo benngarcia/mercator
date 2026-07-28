@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 49 {
-		t.Fatalf("latest invariant results = %d, want 49", len(latest))
+	if len(latest) != 50 {
+		t.Fatalf("latest invariant results = %d, want 50", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -260,6 +260,13 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		},
 		"safety.secrets_absent": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{{Data: []byte(`{"password":"exposed"}`)}}
+		},
+		// The world this exists to catch is the one a machine that outlives its
+		// first session walks into: an agent whose credential lapsed answering with
+		// the invitation it joined on, so one bootstrap is redeemed twice and the
+		// thing that was supposed to be spent by being used never is.
+		"safety.bootstrap_credential_is_short_lived_and_single_use": func(observation *InvariantObservation) {
+			observation.BootstrapCredentials = []bootstrapCredential{mintedFor(1, 2)}
 		},
 		"safety.ephemeral_capacity_not_reused": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{queuedBehindOneShotCapacity()}

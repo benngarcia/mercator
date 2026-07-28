@@ -72,7 +72,14 @@ type InvariantObservation struct {
 	// launched. A rule about the orphan policy reads it rather than the fleet as it
 	// stands, because the interesting case is capacity that is no longer here: a
 	// machine converged without a stated rule leaves nothing behind to ask about.
-	SeededOrphans               map[string]bool
+	SeededOrphans map[string]bool
+	// BootstrapCredentials is every enrollment token this world handed a machine
+	// and what became of it. It is the only thing in an observation that carries
+	// live credential material, and it carries it because the rules about a
+	// bootstrap are asked in its terms: how many machines held it, how many times
+	// it was redeemed, and whether it turns up anywhere in Mercator's own record.
+	// It is built in memory for one evaluation and exported nowhere.
+	BootstrapCredentials        []bootstrapCredential
 	ProjectionRebuildEquivalent bool
 }
 
@@ -121,6 +128,10 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.cache_mount_workspace_isolation", check: cacheMountWorkspaceIsolation},
 		invariantRule{id: "safety.projection_rebuild_equivalence", check: projectionRebuildEquivalence},
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
+		invariantRule{
+			id:    "safety.bootstrap_credential_is_short_lived_and_single_use",
+			check: bootstrapCredentialIsShortLivedAndSingleUse,
+		},
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
 		invariantRule{id: "safety.reusable_capacity_has_an_enrolled_runtime", check: reusableCapacityHasAnEnrolledRuntime},
 		invariantRule{id: "safety.a_rental_identity_is_capacity_mercator_holds", check: aRentalIdentityIsCapacityMercatorHolds},
@@ -818,8 +829,9 @@ func effectMutatesWorld(operation string) bool {
 		// each change what a provider is holding for Mercator, and each is asked for
 		// under an operation key the provider is expected to honour. The two reads
 		// in the same family, capacity.observe and capacity.list_owned, are
-		// deliberately not here, and neither are the two things this world does on
-		// its own account: capacity.preempted and node.enrolled.
+		// deliberately not here, and neither are the three things this world does on
+		// its own account: capacity.preempted, node.enrolled, and
+		// node.session_renewed.
 		OperationCapacityProvision,
 		OperationCapacityStop,
 		OperationCapacityResume,
@@ -2597,11 +2609,37 @@ func projectionRebuildEquivalence(observation InvariantObservation) error {
 	return nil
 }
 
+// secretsAbsent is the standing guard on what Mercator writes down. It reads the
+// public event log and the Effect Ledger, which together are everything a Run
+// Bundle exports and everything an operator can ask this control plane for.
+//
+// It holds three things, and the first one alone was a rule about vocabulary
+// rather than about secrets. A field called credential, password, or secret is
+// refused, which catches material somebody filed under an honest name. A signed
+// URL is refused wherever it appears, because a presigned read is a bearer
+// credential written as a location: recording the location a node was handed
+// would put a working read of the object store into every export, and the query
+// markers named here belong to no field name in this record. And a bootstrap
+// credential this world minted is refused whatever it is filed under, which is
+// the clause the name half of the rule cannot reach: an enrollment token in a
+// field called enrollment_token passes every name check ever written, because
+// the name is the truthful one.
+//
+// The last clause is stated over the credentials rather than over a shape,
+// because a token has no shape. What makes a string a secret here is that this
+// world handed it to a machine, and the world is the only thing that knows.
 func secretsAbsent(observation InvariantObservation) error {
-	forbidden := [][]byte{
+	forbiddenFields := [][]byte{
 		[]byte(`"credential"`),
 		[]byte(`"password"`),
 		[]byte(`"secret"`),
+	}
+	signedReads := [][]byte{
+		[]byte("x-amz-signature="),
+		[]byte("x-amz-credential="),
+		[]byte("x-goog-signature="),
+		[]byte("&signature="),
+		[]byte("?signature="),
 	}
 	for _, value := range []any{observation.MercatorEvents, observation.Effects} {
 		encoded, err := json.Marshal(value)
@@ -2609,9 +2647,87 @@ func secretsAbsent(observation InvariantObservation) error {
 			return err
 		}
 		lower := bytes.ToLower(encoded)
-		for _, token := range forbidden {
-			if bytes.Contains(lower, token) {
-				return fmt.Errorf("recorded data contains forbidden secret field %s", token)
+		for _, field := range forbiddenFields {
+			if bytes.Contains(lower, field) {
+				return fmt.Errorf("recorded data contains forbidden secret field %s", field)
+			}
+		}
+		for _, marker := range signedReads {
+			if bytes.Contains(lower, marker) {
+				return fmt.Errorf("recorded data contains a signed URL, which is a credential written as a location: %s", marker)
+			}
+		}
+		for _, credential := range observation.BootstrapCredentials {
+			if bytes.Contains(encoded, []byte(credential.Token)) {
+				return fmt.Errorf(
+					"recorded data contains the enrollment token %s was bootstrapped with, whatever field it is filed under",
+					credential.NodeID,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+// bootstrapCredentialIsShortLivedAndSingleUse is the law on the one credential a
+// machine ever receives from outside itself. A bootstrap is how a host that
+// Mercator has never spoken to proves it is the node it claims to be, and it is
+// the whole of what an attacker needs to become that node, so three things hold
+// of every one this world minted.
+//
+// One machine holds it. A credential carried to two accepted allocations is one
+// invitation two hosts can enrol as, and the second is a machine Mercator would
+// then address every command about the first to.
+//
+// It is redeemed once. This is what makes the credential short-lived in the only
+// sense that matters: it stops being usable when it is used, rather than when
+// somebody remembers to expire it. It is counted rather than flagged because the
+// violation is the second redemption, and the store's own spend record and the
+// signer's expiry are the two doors production refuses it at.
+//
+// It is never written down. The event log and the ledger are what a Run Bundle
+// exports and what an operator can read back, so a token in either is a token in
+// every copy of the record forever, long outliving the thirty minutes the
+// invitation is redeemable for.
+//
+// The third clause is deliberately also held by safety.secrets_absent, which
+// reads the same bytes for the same string. They are not the same rule: that one
+// is about everything Mercator may not write and knows nothing about redemption,
+// and this one is about the lifecycle of one credential and would still be the
+// rule that fails if the record were clean and the token were spent twice.
+func bootstrapCredentialIsShortLivedAndSingleUse(observation InvariantObservation) error {
+	for _, credential := range observation.BootstrapCredentials {
+		if credential.Provisions > 1 {
+			return fmt.Errorf(
+				"the bootstrap minted for %s generation %d was handed to %d machines, and each of them can enrol as that node",
+				credential.NodeID, credential.Generation, credential.Provisions,
+			)
+		}
+		if credential.Redemptions > 1 {
+			return fmt.Errorf(
+				"the bootstrap minted for %s generation %d was redeemed %d times, and an invitation is spent by redeeming it",
+				credential.NodeID, credential.Generation, credential.Redemptions,
+			)
+		}
+	}
+	return recordedCredentials(observation)
+}
+
+// recordedCredentials is the clause about the record, read over the two halves of
+// it Mercator publishes: its own event log, and the ledger of what really crossed
+// into the world.
+func recordedCredentials(observation InvariantObservation) error {
+	for _, value := range []any{observation.MercatorEvents, observation.Effects} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		for _, credential := range observation.BootstrapCredentials {
+			if bytes.Contains(encoded, []byte(credential.Token)) {
+				return fmt.Errorf(
+					"the bootstrap minted for %s generation %d appears in Mercator's own record, which outlives the invitation by the whole life of the record",
+					credential.NodeID, credential.Generation,
+				)
 			}
 		}
 	}

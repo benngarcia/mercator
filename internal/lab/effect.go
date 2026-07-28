@@ -50,6 +50,16 @@ const (
 	// what makes an enrolment redeemable once, and that guard is the registry's
 	// rather than the ledger's.
 	OperationNodeEnrolled = "node.enrolled"
+	// OperationNodeSessionRenewed is an agent already on a machine taking a fresh
+	// session credential before the one it holds lapses. It is its own operation
+	// rather than a second node.enrolled, because the two are different acts with
+	// different material behind them: an enrolment redeems a single-use invitation
+	// and moves the fencing token, and a renewal spends nothing and moves nothing.
+	// Filed under one name, a machine that kept working for a day would read as a
+	// machine that joined the fleet forty eight times, and the one thing the ledger
+	// is here to answer, which invitation made this machine executable, would have
+	// no answer at all.
+	OperationNodeSessionRenewed = "node.session_renewed"
 	// The four Artifact operations are four different facts, and collapsing any
 	// two of them is how a local copy starts standing in for durable content.
 	// OperationArtifactRead is a consuming launch resolving one input, and says

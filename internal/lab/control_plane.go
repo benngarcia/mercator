@@ -90,6 +90,7 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		SeededReplicas:              facts.SeededReplicas,
 		Prewarm:                     facts.Prewarm,
 		SeededOrphans:               facts.SeededOrphans,
+		BootstrapCredentials:        facts.BootstrapCredentials,
 		ProjectionRebuildEquivalent: reflect.DeepEqual(runs, rebuiltRuns),
 	}, nil
 }
@@ -326,6 +327,7 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 	runtime.world.setNow(now)
 	runtime.deliverEnrolments()
+	runtime.renewSessions()
 	if err := runtime.deliverReadiness(ctx); err != nil {
 		return err
 	}
@@ -359,6 +361,12 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 // registry that only learned of one when somebody asked would make the answer a
 // property of how often Mercator asks.
 func (runtime *controlPlane) deliverEnrolments() { runtime.world.deliverEnrolments() }
+
+// renewSessions is the agents that are already here keeping the sessions they
+// opened. It runs beside the enrolments for the same reason and in the same
+// sweep, and after them because a machine that has just arrived holds a fresh
+// credential and has nothing to renew.
+func (runtime *controlPlane) renewSessions() { runtime.world.renewSessions() }
 
 func (runtime *controlPlane) deliverReadiness(ctx context.Context) error {
 	for _, report := range runtime.world.dueReadinessReports() {

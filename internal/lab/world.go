@@ -475,6 +475,13 @@ type simulatedWorld struct {
 	// reserved for them. See capacity.go.
 	leases      map[string]*capacityLease
 	invitations map[string]*labInvitation
+	// credentials is every enrollment token this world ever minted, keyed by the
+	// token itself, and what became of each. It is kept apart from the invitations
+	// because an invitation holds only the credential it currently offers, and the
+	// question a rule about single use asks is about credentials nobody offers any
+	// more: a machine reinvited after a lost response holds one of those, and it is
+	// exactly the one that must never be redeemable twice.
+	credentials map[string]*bootstrapCredential
 	// pulls is image content still moving onto a host.
 	pulls []pendingPull
 	runs  map[string]RunArrival
@@ -589,6 +596,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		usedFaults:     map[string]bool{},
 		leases:         map[string]*capacityLease{},
 		invitations:    map[string]*labInvitation{},
+		credentials:    map[string]*bootstrapCredential{},
 	}
 	for reference, image := range tape.InitialWorld.Images {
 		world.images[reference] = scenario.ImageSpec{Layers: slices.Clone(image.Layers), Registry: image.Registry}
@@ -1339,6 +1347,12 @@ type worldFacts struct {
 	// SeededOrphans is the capacity this world began holding that Mercator never
 	// launched, by the identity a decision about it is filed under.
 	SeededOrphans map[string]bool
+	// BootstrapCredentials is every enrollment token this world minted and what
+	// became of it. It carries the credential itself, which is the one thing here
+	// that must never be written anywhere: it exists so a rule can search
+	// Mercator's own record for it, and it is read in memory and exported by
+	// nothing. A Run Bundle that carried this would be the leak the rule is about.
+	BootstrapCredentials []bootstrapCredential
 }
 
 func (world *simulatedWorld) invariantFacts() worldFacts {
@@ -1357,6 +1371,9 @@ func (world *simulatedWorld) invariantFacts() worldFacts {
 	}
 	for offerID, artifacts := range world.seededReplicas {
 		facts.SeededReplicas[offerID] = cloneMap(artifacts)
+	}
+	for _, token := range slices.Sorted(maps.Keys(world.credentials)) {
+		facts.BootstrapCredentials = append(facts.BootstrapCredentials, *world.credentials[token])
 	}
 	return facts
 }
