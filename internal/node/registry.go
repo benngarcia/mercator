@@ -329,7 +329,7 @@ func (registry *Registry) dispatch(
 	// rather than expiring with the decision that issued it. The reference this
 	// call carries was resolved before the generation ended, so this is the only
 	// place the answer can still change.
-	if record.State == StateRetired {
+	if record.Retired() {
 		return capability.OperationReceipt{}, fmt.Errorf("%w: %q is not asked to %s", ErrRetired, record.ID, kind)
 	}
 	if fencingToken != 0 && fencingToken < record.FencingToken {
@@ -395,7 +395,7 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 	if err != nil {
 		return capability.NodeBootstrap{}, err
 	}
-	if record.State == StateRetired {
+	if record.Retired() {
 		return capability.NodeBootstrap{}, fmt.Errorf("node: %q is retired and cannot be invited again", nodeID)
 	}
 	expires := registry.now().UTC().Add(registry.invitation)

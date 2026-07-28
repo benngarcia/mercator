@@ -4163,17 +4163,40 @@ complete because it works against a live provider.
     because retirement is idempotent. Writing first and failing to retire leaves a
     runtime publishing itself as capacity for a machine the record says Mercator gave
     up, and the Run that wins it starts by discovering there is nobody there.
-  - Retirement is terminal at every door the machine can come to. `Heartbeat` set
+  - Retirement being terminal for `dispatch` is not something this ordering decides.
+    A successful end retires the runtime exactly as a failed write does, so after
+    either one no further command reaches that identity. Anything Mercator means to
+    stop on the machine is stopped before the generation's end is recorded, because
+    the ending is the record of a decision already carried out and not the request to
+    carry it out. The machine still gets its last word in either case, because
+    reporting is the half retirement leaves open.
+  - Retirement withdraws standing and withdraws nothing else. What it refuses is
+    every door that would give the identity capacity or work again: `Heartbeat` set
     `StateReady` unconditionally in both stores, which is the one state the registry
     publishes as capacity, so an agent on a machine being torn down would have put
     itself back in the fleet with its next report and retirement would have been a
     no-op against any live agent. Retiring also ends the session the node is holding
-    open, and `authenticate` refuses the credential afterwards, so the agent's
+    open, and `OpenSession` refuses the credential afterwards, so the agent's
     immediate reconnect is answered with `ErrRetired` rather than with a fresh
-    session preloaded with every command the last one never acknowledged. `dispatch`
-    refuses a retired identity for the same reason from the other side: a node
-    reference resolved before the generation ended would otherwise append a durable
-    command that outlives the decision that issued it.
+    session preloaded with every command the last one never acknowledged, and that
+    refusal is also how such an agent learns it is retired. `dispatch` refuses a
+    retired identity for the same reason from the other side: a node reference
+    resolved before the generation ended would otherwise append a durable command
+    that outlives the decision that issued it.
+  - What retirement must never refuse is the machine reporting what it already did.
+    A generation ends while a container is running every time a provider reclaims a
+    machine, and the agent is alive inside the interruption window when that
+    container exits. The node owns container lifecycle and exit codes and there is
+    no second authority on them, so `RecordEvents` and `RecordResult` stay open to a
+    retired identity: refusing them would leave a finished Run reading as unobserved
+    forever and an operation the machine really applied stranded as pending, with
+    dispatch refused so nothing could ever correct it. The authority model says
+    application callbacks must never be the only way Mercator learns a process
+    exited, and a retired node that could not report would make them exactly that.
+    A retired node's heartbeat is therefore kept as the event it is and renews no
+    lease, which is the whole of what the state costs it. The check lives at each
+    door rather than in `authenticate`, because `authenticate` answers both kinds and
+    a check there takes the second with the first.
   - Ending a generation names the generation. The decision and the write it lands
     are separated by a network, so an attempt whose answer was lost comes back to a
     lease that may already have stopped and resumed onto a fresh machine, and ending
@@ -4181,11 +4204,26 @@ complete because it works against a live provider.
     authority of a decision about a machine that is already gone. Ending a generation
     the same way twice changes nothing and writes nothing, which is what makes that
     retry safe; ending it a second way is refused.
-  - No Blueprint and no Lab invariant, and neither is a gap. A Rental that nothing
-    provisions decides nothing, so a Blueprint asserting on it would be a fixture
-    about a struct, and an invariant over a store with no world behind it is one
-    `TestEveryDefaultInvariantHasADeliberatelyFailingCase` refuses. The two target
-    Blueprints stay red on purpose.
+  - No Blueprint and no Lab invariant. For the lease itself that is not a gap: a
+    Rental that nothing provisions decides nothing, so a Blueprint asserting on it
+    would be a fixture about a struct, and an invariant over a store with no world
+    behind it is one `TestEveryDefaultInvariantHasADeliberatelyFailingCase` refuses.
+    The two target Blueprints stay red on purpose.
+  - For the two retirement rules in the node registry it is a real gap, stated
+    plainly rather than argued away. Delete the `StateRetired` check in
+    `OpenSession` and the one in `dispatch` together and `go test ./internal/lab/...
+    ./internal/scenario/...` is still green: only the hand-written cases in
+    `internal/node` catch either, so promoting a scenario into the corpus proves
+    nothing about retirement. The reason is that the Lab has no node registry in its
+    loop at all. It imports nothing from `internal/node`, writes an enrolment as one
+    `OperationNodeEnrolled` entry in the ledger, and models retirement in
+    `simulatedWorld.retireCapacity` as the machine ceasing to exist, so there is no
+    identity left to open a session, report an exit, or be dispatched to. Closing
+    this needs a node command lane in the simulated world: a machine that outlives
+    its generation, an agent that keeps reporting on it, and effects for the doors it
+    comes to. That is a slice, not a check, and it is where the deliberate failing
+    case for "retirement is terminal" belongs, and it is filed as #204. Until it
+    exists, the rules are held only at L1 and this plan says so.
   - `safety.reusable_capacity_has_an_enrolled_runtime` was reviewed adversarially
     before anything was built on it, because the run that landed it died with both
     reviewers in flight. Three findings were fixed at the root and one was rejected

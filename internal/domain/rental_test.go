@@ -138,6 +138,12 @@ func TestAnEndingThatLeavesNothingReleasesTheLease(t *testing.T) {
 // and the write that records it are separated by a network, so a retry comes back
 // to a lease that has already stopped and resumed. Ending it again by number ends
 // the machine the caller meant, and ends nothing else.
+//
+// The retry is stamped after generation 2 began on purpose. A moment before that
+// would be refused by the rule that a generation cannot end before it started,
+// whichever generation the code picked, and the refusal would stand in for the
+// answer: the case would fail with the naming broken and prove only that the
+// clock disagreed.
 func TestAnEndingNamesTheGenerationItDecidedAbout(t *testing.T) {
 	stopped, _, err := mustOpen(t).EndGeneration(1, RentalStopped, leaseStart.Add(time.Hour))
 	if err != nil {
@@ -148,7 +154,7 @@ func TestAnEndingNamesTheGenerationItDecidedAbout(t *testing.T) {
 		t.Fatalf("resume the lease: %v", err)
 	}
 
-	retried, ended, err := resumed.EndGeneration(1, RentalStopped, leaseStart.Add(time.Hour))
+	retried, ended, err := resumed.EndGeneration(1, RentalStopped, leaseStart.Add(3*time.Hour))
 
 	if err != nil {
 		t.Fatalf("retry the ending of generation 1: %v", err)

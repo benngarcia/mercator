@@ -70,6 +70,13 @@ func NewLeases(store Store, runtimes Retirer) *Leases {
 // failing to retire leaves the opposite, a runtime still publishing itself as
 // capacity for a machine the record says Mercator gave up, and the Run that wins
 // it starts by discovering there is nobody there.
+//
+// What the order does not decide is that a retired runtime takes no further
+// command. A successful ending retires it just the same, so anything Mercator
+// means to stop on the machine is stopped before this call: an ending records a
+// decision already carried out rather than asking for one. The machine's own
+// report stays open either way, which is how the exit of a container that was
+// still running still lands.
 func (leases *Leases) EndGeneration(
 	ctx context.Context,
 	workspaceID, rentalID string,

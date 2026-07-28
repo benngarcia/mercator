@@ -111,6 +111,11 @@ func TestALeaseNothingCanWriteRetiresNoRuntime(t *testing.T) {
 // with a fresh runtime and a Run is placed on it; the loop retries. Ending
 // whichever generation is current then would retire a live runtime mid-Run and
 // record that Mercator stopped a generation it never meant to touch.
+//
+// The retry is stamped after generation 2 began on purpose. A moment before that
+// would be refused by the rule that a generation cannot end before it started,
+// whichever generation the code picked, and the case would then pass on a clock
+// that disagreed rather than on the number the caller named.
 func TestAnEndingRetriedAcrossAResumeTouchesNeitherTheLiveMachineNorItsRuntime(t *testing.T) {
 	fleet := enrolledFleet(t)
 	leases := rental.NewLeases(fleet.store, fleet.registry)
@@ -119,16 +124,16 @@ func TestAnEndingRetriedAcrossAResumeTouchesNeitherTheLiveMachineNorItsRuntime(t
 	}
 	resumed := fleet.resume(t, start.Add(2*time.Hour))
 
-	retried, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalStopped, start.Add(time.Hour))
+	retried, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalStopped, start.Add(3*time.Hour))
 
 	if err != nil {
 		t.Fatalf("retry the ending of generation 1: %v", err)
 	}
+	fleet.mustNotBeRetired(t, resumed)
 	current, open := retried.Current()
 	if !open || current.NodeID != resumed {
 		t.Fatalf("current generation = %+v open=%v, want the resumed machine still running", current, open)
 	}
-	fleet.mustNotBeRetired(t, resumed)
 }
 
 // TestAnEndingRefusesAGenerationTheLeaseHasNotReached is the same rule from the

@@ -48,10 +48,20 @@ func (session *Session) end() {
 // command stream, beginning with every command it has not acknowledged. A node
 // that was disconnected, or that reconnected to a restarted control plane,
 // therefore receives the work it missed instead of the work being lost.
+//
+// A retired machine gets no session, which is what makes ending one worth
+// anything. The credential outlives the machine and an agent's transport
+// reconnects the instant its connection drops, so closing the session of a
+// machine Mercator gave up buys nothing on its own: the same token would open the
+// next one, preloaded with every command the last one never acknowledged. This is
+// also the door through which such an agent learns it is retired.
 func (registry *Registry) OpenSession(ctx context.Context, nodeID, sessionToken string) (*Session, error) {
 	record, err := registry.authenticate(ctx, nodeID, sessionToken)
 	if err != nil {
 		return nil, err
+	}
+	if record.Retired() {
+		return nil, fmt.Errorf("%w: %s holds no session on a Rental generation that is over", ErrRetired, record.ID)
 	}
 	pending, err := registry.store.PendingOperations(ctx, record.WorkspaceID, record.ID)
 	if err != nil {
@@ -122,6 +132,14 @@ func (registry *Registry) CloseSession(session *Session) {
 // and inventory, and container lifecycle transitions. Events carry IDs so a
 // spool replayed after a reconnection changes nothing, which is what lets an
 // agent keep reporting while disconnected.
+//
+// A retired machine still reports here. The node owns container lifecycle and
+// exit codes, and a generation ends while a container is running every time a
+// provider reclaims a machine inside its interruption window: refusing the report
+// would leave the exit nowhere, and the only other account of what the process
+// did is an application callback, which must never be the sole way Mercator
+// learns a process exited. What retirement does withdraw is the lease renewal
+// below.
 func (registry *Registry) RecordEvents(ctx context.Context, nodeID, sessionToken string, events []Event) error {
 	record, err := registry.authenticate(ctx, nodeID, sessionToken)
 	if err != nil {
@@ -147,7 +165,11 @@ func (registry *Registry) RecordEvents(ctx context.Context, nodeID, sessionToken
 			latestFacts = event.Facts
 		}
 	}
-	if latestFacts == nil {
+	if latestFacts == nil || record.Retired() {
+		// A retired machine's heartbeat is kept as the event it is and renews
+		// nothing. Renewing would put the node back in the one state the registry
+		// publishes as capacity, so the machine Mercator gave up would offer itself
+		// again every time its agent spoke.
 		return nil
 	}
 	// The report is kept as the machine can stand behind it. This and Enroll are
@@ -161,6 +183,12 @@ func (registry *Registry) RecordEvents(ctx context.Context, nodeID, sessionToken
 // RecordResult accepts a node's answer about one command. A node that already
 // applied the operation reports Duplicate, which is what makes redelivery after
 // a lost response safe rather than doubling the effect.
+//
+// A retired machine settles here too. The command was dispatched while the
+// generation stood, the agent applied it, and refusing the answer would strand an
+// operation the machine really performed as pending forever, leaving the control
+// plane's record permanently disagreeing with the machine's over work that
+// actually happened.
 func (registry *Registry) RecordResult(ctx context.Context, nodeID, sessionToken string, result Result) error {
 	record, err := registry.authenticate(ctx, nodeID, sessionToken)
 	if err != nil {
@@ -196,16 +224,13 @@ func (registry *Registry) List(ctx context.Context, workspaceID string) ([]Recor
 	return registry.store.List(ctx, workspaceID)
 }
 
-// authenticate resolves the node a request claims to be and refuses it unless the
-// credential is this identity's and the identity is still one Mercator holds.
+// authenticate resolves the node a request claims to be and refuses it unless
+// the credential is this identity's.
 //
-// Retirement is checked here rather than only where a lease is renewed, because
-// the credential outlives the machine. An agent's transport reconnects the
-// instant its session ends, so ending the session of a machine Mercator gave up
-// buys nothing on its own: the same token authenticates the next connection,
-// which is preloaded with every command the previous one never acknowledged. The
-// state is checked after the credential so a caller that cannot prove it is this
-// node learns nothing about it.
+// It says nothing about retirement, deliberately. Every door a session credential
+// opens is one of two kinds, and the two answer a retired machine differently:
+// asking for something is refused, reporting what already happened is kept. A
+// check here would collapse them and take the second with the first.
 func (registry *Registry) authenticate(ctx context.Context, nodeID, sessionToken string) (Record, error) {
 	record, err := registry.store.Find(ctx, nodeID)
 	if err != nil {
@@ -213,9 +238,6 @@ func (registry *Registry) authenticate(ctx context.Context, nodeID, sessionToken
 	}
 	if !registry.signer.VerifySession(record.ID, record.FencingToken, sessionToken, registry.now().UTC()) {
 		return Record{}, fmt.Errorf("node: session credential is not valid for %q at fencing token %d", nodeID, record.FencingToken)
-	}
-	if record.State == StateRetired {
-		return Record{}, fmt.Errorf("%w: %s holds no session on a Rental generation that is over", ErrRetired, nodeID)
 	}
 	return record, nil
 }

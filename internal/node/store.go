@@ -21,11 +21,17 @@ var ErrEnrollmentSpent = errors.New("node: enrollment token already redeemed")
 // machine claim the first one's history.
 var ErrIdentityExists = errors.New("node: identity already exists")
 
-// ErrRetired is returned to a node whose Rental generation is over, whichever
-// door it comes to: enrolling, opening a session, reporting, or being asked to do
-// anything. Retirement is terminal: the machine the identity was minted for is
-// gone, and the way back is a fresh generation with a fresh identity rather than
-// this one coming round again.
+// ErrRetired is returned to a node whose Rental generation is over at every door
+// that would give it standing again: enrolling, opening a session, renewing a
+// lease, or being asked to do anything further. Retirement is terminal: the
+// machine the identity was minted for is gone, and the way back is a fresh
+// generation with a fresh identity rather than this one coming round again.
+//
+// It is never the answer to a machine reporting what it already did. An exit code
+// and the result of a command the agent applied are the node's own authority, and
+// a generation ends while a container is running every time a provider reclaims a
+// machine, so a retirement that refused those would lose the only account of what
+// the process did.
 var ErrRetired = errors.New("node: retired")
 
 // ErrFenced is returned when a command carries a superseded fencing token. It

@@ -3,6 +3,7 @@ package node_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -585,6 +586,9 @@ func TestRetiringARuntimeEndsTheSessionItIsHoldingOpen(t *testing.T) {
 // reporting on the session credential it already has, and a heartbeat is what
 // puts a node back into the one state the registry publishes as capacity. Read as
 // an ordinary report it would undo the retirement every time the agent spoke.
+//
+// The report is still kept. What the machine says about itself is history the
+// registry holds, and only the standing it would confer is withdrawn.
 func TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet(t *testing.T) {
 	registry, clock := newRegistry(t)
 	bootstrap := invite(t, registry)
@@ -604,8 +608,8 @@ func TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet(t *testing.T) {
 		},
 	}})
 
-	if !errors.Is(err, node.ErrRetired) {
-		t.Fatalf("heartbeat from a retired runtime = %v, want ErrRetired", err)
+	if err != nil {
+		t.Fatalf("a retired runtime reporting its liveness: %v", err)
 	}
 	offers, err := registry.Offers(context.Background(), testWorkspace)
 	if err != nil {
@@ -613,6 +617,13 @@ func TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet(t *testing.T) {
 	}
 	if len(offers) != 0 {
 		t.Fatalf("offers = %+v, want a machine Mercator gave up published to nobody", offers)
+	}
+	fleet, err := registry.List(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("list the fleet: %v", err)
+	}
+	if len(fleet) != 1 || fleet[0].State != node.StateRetired {
+		t.Fatalf("fleet = %+v, want the identity still retired after it spoke", fleet)
 	}
 }
 
@@ -639,10 +650,88 @@ func TestARetiredRuntimeOpensNoFurtherSessionOnTheCredentialItHolds(t *testing.T
 	if !errors.Is(err, node.ErrRetired) {
 		t.Fatalf("a retired runtime reconnecting = %v, want ErrRetired", err)
 	}
-	if err := registry.RecordResult(context.Background(), bootstrap.NodeID, enrollment.SessionToken, node.Result{
-		OperationID: "op-launch-1", Applied: true,
-	}); !errors.Is(err, node.ErrRetired) {
-		t.Fatalf("a retired runtime reporting a result = %v, want ErrRetired", err)
+}
+
+// TestARetiredRuntimeStillReportsWhatItsContainerDid is the half retirement must
+// not take. A provider reclaims the machine, Mercator ends the generation, and the
+// agent is still alive inside the interruption window when the container exits.
+// The node owns exit codes and there is no second authority on them, so an
+// identity that could not report would leave a Run that finished looking
+// unobserved forever.
+func TestARetiredRuntimeStillReportsWhatItsContainerDid(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	if _, err := registry.LaunchWorkload(context.Background(), launchCommand(bootstrap, enrollment, "op-launch-1")); err != nil {
+		t.Fatalf("launch the workload: %v", err)
+	}
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+	err := registry.RecordEvents(context.Background(), bootstrap.NodeID, enrollment.SessionToken, []node.Event{{
+		ID:         "evt-exited-after-retirement",
+		Kind:       node.EventWorkload,
+		ObservedAt: clock.Now(),
+		Workload: &capability.WorkloadObservation{
+			RunID: "run-1", AttemptID: "attempt-1", Phase: capability.WorkloadPhaseExited,
+			ExitCode: exitCode(0), ObservedAt: clock.Now(),
+		},
+	}})
+
+	if err != nil {
+		t.Fatalf("a retired runtime reporting its container's exit: %v", err)
+	}
+	observation, err := registry.ObserveWorkload(context.Background(), capability.WorkloadRef{
+		NodeRef: nodeRef(bootstrap), RunID: "run-1", AttemptID: "attempt-1",
+	})
+	if err != nil {
+		t.Fatalf("observe the workload: %v", err)
+	}
+	if observation.Phase != capability.WorkloadPhaseExited {
+		t.Fatalf("phase = %q, want the exit the machine reported", observation.Phase)
+	}
+	if observation.ExitCode == nil || *observation.ExitCode != 0 {
+		t.Fatalf("exit code = %v, want the 0 the machine reported", observation.ExitCode)
+	}
+}
+
+// TestARetiredRuntimeSettlesTheCommandItAlreadyApplied is the same rule for the
+// other thing only the machine knows. The stop was dispatched while the
+// generation stood and the agent applied it; the generation ended before the
+// answer landed. Refusing the answer would strand an operation the machine really
+// performed as pending forever, and dispatching it again is refused, so nothing
+// could ever tell the control plane otherwise.
+func TestARetiredRuntimeSettlesTheCommandItAlreadyApplied(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	stop := capability.StopWorkloadCommand{RunID: "run-1", GraceSeconds: 30}
+	stop.NodeRef = nodeRef(bootstrap)
+	stop.OperationID = "op-stop-1"
+	stop.FencingToken = enrollment.FencingToken
+	if _, err := registry.StopWorkload(context.Background(), stop); err != nil {
+		t.Fatalf("stop the workload: %v", err)
+	}
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+	err := registry.RecordResult(context.Background(), bootstrap.NodeID, enrollment.SessionToken, node.Result{
+		OperationID: "op-stop-1", Applied: true, ReportedAt: clock.Now(),
+	})
+
+	if err != nil {
+		t.Fatalf("a retired runtime settling the command it applied: %v", err)
+	}
+	reconciliation, err := registry.Reconcile(context.Background(), nodeRef(bootstrap))
+	if err != nil {
+		t.Fatalf("reconcile the retired identity: %v", err)
+	}
+	if !slices.Contains(reconciliation.AppliedOperationIDs, "op-stop-1") {
+		t.Fatalf("applied = %v, want the stop the machine really performed", reconciliation.AppliedOperationIDs)
 	}
 }
 
