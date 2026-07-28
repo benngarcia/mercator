@@ -1,12 +1,16 @@
 package lab
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/node"
+	"github.com/benngarcia/mercator/internal/scenario"
 )
 
 // The machine and lease every case here is about, and the enrolment that would
@@ -298,6 +302,91 @@ func TestAnEnrolmentIsBoundToTheGenerationItsMachineWasInvitedFor(t *testing.T) 
 			}
 		})
 	}
+}
+
+// TestTheWorldRecordsTheGenerationTheAgentRedeemsRatherThanTheOneItsMachineWasAllocatedUnder
+// is what the hand-written ledger above cannot be: the proof that this world can
+// produce the disagreement the rule is about, so a control plane that really made
+// it would be caught rather than agreed with.
+//
+// Two facts of Mercator's making meet on one machine. The provider is asked to
+// allocate under a generation, and the node registry mints the bootstrap the
+// machine redeems under a generation, and nothing in the world makes them equal.
+// A world that wrote the lease's generation into the enrolment would be copying
+// the first into the second, and then no ledger it ever produced could hold a
+// mismatch, whatever the control plane did.
+//
+// So the arrangement is exactly the defect: one bootstrap minted for generation
+// one, one machine allocated under generation two, one agent arriving on it. The
+// enrolment names what the agent redeemed, and the rule refuses it.
+func TestTheWorldRecordsTheGenerationTheAgentRedeems(t *testing.T) {
+	ctx := context.Background()
+	for name, provisioned := range map[string]struct {
+		generation uint64
+		holds      bool
+	}{
+		"the generation the bootstrap was minted for": {generation: 1, holds: true},
+		"a generation the bootstrap knows nothing of": {generation: 2, holds: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			world := labWorldFor(t, "../scenario/scenarios/conformance/provisioned-capacity-becomes-a-machine-mercator-holds.json")
+			bootstrap, err := world.Invite(ctx, node.Invitation{
+				WorkspaceID:           labWorkspace,
+				NodeID:                "nod_disagreeing",
+				RentalID:              strandedRental,
+				Generation:            1,
+				ShadowPriceUSDPerHour: 2,
+			})
+			if err != nil {
+				t.Fatalf("invite the node: %v", err)
+			}
+			if _, err := world.ProvisionCapacity(ctx, capability.ProvisionCommand{
+				WorkspaceID:     labWorkspace,
+				ConnectionID:    labConnection,
+				OperationKey:    "provision_" + strandedRental,
+				RequestHash:     "sha256:provision-under-a-generation-of-its-own",
+				RentalID:        strandedRental,
+				Generation:      provisioned.generation,
+				OfferSnapshotID: "fresh-4090",
+				Bootstrap:       bootstrap,
+			}); err != nil {
+				t.Fatalf("allocate the machine: %v", err)
+			}
+
+			world.setNow(world.now.Add(10 * time.Minute))
+			world.deliverEnrolments()
+
+			err = enrolmentNamesTheGenerationItWasInvitedFor(handWrittenLedger(world.now, world.effectRecords()...))
+			if provisioned.holds && err != nil {
+				t.Fatalf("an agent that redeemed the bootstrap its own machine was handed was refused: %v", err)
+			}
+			if !provisioned.holds && err == nil {
+				t.Fatal("the machine was allocated under one generation and its agent redeemed a bootstrap minted for another, and the ledger reads as though they agreed")
+			}
+		})
+	}
+}
+
+// labWorldFor is one Blueprint's world, built as an Execution builds it and
+// driven by hand. It is how a case reaches the world's own contracts, which is
+// where a fidelity claim about the simulator has to be made: through an Execution
+// the acts are Mercator's, and Mercator is exactly what must not be trusted to
+// make the two generations disagree.
+func labWorldFor(t *testing.T, path string) *simulatedWorld {
+	t.Helper()
+	blueprint, err := scenario.LoadBlueprint(path)
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+	tape, _, err := Compile(blueprint, CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile Blueprint: %v", err)
+	}
+	world, err := newSimulatedWorld(tape)
+	if err != nil {
+		t.Fatalf("build the world: %v", err)
+	}
+	return world
 }
 
 func provisionEffect(generation uint64) EffectRecord {

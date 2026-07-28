@@ -24,9 +24,16 @@ import (
 // on every search, and the lease is what Mercator names when it asks again about
 // an allocation whose answer it lost.
 type capacityLease struct {
-	RentalID       string
-	NodeID         string
-	Generation     uint64
+	RentalID   string
+	Generation uint64
+	// Bootstrap is the material handed to the machine, verbatim and entire. It is
+	// held rather than reduced to a token because it is the whole of what the
+	// agent on this machine knows about itself: the identity it enrols under, the
+	// lease and generation it names doing so, and the credential it redeems. A
+	// world that kept only the token would have to reconstruct the other three
+	// from what Mercator asked the provider for, and then no enrolment could ever
+	// disagree with the provision that carried it. It never leaves this world.
+	Bootstrap      capability.NodeBootstrap
 	OfferID        string
 	NativeRef      string
 	WorkspaceID    string
@@ -35,9 +42,6 @@ type capacityLease struct {
 	AcceptedAt     time.Time
 	Terminated     bool
 	Enrolled       bool
-	// Token is the material handed to the machine, held so the agent can redeem
-	// exactly the one its provider was given. It never leaves this world.
-	Token string
 }
 
 // arrivesAt is when the agent on this machine opens its session, which is the
@@ -77,15 +81,14 @@ func (world *simulatedWorld) ProvisionCapacity(_ context.Context, command capabi
 	}
 	lease := &capacityLease{
 		RentalID:       command.RentalID,
-		NodeID:         command.Bootstrap.NodeID,
 		Generation:     command.Generation,
+		Bootstrap:      command.Bootstrap,
 		OfferID:        command.OfferSnapshotID,
 		NativeRef:      "lab-machine-" + command.RentalID,
 		WorkspaceID:    command.WorkspaceID,
 		ConnectionID:   labConnection,
 		OwnershipToken: command.OwnershipToken,
 		AcceptedAt:     world.now,
-		Token:          command.Bootstrap.EnrollmentToken,
 	}
 	world.leases[command.RentalID] = lease
 	receipt := capability.CapacityReceipt{
@@ -233,11 +236,24 @@ func (world *simulatedWorld) Reinvite(_ context.Context, _, nodeID string) (capa
 // Enrolled reports whether the agent on this machine has opened its session.
 // An identity nobody has heard from is not an error: a node invited and never
 // filled is exactly the state provisioning waits in.
+//
+// A question about a generation this identity is not on is an error, exactly as
+// node.Registry makes it one. The registry answers about a node and a generation
+// together, because that pair is what every act against a machine is addressed
+// to, and a world that answered "enrolled and healthy" to a question about the
+// wrong generation would report a machine ready to launch on where the real
+// deployment cannot make progress at all.
 func (world *simulatedWorld) Enrolled(_ context.Context, ref capability.NodeRef) (bool, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	invitation, exists := world.invitations[ref.NodeID]
-	return exists && invitation.Enrolled, nil
+	if !exists {
+		return false, nil
+	}
+	if ref.Generation != 0 && invitation.Generation != ref.Generation {
+		return false, fmt.Errorf("node: %q is generation %d, not %d", ref.NodeID, invitation.Generation, ref.Generation)
+	}
+	return invitation.Enrolled, nil
 }
 
 // labInvitation is one node identity this world reserved before any machine
@@ -278,27 +294,37 @@ func (world *simulatedWorld) bootstrapFor(nodeID string) capability.NodeBootstra
 // Mercator has no session to that machine, so nothing can create a container
 // there, and the record says the start was never observed because nobody was
 // ever able to look.
+//
+// What the record says the session was opened under is read off the bootstrap
+// the machine holds and never off the lease it was allocated against. Those are
+// two different facts of Mercator's making, and the whole point of writing the
+// first is that the two can disagree: a control plane that provisions under one
+// generation and mints the token under another produces a machine whose agent
+// enrols as somebody the provider is not holding a machine for. Recording the
+// lease's own generation here would be this world copying the provision into the
+// enrolment and then agreeing with itself.
 func (world *simulatedWorld) deliverEnrolments() {
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	for _, rentalID := range slices.Sorted(maps.Keys(world.leases)) {
 		lease := world.leases[rentalID]
-		invitation, invited := world.invitations[lease.NodeID]
+		invitation, invited := world.invitations[lease.Bootstrap.NodeID]
 		if lease.Terminated || lease.Enrolled || !invited {
 			continue
 		}
 		if world.truth[lease.OfferID].neverEnrolls || world.now.Before(lease.arrivesAt(world.truth[lease.OfferID].provisioning)) {
 			continue
 		}
-		if invitation.Token != lease.Token || invitation.Spent {
+		if invitation.Token != lease.Bootstrap.EnrollmentToken || invitation.Spent {
 			continue
 		}
 		lease.Enrolled = true
 		invitation.Enrolled = true
 		invitation.Spent = true
+		redeemed := lease.Bootstrap
 		world.recordEffect(
 			OperationNodeEnrolled,
-			fmt.Sprintf("%s/generation-%d", lease.NodeID, lease.Generation),
+			fmt.Sprintf("%s/generation-%d", redeemed.NodeID, redeemed.Generation),
 			EffectCommandAccepted,
 			EffectResponseDelivered,
 			lease.NativeRef,
@@ -306,11 +332,11 @@ func (world *simulatedWorld) deliverEnrolments() {
 			"",
 			map[string]any{
 				"machine_id": lease.NativeRef,
-				"rental_id":  lease.RentalID,
-				"node_id":    lease.NodeID,
-				"generation": lease.Generation,
+				"rental_id":  redeemed.RentalID,
+				"node_id":    redeemed.NodeID,
+				"generation": redeemed.Generation,
 			},
-			map[string]any{"node_id": lease.NodeID, "fencing_token": lease.Generation},
+			map[string]any{"node_id": redeemed.NodeID, "fencing_token": redeemed.Generation},
 			"",
 		)
 	}
