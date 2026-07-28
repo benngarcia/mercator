@@ -616,6 +616,64 @@ func TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet(t *testing.T) {
 	}
 }
 
+// TestARetiredRuntimeOpensNoFurtherSessionOnTheCredentialItHolds is what makes
+// ending the session worth anything. An agent's transport reconnects the instant
+// the connection drops, so a retirement that only closed the session it found
+// would be undone milliseconds later by the same credential, and the fresh
+// session arrives preloaded with every command the previous one never
+// acknowledged: the machine Mercator gave up launches the container anyway.
+func TestARetiredRuntimeOpensNoFurtherSessionOnTheCredentialItHolds(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+	if _, err := registry.LaunchWorkload(context.Background(), launchCommand(bootstrap, enrollment, "op-launch-1")); err != nil {
+		t.Fatalf("launch the workload: %v", err)
+	}
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	_, err := registry.OpenSession(context.Background(), bootstrap.NodeID, enrollment.SessionToken)
+
+	if !errors.Is(err, node.ErrRetired) {
+		t.Fatalf("a retired runtime reconnecting = %v, want ErrRetired", err)
+	}
+	if err := registry.RecordResult(context.Background(), bootstrap.NodeID, enrollment.SessionToken, node.Result{
+		OperationID: "op-launch-1", Applied: true,
+	}); !errors.Is(err, node.ErrRetired) {
+		t.Fatalf("a retired runtime reporting a result = %v, want ErrRetired", err)
+	}
+}
+
+// TestARetiredRuntimeIsAskedForNothingFurther closes the other half. The node
+// reference a caller carries was resolved before the generation ended, and a
+// command appended for a retired identity is durable: it would outlive the
+// decision that issued it and be delivered to whatever next answers on that
+// identity. The identity stays readable, because what it was told and what it
+// reported is what a later reconciliation reads.
+func TestARetiredRuntimeIsAskedForNothingFurther(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	_, launchErr := registry.LaunchWorkload(context.Background(), launchCommand(bootstrap, enrollment, "op-launch-after-retirement"))
+	_, prepareErr := registry.PrepareImage(context.Background(), prepareCommand(bootstrap, enrollment, "op-prepare-after-retirement"))
+
+	if !errors.Is(launchErr, node.ErrRetired) {
+		t.Fatalf("a launch dispatched to a retired runtime = %v, want ErrRetired", launchErr)
+	}
+	if !errors.Is(prepareErr, node.ErrRetired) {
+		t.Fatalf("a prepare dispatched to a retired runtime = %v, want ErrRetired", prepareErr)
+	}
+	if _, err := registry.Reconcile(context.Background(), nodeRef(bootstrap)); err != nil {
+		t.Fatalf("a retired identity is history a reconciliation must still be able to read: %v", err)
+	}
+}
+
 // Helpers below keep each case to arrange, act, assert.
 
 const (

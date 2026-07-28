@@ -34,7 +34,7 @@ func TestEndingAGenerationRetiresTheRuntimeItWasServing(t *testing.T) {
 	fleet := enrolledFleet(t)
 	leases := rental.NewLeases(fleet.store, fleet.registry)
 
-	ended, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, domain.RentalTerminated, start.Add(time.Hour))
+	ended, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalTerminated, start.Add(time.Hour))
 
 	if err != nil {
 		t.Fatalf("end the generation: %v", err)
@@ -66,7 +66,7 @@ func TestARetiredRuntimeIsNoLongerPublishableAsCapacity(t *testing.T) {
 		t.Fatalf("offers before = %+v, want the enrolled machine published", before)
 	}
 
-	if _, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, domain.RentalTerminated, start.Add(time.Hour)); err != nil {
+	if _, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalTerminated, start.Add(time.Hour)); err != nil {
 		t.Fatalf("end the generation: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestALeaseNothingCanWriteRetiresNoRuntime(t *testing.T) {
 	fleet := enrolledFleet(t)
 	leases := rental.NewLeases(fleet.store, refusingRetirer{})
 
-	_, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, domain.RentalTerminated, start.Add(time.Hour))
+	_, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalTerminated, start.Add(time.Hour))
 
 	if err == nil {
 		t.Fatal("a generation ended although the runtime serving it could not be retired")
@@ -102,6 +102,55 @@ func TestALeaseNothingCanWriteRetiresNoRuntime(t *testing.T) {
 	}
 	if _, open := held.Current(); !open {
 		t.Fatalf("lease = %+v, want the generation still open because nothing retired its runtime", held)
+	}
+}
+
+// TestAnEndingRetriedAcrossAResumeTouchesNeitherTheLiveMachineNorItsRuntime is
+// the failure this call is named for. A reconcile loop ends generation 1 and
+// loses the answer; the lease is resumed onto generation 2 on a fresh machine
+// with a fresh runtime and a Run is placed on it; the loop retries. Ending
+// whichever generation is current then would retire a live runtime mid-Run and
+// record that Mercator stopped a generation it never meant to touch.
+func TestAnEndingRetriedAcrossAResumeTouchesNeitherTheLiveMachineNorItsRuntime(t *testing.T) {
+	fleet := enrolledFleet(t)
+	leases := rental.NewLeases(fleet.store, fleet.registry)
+	if _, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalStopped, start.Add(time.Hour)); err != nil {
+		t.Fatalf("stop the machine: %v", err)
+	}
+	resumed := fleet.resume(t, start.Add(2*time.Hour))
+
+	retried, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalStopped, start.Add(time.Hour))
+
+	if err != nil {
+		t.Fatalf("retry the ending of generation 1: %v", err)
+	}
+	current, open := retried.Current()
+	if !open || current.NodeID != resumed {
+		t.Fatalf("current generation = %+v open=%v, want the resumed machine still running", current, open)
+	}
+	fleet.mustNotBeRetired(t, resumed)
+}
+
+// TestAnEndingRefusesAGenerationTheLeaseHasNotReached is the same rule from the
+// other side. A caller that names a generation this lease has never been through
+// is deciding about a machine that does not exist, and the answer is a refusal
+// rather than the nearest thing the record happens to hold.
+func TestAnEndingRefusesAGenerationTheLeaseHasNotReached(t *testing.T) {
+	fleet := enrolledFleet(t)
+	leases := rental.NewLeases(fleet.store, fleet.registry)
+
+	_, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 2, domain.RentalTerminated, start.Add(time.Hour))
+
+	if err == nil {
+		t.Fatal("a generation this lease has never been through was ended")
+	}
+	fleet.mustNotBeRetired(t, fleet.nodeID)
+	held, readErr := fleet.store.Get(context.Background(), workspaceID, rentalID)
+	if readErr != nil {
+		t.Fatalf("read the lease back: %v", readErr)
+	}
+	if _, open := held.Current(); !open {
+		t.Fatalf("lease = %+v, want the generation nobody named still open", held)
 	}
 }
 
@@ -122,19 +171,70 @@ type fleet struct {
 
 func enrolledFleet(t *testing.T) fleet {
 	t.Helper()
-	signer := node.NewSigner([]byte("conformance-signing-key-conformance"))
-	registry := node.NewRegistry(node.NewMemoryStore(), signer, "https://mercator.example",
-		node.WithClock(func() time.Time { return start }))
-	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
+	registry := node.NewRegistry(
+		node.NewMemoryStore(),
+		node.NewSigner([]byte("conformance-signing-key-conformance")),
+		"https://mercator.example",
+		node.WithClock(func() time.Time { return start }),
+	)
+	fleet := fleet{store: rental.NewMemoryStore(), registry: registry}
+	fleet.nodeID = fleet.enrolledRuntime(t, 1)
+
+	lease, err := domain.OpenRental(domain.RentalIdentity{
+		RentalID:       rentalID,
+		WorkspaceID:    workspaceID,
+		ConnectionID:   connectionID,
+		OwnershipToken: "own_lifecycle",
+	}, fleet.nodeID, start)
+	if err != nil {
+		t.Fatalf("open the lease: %v", err)
+	}
+	lease, err = lease.Acquire("i-0abc")
+	if err != nil {
+		t.Fatalf("acquire the machine: %v", err)
+	}
+	if err := fleet.store.Save(context.Background(), 0, lease); err != nil {
+		t.Fatalf("write the lease: %v", err)
+	}
+	return fleet
+}
+
+// resume takes the stopped lease onto a fresh generation with a fresh runtime,
+// which is the state a machine comes back in, and returns the runtime now
+// serving it.
+func (fleet fleet) resume(t *testing.T, at time.Time) string {
+	t.Helper()
+	held, err := fleet.store.Get(context.Background(), workspaceID, rentalID)
+	if err != nil {
+		t.Fatalf("read the stopped lease: %v", err)
+	}
+	resumed := fleet.enrolledRuntime(t, 2)
+	lease, err := held.BeginGeneration(resumed, at)
+	if err != nil {
+		t.Fatalf("resume the lease: %v", err)
+	}
+	lease, err = lease.Acquire("i-0def")
+	if err != nil {
+		t.Fatalf("acquire the resumed machine: %v", err)
+	}
+	if err := fleet.store.Save(context.Background(), held.Version, lease); err != nil {
+		t.Fatalf("write the resumed lease: %v", err)
+	}
+	return resumed
+}
+
+func (fleet fleet) enrolledRuntime(t *testing.T, generation uint64) string {
+	t.Helper()
+	bootstrap, err := fleet.registry.Invite(context.Background(), node.Invitation{
 		WorkspaceID:           workspaceID,
 		RentalID:              rentalID,
-		Generation:            1,
+		Generation:            generation,
 		ShadowPriceUSDPerHour: 1.5,
 	})
 	if err != nil {
 		t.Fatalf("invite a runtime: %v", err)
 	}
-	if _, err := registry.Enroll(context.Background(), capability.EnrollmentRequest{
+	if _, err := fleet.registry.Enroll(context.Background(), capability.EnrollmentRequest{
 		NodeID:          bootstrap.NodeID,
 		RentalID:        bootstrap.RentalID,
 		Generation:      bootstrap.Generation,
@@ -147,23 +247,16 @@ func enrolledFleet(t *testing.T) fleet {
 	}); err != nil {
 		t.Fatalf("enroll the runtime: %v", err)
 	}
+	return bootstrap.NodeID
+}
 
-	store := rental.NewMemoryStore()
-	lease, err := domain.OpenRental(domain.RentalIdentity{
-		RentalID:       rentalID,
-		WorkspaceID:    workspaceID,
-		ConnectionID:   connectionID,
-		OwnershipToken: "own_lifecycle",
-	}, bootstrap.NodeID, start)
+func (fleet fleet) mustNotBeRetired(t *testing.T, nodeID string) {
+	t.Helper()
+	record, err := fleet.registry.Ref(context.Background(), workspaceID, nodeID)
 	if err != nil {
-		t.Fatalf("open the lease: %v", err)
+		t.Fatalf("a runtime nothing decided about was retired: %v", err)
 	}
-	lease, err = lease.Acquire("i-0abc")
-	if err != nil {
-		t.Fatalf("acquire the machine: %v", err)
+	if record.NodeID != nodeID {
+		t.Fatalf("resolved runtime = %q, want %q", record.NodeID, nodeID)
 	}
-	if err := store.Save(context.Background(), 0, lease); err != nil {
-		t.Fatalf("write the lease: %v", err)
-	}
-	return fleet{store: store, registry: registry, nodeID: bootstrap.NodeID}
 }

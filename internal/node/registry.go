@@ -324,6 +324,14 @@ func (registry *Registry) dispatch(
 	if err != nil {
 		return capability.OperationReceipt{}, err
 	}
+	// A retired node is a machine Mercator gave up, and a command appended for it
+	// is durable: it would be delivered to whatever reconnects on that identity
+	// rather than expiring with the decision that issued it. The reference this
+	// call carries was resolved before the generation ended, so this is the only
+	// place the answer can still change.
+	if record.State == StateRetired {
+		return capability.OperationReceipt{}, fmt.Errorf("%w: %q is not asked to %s", ErrRetired, record.ID, kind)
+	}
 	if fencingToken != 0 && fencingToken < record.FencingToken {
 		return capability.OperationReceipt{}, fmt.Errorf("%w: %s carries %d under %d", ErrFenced, kind, fencingToken, record.FencingToken)
 	}
@@ -413,12 +421,13 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 // told and what it reported is what a later reconciliation reads, and deleting it
 // would leave the machine's last word nowhere.
 //
-// The record is written before the session is ended, in that order. A record that
-// says retired refuses the next enrolment and the next heartbeat whether or not
-// the session was ever closed, so a control plane that stops in between still
-// offers the machine to nobody. Ending the session first and failing to write
-// would leave the agent reconnecting to an identity the registry still believes
-// in, which is exactly the machine this is supposed to stop offering.
+// The record is written before the session is ended, in that order. The record is
+// what refuses the machine everything: closing the session only drops the
+// connection it happens to hold, and an agent redials in milliseconds, so a
+// control plane that ended the session and failed to write would hand the same
+// credential a fresh session preloaded with every command the last one never
+// acknowledged. Written first, a control plane that stops in between still offers
+// the machine to nobody and answers its next connection with ErrRetired.
 func (registry *Registry) Retire(ctx context.Context, workspaceID, nodeID string) error {
 	if err := registry.store.Retire(ctx, workspaceID, nodeID); err != nil {
 		return err

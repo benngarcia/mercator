@@ -166,6 +166,16 @@ func (rental Rental) Current() (RentalGeneration, bool) {
 	return latest, latest.Open()
 }
 
+// Generation is the generation with this number, and whether the lease has ever
+// been through it. Position is the number because generations are numbered from
+// one without a gap, which is what Validate refuses a lease for breaking.
+func (rental Rental) Generation(number uint64) (RentalGeneration, bool) {
+	if number == 0 || number > uint64(len(rental.Generations)) {
+		return RentalGeneration{}, false
+	}
+	return rental.Generations[number-1], true
+}
+
 // Acquire records the provider's own name for the machine this generation runs
 // on. It is a separate act from opening the lease because Mercator mints the
 // identity before it asks: until the provider answers, the lease says what was
@@ -198,29 +208,47 @@ func (rental Rental) Acquire(nativeRef string) (Rental, error) {
 	return next, nil
 }
 
-// EndGeneration closes the generation a command could still be sent to and
-// returns it, so the caller knows which runtime this ending retires. An ending
-// that leaves nothing to come back to releases the lease in the same act: a
-// destroyed machine is not capacity waiting to be resumed.
-func (rental Rental) EndGeneration(ending RentalGenerationEnding, at time.Time) (Rental, RentalGeneration, error) {
+// EndGeneration closes the generation the caller names and returns it, so the
+// caller knows which runtime this ending retires. An ending that leaves nothing
+// to come back to releases the lease in the same act: a destroyed machine is not
+// capacity waiting to be resumed.
+//
+// The generation is named rather than taken as whichever one is current, because
+// the decision to end one and the write that records it are separated by a
+// network. A reconciliation that stopped generation 1 and lost the answer comes
+// back to a lease that has already resumed onto generation 2 on a fresh machine,
+// and ending "the current one" there would retire a live runtime mid-Run on the
+// authority of a decision about a machine that is already gone.
+//
+// Ending a generation the same way twice changes nothing, which is what makes
+// that retry safe. Ending it a second way is refused: a generation records what
+// became of one machine, and there is no history in which both happened.
+func (rental Rental) EndGeneration(number uint64, ending RentalGenerationEnding, at time.Time) (Rental, RentalGeneration, error) {
 	if !ending.Valid() {
 		return Rental{}, RentalGeneration{}, fmt.Errorf("%q is not a way a Rental generation ends", ending)
 	}
 	if at.IsZero() {
 		return Rental{}, RentalGeneration{}, fmt.Errorf("Rental %q ends a generation at no moment", rental.ID)
 	}
-	current, open := rental.Current()
-	if !open {
-		return Rental{}, RentalGeneration{}, fmt.Errorf("Rental %q has no open generation to end", rental.ID)
-	}
-	if at.Before(current.BeganAt) {
+	named, found := rental.Generation(number)
+	switch {
+	case !found:
+		return Rental{}, RentalGeneration{}, fmt.Errorf("Rental %q has no generation %d to end", rental.ID, number)
+	case !named.Open() && named.Ending == ending:
+		return rental, named, nil
+	case !named.Open():
+		return Rental{}, RentalGeneration{}, fmt.Errorf(
+			"Rental %q generation %d was %s at %s and cannot also be %s",
+			rental.ID, number, named.Ending, named.EndedAt.Format(time.RFC3339), ending,
+		)
+	case at.Before(named.BeganAt):
 		return Rental{}, RentalGeneration{}, fmt.Errorf(
 			"Rental %q generation %d began at %s and cannot end at %s",
-			rental.ID, current.Number, current.BeganAt.Format(time.RFC3339), at.Format(time.RFC3339),
+			rental.ID, number, named.BeganAt.Format(time.RFC3339), at.Format(time.RFC3339),
 		)
 	}
 	next := rental.Clone()
-	ended := &next.Generations[len(next.Generations)-1]
+	ended := &next.Generations[number-1]
 	ended.EndedAt = at
 	ended.Ending = ending
 	if ending.EndsTheLease() {
@@ -289,8 +317,10 @@ func (rental Rental) Validate() error {
 }
 
 // generationsRunInOrder holds the shape of the sequence: they are numbered from
-// one without a gap, and every generation but the newest has already ended,
-// because a lease can only have one machine under it at a time.
+// one without a gap, every generation but the newest has already ended, because
+// a lease can only have one machine under it at a time, and nothing follows the
+// ending that gave the lease up, because a destroyed machine leaves nothing to
+// resume onto.
 func (rental Rental) generationsRunInOrder() error {
 	for index, generation := range rental.Generations {
 		switch {
@@ -307,6 +337,11 @@ func (rental Rental) generationsRunInOrder() error {
 			)
 		case !generation.Open() && !generation.Ending.Valid():
 			return fmt.Errorf("Rental %q generation %d ended and does not say how", rental.ID, generation.Number)
+		case !generation.Open() && generation.Ending.EndsTheLease() && index != len(rental.Generations)-1:
+			return fmt.Errorf(
+				"Rental %q generation %d was %s and generation %d followed it",
+				rental.ID, generation.Number, generation.Ending, generation.Number+1,
+			)
 		}
 	}
 	return nil

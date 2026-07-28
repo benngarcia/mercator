@@ -4163,12 +4163,24 @@ complete because it works against a live provider.
     because retirement is idempotent. Writing first and failing to retire leaves a
     runtime publishing itself as capacity for a machine the record says Mercator gave
     up, and the Run that wins it starts by discovering there is nobody there.
-  - A retired node renews no lease. `Heartbeat` set `StateReady` unconditionally in
-    both stores, which is the one state the registry publishes as capacity, so an
-    agent on a machine being torn down would have put itself back in the fleet with
-    its next report and retirement would have been a no-op against any live agent.
-    Retiring also ends the session the node is holding open, so the connection it
-    already has carries no further command.
+  - Retirement is terminal at every door the machine can come to. `Heartbeat` set
+    `StateReady` unconditionally in both stores, which is the one state the registry
+    publishes as capacity, so an agent on a machine being torn down would have put
+    itself back in the fleet with its next report and retirement would have been a
+    no-op against any live agent. Retiring also ends the session the node is holding
+    open, and `authenticate` refuses the credential afterwards, so the agent's
+    immediate reconnect is answered with `ErrRetired` rather than with a fresh
+    session preloaded with every command the last one never acknowledged. `dispatch`
+    refuses a retired identity for the same reason from the other side: a node
+    reference resolved before the generation ended would otherwise append a durable
+    command that outlives the decision that issued it.
+  - Ending a generation names the generation. The decision and the write it lands
+    are separated by a network, so an attempt whose answer was lost comes back to a
+    lease that may already have stopped and resumed onto a fresh machine, and ending
+    whichever generation is current then would retire a live runtime mid-Run on the
+    authority of a decision about a machine that is already gone. Ending a generation
+    the same way twice changes nothing and writes nothing, which is what makes that
+    retry safe; ending it a second way is refused.
   - No Blueprint and no Lab invariant, and neither is a gap. A Rental that nothing
     provisions decides nothing, so a Blueprint asserting on it would be a fixture
     about a struct, and an invariant over a store with no world behind it is one
@@ -5515,6 +5527,18 @@ A destroyed machine leaves the lease     -> domain TestAnEndingThatLeavesNothing
 Two generations may be open at once      -> domain "two generations open at once"
                                            rentaltest "a lease Mercator could not have reached
                                              is refused before it is written"
+authenticate stops refusing a retired   -> node   TestARetiredRuntimeOpensNoFurtherSession
+  identity                                          OnTheCredentialItHolds
+dispatch stops refusing a retired       -> node   TestARetiredRuntimeIsAskedForNothingFurther
+  identity
+EndGeneration ends whichever            -> domain TestAnEndingNamesTheGenerationItDecidedAbout
+  generation is current                    domain TestAGenerationRecordsOneEnding
+                                           rental TestAnEndingRetriedAcrossAResume
+                                                    TouchesNeitherTheLiveMachineNorItsRuntime
+                                           rental TestAnEndingRefusesAGenerationTheLeaseHasNotReached
+A lease-ending ending may be followed   -> domain "a generation after the lease was given up"
+  by another generation                    rentaltest "a generation after the lease was given up"
+                                             (both stores)
 ```
 
 The resurrection is the one worth stating on its own, because it made the whole
@@ -5524,6 +5548,48 @@ unconditionally in both stores, and `StateReady` inside its lease is exactly wha
 back into the fleet with its next report. Both stores now refuse it, and the
 SQLite one matches the state inside the statement rather than reading it first, so
 a retirement landing between the two cannot be missed.
+
+### Phase 5 the Rental aggregate under review
+
+Two reviewers read beacf7e adversarially. Three findings were real and are fixed
+at the root; one framing inside them was rejected.
+
+Fixed. Retirement stopped nothing an agent actually does. `Retire` wrote
+`StateRetired` and closed the open session, and `authenticate` never read the
+state, so the agent's transport reconnected on the same credential within
+milliseconds and `OpenSession` handed it every unacknowledged operation. The
+retired machine launched the container of a generation whose lease the record says
+was released. `dispatch` had the same hole from the other side: a `NodeRef`
+resolved before the generation ended appended a durable command that nothing would
+ever expire. Both now refuse a retired record, and the state is checked after the
+credential verifies so an unauthenticated caller learns nothing about the node.
+
+Rejected, one framing. The finding asked `dispatch` to check liveness. It checks
+retirement instead. `StateLost` is a node Mercator has stopped hearing from rather
+than a node that is gone, commands are durable and redelivered on the next
+session, and `StopWorkload` against a machine that went quiet is exactly the
+command an operator most needs to land. Refusing dispatch on liveness would delete
+that. Retirement is the only terminal state and it is the only one refused.
+
+Fixed. `Leases.EndGeneration` took no generation number, so a retry read the lease
+fresh and ended whatever was current at read time. A reconcile loop that stopped
+generation 1 and lost its answer would, after a resume, terminate generation 2 and
+retire the runtime of a live machine mid-Run. `domain.Rental.EndGeneration` now
+names the generation, answers a repeat of the same ending with the lease unchanged
+and no write, and refuses a second, different ending for a generation that already
+has one. `Rental.Generation` reads a generation by number, which the numbering
+invariant `Validate` already holds makes a position.
+
+Fixed. `Validate` accepted a lease whose earlier generation ended in a termination
+or a reclamation and was then followed by a new open generation. `BeginGeneration`
+refuses that, but `Validate` is what every store calls: `generationsRunInOrder`
+only checked numbering and that non-final generations are closed, and
+`releaseFollowsTheLastEnding` only inspects the newest generation. Written and
+read back, `Held` reported true and `Current` reported the later generation open,
+so Placement would send a Run to a host the record says was destroyed and the
+workspace would keep a lease nothing releases. Nothing may follow the ending that
+gave the lease up, and the conformance suite now holds both directions against
+both stores.
 
 ### Phase 5 the enrolment rule under review
 

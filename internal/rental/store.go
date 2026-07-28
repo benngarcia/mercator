@@ -56,8 +56,12 @@ func NewLeases(store Store, runtimes Retirer) *Leases {
 	return &Leases{store: store, runtimes: runtimes}
 }
 
-// EndGeneration closes the generation this lease currently has and retires the
-// runtime that was invited onto it.
+// EndGeneration closes the generation the caller names and retires the runtime
+// that was invited onto it. The number is the caller's, because this call and the
+// write it lands are separated by a network: an attempt whose answer was lost
+// comes back to a lease that may already have resumed onto a fresh machine, and
+// ending whichever generation is current then would retire a live runtime on the
+// authority of a decision about a machine that is already gone.
 //
 // The runtime is retired before the lease is written, because the two failures
 // are not symmetric. Retiring first and failing to write leaves a machine nothing
@@ -69,6 +73,7 @@ func NewLeases(store Store, runtimes Retirer) *Leases {
 func (leases *Leases) EndGeneration(
 	ctx context.Context,
 	workspaceID, rentalID string,
+	generation uint64,
 	ending domain.RentalGenerationEnding,
 	at time.Time,
 ) (domain.Rental, error) {
@@ -76,12 +81,19 @@ func (leases *Leases) EndGeneration(
 	if err != nil {
 		return domain.Rental{}, err
 	}
-	next, ended, err := held.EndGeneration(ending, at)
+	next, ended, err := held.EndGeneration(generation, ending, at)
 	if err != nil {
 		return domain.Rental{}, err
 	}
 	if err := leases.runtimes.Retire(ctx, workspaceID, ended.NodeID); err != nil {
 		return domain.Rental{}, fmt.Errorf("retire the runtime of Rental %q generation %d: %w", rentalID, ended.Number, err)
+	}
+	if next.Version == held.Version {
+		// This generation already ended this way, so there is no transition to
+		// write and the lease as it stands is the answer. Retirement was still
+		// asked for, because the attempt that ended it may be the one whose answer
+		// was lost before it got that far.
+		return next, nil
 	}
 	if err := leases.store.Save(ctx, held.Version, next); err != nil {
 		return domain.Rental{}, err

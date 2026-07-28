@@ -21,10 +21,11 @@ var ErrEnrollmentSpent = errors.New("node: enrollment token already redeemed")
 // machine claim the first one's history.
 var ErrIdentityExists = errors.New("node: identity already exists")
 
-// ErrRetired is returned when a node whose Rental generation is over is asked to
-// enroll or to renew its lease. Retirement is terminal: the machine the identity
-// was minted for is gone, and the way back is a fresh generation with a fresh
-// identity rather than this one coming round again.
+// ErrRetired is returned to a node whose Rental generation is over, whichever
+// door it comes to: enrolling, opening a session, reporting, or being asked to do
+// anything. Retirement is terminal: the machine the identity was minted for is
+// gone, and the way back is a fresh generation with a fresh identity rather than
+// this one coming round again.
 var ErrRetired = errors.New("node: retired")
 
 // ErrFenced is returned when a command carries a superseded fencing token. It

@@ -162,23 +162,45 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 	})
 
 	t.Run("a lease Mercator could not have reached is refused before it is written", func(t *testing.T) {
-		store := newStore(t)
-		invented := opened(t)
-		invented.Generations = append(invented.Generations, domain.RentalGeneration{
-			Number: 2, NodeID: secondNode, BeganAt: start,
-		})
-		// The version is what two generations would really have cost, so the write
-		// is refused for holding two machines at once rather than for counting its
-		// own transitions wrong.
-		invented.Version = 2
+		// Each of these reads back as capacity somebody could act on, which is what
+		// makes a store worse than memory to write it into. The versions are what
+		// the generations would really have cost, so every case is refused for the
+		// history it claims rather than for counting its own transitions wrong.
+		for name, invented := range map[string]domain.Rental{
+			"two generations open at once": func() domain.Rental {
+				lease := opened(t)
+				lease.Generations = append(lease.Generations, domain.RentalGeneration{
+					Number: 2, NodeID: secondNode, BeganAt: start,
+				})
+				lease.Version = 2
+				return lease
+			}(),
+			// A destroyed machine leaves nothing to resume, so a generation after
+			// that ending is a machine Mercator never took. Read back, the lease
+			// reports the later generation open and is held by nobody, which is a
+			// host Placement may send a Run to and a lease nothing will release.
+			"a generation after the lease was given up": func() domain.Rental {
+				lease := terminated(t)
+				lease.ReleasedAt = time.Time{}
+				lease.Generations = append(lease.Generations, domain.RentalGeneration{
+					Number: 2, NodeID: secondNode, BeganAt: start.Add(2 * time.Hour),
+				})
+				lease.Version = 3
+				return lease
+			}(),
+		} {
+			t.Run(name, func(t *testing.T) {
+				store := newStore(t)
 
-		err := store.Save(context.Background(), 0, invented)
+				err := store.Save(context.Background(), 0, invented)
 
-		if err == nil {
-			t.Fatal("a lease with two open generations at once was written")
-		}
-		if _, err := store.Get(context.Background(), workspaceID, rentalID); !errors.Is(err, rental.ErrNotFound) {
-			t.Fatalf("after the refusal the store held %v, want nothing", err)
+				if err == nil {
+					t.Fatalf("a lease Mercator could not have reached was written: %+v", invented)
+				}
+				if _, err := store.Get(context.Background(), workspaceID, rentalID); !errors.Is(err, rental.ErrNotFound) {
+					t.Fatalf("after the refusal the store held %v, want nothing", err)
+				}
+			})
 		}
 	})
 }
@@ -209,7 +231,7 @@ func stoppedAndResumed(t *testing.T) domain.Rental {
 	if err != nil {
 		t.Fatalf("acquire the first machine: %v", err)
 	}
-	lease, _, err = lease.EndGeneration(domain.RentalStopped, start.Add(time.Hour))
+	lease, _, err = lease.EndGeneration(1, domain.RentalStopped, start.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("stop the machine: %v", err)
 	}
@@ -230,7 +252,7 @@ func terminated(t *testing.T) domain.Rental {
 	if err != nil {
 		t.Fatalf("acquire the machine: %v", err)
 	}
-	lease, _, err = lease.EndGeneration(domain.RentalTerminated, start.Add(time.Hour))
+	lease, _, err = lease.EndGeneration(1, domain.RentalTerminated, start.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("terminate the machine: %v", err)
 	}

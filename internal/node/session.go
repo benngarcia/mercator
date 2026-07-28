@@ -196,6 +196,16 @@ func (registry *Registry) List(ctx context.Context, workspaceID string) ([]Recor
 	return registry.store.List(ctx, workspaceID)
 }
 
+// authenticate resolves the node a request claims to be and refuses it unless the
+// credential is this identity's and the identity is still one Mercator holds.
+//
+// Retirement is checked here rather than only where a lease is renewed, because
+// the credential outlives the machine. An agent's transport reconnects the
+// instant its session ends, so ending the session of a machine Mercator gave up
+// buys nothing on its own: the same token authenticates the next connection,
+// which is preloaded with every command the previous one never acknowledged. The
+// state is checked after the credential so a caller that cannot prove it is this
+// node learns nothing about it.
 func (registry *Registry) authenticate(ctx context.Context, nodeID, sessionToken string) (Record, error) {
 	record, err := registry.store.Find(ctx, nodeID)
 	if err != nil {
@@ -203,6 +213,9 @@ func (registry *Registry) authenticate(ctx context.Context, nodeID, sessionToken
 	}
 	if !registry.signer.VerifySession(record.ID, record.FencingToken, sessionToken, registry.now().UTC()) {
 		return Record{}, fmt.Errorf("node: session credential is not valid for %q at fencing token %d", nodeID, record.FencingToken)
+	}
+	if record.State == StateRetired {
+		return Record{}, fmt.Errorf("%w: %s holds no session on a Rental generation that is over", ErrRetired, nodeID)
 	}
 	return record, nil
 }

@@ -78,7 +78,7 @@ func TestARetriedProvisionAnswersWithTheSameMachine(t *testing.T) {
 func TestAStoppedLeaseResumesOntoAFreshGenerationAndRuntime(t *testing.T) {
 	lease := mustOpen(t)
 
-	stopped, ended, err := lease.EndGeneration(RentalStopped, leaseStart.Add(time.Hour))
+	stopped, ended, err := lease.EndGeneration(1, RentalStopped, leaseStart.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("stop the machine: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestAnEndingThatLeavesNothingReleasesTheLease(t *testing.T) {
 		t.Run(string(ending), func(t *testing.T) {
 			lease := mustOpen(t)
 
-			next, _, err := lease.EndGeneration(ending, leaseStart.Add(time.Hour))
+			next, _, err := lease.EndGeneration(1, ending, leaseStart.Add(time.Hour))
 
 			if err != nil {
 				t.Fatalf("end the generation: %v", err)
@@ -130,6 +130,60 @@ func TestAnEndingThatLeavesNothingReleasesTheLease(t *testing.T) {
 				t.Fatalf("resuming after %q = %v, want resumable=%v", ending, err, held)
 			}
 		})
+	}
+}
+
+// TestAnEndingNamesTheGenerationItDecidedAbout is the confusion binding a Node to
+// a generation exists to prevent, one level up. The decision to end a generation
+// and the write that records it are separated by a network, so a retry comes back
+// to a lease that has already stopped and resumed. Ending it again by number ends
+// the machine the caller meant, and ends nothing else.
+func TestAnEndingNamesTheGenerationItDecidedAbout(t *testing.T) {
+	stopped, _, err := mustOpen(t).EndGeneration(1, RentalStopped, leaseStart.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("stop the machine: %v", err)
+	}
+	resumed, err := stopped.BeginGeneration("nod_2", leaseStart.Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("resume the lease: %v", err)
+	}
+
+	retried, ended, err := resumed.EndGeneration(1, RentalStopped, leaseStart.Add(time.Hour))
+
+	if err != nil {
+		t.Fatalf("retry the ending of generation 1: %v", err)
+	}
+	if ended.Number != 1 || ended.NodeID != "nod_1" {
+		t.Fatalf("ended generation = %+v, want the one the caller decided about", ended)
+	}
+	if retried.Version != resumed.Version {
+		t.Fatalf("version = %d, want a retry to change nothing at %d", retried.Version, resumed.Version)
+	}
+	current, open := retried.Current()
+	if !open || current.Number != 2 || current.NodeID != "nod_2" {
+		t.Fatalf("current generation = %+v open=%v, want the live machine untouched", current, open)
+	}
+}
+
+// TestAGenerationRecordsOneEnding refuses the other half of the same confusion. A
+// generation says what became of one machine, and a second answer about it is a
+// history in which both happened.
+func TestAGenerationRecordsOneEnding(t *testing.T) {
+	stopped, _, err := mustOpen(t).EndGeneration(1, RentalStopped, leaseStart.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("stop the machine: %v", err)
+	}
+
+	_, _, err = stopped.EndGeneration(1, RentalTerminated, leaseStart.Add(2*time.Hour))
+
+	if err == nil {
+		t.Fatal("a stopped generation was also terminated and said nothing")
+	}
+	if !strings.Contains(err.Error(), "cannot also be") {
+		t.Fatalf("refusal = %q, want it to name the ending the generation already carries", err)
+	}
+	if _, _, err := stopped.EndGeneration(2, RentalStopped, leaseStart.Add(2*time.Hour)); err == nil {
+		t.Fatal("a generation this lease has never been through was ended")
 	}
 }
 
@@ -170,6 +224,18 @@ func TestALeaseMercatorCouldNotHaveReachedIsRefused(t *testing.T) {
 				Number: 1, NodeID: "nod_1", BeganAt: leaseStart,
 				EndedAt: leaseStart.Add(time.Hour), Ending: RentalTerminated,
 			},
+		),
+		// A lease whose machine was destroyed has nothing to resume, so a
+		// generation after that ending is a machine Mercator never took. Read back
+		// it is worse than a lease that will not open: Current reports the later
+		// generation open and Placement sends a Run to a host the record itself
+		// says was destroyed.
+		"a generation after the lease was given up": withGenerations(
+			RentalGeneration{
+				Number: 1, NodeID: "nod_1", BeganAt: leaseStart,
+				EndedAt: leaseStart.Add(time.Hour), Ending: RentalTerminated,
+			},
+			RentalGeneration{Number: 2, NodeID: "nod_2", BeganAt: leaseStart.Add(2 * time.Hour)},
 		),
 	} {
 		t.Run(name, func(t *testing.T) {
