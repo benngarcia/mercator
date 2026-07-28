@@ -4597,8 +4597,8 @@ complete because it works against a live provider.
     `ErrEnrollmentSpent` behind the deliberately opaque answer.
   - Found and not fixed here: `Reinvite` has no operator surface. The only caller
     is the orchestrator's own provisioning path, so an operator whose machine lost
-    its state has no supported way to reinvite that identity. Recorded in
-    docs/production/node-agent.md rather than papered over.
+    its state has no supported way to reinvite that identity. Filed as #211 and
+    recorded in docs/production/node-agent.md rather than papered over.
 
 ## Phase status
 

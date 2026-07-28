@@ -61,8 +61,8 @@ machine's credential is compromised retires the generation.
 ## When a machine is locked out
 
 A machine that lost its local state (`--state-dir`, `/var/lib/mercator-node` by
-default), or that
-was down for longer than its session window, holds nothing that opens any door.
+default), or that was down for longer than its session window, holds nothing that
+opens any door.
 This is intended, and the remedy is a fresh invitation for the same identity
 rather than a more forgiving enrollment route. The agent then has to be restarted
 with the new bootstrap, because the invitation is material a machine is given
@@ -74,8 +74,9 @@ off by an invitation nobody uses. **It has no operator surface today.** The only
 caller is the orchestrator's own provisioning path, which reinvites an identity
 whose first allocation it lost the answer to. An operator whose hand-enrolled
 machine lost its state has no supported way to reinvite it and has to invite a
-new identity, which loses that machine's history. This gap is tracked as its own
-issue rather than papered over here.
+new identity, which loses that machine's history. This gap is
+[mercator#211](https://github.com/benngarcia/mercator/issues/211) rather than
+something papered over here.
 
 ## What the record may never contain
 
