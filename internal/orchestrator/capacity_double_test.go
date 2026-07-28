@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/node"
@@ -22,7 +23,15 @@ import (
 type instantCapacity struct {
 	mu     sync.Mutex
 	leases map[string]*instantLease
-	nodes  map[string]string
+	nodes  map[string]instantNode
+}
+
+// instantNode is one identity this double invited, with the moment its agent
+// opened a session. The moment is the invitation's own, because that is the
+// claim: the machine was allocated and its agent was already there.
+type instantNode struct {
+	rentalID   string
+	enrolledAt time.Time
 }
 
 type instantLease struct {
@@ -37,7 +46,7 @@ type instantLease struct {
 // placement that chooses to provision is an act and these tests drive Runs past
 // that point.
 func withTestCapacity() Option {
-	seam := &instantCapacity{leases: map[string]*instantLease{}, nodes: map[string]string{}}
+	seam := &instantCapacity{leases: map[string]*instantLease{}, nodes: map[string]instantNode{}}
 	return func(o *Orchestrator) {
 		WithCapacity(seam)(o)
 		WithInviter(seam)(o)
@@ -110,7 +119,7 @@ func (c *instantCapacity) Invite(_ context.Context, invitation node.Invitation) 
 	if _, exists := c.nodes[invitation.NodeID]; exists {
 		return capability.NodeBootstrap{}, fmt.Errorf("%w: %s", node.ErrIdentityExists, invitation.NodeID)
 	}
-	c.nodes[invitation.NodeID] = invitation.RentalID
+	c.nodes[invitation.NodeID] = instantNode{rentalID: invitation.RentalID, enrolledAt: time.Now().UTC()}
 	return capability.NodeBootstrap{
 		NodeID:          invitation.NodeID,
 		RentalID:        invitation.RentalID,
@@ -122,18 +131,17 @@ func (c *instantCapacity) Invite(_ context.Context, invitation node.Invitation) 
 func (c *instantCapacity) Reinvite(_ context.Context, _, nodeID string) (capability.NodeBootstrap, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	rentalID, exists := c.nodes[nodeID]
+	invited, exists := c.nodes[nodeID]
 	if !exists {
 		return capability.NodeBootstrap{}, fmt.Errorf("%w: %s", node.ErrNotFound, nodeID)
 	}
-	return capability.NodeBootstrap{NodeID: nodeID, RentalID: rentalID, Generation: 1, EnrollmentToken: "enrol-" + nodeID}, nil
+	return capability.NodeBootstrap{NodeID: nodeID, RentalID: invited.rentalID, Generation: 1, EnrollmentToken: "enrol-" + nodeID}, nil
 }
 
-// Enrolled answers yes for any identity this double invited, because the agent
-// on a machine it allocated is already there.
-func (c *instantCapacity) Enrolled(_ context.Context, ref capability.NodeRef) (bool, error) {
+// EnrolledAt dates the session from the invitation for any identity this double
+// invited, because the agent on a machine it allocated is already there.
+func (c *instantCapacity) EnrolledAt(_ context.Context, ref capability.NodeRef) (time.Time, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, invited := c.nodes[ref.NodeID]
-	return invited, nil
+	return c.nodes[ref.NodeID].enrolledAt, nil
 }

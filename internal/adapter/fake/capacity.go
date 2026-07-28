@@ -41,7 +41,17 @@ type allocation struct {
 	bootstrap      capability.NodeBootstrap
 	acceptedAt     time.Time
 	terminated     bool
+	terminatedAt   time.Time
 	enrolled       bool
+}
+
+// capacityProgress is how far this world has got with one machine and the moment
+// it got there. The two travel together because a provider that reports a state
+// without dating it leaves its caller measuring the interval between two looks
+// and calling that the machine's own spend.
+type capacityProgress struct {
+	state capability.CapacityState
+	since time.Time
 }
 
 // CapacitySupport is what this simulated provider promises. It stops, resumes,
@@ -79,7 +89,7 @@ func (w *World) ProvisionCapacity(_ context.Context, command capability.Provisio
 	if held, exists := w.allocations[command.RentalID]; exists && !held.terminated {
 		return capability.CapacityReceipt{
 			NativeRef:  held.nativeRef,
-			State:      w.capacityStateAt(held, w.clock.Now()),
+			State:      w.capacityStateAt(held, w.clock.Now()).state,
 			AcceptedAt: held.acceptedAt,
 			Duplicate:  true,
 		}, nil
@@ -123,10 +133,12 @@ func (w *World) ObserveCapacity(_ context.Context, ref capability.CapacityRef) (
 		return capability.CapacityObservation{}, fmt.Errorf("fake: nothing allocated for Rental %q", ref.RentalID)
 	}
 	now := w.clock.Now()
+	progress := w.capacityStateAt(held, now)
 	return capability.CapacityObservation{
 		NativeRef:  held.nativeRef,
-		State:      w.capacityStateAt(held, now),
+		State:      progress.state,
 		ObservedAt: now,
+		StateSince: progress.since,
 	}, nil
 }
 
@@ -154,6 +166,11 @@ func (w *World) TerminateCapacity(_ context.Context, command capability.Capacity
 		return capability.CapacityReceipt{}, fmt.Errorf("fake: nothing allocated for Rental %q", command.RentalID)
 	}
 	duplicate := held.terminated
+	if !duplicate {
+		// The moment the machine was destroyed, which a repeat of the same command
+		// does not move: the bill ended once.
+		held.terminatedAt = w.clock.Now()
+	}
 	held.terminated = true
 	return capability.CapacityReceipt{
 		NativeRef:  held.nativeRef,
@@ -194,7 +211,7 @@ func (w *World) ListOwnedCapacity(_ context.Context, query capability.OwnershipQ
 			RentalID:       held.rentalID,
 			Generation:     held.bootstrap.Generation,
 			OwnershipToken: held.ownershipToken,
-			State:          w.capacityStateAt(held, w.clock.Now()),
+			State:          w.capacityStateAt(held, w.clock.Now()).state,
 			CreatedAt:      held.acceptedAt,
 		})
 	}
@@ -202,24 +219,26 @@ func (w *World) ListOwnedCapacity(_ context.Context, query capability.OwnershipQ
 }
 
 // capacityStateAt is how far this world has got with one machine, spent from the
-// moment the allocation was accepted. Acquisition puts it in starting and boot
-// puts it in active; the agent's own arrival is past the end of what a provider
-// can see, so nothing after boot moves this answer.
-func (w *World) capacityStateAt(held *allocation, now time.Time) capability.CapacityState {
+// moment the allocation was accepted, and when it reached that. Acquisition puts
+// it in starting and boot puts it in active; the agent's own arrival is past the
+// end of what a provider can see, so nothing after boot moves this answer.
+func (w *World) capacityStateAt(held *allocation, now time.Time) capacityProgress {
 	if held.terminated {
-		return capability.CapacityStateTerminated
+		return capacityProgress{state: capability.CapacityStateTerminated, since: held.terminatedAt}
 	}
 	machine, exists := w.machines[held.offerID]
 	if !exists {
-		return capability.CapacityStateUnknown
+		return capacityProgress{state: capability.CapacityStateUnknown}
 	}
-	switch elapsed := now.Sub(held.acceptedAt); {
-	case elapsed < machine.AcquisitionSpend:
-		return capability.CapacityStateRequested
-	case elapsed < machine.AcquisitionSpend+machine.BootSpend:
-		return capability.CapacityStateStarting
+	acquired := held.acceptedAt.Add(machine.AcquisitionSpend)
+	booted := acquired.Add(machine.BootSpend)
+	switch {
+	case now.Before(acquired):
+		return capacityProgress{state: capability.CapacityStateRequested, since: held.acceptedAt}
+	case now.Before(booted):
+		return capacityProgress{state: capability.CapacityStateStarting, since: acquired}
 	default:
-		return capability.CapacityStateActive
+		return capacityProgress{state: capability.CapacityStateActive, since: booted}
 	}
 }
 

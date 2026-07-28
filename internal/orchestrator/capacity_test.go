@@ -121,10 +121,19 @@ func TestAProvisionWhoseAnswerWasLostAllocatesNoSecondMachine(t *testing.T) {
 // The seconds are the difference between two moments this Run's own stream
 // carries, so the estimate the listing published is measured against something
 // rather than against itself.
+//
+// Every look here lands deliberately late. The machine is allocated at thirty
+// seconds and nobody looks until thirty seven, it is up at four and a half
+// minutes and nobody looks until four fifty, its agent arrives at five fifteen
+// and nobody looks until six. A control plane that dated a stage from its own
+// look would record 37, 253 and 70, which is this case's whole point: those three
+// numbers are a property of when Mercator asked, and a calibration trained on
+// them would learn the reconcile cadence.
 func TestTheThreeProvisioningStagesAreMeasuredRatherThanDeclared(t *testing.T) {
 	ctx := context.Background()
-	clock := &steppingClock{now: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)}
-	seam := newRecordingCapacity()
+	start := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	clock := &steppingClock{now: start}
+	seam := newRecordingCapacity().runsOn(clock.Now)
 	seam.holdAt(capability.CapacityStateRequested)
 	orch := New(openOrchestratorLog(t), scheduler.New(), fake.New(
 		fake.WithOffers([]domain.OfferSnapshot{provisionableOfferAt(1)}),
@@ -135,36 +144,71 @@ func TestTheThreeProvisioningStagesAreMeasuredRatherThanDeclared(t *testing.T) {
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
 		t.Fatalf("allocate the machine: %v", err)
 	}
-	clock.step(30 * time.Second)
-	seam.holdAt(capability.CapacityStateStarting)
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
-		t.Fatalf("watch it be acquired: %v", err)
-	}
-	clock.step(4 * time.Minute)
-	seam.holdAt(capability.CapacityStateActive)
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
-		t.Fatalf("watch it boot: %v", err)
-	}
-	clock.step(45 * time.Second)
-	seam.enrolTheAgent()
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
-		t.Fatalf("watch the agent arrive: %v", err)
-	}
+	reach(t, ctx, orch, clock, seam.acquiredAt(start.Add(30*time.Second)), start.Add(37*time.Second))
+	reach(t, ctx, orch, clock, seam.bootedAt(start.Add(4*time.Minute+30*time.Second)), start.Add(4*time.Minute+50*time.Second))
+	reach(t, ctx, orch, clock, seam.agentArrivedAt(start.Add(5*time.Minute+15*time.Second)), start.Add(6*time.Minute))
 
-	measured := recordedStageSeconds(t, ctx, orch)
+	measured := recordedStages(t, ctx, orch)
 	want := map[domain.LaunchStage]float64{
 		domain.StageAcquisition: 30,
 		domain.StageBoot:        240,
 		domain.StageAgentReady:  45,
 	}
 	for stage, seconds := range want {
-		if measured[stage] != seconds {
+		if measured[stage].Seconds != seconds {
 			t.Errorf("the %s stage was recorded as %vs, and this machine spent %vs on it",
-				stage, measured[stage], seconds)
+				stage, measured[stage].Seconds, seconds)
+		}
+		if measured[stage].Bounded {
+			t.Errorf("the %s stage is recorded as a bound, and its authority dated the transition", stage)
 		}
 	}
 	if len(measured) != len(want) {
 		t.Fatalf("the record holds %d provisioning actuals, and a machine goes through three", len(measured))
+	}
+}
+
+// TestAStageNoAuthorityDatesIsRecordedAsABound is the other half, and the reason
+// the record carries the distinction at all. A provider that reports what a
+// machine is doing without saying since when leaves Mercator with the interval
+// between two looks, and that interval is an upper bound on the stage rather than
+// its duration. It is written down as one, so a reader can tell a machine that
+// took thirty seconds from a machine that was found finished by a look thirty
+// seconds after the last.
+func TestAStageNoAuthorityDatesIsRecordedAsABound(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	clock := &steppingClock{now: start}
+	seam := newRecordingCapacity().runsOn(clock.Now).datesNothing()
+	seam.holdAt(capability.CapacityStateRequested)
+	orch := New(openOrchestratorLog(t), scheduler.New(), fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{provisionableOfferAt(1)}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
+	), WithCapacity(seam), WithInviter(seam), WithClock(clock.Now))
+	createRun(t, ctx, orch)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("allocate the machine: %v", err)
+	}
+	reach(t, ctx, orch, clock, seam.acquiredAt(start.Add(30*time.Second)), start.Add(37*time.Second))
+
+	acquisition := recordedStages(t, ctx, orch)[domain.StageAcquisition]
+	if !acquisition.Bounded {
+		t.Fatal("a stage Mercator only knows had finished by the time it looked is recorded as though the machine had been timed")
+	}
+	if acquisition.Seconds != 37 {
+		t.Fatalf("the bound is recorded at %vs, and the whole interval this look established is 37s", acquisition.Seconds)
+	}
+}
+
+// reach is one thing happening to the machine at its own moment and Mercator
+// looking at a later one, which is the arrangement every case above is about.
+func reach(t *testing.T, ctx context.Context, orch *Orchestrator, clock *steppingClock, world func(), looked time.Time) {
+	t.Helper()
+	world()
+	clock.stopAt(looked)
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("look at the machine: %v", err)
 	}
 }
 
@@ -201,12 +245,27 @@ func (clock *steppingClock) step(by time.Duration) {
 	clock.now = clock.now.Add(by)
 }
 
+// stopAt puts the clock at one named moment, which is how a case says that the
+// world reached a state at one time and Mercator looked at another.
+func (clock *steppingClock) stopAt(moment time.Time) {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	clock.now = moment
+}
+
 // recordingCapacity is a provider these cases can hold still. It answers the
 // capacity contract honestly, remembers what it was asked, and lets a case decide
 // how far the machine has got and whether its answer came back.
 type recordingCapacity struct {
-	mu               sync.Mutex
+	mu sync.Mutex
+	// now is this provider's own clock, so the moments it dates its transitions
+	// with are the world's rather than the caller's. A double that dated them
+	// from the look would answer whatever the look wanted to hear.
+	now              func() time.Time
 	state            capability.CapacityState
+	stateSince       time.Time
+	dates            bool
+	enrolledAt       time.Time
 	enrolled         bool
 	loseNext         bool
 	terminateRefused bool
@@ -219,18 +278,70 @@ type recordingCapacity struct {
 
 func newRecordingCapacity() *recordingCapacity {
 	return &recordingCapacity{
+		now:      func() time.Time { return time.Now().UTC() },
 		state:    capability.CapacityStateActive,
+		dates:    true,
 		enrolled: true,
 		machines: map[string]string{},
 		nodes:    map[string]node.Invitation{},
 	}
 }
 
+// runsOn puts this provider on the case's own clock, so a machine that reaches a
+// state at one moment and is looked at another is a world a case can arrange.
+func (c *recordingCapacity) runsOn(clock func() time.Time) *recordingCapacity {
+	c.now = clock
+	c.stateSince = clock()
+	return c
+}
+
+// datesNothing is the provider that reports what a machine is doing and never
+// when it started doing it, which is a real product and the reason a record has
+// to be able to say that its seconds are a bound.
+func (c *recordingCapacity) datesNothing() *recordingCapacity {
+	c.dates = false
+	return c
+}
+
 func (c *recordingCapacity) holdAt(state capability.CapacityState) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.state = state
+	c.stateSince = c.now()
 	c.enrolled = false
+	c.enrolledAt = time.Time{}
+}
+
+// acquiredAt, bootedAt and agentArrivedAt are the three things that happen to a
+// machine, each at the moment it really happened. The moment is stated rather
+// than read off the clock, because these cases are about the gap between when a
+// machine reached a state and when Mercator looked, and a double that dated its
+// own transitions from the look could not hold one open.
+func (c *recordingCapacity) acquiredAt(moment time.Time) func() {
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.state = capability.CapacityStateStarting
+		c.stateSince = moment
+	}
+}
+
+func (c *recordingCapacity) bootedAt(moment time.Time) func() {
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.state = capability.CapacityStateActive
+		c.stateSince = moment
+	}
+}
+
+func (c *recordingCapacity) agentArrivedAt(moment time.Time) func() {
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.enrolled = true
+		c.enrolledAt = moment
+	}
 }
 
 func (c *recordingCapacity) refuseTerminate() {
@@ -243,6 +354,7 @@ func (c *recordingCapacity) enrolTheAgent() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.enrolled = true
+	c.enrolledAt = c.now()
 }
 
 func (c *recordingCapacity) loseTheNextAnswer() {
@@ -295,7 +407,11 @@ func (c *recordingCapacity) ObserveCapacity(_ context.Context, ref capability.Ca
 	if !exists {
 		return capability.CapacityObservation{}, fmt.Errorf("nothing allocated for Rental %q", ref.RentalID)
 	}
-	return capability.CapacityObservation{NativeRef: native, State: c.state}, nil
+	observation := capability.CapacityObservation{NativeRef: native, State: c.state, ObservedAt: c.now()}
+	if c.dates {
+		observation.StateSince = c.stateSince
+	}
+	return observation, nil
 }
 
 func (c *recordingCapacity) TerminateCapacity(_ context.Context, command capability.CapacityCommand) (capability.CapacityReceipt, error) {
@@ -355,10 +471,16 @@ func (c *recordingCapacity) bootstrapFor(nodeID string) capability.NodeBootstrap
 	}
 }
 
-func (c *recordingCapacity) Enrolled(_ context.Context, _ capability.NodeRef) (bool, error) {
+func (c *recordingCapacity) EnrolledAt(_ context.Context, _ capability.NodeRef) (time.Time, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.enrolled, nil
+	if !c.enrolled {
+		return time.Time{}, nil
+	}
+	if c.enrolledAt.IsZero() {
+		return c.now(), nil
+	}
+	return c.enrolledAt, nil
 }
 
 func recordedCapacityAcceptance(t *testing.T, ctx context.Context, orch *Orchestrator) capacityAcceptedData {
@@ -380,9 +502,9 @@ func recordedCapacityAcceptance(t *testing.T, ctx context.Context, orch *Orchest
 	return accepted
 }
 
-func recordedStageSeconds(t *testing.T, ctx context.Context, orch *Orchestrator) map[domain.LaunchStage]float64 {
+func recordedStages(t *testing.T, ctx context.Context, orch *Orchestrator) map[domain.LaunchStage]capacityStageObservedData {
 	t.Helper()
-	measured := map[domain.LaunchStage]float64{}
+	measured := map[domain.LaunchStage]capacityStageObservedData{}
 	for _, event := range runEventsFor(t, ctx, orch) {
 		if event.Type != EventCapacityStageObserved {
 			continue
@@ -391,7 +513,7 @@ func recordedStageSeconds(t *testing.T, ctx context.Context, orch *Orchestrator)
 		if err := json.Unmarshal(event.Data, &stage); err != nil {
 			t.Fatalf("decode observed stage: %v", err)
 		}
-		measured[stage.Stage] = stage.Seconds
+		measured[stage.Stage] = stage
 	}
 	return measured
 }

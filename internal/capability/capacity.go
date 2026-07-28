@@ -274,6 +274,17 @@ type CapacityObservation struct {
 	NativeRef  string        `json:"native_ref"`
 	State      CapacityState `json:"state"`
 	ObservedAt time.Time     `json:"observed_at"`
+	// StateSince is the provider's own account of when this machine entered the
+	// state it is reporting, and the zero time from a provider that does not date
+	// its transitions.
+	//
+	// It is the difference between measuring a machine and measuring a poll. A
+	// caller that has only ObservedAt knows the stage finished somewhere between
+	// this look and the last one, and writing that interval down as the stage's
+	// duration would publish the caller's own cadence as a property of the
+	// machine. Callers that cannot get this fact record a bound and say so rather
+	// than reporting the interval as a measurement.
+	StateSince time.Time `json:"state_since,omitzero"`
 	// Endpoint is where the machine can be reached, when the provider exposes
 	// one. It is provenance for operators, never a control channel: Mercator
 	// reaches nodes only through their outbound agent session.

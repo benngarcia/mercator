@@ -77,6 +77,14 @@ func TestProvisionedCapacityBecomesAMachineMercatorHolds(t *testing.T) {
 // a control plane that reported the gap between two of its own looks would be
 // recording its polling interval as a property of the machine. A calibration
 // trained on that would learn the reconcile cadence.
+//
+// Not one of the three durations is a multiple of labReconcileInterval, which is
+// what makes the assertion capable of failing. Every stage of this machine ends
+// between two looks, so a record carrying the look would read 45, 255 and 60
+// against the 37, 247 and 51 the world spends, and each of the three is off by a
+// different amount. The record is also required to say it was measured: a bound
+// that happened to equal the spend would be right by luck, and the flag is what
+// the calibration reads to know whether it may learn from the number at all.
 func TestEveryProvisioningStageIsRecordedAtWhatTheWorldSpent(t *testing.T) {
 	execution := openConformanceExecution(t, "provisioned-capacity-becomes-a-machine-mercator-holds")
 	defer func() {
@@ -87,20 +95,23 @@ func TestEveryProvisioningStageIsRecordedAtWhatTheWorldSpent(t *testing.T) {
 
 	driveFor(t, execution, 12*time.Minute)
 
-	recorded := capacityStageSeconds(t, execution)
-	// The listing's own three stages: thirty seconds to allocate the machine, four
-	// minutes to boot it, forty five seconds for its agent to open a session.
+	recorded := capacityStages(t, execution)
+	// The listing's own three stages: thirty seven seconds to allocate the machine,
+	// four minutes and seven to boot it, fifty one for its agent to open a session.
 	for stage, spent := range map[domain.LaunchStage]float64{
-		domain.StageAcquisition: 30,
-		domain.StageBoot:        240,
-		domain.StageAgentReady:  45,
+		domain.StageAcquisition: 37,
+		domain.StageBoot:        247,
+		domain.StageAgentReady:  51,
 	} {
 		observed, present := recorded[stage]
 		if !present {
 			t.Fatalf("the record holds no %s stage, and this machine went through it", stage)
 		}
-		if observed != spent {
-			t.Fatalf("%s is recorded at %.0fs and this world spends %.0fs on it", stage, observed, spent)
+		if observed.Seconds != spent {
+			t.Fatalf("%s is recorded at %.0fs and this world spends %.0fs on it", stage, observed.Seconds, spent)
+		}
+		if observed.Bounded {
+			t.Fatalf("%s is recorded as a bound, and both this world's provider and its registry date what they answer", stage)
 		}
 	}
 }
@@ -231,29 +242,35 @@ func firstLaunchSequence(ledger []EffectRecord) (uint64, bool) {
 	return 0, false
 }
 
-// capacityStageSeconds is what Mercator wrote down about each stage of the machine
+// recordedStage is one provisioning stage as Mercator wrote it down: how long it
+// took, and whether that is the duration its authority dated or the bound one
+// look established.
+type recordedStage struct {
+	Stage   domain.LaunchStage `json:"stage"`
+	Seconds float64            `json:"seconds"`
+	Bounded bool               `json:"bounded"`
+}
+
+// capacityStages is what Mercator wrote down about each stage of the machine
 // being built, read off its own event log rather than the world's ledger: these
 // are the control plane's observations, and whether they match what the world
 // spent is the whole question.
-func capacityStageSeconds(t *testing.T, execution *Execution) map[domain.LaunchStage]float64 {
+func capacityStages(t *testing.T, execution *Execution) map[domain.LaunchStage]recordedStage {
 	t.Helper()
 	events, err := execution.runtime.mercatorEvents(context.Background())
 	if err != nil {
 		t.Fatalf("read Mercator events: %v", err)
 	}
-	seconds := map[domain.LaunchStage]float64{}
+	stages := map[domain.LaunchStage]recordedStage{}
 	for _, event := range events {
 		if event.Type != orchestrator.EventCapacityStageObserved {
 			continue
 		}
-		var observed struct {
-			Stage   domain.LaunchStage `json:"stage"`
-			Seconds float64            `json:"seconds"`
-		}
+		var observed recordedStage
 		if err := json.Unmarshal(event.Data, &observed); err != nil {
 			t.Fatalf("decode capacity stage %s: %v", event.ID, err)
 		}
-		seconds[observed.Stage] = observed.Seconds
+		stages[observed.Stage] = observed
 	}
-	return seconds
+	return stages
 }

@@ -324,7 +324,7 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			state.capacityStages = map[domain.LaunchStage]bool{}
 		}
 		state.capacityStages[data.Stage] = true
-		state.lastCapacityStageAt = data.ObservedAt.UTC()
+		state.lastCapacityStageAt = data.FinishedAt.UTC()
 		if data.Stage == domain.StageAgentReady {
 			state.nodeEnrolled = true
 		}

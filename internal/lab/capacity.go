@@ -41,7 +41,17 @@ type capacityLease struct {
 	OwnershipToken string
 	AcceptedAt     time.Time
 	Terminated     bool
+	TerminatedAt   time.Time
 	Enrolled       bool
+}
+
+// capacityProgress is how far this world has got with one machine and the moment
+// it got there. The two travel together because a provider that reports a state
+// without dating it leaves its caller measuring the interval between two looks
+// and calling that the machine's own spend.
+type capacityProgress struct {
+	state capability.CapacityState
+	since time.Time
 }
 
 // arrivesAt is when the agent on this machine opens its session, which is the
@@ -65,7 +75,7 @@ func (world *simulatedWorld) ProvisionCapacity(_ context.Context, command capabi
 	if lease, exists := world.leases[command.RentalID]; exists && !lease.Terminated {
 		receipt := capability.CapacityReceipt{
 			NativeRef:  lease.NativeRef,
-			State:      world.capacityStateOf(lease),
+			State:      world.capacityProgressOf(lease).state,
 			AcceptedAt: lease.AcceptedAt,
 			Duplicate:  true,
 		}
@@ -113,10 +123,12 @@ func (world *simulatedWorld) ObserveCapacity(_ context.Context, ref capability.C
 	if !exists {
 		return capability.CapacityObservation{}, fmt.Errorf("Lab holds nothing for Rental %q", ref.RentalID)
 	}
+	progress := world.capacityProgressOf(lease)
 	observation := capability.CapacityObservation{
 		NativeRef:  lease.NativeRef,
-		State:      world.capacityStateOf(lease),
+		State:      progress.state,
 		ObservedAt: world.now,
+		StateSince: progress.since,
 	}
 	world.recordCapacityEffect(OperationCapacityObserve, "", "", lease.RentalID, EffectCommandAccepted,
 		map[string]any{"rental_id": lease.RentalID}, observation)
@@ -137,6 +149,10 @@ func (world *simulatedWorld) TerminateCapacity(_ context.Context, command capabi
 	command2 := EffectCommandAccepted
 	if lease.Terminated {
 		command2 = EffectCommandDuplicate
+	} else {
+		// The moment the machine was destroyed, which a repeat of the same command
+		// does not move: the bill ended once.
+		lease.TerminatedAt = world.now
 	}
 	lease.Terminated = true
 	receipt := capability.CapacityReceipt{
@@ -170,7 +186,7 @@ func (world *simulatedWorld) ListOwnedCapacity(_ context.Context, query capabili
 			RentalID:       lease.RentalID,
 			Generation:     lease.Generation,
 			OwnershipToken: lease.OwnershipToken,
-			State:          world.capacityStateOf(lease),
+			State:          world.capacityProgressOf(lease).state,
 			CreatedAt:      lease.AcceptedAt,
 		})
 	}
@@ -179,22 +195,29 @@ func (world *simulatedWorld) ListOwnedCapacity(_ context.Context, query capabili
 	return owned, nil
 }
 
-// capacityStateOf is how far this world has got with one machine, spent from the
-// moment its allocation was accepted. Acquisition puts it in starting and boot
-// puts it in active, and nothing after that moves this answer, because the agent
-// arriving is past the end of what a provider can see.
-func (world *simulatedWorld) capacityStateOf(lease *capacityLease) capability.CapacityState {
+// capacityProgressOf is how far this world has got with one machine, spent from
+// the moment its allocation was accepted, and when it got there. Acquisition puts
+// it in starting and boot puts it in active, and nothing after that moves this
+// answer, because the agent arriving is past the end of what a provider can see.
+//
+// The moment is a provider fact and is answered as one. A machine really did
+// finish booting at a moment of its own, and a provider that knows it and reports
+// only its current state forces every reader to date the transition from its own
+// next look.
+func (world *simulatedWorld) capacityProgressOf(lease *capacityLease) capacityProgress {
 	if lease.Terminated {
-		return capability.CapacityStateTerminated
+		return capacityProgress{state: capability.CapacityStateTerminated, since: lease.TerminatedAt}
 	}
 	spend := world.truth[lease.OfferID].provisioning
-	switch elapsed := world.now.Sub(lease.AcceptedAt); {
-	case elapsed < spend.AcquisitionSpend():
-		return capability.CapacityStateRequested
-	case elapsed < spend.AcquisitionSpend()+spend.BootSpend():
-		return capability.CapacityStateStarting
+	acquired := lease.AcceptedAt.Add(spend.AcquisitionSpend())
+	booted := acquired.Add(spend.BootSpend())
+	switch {
+	case world.now.Before(acquired):
+		return capacityProgress{state: capability.CapacityStateRequested, since: lease.AcceptedAt}
+	case world.now.Before(booted):
+		return capacityProgress{state: capability.CapacityStateStarting, since: acquired}
 	default:
-		return capability.CapacityStateActive
+		return capacityProgress{state: capability.CapacityStateActive, since: booted}
 	}
 }
 
@@ -233,9 +256,9 @@ func (world *simulatedWorld) Reinvite(_ context.Context, _, nodeID string) (capa
 	return world.bootstrapFor(nodeID), nil
 }
 
-// Enrolled reports whether the agent on this machine has opened its session.
-// An identity nobody has heard from is not an error: a node invited and never
-// filled is exactly the state provisioning waits in.
+// EnrolledAt is when the agent on this machine opened its session, and the zero
+// time while none has. An identity nobody has heard from is not an error: a node
+// invited and never filled is exactly the state provisioning waits in.
 //
 // A question about a generation this identity is not on is an error, exactly as
 // node.Registry makes it one. The registry answers about a node and a generation
@@ -243,17 +266,17 @@ func (world *simulatedWorld) Reinvite(_ context.Context, _, nodeID string) (capa
 // to, and a world that answered "enrolled and healthy" to a question about the
 // wrong generation would report a machine ready to launch on where the real
 // deployment cannot make progress at all.
-func (world *simulatedWorld) Enrolled(_ context.Context, ref capability.NodeRef) (bool, error) {
+func (world *simulatedWorld) EnrolledAt(_ context.Context, ref capability.NodeRef) (time.Time, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	invitation, exists := world.invitations[ref.NodeID]
 	if !exists {
-		return false, nil
+		return time.Time{}, nil
 	}
 	if ref.Generation != 0 && invitation.Generation != ref.Generation {
-		return false, fmt.Errorf("node: %q is generation %d, not %d", ref.NodeID, invitation.Generation, ref.Generation)
+		return time.Time{}, fmt.Errorf("node: %q is generation %d, not %d", ref.NodeID, invitation.Generation, ref.Generation)
 	}
-	return invitation.Enrolled, nil
+	return invitation.EnrolledAt, nil
 }
 
 // labInvitation is one node identity this world reserved before any machine
@@ -264,9 +287,15 @@ type labInvitation struct {
 	Generation            uint64
 	WorkspaceID           string
 	ShadowPriceUSDPerHour float64
-	Enrolled              bool
-	Token                 string
-	Spent                 bool
+	// EnrolledAt is the moment the agent redeemed this invitation, which is the
+	// moment its machine's whole provisioning ended. It is the agent's arrival and
+	// not the sweep that noticed it: the registry is called by the machine, so it
+	// knows when the session was opened, and a world that dated it from the next
+	// look would make a stage's duration a property of how often Mercator asks.
+	EnrolledAt time.Time
+	Enrolled   bool
+	Token      string
+	Spent      bool
 }
 
 func (world *simulatedWorld) bootstrapFor(nodeID string) capability.NodeBootstrap {
@@ -312,7 +341,8 @@ func (world *simulatedWorld) deliverEnrolments() {
 		if lease.Terminated || lease.Enrolled || !invited {
 			continue
 		}
-		if world.truth[lease.OfferID].neverEnrolls || world.now.Before(lease.arrivesAt(world.truth[lease.OfferID].provisioning)) {
+		arrives := lease.arrivesAt(world.truth[lease.OfferID].provisioning)
+		if world.truth[lease.OfferID].neverEnrolls || world.now.Before(arrives) {
 			continue
 		}
 		if invitation.Token != lease.Bootstrap.EnrollmentToken || invitation.Spent {
@@ -320,6 +350,7 @@ func (world *simulatedWorld) deliverEnrolments() {
 		}
 		lease.Enrolled = true
 		invitation.Enrolled = true
+		invitation.EnrolledAt = arrives
 		invitation.Spent = true
 		redeemed := lease.Bootstrap
 		world.recordEffect(

@@ -176,23 +176,33 @@ func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (ca
 	}, nil
 }
 
-// Enrolled reports whether the machine invited under this identity has opened
-// its session. It is the one authority on the question: a provider can say a
-// machine is active and an operator can say an image has an agent in it, and
-// neither is a session Mercator can create a container through.
+// EnrolledAt is when the machine invited under this identity opened its session,
+// and the zero time while none has. It is the one authority on the question: a
+// provider can say a machine is active and an operator can say an image has an
+// agent in it, and neither is a session Mercator can create a container through.
+//
+// It answers with the moment rather than with a yes because the moment is a fact
+// this registry holds and nobody else does. The agent calls Mercator to enrol, so
+// the session is dated when it opens; a caller told only that a node is ready
+// would have to date the arrival from its own next look, and then how long a
+// machine took to become usable would be a property of how often it was asked
+// about.
 //
 // An identity nobody has heard from is not an error. A node invited and never
 // filled is exactly the state provisioning waits in, and reporting it as a
 // failure would make every look at a machine still booting an incident.
-func (registry *Registry) Enrolled(ctx context.Context, ref capability.NodeRef) (bool, error) {
+func (registry *Registry) EnrolledAt(ctx context.Context, ref capability.NodeRef) (time.Time, error) {
 	record, err := registry.record(ctx, ref)
 	if errors.Is(err, ErrNotFound) {
-		return false, nil
+		return time.Time{}, nil
 	}
 	if err != nil {
-		return false, err
+		return time.Time{}, err
 	}
-	return record.State == StateReady, nil
+	if record.State != StateReady {
+		return time.Time{}, nil
+	}
+	return record.EnrolledAt, nil
 }
 
 // Enroll redeems an invitation for an authenticated session. Identity is not

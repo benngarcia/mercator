@@ -39,7 +39,12 @@ type Capacity interface {
 type Inviter interface {
 	Invite(ctx context.Context, invitation node.Invitation) (capability.NodeBootstrap, error)
 	Reinvite(ctx context.Context, workspaceID, nodeID string) (capability.NodeBootstrap, error)
-	Enrolled(ctx context.Context, ref capability.NodeRef) (bool, error)
+	// EnrolledAt is when the agent opened its session, and the zero time while
+	// none has. The moment is asked for rather than a yes because the registry is
+	// the only holder of it: the agent calls in, so the arrival is dated where it
+	// lands, and a control plane that dated it from its own next look would record
+	// its polling cadence as the machine's own spend.
+	EnrolledAt(ctx context.Context, ref capability.NodeRef) (time.Time, error)
 }
 
 // WithCapacity supplies the capacity lease seam, and WithInviter the node
@@ -71,9 +76,12 @@ const (
 	// owned-capacity sweep having found the machine an earlier command allocated.
 	EventCapacityAccepted = "compute.run.capacity_accepted.v1"
 	// EventCapacityStageObserved is one provisioning stage completing, with the
-	// seconds it really took. The three are recorded separately because they are
-	// three different failures: a provider that cannot allocate, a machine that
-	// cannot boot, and an agent that never arrives.
+	// seconds between the moment the stage before it finished and the moment the
+	// authority that owns this one says it did. Where an authority will not date
+	// its own transition the record says so and the seconds are an upper bound.
+	// The three are recorded separately because they are three different
+	// failures: a provider that cannot allocate, a machine that cannot boot, and
+	// an agent that never arrives.
 	EventCapacityStageObserved = "compute.run.capacity_stage_observed.v1"
 	// EventCapacityReclaimed is Mercator having stopped waiting for the agent and
 	// destroyed the machine. It is not a cleanup: a cleanup ends a Run, and this
@@ -189,14 +197,21 @@ type capacityAcceptedData struct {
 	Adopted    bool                     `json:"adopted,omitempty"`
 }
 
-// capacityStageObservedData is one provisioning stage with its real duration:
-// when it finished, and the seconds between it and the stage before it. Nothing
-// here is read from the estimate the offer published, which is the claim these
+// capacityStageObservedData is one provisioning stage with its duration: when it
+// finished, and the seconds between that and the stage before it. Nothing here is
+// read from the estimate the offer published, which is the claim these
 // measurements exist to be judged against.
+//
+// FinishedAt is the authority's own moment where it dates its transitions, and
+// the moment Mercator looked where it does not. Bounded is which of the two this
+// record holds, and it is written rather than left to be inferred because the
+// difference decides what the number may be used for: a calibration that trained
+// on bounded records would be learning the reconcile cadence.
 type capacityStageObservedData struct {
 	Stage      domain.LaunchStage `json:"stage"`
-	ObservedAt time.Time          `json:"observed_at"`
+	FinishedAt time.Time          `json:"finished_at"`
 	Seconds    float64            `json:"seconds"`
+	Bounded    bool               `json:"bounded,omitempty"`
 }
 
 // capacityReclaimedData is Mercator having given a machine back, and the rule
@@ -346,12 +361,12 @@ func (o *Orchestrator) watchCapacityArrive(ctx context.Context, workspaceID, run
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: observe capacity for Rental %q: %w", requested.RentalID, err)
 	}
-	enrolled, err := o.inviter.Enrolled(ctx, requested.nodeRef(workspaceID))
+	enrolledAt, err := o.inviter.EnrolledAt(ctx, requested.nodeRef(workspaceID))
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: read whether node %q enrolled: %w", requested.NodeID, err)
 	}
 	now := o.now().UTC()
-	events := capacityStageEvents(runID, state, observation, enrolled, now)
+	events := capacityStageEvents(runID, state, observation, enrolledAt, now)
 	switch {
 	case len(events) > 0:
 		return true, o.appendEvents(ctx, workspaceID, runID, version,
@@ -367,35 +382,70 @@ func (o *Orchestrator) watchCapacityArrive(ctx context.Context, workspaceID, run
 // does not hold yet, in the order a machine goes through them. Each stage is
 // measured from the moment the stage before it finished, so the three add up to
 // the whole wait rather than each restating it from the beginning.
-func capacityStageEvents(runID string, state runState, observation capability.CapacityObservation, enrolled bool, now time.Time) []eventlog.NewEvent {
-	reached := map[domain.LaunchStage]bool{
-		domain.StageAcquisition: observation.State == capability.CapacityStateStarting || observation.State == capability.CapacityStateActive,
-		domain.StageBoot:        observation.State == capability.CapacityStateActive,
-		domain.StageAgentReady:  enrolled,
-	}
+//
+// A stage finished when the authority that owns it says it did. Only where an
+// authority will not date its own transition does the moment Mercator looked
+// stand in, and such a record is marked as the bound it is: the machine finished
+// somewhere between this look and the last one, and writing the whole interval
+// down as a duration would publish the reconcile cadence as a property of the
+// machine for a calibration to learn.
+func capacityStageEvents(runID string, state runState, observation capability.CapacityObservation, enrolledAt, now time.Time) []eventlog.NewEvent {
+	finished := provisioningStagesFinished(observation, enrolledAt)
 	since := state.capacity.RequestedAt
 	if !state.lastCapacityStageAt.IsZero() {
 		since = state.lastCapacityStageAt
 	}
 	var events []eventlog.NewEvent
 	for _, stage := range domain.ProvisioningStages {
-		if state.capacityStages[stage] || !reached[stage] {
+		at, reached := finished[stage]
+		if state.capacityStages[stage] || !reached {
 			continue
+		}
+		// A moment outside the interval this look is about dates nothing usable:
+		// before the last stage finished it would measure a negative duration, and
+		// after now it is a transition this look cannot have established. Two stages
+		// found complete in one look leave the second here, sharing the first's
+		// moment and measuring zero, because splitting an interval nothing observed
+		// would be the control plane inventing a boundary.
+		dated := !at.IsZero() && !at.Before(since) && !at.After(now)
+		if !dated {
+			at = now
 		}
 		// Identified by the machine as well as the stage, because a Run whose first
 		// machine was reclaimed goes through all three again on the next one.
 		events = append(events, mustEvent(runID, "capacity_stage_"+state.capacity.RentalID+"_"+string(stage), EventCapacityStageObserved, capacityStageObservedData{
 			Stage:      stage,
-			ObservedAt: now,
-			Seconds:    now.Sub(since).Seconds(),
+			FinishedAt: at,
+			Seconds:    at.Sub(since).Seconds(),
+			Bounded:    !dated,
 		}, now))
-		// Two stages found complete in one look share a moment, so the second
-		// measures zero. What this look established is that both had finished by
-		// now, and splitting the interval between them would be the control plane
-		// inventing a boundary nothing observed.
-		since = now
+		since = at
 	}
 	return events
+}
+
+// provisioningStagesFinished is when each stage a machine has got through
+// finished, according to the authority that owns it: the provider for the
+// allocation and the boot, the node registry for the agent's session. A stage
+// the machine has not reached is absent, and a stage its authority reports
+// without dating carries the zero time.
+func provisioningStagesFinished(observation capability.CapacityObservation, enrolledAt time.Time) map[domain.LaunchStage]time.Time {
+	finished := map[domain.LaunchStage]time.Time{}
+	switch observation.State {
+	case capability.CapacityStateStarting:
+		// Building has begun, so the allocation is over and this is when it ended.
+		finished[domain.StageAcquisition] = observation.StateSince
+	case capability.CapacityStateActive:
+		// The machine is up, which dates the boot. The acquisition ended somewhere
+		// before that and the provider is no longer saying where, so it is left
+		// undated for the caller to record as a bound.
+		finished[domain.StageAcquisition] = time.Time{}
+		finished[domain.StageBoot] = observation.StateSince
+	}
+	if !enrolledAt.IsZero() {
+		finished[domain.StageAgentReady] = enrolledAt
+	}
+	return finished
 }
 
 // reclaimCapacity destroys a machine whose agent never came and releases the

@@ -32,15 +32,15 @@ func TestTheWorldAnswersAboutANodeAndAGenerationTogether(t *testing.T) {
 		t.Fatalf("invite the node: %v", err)
 	}
 
-	invited, err := world.Enrolled(ctx, capability.NodeRef{WorkspaceID: labWorkspace, NodeID: "nod_fenced", Generation: 1})
+	invited, err := world.EnrolledAt(ctx, capability.NodeRef{WorkspaceID: labWorkspace, NodeID: "nod_fenced", Generation: 1})
 	if err != nil {
 		t.Fatalf("the generation this node was invited for was refused: %v", err)
 	}
-	if invited {
-		t.Fatal("a node nothing has enrolled on reads as though its agent had opened a session")
+	if !invited.IsZero() {
+		t.Fatalf("a node nothing has enrolled on reads as though its agent had opened a session at %s", invited)
 	}
 
-	_, err = world.Enrolled(ctx, capability.NodeRef{WorkspaceID: labWorkspace, NodeID: "nod_fenced", Generation: 2})
+	_, err = world.EnrolledAt(ctx, capability.NodeRef{WorkspaceID: labWorkspace, NodeID: "nod_fenced", Generation: 2})
 	if err == nil {
 		t.Fatal("a question about a generation this node is not on was answered rather than refused")
 	}
