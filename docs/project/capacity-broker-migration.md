@@ -4111,6 +4111,44 @@ complete because it works against a live provider.
     same Blueprint with `never_enrolls` set asserts the absence, which is a
     machine allocated, no session opened, and nothing launched.
 
+- [x] 2026-07-28: Fix what two reviewers refuted in the entry below, which was the
+  fix for the entry below that. Three defects held, and both of the entry's own new
+  assertions were among them: one compared a value with itself, and the other could
+  not tell a measurement from a polling interval.
+  - `safety.enrolment_names_the_generation_it_was_invited_for` compared the
+    provision's generation against itself. The Lab stored `command.Generation` on the
+    lease and wrote that one field into both the provision facts and the enrolment
+    facts, so the generation the machine's bootstrap was actually minted under never
+    reached the ledger. The lease now holds the bootstrap it was handed, entire, and
+    the enrolment is recorded under what the agent redeems. Verified against the
+    control plane rather than against the recorder: `allocateCapacity` sending
+    `Generation: requested.Generation + 1` fails 15 Lab tests mid-drive, and at
+    3b2c3e4 the same defect drove a fully green `go test ./...`.
+  - `simulatedWorld.Enrolled` ignored the generation on the `NodeRef` while
+    `node.Registry` refuses a mismatch, so the Lab could not model the failure the
+    rule is about at all. It now refuses with the sentence the real registry writes.
+    The mirror-image defect, inviting under generation 2 while provisioning under 1,
+    now fails the Lab the way it fails production instead of reading as a machine
+    ready to launch on.
+  - Provisioning stages were recorded at `now.Sub(since)` with both ends at reconcile
+    moments, so the seconds were the world's spend rounded up to the polling grid.
+    The fixture's 30s, 4m and 45s were all exact multiples of the fifteen second
+    cadence, which is the only reason the assertion held. Each stage is now dated by
+    the authority that owns it: `CapacityObservation.StateSince` is the provider's own
+    account of when the machine entered the state it reports, and `Inviter.EnrolledAt`
+    replaces `Enrolled` so the registry answers with the moment the agent opened its
+    session. Where an authority will not date a transition the record carries
+    `bounded`, which is the honest reading and what keeps a calibration from training
+    on a polling interval. The fixture leaves the grid: 37s, 4m7s, 51s.
+  - The judgment call is to model the undated case rather than to require dating.
+    A provider that reports a state without a since is a real product, and refusing
+    to record anything for it would lose the one fact Mercator does have. What is
+    refused is the pretence: the seconds are published as a bound and marked as one.
+  - No Blueprint states either defect, and none can. A scenario describes a world,
+    and both are Mercator's own acts, so the deliberate failing cases reach the
+    world's two contracts directly and the control-plane evidence is the injected
+    defect recorded under Verification evidence.
+
 - [x] 2026-07-28: Fix what two reviewers refuted in the entry above. Four findings
   held, and all four were the same class the entry claims to have fixed: a statement
   that reaches nothing, or an assertion that could not fail.
@@ -4147,7 +4185,10 @@ complete because it works against a live provider.
     `safety.enrolment_names_the_generation_it_was_invited_for` is registered with its
     own deliberate failing world, and the conformance case compares the whole lease
     rather than the Rental alone. Recording `lease.Generation + 7` in the Lab's
-    enrolment now fails the corpus mid-drive; before, it was green.
+    enrolment now fails the corpus mid-drive; before, it was green. Refuted by the
+    review round below: that evidence mutates the recorder rather than the control
+    plane, and the rule as registered here compared the provision's generation with
+    itself.
   - The conformance cases reconcile every fifteen seconds rather than every three
     minutes, and `TestEveryProvisioningStageIsRecordedAtWhatTheWorldSpent` holds each
     stage to the seconds this world really spends. At the old cadence the record
@@ -4155,7 +4196,10 @@ complete because it works against a live provider.
     took forty five seconds. The zero itself is not a defect: two stages found
     complete in one look share a moment, and splitting an interval nothing observed
     would be the control plane inventing a boundary. What was wrong was a green
-    fixture whose record read that way and asserted nothing about it.
+    fixture whose record read that way and asserted nothing about it. Refuted by the
+    review round below: a finer cadence narrows the error and does not make the
+    assertion capable of detecting it, and every stage in the fixture was an exact
+    multiple of the new interval.
   - Not fixed here, and filed instead: a Run whose machine was provisioned under the
     capacity lease has the listing's whole provisioning attributed to its launch, so
     the Run Bundle reads `start_latency_seconds` predicted against an actual measured
@@ -4414,9 +4458,11 @@ Phase 1 added:
   act about, the fencing token included, to a machine that does not exist. A lease
   with no provision behind it is exempt, because standing capacity a world seeded
   has no invitation to be right or wrong about. Added in the review round of phase
-  5 slice 4: the ontology's one binding of a Node to a Rental generation was
-  asserted in prose and by nothing executable, and recording `lease.Generation + 7`
-  in the Lab's own enrolment left the whole tree green.
+  5 slice 4, and made able to fail in the round after it: the enrolment is recorded
+  under the generation the agent's own bootstrap names, so the rule compares two
+  facts of Mercator's making rather than one field with itself. A control plane that
+  provisions under one generation and mints the token under another fails 15 Lab
+  tests mid-drive; before, it was fully green.
 
 Phase 3 added:
 
@@ -5639,6 +5685,85 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 5 the generation binding and the measured stage, under the second review
+
+Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
+`go vet` and `go test ./...` are green, including the live half: the node agent's
+object-store cases and the Docker runtime cases execute against real containers on
+this host rather than being skipped, so `TestANodeReplicatesAnArtifactFromARealObjectStore`
+and `TestDockerRuntimeReportsTheLayersItUnpacked` are evidence rather than
+simulation.
+
+Three defects held. Both new assertions the previous entry added were among them.
+
+The generation rule compared one value with itself. `simulatedWorld.ProvisionCapacity`
+stored `command.Generation` on the lease, and `deliverEnrolments` wrote that same
+field into the enrolment facts, so `invitedGenerations` and the rule read the same
+number twice. The generation the bootstrap was minted under, which is what the node
+redeems and what the fencing token is issued against, never reached the ledger. The
+lease now holds the bootstrap verbatim and the enrolment is recorded under what the
+agent redeems.
+
+It was verified by injecting the defect into the control plane rather than into the
+recorder. In a scratch copy of the tree, `allocateCapacity` sending
+`Generation: requested.Generation + 1` while the token is minted for generation 1:
+
+```text
+enrolment effect_d3c9… opened a session under Rental "rnt_c915…" generation 1,
+  and the machines allocated for that lease were invited for [2]
+```
+
+15 Lab tests fail on it, `TestProvisionedCapacityBecomesAMachineMercatorHolds` and
+`TestDefaultInvariantRegistryPassesTheCanonicalExecution` included. At 3b2c3e4 the
+same defect drove a fully green `go test -count=1 ./...`.
+
+The mirror-image defect, `bootstrapFor` inviting under generation 2 while the
+provider is asked for generation 1, now fails the Lab with the sentence the real
+registry writes, because `simulatedWorld.EnrolledAt` honours the generation on the
+`NodeRef` as `node.Registry.record` does:
+
+```text
+advance Lab Run "builder": orchestrator: read whether node "nod_c915…" enrolled:
+  node: "nod_c915…" is generation 2, not 1
+```
+
+Before the fix the Lab answered "enrolled" to that question and reported a machine
+ready to launch on where the real deployment cannot make progress at all.
+
+The stage record carried the polling grid. Each stage was `now.Sub(since)` with both
+ends at reconcile moments, and the fixture's 30s, 4m and 45s were exact multiples of
+the fifteen second cadence, so grid and spend coincided. Each stage is now dated by
+its authority, and where an authority does not date its transitions the record says
+`bounded` and the seconds are published as the upper bound they are.
+
+Both halves were shown failing. Forcing every stage to fall back to the look:
+
+```text
+agent_ready is recorded at 60s and this world spends 51s on it        (Lab)
+the acquisition stage was recorded as 37s, and this machine spent 30s on it
+the boot stage was recorded as 253s, and this machine spent 240s on it
+the agent_ready stage was recorded as 70s, and this machine spent 45s on it
+  and each of the three is also reported as a bound                   (orchestrator)
+```
+
+The probe the reviewers used now passes. With the fixture's `boot` at `4m10s` and
+the expectation at 250 the case is green, and with the expectation left at 247 it
+fails with `boot is recorded at 250s and this world spends 247s on it`. The record
+follows the world rather than the reconcile interval, and the fixture's three
+stages, 37s, 4m7s and 51s, are deliberately none of them multiples of it.
+
+`TestAStageNoAuthorityDatesIsRecordedAsABound` holds the other half: a provider that
+reports a state without saying since when yields the whole 37 second interval marked
+`bounded`, rather than a 30 second measurement nobody made.
+
+Two cases are new and both are load-bearing.
+`TestTheWorldRecordsTheGenerationTheAgentRedeems` fails if the world's enrolment
+line is restored to `lease.Generation`, and
+`TestTheWorldAnswersAboutANodeAndAGenerationTogether` fails if the Lab's registry
+goes back to looking a node up by name alone. Neither can be stated as a Blueprint:
+a scenario describes a world, and what has to disagree here is two acts of
+Mercator's, so both reach the world's own contracts directly.
 
 ### Phase 5 what a machine has to be for anything to accumulate on it
 
