@@ -444,9 +444,10 @@ const sessionRenewalMargin = node.DefaultSession / 10
 // one: nothing is redeemed, no fencing token moves, and the machine is the same
 // machine it was a moment before.
 //
-// A retired or destroyed machine renews nothing. The credential outlives neither,
-// and an agent that went on renewing against a lease Mercator gave up would be
-// holding a session to a machine nobody is paying for.
+// A machine this world destroyed renews nothing, and neither does one whose agent
+// never arrived. There is nobody on either to hold a session, and an agent that
+// went on renewing against a lease Mercator handed back would be a session to a
+// machine that no longer exists.
 func (world *simulatedWorld) renewSessions() {
 	world.mu.Lock()
 	defer world.mu.Unlock()

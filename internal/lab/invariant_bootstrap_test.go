@@ -41,6 +41,11 @@ func TestEveryClauseOfTheBootstrapCredentialRuleCanFail(t *testing.T) {
 		"one invitation redeemed twice": func(observation *InvariantObservation) {
 			observation.BootstrapCredentials = []bootstrapCredential{mintedFor(1, 2)}
 		},
+		"an invitation with no material to present": func(observation *InvariantObservation) {
+			credential := mintedFor(1, 1)
+			credential.Token = ""
+			observation.BootstrapCredentials = []bootstrapCredential{credential}
+		},
 		"the invitation written into a Mercator event": func(observation *InvariantObservation) {
 			observation.BootstrapCredentials = []bootstrapCredential{mintedFor(1, 1)}
 			observation.MercatorEvents = []eventlog.CloudEvent{{

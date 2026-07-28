@@ -2658,6 +2658,13 @@ func secretsAbsent(observation InvariantObservation) error {
 			}
 		}
 		for _, credential := range observation.BootstrapCredentials {
+			// A credential with no material is a record the rule about bootstraps
+			// refuses on its own. Searching for the empty string here would match
+			// every record ever written, so this rule leaves it to the one that
+			// names the problem.
+			if credential.Token == "" {
+				continue
+			}
 			if bytes.Contains(encoded, []byte(credential.Token)) {
 				return fmt.Errorf(
 					"recorded data contains the enrollment token %s was bootstrapped with, whatever field it is filed under",
@@ -2697,6 +2704,16 @@ func secretsAbsent(observation InvariantObservation) error {
 // rule that fails if the record were clean and the token were spent twice.
 func bootstrapCredentialIsShortLivedAndSingleUse(observation InvariantObservation) error {
 	for _, credential := range observation.BootstrapCredentials {
+		// A credential with no material is a record this rule cannot use, and
+		// dropping it quietly is how the rule would weaken without anything saying
+		// so: the clause below searches the record for the token, and the empty
+		// string is in every record ever written.
+		if credential.Token == "" {
+			return fmt.Errorf(
+				"the invitation minted for %q generation %d carries no material, and a bootstrap is the material a machine presents",
+				credential.NodeID, credential.Generation,
+			)
+		}
 		if credential.Provisions > 1 {
 			return fmt.Errorf(
 				"the bootstrap minted for %s generation %d was handed to %d machines, and each of them can enrol as that node",
