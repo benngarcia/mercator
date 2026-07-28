@@ -4030,6 +4030,76 @@ complete because it works against a live provider.
     hands capacity back and then decides again. It is read from both sides through
     `Run` against a replayed stream instead: handed back before the answer changed,
     handed back after it, and released rather than terminated.
+- [x] 2026-07-28: Make a placement that chose to provision an act, and give a
+  machine nobody came for an end. `provisioned-capacity-enrolls-or-is-reclaimed`
+  is green with its `missing_capabilities` emptied, and the corpus moves from 56
+  green and 4 target to 57 and 3.
+  - The control plane gained two seams. `orchestrator.Capacity` is the lease,
+    satisfied by the Broker, and `orchestrator.Inviter` is the node registry.
+    They are separate from `orchestrator.Adapter` because Adapter is an
+    execution: ADR 0005 is why a terminate that destroys a machine may never be
+    filed under a release that ends a workload.
+  - What a Run placed on capacity to provision now does, in order: reserves its
+    Booking on the Rental the decision minted, sweeps the connection's owned
+    capacity for a machine already allocated against that Rental, invites the
+    node the machine will be with the listing's own rate on it, hands the
+    provider the bootstrap verbatim, and watches. Acquisition and boot are read
+    from the provider; whether an agent opened a session is read from the
+    registry, because nothing else can answer that. Each stage is recorded when
+    it completes with the seconds it really took, measured from the stage before
+    it.
+  - The owned-capacity sweep runs before every provision rather than only after
+    a failure. A command whose response was lost and a command never sent leave
+    Mercator's own record saying the same thing, so there is no state in which
+    the cheaper check would be correct.
+  - The enrollment token is never written down, in the public payload or the
+    private one. It is minted at the moment it is handed to a provider, and what
+    the record carries is the node identity it was minted for.
+    `TestTheProviderIsHandedTheBootstrapVerbatim` reads every event this Run
+    records back and refuses any that carries it.
+  - Reclamation is its own event and not a cleanup, because a cleanup ends a Run
+    and this is a Run that never started. The terminate happens before the work
+    moves and in the same commit that releases the Booking, and a provider that
+    refuses to destroy the machine leaves the Run exactly where it was:
+    `TestTheWorkDoesNotMoveUntilTheBillEnds` is that clause, and without it a
+    recorded reclamation would read the same in a world where the machine is
+    still billing.
+  - Offer exclusions are typed. A bare list of IDs could only say "an earlier
+    attempt refused this", which reads a machine somebody else was using and a
+    machine Mercator allocated and destroyed as one fact.
+    `PREVIOUS_ATTEMPT_CAPACITY_RECLAIMED` is the second code.
+  - Mercator's enrolment patience is fifteen minutes and a listing may state its
+    own. There is deliberately no value meaning "wait for ever".
+  - `liveness.provisioned_capacity_enrolls_or_is_reclaimed` is registered with a
+    thirty-minute bound and a deliberate failing world: an accepted
+    `capacity.provision` an hour old with no `node.enrolled` and no
+    `capacity.terminate` against its Rental. It is stated over the ledger alone,
+    because Mercator's own record can say a Run moved on and only the ledger says
+    whether the machine it moved off is still allocated.
+  - `safety.capacity_lifecycle_is_negotiated` is NOT registered, and the reason
+    is the registry's own rule. Nothing in the tree stops or resumes capacity:
+    this slice performs provision, observe, terminate, and list_owned, and
+    `CapacitySupport.Claims` returns true for the first three unconditionally.
+    The production half of that promise is already made where the provider is,
+    in `Broker.providerFor`, which refuses an operation a connection never
+    claimed before any request is sent. A rule policing an act no path performs,
+    against a set no ledger entry yet carries, would be a rule that could only
+    fail against a hand-written observation. It lands with the slice that stops
+    or resumes a machine.
+  - Two green Blueprints changed, and it is the honest consequence rather than a
+    fixture bent to fit. `a-launch-is-eight-stages` and
+    `a-start-is-a-moment-somebody-observed` both measured a start latency from
+    the moment the launch was accepted, and that moment used to be before the
+    machine existed, so the figure they asserted was provisioning plus the image.
+    The three provisioning stages are now spent under the lease with three
+    actuals of their own, so what is left between the launch being accepted and
+    the container starting is the content the machine still owed: 58s and 288s.
+    Both also need one more look, because a control plane that never looks never
+    launches.
+  - `capability.CapacityProvider.Provision` is now `ProvisionCapacity`. Every
+    sibling act was already named for the lease, and a provider that also
+    launches workloads has two things it could be asked to provision.
+
 - [x] 2026-07-27: Make the capacity contract reachable from the control plane. Every
   one of `CapacityProvider`'s nine methods was called by nothing, `Backend.Capacity`
   had no caller, and `capability.Declare` refused capacity without a `NodeRuntime` on
@@ -5401,7 +5471,7 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 60 regression Blueprints: 56 green and 4 target, beside two demo
+The corpus is 60 regression Blueprints: 57 green and 3 target, beside two demo
 documents, one minimized case, and forty conformance Blueprints, all of
 them green. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
@@ -5411,21 +5481,17 @@ subdirectories beside them hold the demo and the one minimized case.
 Blueprint added without a classification fails the build rather than drifting the
 number quoted here.
 
-The four targets are the capabilities no simulated world performs yet.
+The three targets are the capabilities no simulated world performs yet.
 `enrolled-node-survives-its-first-run` needs an agent to bootstrap on provisioned
-capacity, which is phase 5. `provisioned-capacity-enrolls-or-is-reclaimed` needs
-the other half of the same transition: a machine the provider allocates and boots
-whose agent never opens a session, where nothing can create a container and no
-workload begins, which is the failure a real provider bills for until its own
-backstop fires. What it is red on is bounded patience and what follows it, which is
-Mercator waiting out the deadline the capacity stated, terminating the machine, and
-deciding again with that listing struck out. `queued-booking-deadline-expiry` needs
+capacity and an execution to warm it, which is the rest of phase 5.
+`queued-booking-deadline-expiry` needs
 `schedule_advancement`, which is a Booking expiring past its latest start and its
 Run being placed again. `bad-host-facts-rejected-loudly` needs a world that can
 publish host facts a machine then contradicts.
 
-The Lab registry holds forty five invariants, thirty eight safety and seven
-liveness. Every one carries a deliberate failing case, which
+The Lab registry holds forty eight invariants, forty safety and eight liveness.
+The figure is counted off `DefaultInvariantRegistry` rather than remembered; an
+earlier revision of this section said forty five and was already two behind. Every one carries a deliberate failing case, which
 `TestEveryDefaultInvariantHasADeliberatelyFailingCase` requires of the registry
 itself: an invariant nothing can make fail is not evidence, so one cannot be
 registered without the world that breaks it.

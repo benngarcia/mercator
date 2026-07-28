@@ -150,6 +150,15 @@ func DefaultInvariantRegistry() InvariantRegistry {
 			check:       lostResponseReconciliation,
 		},
 		invariantRule{
+			id: "liveness.provisioned_capacity_enrolls_or_is_reclaimed",
+			assumptions: []string{
+				"virtual time advances",
+				"the provider records every allocation it accepted",
+			},
+			bound: provisionedCapacityBound,
+			check: provisionedCapacityEnrolsOrIsReclaimed,
+		},
+		invariantRule{
 			id:          "liveness.stale_lease_expiry",
 			assumptions: []string{"virtual time advances", "provider execution deadlines are observable"},
 			bound:       5 * time.Minute,

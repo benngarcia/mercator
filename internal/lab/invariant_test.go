@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 47 {
-		t.Fatalf("latest invariant results = %d, want 47", len(latest))
+	if len(latest) != 48 {
+		t.Fatalf("latest invariant results = %d, want 48", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -343,6 +343,20 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		// guarantee was already spent when the decision recording it was written.
 		"safety.promised_start_is_still_ahead": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{queuedOnADeadlineAlreadyReached(now)}
+		},
+		// The world this exists to catch is a machine a provider allocated, billed
+		// for, and that nothing ever came for: no agent opened a session on it and
+		// Mercator never gave it back. It is a full hour old here, past any patience
+		// a listing states and past the backstop, so what is left is a bill nobody
+		// is watching.
+		"liveness.provisioned_capacity_enrolls_or_is_reclaimed": func(observation *InvariantObservation) {
+			observation.Effects = []EffectRecord{{
+				ID:        "effect-abandoned",
+				Operation: OperationCapacityProvision,
+				At:        now.Add(-time.Hour),
+				Command:   EffectCommandAccepted,
+				Request:   []byte(`{"rental_id":"rnt_abandoned"}`),
+			}}
 		},
 		"liveness.lost_response_reconciliation": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{{CorrelationID: "run-missing", Response: EffectResponseLost}}
@@ -662,10 +676,13 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 // that: two prewarming rules were decoding the request projection of every
 // accepted effect before deciding whether the effect was theirs.
 //
-// No world emits a capacity operation until the provider seam exists, so the
-// ledger here is written by hand. That is the point: the rules that will read it
-// are already registered, and the day a provision is really recorded nothing else
-// has to change for them to see it.
+// The ledger is written by hand so each pair is the one fact the case is about
+// and nothing else. Each record states the request projection its operation
+// really carries and the moment it happened, which
+// liveness.provisioned_capacity_enrolls_or_is_reclaimed needs to be a rule about
+// a machine at all: it is keyed on the lease, and it is the age of an allocation
+// nothing came for that it objects to. Two entries stamped now are a machine just
+// allocated, which is what every provision looks like for its first minute.
 func TestTheLedgerReadsTheCapacityLifecycleItWillBeAskedToRecord(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	for _, operation := range []string{
@@ -677,12 +694,14 @@ func TestTheLedgerReadsTheCapacityLifecycleItWillBeAskedToRecord(t *testing.T) {
 		t.Run(operation, func(t *testing.T) {
 			observation := handWrittenLedger(now,
 				EffectRecord{
-					Operation: operation, OperationID: "operation-1",
-					Command: EffectCommandAccepted, Consequence: []byte(`{"native_ref":"machine-first"}`),
+					Operation: operation, OperationID: "operation-1", At: now,
+					Command: EffectCommandAccepted,
+					Request: []byte(`{"rental_id":"rnt_1"}`), Consequence: []byte(`{"native_ref":"machine-first"}`),
 				},
 				EffectRecord{
-					Operation: operation, OperationID: "operation-1",
-					Command: EffectCommandAccepted, Consequence: []byte(`{"native_ref":"machine-second"}`),
+					Operation: operation, OperationID: "operation-1", At: now,
+					Command: EffectCommandAccepted,
+					Request: []byte(`{"rental_id":"rnt_1"}`), Consequence: []byte(`{"native_ref":"machine-second"}`),
 				},
 			)
 
@@ -726,7 +745,7 @@ func TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated(t *testing
 		answers [2]string
 	}{
 		OperationCapacityObserve: {
-			request: `{"native_ref":"machine-1"}`,
+			request: `{"rental_id":"rnt_1","native_ref":"machine-1"}`,
 			answers: [2]string{`{"state":"starting"}`, `{"state":"active"}`},
 		},
 		OperationCapacityListOwned: {
