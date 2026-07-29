@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -990,4 +991,174 @@ func TestAPathANodeMeasuredReachesTheOfferItPrices(t *testing.T) {
 	if registryRate := offers[0].DownloadRate(domain.NetworkScopeRegistry, offers[0].ObservedAt); registryRate.Assumption != domain.AssumptionRegistryRate {
 		t.Fatalf("the offer prices an image pull at %+v, and nothing has measured this node's link to a registry", registryRate)
 	}
+}
+
+// pullSecret and readLocation are the two things a machine may present and the
+// control plane's record must never hold: the password behind a private
+// registry, and a presigned GET, which is a bearer credential written as a URL.
+const (
+	pullSecret   = "registry-password-nobody-may-keep"
+	readLocation = "https://objects.test/bucket/corpus?X-Amz-Signature=deadbeef"
+)
+
+// TestTheRecordOfAPullHoldsWhatWasAuthorisedAndNotTheMaterial is the line
+// between a durable desire and a minted credential. A node command is written
+// down so a machine that was disconnected still receives it, and node_operations
+// is kept for the life of the deployment and pruned by nothing, so material
+// written there outlives its own fifteen minute window by years in a file an
+// operator backs up. What the record holds instead is the bound: which pull was
+// authorised, for whom, and until when, which is presentable to nobody.
+func TestTheRecordOfAPullHoldsWhatWasAuthorisedAndNotTheMaterial(t *testing.T) {
+	store := node.NewMemoryStore()
+	registry, clock := newRegistryOn(t, store)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+
+	if _, err := registry.PrepareImage(context.Background(),
+		privatePullCommand(bootstrap, enrollment, "op-prepare-1", clock.Now())); err != nil {
+		t.Fatalf("prepare the private image: %v", err)
+	}
+
+	delivered := receiveCommand(t, session)
+	if !strings.Contains(string(delivered.Payload), pullSecret) {
+		t.Fatal("the machine was handed a pull it cannot present, so nothing it was told to fetch could be fetched")
+	}
+	recorded := onlyPendingOperation(t, store)
+	if strings.Contains(string(recorded.Payload), pullSecret) {
+		t.Fatalf("the registry password was written into the durable record of the command: %s", recorded.Payload)
+	}
+	if !strings.Contains(string(recorded.Payload), "op-prepare-1") {
+		t.Fatalf("the record states nothing about which pull was authorised: %s", recorded.Payload)
+	}
+}
+
+// TestTheRecordOfAnArtifactFetchHoldsNoSignedRead is the same rule for the other
+// fetch. The durable location the catalog states is a name for content and stays
+// in the record; the signed one beside it is a working read of the object and
+// does not.
+func TestTheRecordOfAnArtifactFetchHoldsNoSignedRead(t *testing.T) {
+	store := node.NewMemoryStore()
+	registry, clock := newRegistryOn(t, store)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+
+	if _, err := registry.PrepareArtifact(context.Background(),
+		artifactFetchCommand(bootstrap, enrollment, "op-fetch-1", clock.Now())); err != nil {
+		t.Fatalf("prepare the Artifact: %v", err)
+	}
+
+	delivered := receiveCommand(t, session)
+	if !strings.Contains(string(delivered.Payload), readLocation) {
+		t.Fatal("the machine was handed no read, so the object store would refuse the fetch it was told to make")
+	}
+	recorded := onlyPendingOperation(t, store)
+	if strings.Contains(string(recorded.Payload), "X-Amz-Signature") {
+		t.Fatalf("a signed read of the object store was written into the durable record: %s", recorded.Payload)
+	}
+	if !strings.Contains(string(recorded.Payload), "objects://corpus/v3") {
+		t.Fatalf("the record states nothing about which version was authorised: %s", recorded.Payload)
+	}
+}
+
+// TestACommandReplayedOnALaterSessionCarriesNoMaterial states what the two cases
+// above cost, so nobody reads them as free. A command is durable and the
+// credential inside it is not, so an agent that was down when the sweep issued
+// one is handed the record rather than the pull. The machine refuses that rather
+// than presenting an empty password to a registry, and the fetch is asked for
+// again; what must never happen is the alternative, which is the material
+// sitting in the database until somebody replays it.
+func TestACommandReplayedOnALaterSessionCarriesNoMaterial(t *testing.T) {
+	store := node.NewMemoryStore()
+	registry, clock := newRegistryOn(t, store)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	first := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+	if _, err := registry.PrepareImage(context.Background(),
+		privatePullCommand(bootstrap, enrollment, "op-prepare-1", clock.Now())); err != nil {
+		t.Fatalf("prepare the private image: %v", err)
+	}
+	receiveCommand(t, first)
+	registry.CloseSession(first)
+
+	second := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+
+	replayed := receiveCommand(t, second)
+	if strings.Contains(string(replayed.Payload), pullSecret) {
+		t.Fatal("a command replayed on a later session carried material the record was supposed not to hold")
+	}
+}
+
+func newRegistryOn(t *testing.T, store node.Store) (*node.Registry, *testClock) {
+	t.Helper()
+	clock := &testClock{now: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)}
+	registry := node.NewRegistry(
+		store,
+		node.NewSigner(node.DeriveKey([]byte("test-master-key"))),
+		"https://mercator.test",
+		node.WithClock(clock.Now),
+	)
+	return registry, clock
+}
+
+func onlyPendingOperation(t *testing.T, store node.Store) node.Operation {
+	t.Helper()
+	pending, err := store.PendingOperations(context.Background(), testWorkspace, testNode)
+	if err != nil {
+		t.Fatalf("read the durable record of what the node was told: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("the record holds %d pending operations, want the one that was dispatched", len(pending))
+	}
+	return pending[0]
+}
+
+func privatePullCommand(
+	bootstrap capability.NodeBootstrap,
+	enrollment capability.Enrollment,
+	operationID string,
+	now time.Time,
+) capability.PrepareImageCommand {
+	command := prepareCommand(bootstrap, enrollment, operationID)
+	command.Reference = "registry.test/analyst@" + command.ManifestDigest
+	command.RegistryCredential = domain.RegistryPull{
+		ContentCredentialScope: domain.ContentCredentialScope{
+			Operation:   operationID,
+			WorkspaceID: testWorkspace,
+			Content:     command.ManifestDigest,
+			ExpiresAt:   now.Add(15 * time.Minute),
+		},
+		Registry: "registry.test",
+		Username: "mercator",
+		Secret:   pullSecret,
+	}
+	return command
+}
+
+func artifactFetchCommand(
+	bootstrap capability.NodeBootstrap,
+	enrollment capability.Enrollment,
+	operationID string,
+	now time.Time,
+) capability.PrepareArtifactCommand {
+	command := capability.PrepareArtifactCommand{
+		ArtifactID:    "artifact:corpus:v3",
+		ContentDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+		Source:        "objects://corpus/v3",
+		SourceCredential: domain.ArtifactRead{
+			ContentCredentialScope: domain.ContentCredentialScope{
+				Operation:   operationID,
+				WorkspaceID: testWorkspace,
+				Content:     "artifact:corpus:v3",
+				ExpiresAt:   now.Add(15 * time.Minute),
+			},
+			Location: readLocation,
+		},
+		SizeBytes: 4096,
+	}
+	command.NodeRef = nodeRef(bootstrap)
+	command.OperationID = operationID
+	command.FencingToken = enrollment.FencingToken
+	return command
 }

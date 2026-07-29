@@ -300,7 +300,8 @@ type PrepareImageCommand struct {
 	// ManifestDigest.
 	Reference string
 	// RegistryCredential is short-lived material scoped to this pull. It is
-	// never logged, never persisted on the node, and never enters an event.
+	// never logged, never persisted on the node, never entered into an event, and
+	// never written into the control plane's own record of the command.
 	//
 	// It is zero for an image any anonymous reader can have, which is a real
 	// answer rather than a missing one: Mercator holds no account at that
@@ -308,6 +309,15 @@ type PrepareImageCommand struct {
 	RegistryCredential domain.RegistryPull
 	// Unpack requests the image be made ready to run, not merely fetched.
 	Unpack bool
+}
+
+// WithoutMaterial is this command as the durable record holds it. The secret is
+// dropped and the bound it was minted under is kept, so an operator reading the
+// record can say which pull this machine was authorised to make and until when,
+// and can present nothing.
+func (command PrepareImageCommand) WithoutMaterial() any {
+	command.RegistryCredential.Secret = ""
+	return command
 }
 
 type PrepareArtifactCommand struct {
@@ -324,6 +334,15 @@ type PrepareArtifactCommand struct {
 	// authority's own credential is never on a machine an operator rents.
 	SourceCredential domain.ArtifactRead
 	SizeBytes        int64
+}
+
+// WithoutMaterial is this command as the durable record holds it. A presigned
+// GET is a bearer credential written as a URL, so the location goes and the
+// bound stays; Source above is the catalog's own name for the same content and
+// is what a reader of the record uses to say which version this was.
+func (command PrepareArtifactCommand) WithoutMaterial() any {
+	command.SourceCredential.Location = ""
+	return command
 }
 
 type LaunchWorkloadCommand struct {

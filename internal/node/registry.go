@@ -390,9 +390,13 @@ func (registry *Registry) dispatch(
 	if fencingToken != 0 && fencingToken < record.FencingToken {
 		return capability.OperationReceipt{}, fmt.Errorf("%w: %s carries %d under %d", ErrFenced, kind, fencingToken, record.FencingToken)
 	}
-	payload, err := json.Marshal(command)
+	wire, err := json.Marshal(command)
 	if err != nil {
 		return capability.OperationReceipt{}, fmt.Errorf("node: encode %s: %w", kind, err)
+	}
+	payload, err := json.Marshal(recorded(command))
+	if err != nil {
+		return capability.OperationReceipt{}, fmt.Errorf("node: record %s: %w", kind, err)
 	}
 	now := registry.now().UTC()
 	stored, duplicate, err := registry.store.AppendOperation(ctx, Operation{
@@ -414,8 +418,37 @@ func (registry *Registry) dispatch(
 	// Delivery is best effort on purpose. The command is durable now, so a node
 	// that is disconnected receives it on its next session rather than the work
 	// being lost or the caller blocking on a machine that may never answer.
-	registry.deliver(record.WorkspaceID, record.ID, commandFrom(stored))
+	//
+	// What is delivered is the command as it was issued, and what was recorded a
+	// moment ago is the command without its material. The two encodings are the
+	// whole of why this hands over the wire bytes rather than the stored ones: a
+	// desire is durable and a credential minted for one fetch is not.
+	delivered := commandFrom(stored)
+	delivered.Payload = wire
+	registry.deliver(record.WorkspaceID, record.ID, delivered)
 	return capability.OperationReceipt{OperationID: operationID, AcceptedAt: now}, nil
+}
+
+// materialHolder is a command carrying something a machine may present. Every
+// other command is its own record.
+type materialHolder interface {
+	// WithoutMaterial is this command with every bearer credential taken out and
+	// the bound each was minted under left in. A registry secret and a signed
+	// location are what a holder can spend; the operation, workspace, content and
+	// expiry beside them are the record of what Mercator authorised and are
+	// presentable to nobody.
+	WithoutMaterial() any
+}
+
+// recorded is what the durable record holds of one command. It is a separate
+// encoding rather than a redaction on the way out because node_operations is
+// kept for the life of the deployment and is never pruned: material written
+// there outlives its own window by years, in a file an operator backs up.
+func recorded(command any) any {
+	if holder, ok := command.(materialHolder); ok {
+		return holder.WithoutMaterial()
+	}
+	return command
 }
 
 func commandFrom(operation Operation) Command {

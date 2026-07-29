@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -103,6 +105,11 @@ func (docker *DockerRuntime) PrepareArtifact(ctx context.Context, command capabi
 // spends it. The scope names the operation this fetch is, the workspace the
 // content belongs to, and the version itself, and a read that names any other is
 // material this command was not the one for.
+//
+// No location is either of two things and both are the same refusal: a
+// deployment that minted nothing because it holds no object store, or a command
+// replayed on a later session, whose durable record holds the bound this read
+// was minted under and never the signed URL.
 func (docker *DockerRuntime) authorisedRead(command capability.PrepareArtifactCommand) error {
 	read := command.SourceCredential
 	if read.Location == "" {
@@ -125,7 +132,7 @@ func (docker *DockerRuntime) fetchArtifact(ctx context.Context, command capabili
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return "", 0, fmt.Errorf("read Artifact %s from the object store: %w", command.ArtifactID, err)
+		return "", 0, transportFailure(command.ArtifactID, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
@@ -144,7 +151,7 @@ func (docker *DockerRuntime) fetchArtifact(ctx context.Context, command capabili
 	size, err := io.Copy(io.MultiWriter(partial, sum), response.Body)
 	if err != nil {
 		_ = partial.Close()
-		return "", 0, fmt.Errorf("read Artifact %s from the object store: %w", command.ArtifactID, err)
+		return "", 0, transportFailure(command.ArtifactID, err)
 	}
 	// This read is the measurement. The bytes and the seconds are both here, at
 	// the one moment anything in this system holds both, so the node offers what
@@ -168,6 +175,27 @@ func (docker *DockerRuntime) fetchArtifact(ctx context.Context, command capabili
 		return "", 0, fmt.Errorf("prepare Artifact %s: %w", command.ArtifactID, err)
 	}
 	return "sha256:" + hex.EncodeToString(sum.Sum(nil)), size, nil
+}
+
+// transportFailure is what this node says when the object store could not be
+// reached or the stream broke, and it is deliberately not the error the standard
+// library handed back. A read minted for one fetch is a presigned URL, and
+// net/http answers a failed request with a *url.Error whose message is the whole
+// request URL: signature, credential parameter and all. That string becomes the
+// operation's failure, which the control plane stores durably in a column whose
+// contract is that it never carries credential material, so wrapping it would
+// put a working read of the object into the record it was kept out of, for the
+// rest of its window and for the life of the database.
+//
+// What is kept is the transport's own reason, which is what an operator needs: a
+// refused connection and a reset stream read differently, and neither of them
+// needs the URL to be understood.
+func transportFailure(artifactID string, err error) error {
+	var transport *url.Error
+	for errors.As(err, &transport) {
+		err = transport.Err
+	}
+	return fmt.Errorf("read Artifact %s from the object store: %w", artifactID, err)
 }
 
 func writeArtifactRecord(path string, record artifactReplicaFile) error {

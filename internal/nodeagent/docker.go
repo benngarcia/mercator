@@ -144,10 +144,23 @@ func (docker *DockerRuntime) PrepareImage(ctx context.Context, command capabilit
 // No credential is not a refusal. An image any anonymous reader can have is
 // minted nothing, and a node that failed here would be unable to pull the public
 // images most workloads run.
+//
+// A bound with no material behind it is a refusal, and a distinct one. It is
+// what a command replayed on a later session carries: the control plane's record
+// of a pull holds what was authorised and never the secret, so an agent
+// reconnecting to a command issued while it was down is handed the record rather
+// than the pull. Presenting it would reach the registry as an empty password and
+// come back in the registry's vocabulary instead of Mercator's.
 func (docker *DockerRuntime) authorisedPull(command capability.PrepareImageCommand) error {
 	credential := command.RegistryCredential
 	if credential.Zero() {
 		return nil
+	}
+	if credential.Secret == "" {
+		return fmt.Errorf(
+			"this node was handed the record of a pull minted for %s rather than the pull itself, so there is nothing to present",
+			credential.Content,
+		)
 	}
 	if err := credential.Authorises(command.OperationID, command.WorkspaceID, command.ManifestDigest, docker.now().UTC()); err != nil {
 		return err
