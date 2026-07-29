@@ -82,10 +82,12 @@ func (c *client) sanitizedResponseBody(request createRequest, result httpResult)
 
 func requestSecrets(apiKey string, request createRequest) []string {
 	secrets := []string{apiKey}
-	if launch := request.LaunchConfiguration; launch != nil && launch.DockerConfiguration != nil {
-		for _, env := range launch.DockerConfiguration.Envs {
-			secrets = append(secrets, env.Value)
-		}
+	// The bootstrap script carries the machine's single-use invitation, so a
+	// provider that echoes the create body back would put a live credential in
+	// the operator's own diagnostic. It is redacted as one secret rather than
+	// decoded and searched for the token: the whole script is material.
+	if launch := request.LaunchConfiguration; launch != nil && launch.ScriptConfiguration != nil {
+		secrets = append(secrets, launch.ScriptConfiguration.Base64Script)
 	}
 	if encoded, err := json.Marshal(request); err == nil {
 		secrets = append(secrets, string(encoded))
@@ -142,7 +144,8 @@ func sensitiveResponseKey(key string) bool {
 	switch normalized.String() {
 	case "apikey", "xapikey", "authorization", "headers", "password", "token", "secret",
 		"credential", "credentials", "registrycredentials", "env", "envs", "environment",
-		"launchconfiguration", "dockerconfiguration", "request", "requestbody", "payload":
+		"launchconfiguration", "dockerconfiguration", "scriptconfiguration", "base64script",
+		"request", "requestbody", "payload":
 		return true
 	default:
 		return false

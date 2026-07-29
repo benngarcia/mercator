@@ -33,12 +33,20 @@ func TestEveryProductionBackendDeclaresTheLaneItCanActuallyServe(t *testing.T) {
 	}
 }
 
-// TestTodaysBackendsAreAllOneShot records where the migration actually stands.
-// Every current backend creates capacity for one workload and destroys it
-// afterwards. Shadeform and Vast join the reusable lane when they implement
-// CapacityProvider, and their machines become candidates when an agent enrolls on
-// one. Updating this list is the deliberate act of promoting a backend.
-func TestTodaysBackendsAreAllOneShot(t *testing.T) {
+// TestTheCatalogRecordsWhichBackendsHaveBeenPromoted records where the migration
+// actually stands, and updating it is the deliberate act of promoting a backend.
+//
+// Shadeform is the first one promoted: it rents a VM that outlives the workloads
+// run on it and hands that machine a bootstrap its node agent enrolls with, which
+// is what the reusable lane means. Docker, RunPod and Vast still create capacity
+// for one workload and destroy it afterwards.
+//
+// A backend is in exactly one lane, because one lane is stamped on every offer a
+// connection publishes. Promoting Shadeform therefore took its one-shot half
+// away rather than adding to it: a connection that both rented machines and ran
+// one-shot containers would publish offers nothing could say the reuse semantics
+// of.
+func TestTheCatalogRecordsWhichBackendsHaveBeenPromoted(t *testing.T) {
 	declarations, err := providers.Factory().Declarations()
 	if err != nil {
 		t.Fatalf("declare the production catalog: %v", err)
@@ -51,7 +59,7 @@ func TestTodaysBackendsAreAllOneShot(t *testing.T) {
 	want := map[string]domain.ExecutionLane{
 		"docker":    domain.LaneEphemeral,
 		"runpod":    domain.LaneEphemeral,
-		"shadeform": domain.LaneEphemeral,
+		"shadeform": domain.LaneReusable,
 		"vast":      domain.LaneEphemeral,
 	}
 	for adapterType, wantLane := range want {

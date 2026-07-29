@@ -178,12 +178,17 @@ func vmType() instanceType {
 	}
 }
 
+const testAgentDownloadURL = "https://downloads.mercator.test/mercator-node/{version}/linux-amd64"
+
 func newTestAdapter(t *testing.T, fake *fakeShadeform, config map[string]string) *Adapter {
 	t.Helper()
 	if config == nil {
 		config = map[string]string{}
 	}
 	config["base_url"] = "https://shadeform.test/v1"
+	if _, stated := config["agent_download_url"]; !stated {
+		config["agent_download_url"] = testAgentDownloadURL
+	}
 	a, err := New("secret-key", config)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -194,22 +199,21 @@ func newTestAdapter(t *testing.T, fake *fakeShadeform, config map[string]string)
 	return a
 }
 
-func ownedInstance(id, launchKey, workspace, token, status string, createdAt time.Time) instance {
+// rentedInstance is a machine this account is already holding for one Rental, as
+// the account listing reports it.
+func rentedInstance(id, rentalID, workspace, token, status string, createdAt time.Time) instance {
 	return instance{
 		ID:        id,
 		Cloud:     "hyperstack",
 		Region:    "canada-1",
-		Name:      "mercator-" + launchKey,
+		Name:      "mercator-" + rentalID,
 		Status:    status,
 		CreatedAt: createdAt,
 		Tags: []string{
-			tagLaunchKey + "=" + launchKey,
+			tagRental + "=" + rentalID,
+			tagGeneration + "=1",
 			tagWorkspace + "=" + workspace,
-			tagRun + "=run_1",
-			tagAttempt + "=att_1",
 			tagOwnershipToken + "=" + token,
-			tagRequestHash + "=rh_1",
-			tagCleanupLocator + "=cl_1",
 		},
 	}
 }
