@@ -6074,13 +6074,33 @@ authorized over the API, the real node registry mints a bootstrap, the provision
 command carries it to that provider, and the production `nodeagent.Agent` is
 started from the provider's own copy of it and no other input, so an identity the
 provider was never handed could not enrol. The machine then appears as placeable
-standing capacity, a Run lands on it and really pulls `alpine:3.20` from Docker
-Hub, and a second Run lands on the same machine charged zero boot and zero image
-fetch from `image_inventory`. The image is taken off this host before the fleet
-starts: a case that placed content the workstation already held would charge the
-first Run nothing either, and would pass against a control plane that learned
-nothing at all from the execution. Publishing an empty image inventory from
-`Registry.offer` fails it, on the machine never reporting what it ran.
+standing capacity, a Run lands on it and really fetches the image over the
+registry protocol, and a second Run lands on the same machine charged zero boot
+and zero image fetch from `image_inventory`. The image is taken off this host
+before the fleet starts: a case that placed content the workstation already held
+would charge the first Run nothing either, and would pass against a control plane
+that learned nothing at all from the execution. Publishing an empty image
+inventory from `Registry.offer` fails it, on the machine never reporting what it
+ran.
+
+The image the case places is built on the host and served from a registry the
+case runs there. It used to be `alpine:3.20` pulled from Docker Hub and deleted
+again on every run, and a refusal turned into a skip: once this address had spent
+its anonymous quota, Docker Hub answered 429, the case reported SKIP in under a
+second, and `go test ./...` reported the package green with the only live
+statement about provider bootstrap never having executed. The case now commits an
+image onto a base this host keeps, whose top layer is four megabytes of
+randomness made for the run, pushes it to a registry container, and takes it back
+off the daemon. The fetch is real, the content is cold because it did not exist
+until the run made it, and nothing asks Docker Hub for anything.
+
+The live cases hold this machine's Docker daemon while they use it, through
+`internal/dockertest.Exclusive`. Three packages drive the one daemon this host
+has, `go test ./...` runs them at once in separate processes, and run together
+they measure each other rather than Mercator: that is mercator#212, and the file
+lock is the option it asked for. It is also what makes a budget stated as "what
+this host's Docker really takes" true, because a wait taken while four other
+suites work the same machine is a measurement of them.
 
 What that case deliberately does not do is let Placement choose to provision. A
 capacity connection publishes no candidate, which is mercator#200, and the launch
