@@ -108,23 +108,76 @@ func TestAReceiptTheSuiteRefusesStillCostsNoMachine(t *testing.T) {
 	provider := newStub(flawAcceptsAMachineAtNoMoment)
 	subject := subjectFor(t, provider)
 
-	refused := 0
-	for _, promise := range capacitytest.Promises() {
-		if err := promise.Keep(t.Context(), subject); err != nil {
-			refused++
-		}
-	}
+	broken := everyPromiseAgainst(t, subject)
 
-	if refused == 0 {
+	if len(broken) == 0 {
 		t.Fatal("a provider that dates no allocation broke no promise, so nothing here was ever refused")
 	}
-	owned, err := provider.ListOwnedCapacity(t.Context(), capability.OwnershipQuery{WorkspaceID: subject.Lease.WorkspaceID})
-	if err != nil {
-		t.Fatalf("list what the provider still owns: %v", err)
+	if running := provider.running(); len(running) != 0 {
+		t.Fatalf("the suite refused every receipt and left %d machines running: %v", len(running), running)
 	}
-	if len(owned) != 0 {
-		t.Fatalf("the suite refused every receipt and left %d machines behind: %+v", len(owned), owned)
+}
+
+// TestTheSecondMachineOneCommandAllocatedIsGivenBack is the leak this suite
+// exists to report, made to happen. A provider that allocates a fresh machine
+// per command is billing for two the moment the promise catches it, and the
+// promise that reports the defect is the only thing holding a ref to the second
+// one: this connection enumerates nothing it owns, so no sweep can find it
+// afterwards.
+func TestTheSecondMachineOneCommandAllocatedIsGivenBack(t *testing.T) {
+	provider := newStub(flawProvisionsAFreshMachineEveryTime, listsNothingItOwns)
+	subject := subjectFor(t, provider)
+
+	broken := everyPromiseAgainst(t, subject)
+
+	if !broken["one_provision_command_produces_one_machine"] {
+		t.Fatal("a provider that allocates a fresh machine per command was reported as keeping provision idempotency")
 	}
+	if running := provider.running(); len(running) != 0 {
+		t.Fatalf("the duplicate machines the promise reported are still running: %v", running)
+	}
+}
+
+// TestAProvisionNobodyGotAnAnswerToIsStillGivenBack is the machine that costs
+// money in silence: allocated, and named in no receipt. The suite cannot
+// terminate a ref nothing handed it, so it asks the mechanism the provider
+// negotiated for this case, and both of the legal answers are exercised here.
+func TestAProvisionNobodyGotAnAnswerToIsStillGivenBack(t *testing.T) {
+	tests := []struct {
+		reconciliation string
+		flaws          []flaw
+	}{
+		{"by what the connection owns", []flaw{flawLosesTheAnswerToTheFirstProvision}},
+		{"by repeating the operation key", []flaw{flawLosesTheAnswerToTheFirstProvision, listsNothingItOwns}},
+	}
+	for _, test := range tests {
+		t.Run(test.reconciliation, func(t *testing.T) {
+			provider := newStub(test.flaws...)
+			subject := subjectFor(t, provider)
+
+			broken := everyPromiseAgainst(t, subject)
+
+			if len(broken) == 0 {
+				t.Fatal("a provision nobody got an answer to broke no promise")
+			}
+			if running := provider.running(); len(running) != 0 {
+				t.Fatalf("the machine the lost answer allocated is still running: %v", running)
+			}
+		})
+	}
+}
+
+// everyPromiseAgainst runs the whole suite and answers with the promises this
+// provider broke.
+func everyPromiseAgainst(t *testing.T, subject capacitytest.Subject) map[string]bool {
+	t.Helper()
+	broken := map[string]bool{}
+	for _, promise := range capacitytest.Promises() {
+		if err := promise.Keep(t.Context(), subject); err != nil && !errors.Is(err, capacitytest.ErrNotApplicable) {
+			broken[promise.Name] = true
+		}
+	}
+	return broken
 }
 
 // TestASubjectMissingWhatEveryMachineIsRentedUnderIsRefused keeps the suite from
@@ -180,19 +233,27 @@ const (
 	flawStopsWithoutPromisingTo           flaw = "stops without promising to"
 	flawGoesOnOwningWhatItDestroyed       flaw = "goes on owning what it destroyed"
 	flawAcceptsAMachineAtNoMoment         flaw = "accepts a machine at no moment"
+	flawLosesTheAnswerToTheFirstProvision flaw = "allocates a machine and loses the answer"
 	listsNothingItOwns                    flaw = "lists nothing it owns"
 )
 
-// stub is a capacity provider in a map: enough of the contract for the suite to
-// exercise, with one clause of it breakable at a time.
+// stub is a capacity provider in a slice: enough of the contract for the suite
+// to exercise, with one clause of it breakable at a time.
+//
+// Every machine is addressed by its own native ref, the way a real backend
+// addresses one. A stub that kept one machine per Rental could not hold the two
+// a non-idempotent provider allocates for the same command, and a suite run
+// against it would report a leak reclaimed that nothing had reclaimed.
 type stub struct {
 	flaws    map[flaw]bool
-	machines map[string]*stubMachine
+	machines []*stubMachine
+	lost     map[string]bool
 	next     int
 }
 
 type stubMachine struct {
 	nativeRef      string
+	rentalID       string
 	workspaceID    string
 	ownershipToken string
 	generation     uint64
@@ -204,7 +265,37 @@ func newStub(flaws ...flaw) *stub {
 	for _, broken := range flaws {
 		held[broken] = true
 	}
-	return &stub{flaws: held, machines: map[string]*stubMachine{}}
+	return &stub{flaws: held, lost: map[string]bool{}}
+}
+
+// running is every machine this provider is still billing for, whatever the
+// suite believes it gave back.
+func (s *stub) running() []string {
+	var live []string
+	for _, machine := range s.machines {
+		if !machine.terminated {
+			live = append(live, machine.nativeRef)
+		}
+	}
+	return live
+}
+
+func (s *stub) at(nativeRef string) (*stubMachine, bool) {
+	for _, machine := range s.machines {
+		if machine.nativeRef == nativeRef {
+			return machine, true
+		}
+	}
+	return nil, false
+}
+
+func (s *stub) liveFor(rentalID string) (*stubMachine, bool) {
+	for _, machine := range s.machines {
+		if machine.rentalID == rentalID && !machine.terminated {
+			return machine, true
+		}
+	}
+	return nil, false
 }
 
 func (s *stub) CapacitySupport() capability.CapacitySupport {
@@ -256,7 +347,7 @@ func (s *stub) ListCapacity(context.Context, capability.CapacityQuery) ([]domain
 }
 
 func (s *stub) ProvisionCapacity(_ context.Context, command capability.ProvisionCommand) (capability.CapacityReceipt, error) {
-	if held, exists := s.machines[command.RentalID]; exists && !held.terminated && !s.flaws[flawProvisionsAFreshMachineEveryTime] {
+	if held, exists := s.liveFor(command.RentalID); exists && !s.flaws[flawProvisionsAFreshMachineEveryTime] {
 		return capability.CapacityReceipt{
 			NativeRef:  held.nativeRef,
 			State:      capability.CapacityStateActive,
@@ -267,6 +358,7 @@ func (s *stub) ProvisionCapacity(_ context.Context, command capability.Provision
 	s.next++
 	held := &stubMachine{
 		nativeRef:      fmt.Sprintf("mch_%d", s.next),
+		rentalID:       command.RentalID,
 		workspaceID:    command.WorkspaceID,
 		ownershipToken: command.OwnershipToken,
 		generation:     command.Generation,
@@ -274,7 +366,14 @@ func (s *stub) ProvisionCapacity(_ context.Context, command capability.Provision
 	if s.flaws[flawOwnsAMachineUnderNoToken] {
 		held.ownershipToken = ""
 	}
-	s.machines[command.RentalID] = held
+	s.machines = append(s.machines, held)
+	if s.flaws[flawLosesTheAnswerToTheFirstProvision] && !s.lost[command.RentalID] {
+		s.lost[command.RentalID] = true
+		return capability.CapacityReceipt{}, fmt.Errorf(
+			"%w: stub allocated %s for Rental %q and the answer never came back",
+			capability.ErrCapacityIndeterminate, held.nativeRef, command.RentalID,
+		)
+	}
 	receipt := capability.CapacityReceipt{
 		NativeRef:  held.nativeRef,
 		State:      capability.CapacityStateStarting,
@@ -287,9 +386,9 @@ func (s *stub) ProvisionCapacity(_ context.Context, command capability.Provision
 }
 
 func (s *stub) ObserveCapacity(_ context.Context, held capability.CapacityRef) (capability.CapacityObservation, error) {
-	machine, exists := s.machines[held.RentalID]
+	machine, exists := s.at(held.NativeRef)
 	if !exists {
-		return capability.CapacityObservation{}, fmt.Errorf("stub: nothing allocated for Rental %q", held.RentalID)
+		return capability.CapacityObservation{}, fmt.Errorf("stub: nothing allocated as machine %q", held.NativeRef)
 	}
 	state := capability.CapacityStateActive
 	if machine.terminated && !s.flaws[flawObservesADestroyedMachineAsActive] {
@@ -314,17 +413,17 @@ func (s *stub) transition(
 	if !s.CapacitySupport().Claims(operation) && !s.flaws[flawStopsWithoutPromisingTo] {
 		return capability.CapacityReceipt{}, fmt.Errorf("%w: stub promises no %s", capability.ErrCapabilityUnsupported, operation)
 	}
-	machine, exists := s.machines[command.RentalID]
+	machine, exists := s.at(command.NativeRef)
 	if !exists {
-		return capability.CapacityReceipt{}, fmt.Errorf("stub: nothing allocated for Rental %q", command.RentalID)
+		return capability.CapacityReceipt{}, fmt.Errorf("stub: nothing allocated as machine %q", command.NativeRef)
 	}
 	return capability.CapacityReceipt{NativeRef: machine.nativeRef, State: state, AcceptedAt: stubMoment}, nil
 }
 
 func (s *stub) TerminateCapacity(_ context.Context, command capability.CapacityCommand) (capability.CapacityReceipt, error) {
-	machine, exists := s.machines[command.RentalID]
+	machine, exists := s.at(command.NativeRef)
 	if !exists {
-		return capability.CapacityReceipt{}, fmt.Errorf("stub: nothing allocated for Rental %q", command.RentalID)
+		return capability.CapacityReceipt{}, fmt.Errorf("stub: nothing allocated as machine %q", command.NativeRef)
 	}
 	duplicate := machine.terminated
 	machine.terminated = true
@@ -341,14 +440,14 @@ func (s *stub) ListOwnedCapacity(_ context.Context, query capability.OwnershipQu
 		return nil, fmt.Errorf("%w: stub promises no owned-capacity listing", capability.ErrCapabilityUnsupported)
 	}
 	var owned []capability.OwnedCapacity
-	for rentalID, machine := range s.machines {
+	for _, machine := range s.machines {
 		if (machine.terminated && !s.flaws[flawGoesOnOwningWhatItDestroyed]) || machine.workspaceID != query.WorkspaceID {
 			continue
 		}
 		owned = append(owned, capability.OwnedCapacity{
 			NativeRef:      machine.nativeRef,
 			WorkspaceID:    machine.workspaceID,
-			RentalID:       rentalID,
+			RentalID:       machine.rentalID,
 			Generation:     machine.generation,
 			OwnershipToken: machine.ownershipToken,
 			State:          capability.CapacityStateActive,

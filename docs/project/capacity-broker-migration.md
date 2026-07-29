@@ -6221,6 +6221,38 @@ registering the return before the judgement, and
 that dates no allocation, every promise run, and nothing owned afterwards. With
 the old ordering it reports one machine left behind.
 
+Two more machines were leaking past that fix, and both were leaking because
+reclamation was keyed on one receipt the suite happened to like. A promise now
+gives back a lease rather than a receipt, and the lease holds every machine
+anything has named under its Rental.
+
+The first is the machine the idempotency promise is about. A provider that
+allocates a fresh machine per command produces a second one, the promise reports
+it, and the old `defer` terminated only the first: the machine the suite was
+complaining about went on billing. Worse, the pairing of operation-key
+idempotency with no owned-capacity listing is legal, and against that set both
+sweep promises are out of reach, so nothing downstream would ever find it.
+`TestTheSecondMachineOneCommandAllocatedIsGivenBack` is the standing case, run
+against a connection that enumerates nothing it owns so the promise's own
+reclamation is the only thing that can work. The in-package stub could not
+express this before, because it kept one machine per Rental and the second
+provision overwrote the first; it now addresses machines by their own native
+ref, the way every real backend does.
+
+The second is the machine no receipt ever named. `reconcileDuplicates` in the
+Shadeform adapter creates an instance, fails to see it in the listing, and
+returns an empty receipt wrapped in `ErrCapacityIndeterminate`; the Lab does the
+same under `FaultLoseResponse`. The old reclamation was `if nativeRef == ""
+{ return nil }`, so exactly the case that costs money returned quietly. A lease
+that was answered with no machine now asks the mechanism the provider negotiated
+for that case: a connection that enumerates what it owns is asked what it holds
+for this Rental, and one that deduplicates on the operation key is sent the same
+command again, which answers with the machine it already made. Those are the two
+legal sets, and `TestAProvisionNobodyGotAnAnswerToIsStillGivenBack` exercises
+both. When neither can name a machine, the lease says so loudly rather than
+recording a clean return, because nothing can destroy what nothing can address
+and an operator has to hear about it.
+
 One break was absorbed, and it is worth writing down. Removing Shadeform's
 pre-scan before create leaves the suite green, because `reconcileDuplicates`
 still keeps the oldest instance carrying the lease's tag and destroys the rest:

@@ -7,17 +7,18 @@
 // other half of, so a failure here can be read against the rule it breaks
 // rather than against one adapter's code.
 //
-// The suite is bounded on purpose. Each promise rents at most one machine and
-// gives it back before it returns, and none of them asserts how long a machine
-// takes to arrive or whether one is in stock right now: what it establishes is
-// that a backend keeps the contract, which is a fact about the contract rather
-// than about the weather.
+// The suite is bounded on purpose. Each promise asks for one machine and gives
+// back every machine that Rental turns out to hold before it returns, and none
+// of them asserts how long a machine takes to arrive or whether one is in stock
+// right now: what it establishes is that a backend keeps the contract, which is
+// a fact about the contract rather than about the weather.
 package capacitytest
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
@@ -290,36 +291,37 @@ func aCredentialCheckAllocatesNothing(ctx context.Context, subject Subject) erro
 // identity both owe the same answer: the same command twice is one machine, and
 // the second answer says so.
 func oneProvisionCommandProducesOneMachine(ctx context.Context, subject Subject) (err error) {
-	command, first, err := subject.rent(ctx, "idempotent")
-	// The machine comes back before the promise is reported, and the defer is
+	rental, first, err := subject.take(ctx, "idempotent")
+	// The lease comes back before the promise is reported, and the defer is
 	// registered before the renting is judged: a receipt this suite refuses is
-	// still a machine somebody is billed for.
-	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, first.NativeRef)) }()
+	// still a machine somebody is billed for, and so is the second machine this
+	// promise is here to catch.
+	defer func() { err = errors.Join(err, rental.giveBack(ctx)) }()
 	if err != nil {
 		return err
 	}
 
 	if first.Duplicate {
-		return fmt.Errorf("the first provision of Rental %q reported a duplicate of nothing", command.RentalID)
+		return fmt.Errorf("the first provision of Rental %q reported a duplicate of nothing", rental.rentalID())
 	}
-	repeat, err := subject.Provider.ProvisionCapacity(ctx, command)
+	repeat, err := rental.provision(ctx)
 	if err != nil {
-		return fmt.Errorf("repeat the provision of Rental %q: %w", command.RentalID, err)
+		return fmt.Errorf("repeat the provision of Rental %q: %w", rental.rentalID(), err)
 	}
 	if repeat.NativeRef != first.NativeRef {
 		return fmt.Errorf(
 			"one provision command produced machine %q and then machine %q, and Rental %q is now billing for two",
-			first.NativeRef, repeat.NativeRef, command.RentalID,
+			first.NativeRef, repeat.NativeRef, rental.rentalID(),
 		)
 	}
 	if !repeat.Duplicate {
 		return fmt.Errorf(
 			"the repeated provision of Rental %q reported machine %q as freshly allocated, so a caller would count the effect twice",
-			command.RentalID, repeat.NativeRef,
+			rental.rentalID(), repeat.NativeRef,
 		)
 	}
 	if repeat.AcceptedAt.IsZero() {
-		return fmt.Errorf("the repeated provision of Rental %q is dated nowhere, so no stage can be measured from it", command.RentalID)
+		return fmt.Errorf("the repeated provision of Rental %q is dated nowhere, so no stage can be measured from it", rental.rentalID())
 	}
 	return nil
 }
@@ -329,11 +331,11 @@ func oneProvisionCommandProducesOneMachine(ctx context.Context, subject Subject)
 // case has something to ask about, and what resolves it is reading what the
 // connection owns rather than sending the command again.
 func aLostAnswerCostsNoSecondMachine(ctx context.Context, subject Subject) (err error) {
-	command, receipt, err := subject.rent(ctx, "lost-answer")
-	// The machine comes back before the promise is reported, and the defer is
+	rental, receipt, err := subject.take(ctx, "lost-answer")
+	// The lease comes back before the promise is reported, and the defer is
 	// registered before the renting is judged: a receipt this suite refuses is
 	// still a machine somebody is billed for.
-	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef)) }()
+	defer func() { err = errors.Join(err, rental.giveBack(ctx)) }()
 	if err != nil {
 		return err
 	}
@@ -349,25 +351,25 @@ func aLostAnswerCostsNoSecondMachine(ctx context.Context, subject Subject) (err 
 	if err != nil {
 		return err
 	}
-	held := heldFor(owned, command.RentalID)
+	held := heldFor(owned, rental.rentalID())
 	if len(held) != 1 {
 		return fmt.Errorf(
 			"the connection reports %d machines for Rental %q, and a reconciler reading that cannot tell which machine this lease is",
-			len(held), command.RentalID,
+			len(held), rental.rentalID(),
 		)
 	}
-	machine := held[0]
+	machine, rented := held[0], rental.command
 	switch {
 	case machine.NativeRef != receipt.NativeRef:
-		return fmt.Errorf("Rental %q was accepted as machine %q and is owned as %q", command.RentalID, receipt.NativeRef, machine.NativeRef)
-	case machine.WorkspaceID != command.WorkspaceID:
-		return fmt.Errorf("machine %q is owned by workspace %q, and it was rented for %q", machine.NativeRef, machine.WorkspaceID, command.WorkspaceID)
-	case machine.OwnershipToken != command.OwnershipToken:
+		return fmt.Errorf("Rental %q was accepted as machine %q and is owned as %q", rented.RentalID, receipt.NativeRef, machine.NativeRef)
+	case machine.WorkspaceID != rented.WorkspaceID:
+		return fmt.Errorf("machine %q is owned by workspace %q, and it was rented for %q", machine.NativeRef, machine.WorkspaceID, rented.WorkspaceID)
+	case machine.OwnershipToken != rented.OwnershipToken:
 		return fmt.Errorf("machine %q carries ownership token %q, and a reconciler acting on it would be acting on somebody else's machine", machine.NativeRef, machine.OwnershipToken)
-	case machine.Generation != command.Generation:
-		return fmt.Errorf("machine %q is owned at generation %d and was rented at %d", machine.NativeRef, machine.Generation, command.Generation)
+	case machine.Generation != rented.Generation:
+		return fmt.Errorf("machine %q is owned at generation %d and was rented at %d", machine.NativeRef, machine.Generation, rented.Generation)
 	}
-	observation, err := subject.Provider.ObserveCapacity(ctx, ref(command, receipt.NativeRef))
+	observation, err := subject.Provider.ObserveCapacity(ctx, rental.held(receipt.NativeRef))
 	if err != nil {
 		return fmt.Errorf("observe the machine the listing says this connection holds: %w", err)
 	}
@@ -383,16 +385,16 @@ func aLostAnswerCostsNoSecondMachine(ctx context.Context, subject Subject) (err 
 // say depends on what the provider promised about observing a machine it
 // destroyed.
 func terminateIsConfirmedAndStaysConfirmed(ctx context.Context, subject Subject) (err error) {
-	command, receipt, err := subject.rent(ctx, "terminate")
-	// The machine comes back before the promise is reported, and the defer is
+	rental, receipt, err := subject.take(ctx, "terminate")
+	// The lease comes back before the promise is reported, and the defer is
 	// registered before the renting is judged: a receipt this suite refuses is
 	// still a machine somebody is billed for.
-	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef)) }()
+	defer func() { err = errors.Join(err, rental.giveBack(ctx)) }()
 	if err != nil {
 		return err
 	}
 
-	destroy := mutate(command, receipt.NativeRef, capability.CapacityTerminate)
+	destroy := rental.act(receipt.NativeRef, capability.CapacityTerminate)
 	confirmed, err := subject.Provider.TerminateCapacity(ctx, destroy)
 	if err != nil {
 		return fmt.Errorf("terminate machine %q: %w", receipt.NativeRef, err)
@@ -413,7 +415,7 @@ func terminateIsConfirmedAndStaysConfirmed(ctx context.Context, subject Subject)
 			receipt.NativeRef, repeat.State, repeat.Duplicate,
 		)
 	}
-	return observationAfterTerminate(ctx, subject, command, receipt.NativeRef)
+	return observationAfterTerminate(ctx, rental, receipt.NativeRef)
 }
 
 // observationAfterTerminate reads the one thing the negotiated set decides. A
@@ -421,9 +423,9 @@ func terminateIsConfirmedAndStaysConfirmed(ctx context.Context, subject Subject)
 // and a provider that promised nothing of the kind may have no record left, so
 // its silence is the confirmation. What neither of them may say is that the
 // machine is still running.
-func observationAfterTerminate(ctx context.Context, subject Subject, command capability.ProvisionCommand, nativeRef string) error {
-	support := subject.Provider.CapacitySupport()
-	observation, err := subject.Provider.ObserveCapacity(ctx, ref(command, nativeRef))
+func observationAfterTerminate(ctx context.Context, rental *lease, nativeRef string) error {
+	support := rental.subject.Provider.CapacitySupport()
+	observation, err := rental.subject.Provider.ObserveCapacity(ctx, rental.held(nativeRef))
 	if err != nil {
 		if support.ObserveAfterTerminate {
 			return fmt.Errorf(
@@ -444,11 +446,11 @@ func observationAfterTerminate(ctx context.Context, subject Subject, command cap
 // provider which cannot suspend is told so; the alternative is a machine that
 // went on billing while the control plane recorded it as stopped.
 func anOperationTheProviderNeverPromisedIsRefused(ctx context.Context, subject Subject) (err error) {
-	command, receipt, err := subject.rent(ctx, "negotiated")
-	// The machine comes back before the promise is reported, and the defer is
+	rental, receipt, err := subject.take(ctx, "negotiated")
+	// The lease comes back before the promise is reported, and the defer is
 	// registered before the renting is judged: a receipt this suite refuses is
 	// still a machine somebody is billed for.
-	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef)) }()
+	defer func() { err = errors.Join(err, rental.giveBack(ctx)) }()
 	if err != nil {
 		return err
 	}
@@ -459,15 +461,15 @@ func anOperationTheProviderNeverPromisedIsRefused(ctx context.Context, subject S
 		perform   func() error
 	}{
 		{capability.CapacityStop, func() error {
-			_, err := subject.Provider.StopCapacity(ctx, mutate(command, receipt.NativeRef, capability.CapacityStop))
+			_, err := subject.Provider.StopCapacity(ctx, rental.act(receipt.NativeRef, capability.CapacityStop))
 			return err
 		}},
 		{capability.CapacityResume, func() error {
-			_, err := subject.Provider.StartCapacity(ctx, mutate(command, receipt.NativeRef, capability.CapacityResume))
+			_, err := subject.Provider.StartCapacity(ctx, rental.act(receipt.NativeRef, capability.CapacityResume))
 			return err
 		}},
 		{capability.CapacityListOwned, func() error {
-			_, err := subject.Provider.ListOwnedCapacity(ctx, capability.OwnershipQuery{WorkspaceID: command.WorkspaceID})
+			_, err := subject.Provider.ListOwnedCapacity(ctx, capability.OwnershipQuery{WorkspaceID: rental.command.WorkspaceID})
 			return err
 		}},
 	} {
@@ -498,11 +500,11 @@ func aTrialLeavesNothingOwned(ctx context.Context, subject Subject) (err error) 
 			ErrNotApplicable,
 		)
 	}
-	command, receipt, err := subject.rent(ctx, "sweep")
+	rental, _, err := subject.take(ctx, "sweep")
 	if err != nil {
-		return errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef))
+		return errors.Join(err, rental.giveBack(ctx))
 	}
-	if err := subject.giveBack(ctx, command, receipt.NativeRef); err != nil {
+	if err := rental.giveBack(ctx); err != nil {
 		return err
 	}
 	owned, err := subject.owned(ctx)
@@ -515,43 +517,152 @@ func aTrialLeavesNothingOwned(ctx context.Context, subject Subject) (err error) 
 	return nil
 }
 
-// rent allocates one machine for one promise from whatever the subject says is
-// on sale.
-func (subject Subject) rent(ctx context.Context, promise string) (capability.ProvisionCommand, capability.CapacityReceipt, error) {
+// lease is one promise's Rental and every machine anything has named under it.
+//
+// A promise gives back the lease rather than a receipt, because the machines a
+// Rental costs money for are not only the one the suite liked the look of. A
+// provider that is not idempotent allocates a second machine for the same
+// command and names it in the answer this promise is about to refuse, and a
+// provision whose outcome nobody knows may be running a machine it never named
+// at all. Both are billed exactly like the first one.
+type lease struct {
+	subject  Subject
+	command  capability.ProvisionCommand
+	machines []string
+	// unanswered is the error from a provision that named no machine. The provider
+	// may be holding one it never told anybody about, so the lease asks what it
+	// holds before giving back rather than taking the answer's word for it.
+	unanswered error
+}
+
+// take opens one promise's lease and allocates its first machine from whatever
+// the subject says is on sale. The lease comes back even when nothing could be
+// rented, because what a caller has to be handed is the thing that gives
+// machines back.
+func (subject Subject) take(ctx context.Context, promise string) (*lease, capability.CapacityReceipt, error) {
+	rental := &lease{subject: subject}
 	if err := subject.check(); err != nil {
-		return capability.ProvisionCommand{}, capability.CapacityReceipt{}, err
+		return rental, capability.CapacityReceipt{}, err
 	}
 	origin, err := subject.Capacity(ctx)
 	if err != nil {
-		return capability.ProvisionCommand{}, capability.CapacityReceipt{}, fmt.Errorf("choose capacity to rent: %w", err)
+		return rental, capability.CapacityReceipt{}, fmt.Errorf("choose capacity to rent: %w", err)
 	}
-	command := subject.command(promise, origin)
-	receipt, err := subject.Provider.ProvisionCapacity(ctx, command)
+	rental.command = subject.command(promise, origin)
+	receipt, err := rental.provision(ctx)
 	if err != nil {
-		return command, receipt, fmt.Errorf("provision capacity for Rental %q: %w", command.RentalID, err)
+		return rental, receipt, fmt.Errorf("provision capacity for Rental %q: %w", rental.rentalID(), err)
 	}
 	switch {
 	case receipt.NativeRef == "":
-		return command, receipt, fmt.Errorf("Rental %q was accepted without naming a machine, so nothing can observe or destroy it", command.RentalID)
+		return rental, receipt, fmt.Errorf("Rental %q was accepted without naming a machine, so nothing can observe or destroy it", rental.rentalID())
 	case !receipt.State.Valid() || receipt.State.Terminal():
-		return command, receipt, fmt.Errorf("Rental %q was accepted in state %q", command.RentalID, receipt.State)
+		return rental, receipt, fmt.Errorf("Rental %q was accepted in state %q", rental.rentalID(), receipt.State)
 	case receipt.AcceptedAt.IsZero():
-		return command, receipt, fmt.Errorf("Rental %q was accepted at no moment, so no stage can be measured from it", command.RentalID)
+		return rental, receipt, fmt.Errorf("Rental %q was accepted at no moment, so no stage can be measured from it", rental.rentalID())
 	}
-	return command, receipt, nil
+	return rental, receipt, nil
 }
 
-// giveBack destroys what one promise rented. It runs even when the promise
-// already failed, because a suite that leaks a machine on its way to reporting a
-// broken promise bills for the report.
-func (subject Subject) giveBack(ctx context.Context, command capability.ProvisionCommand, nativeRef string) error {
-	if nativeRef == "" {
+// provision sends this lease's provision command and holds on to whatever the
+// answer names, including an answer that arrived with an error: a machine named
+// beside a failure is running just the same, and a failure that names none may
+// be a machine nobody can address.
+func (rental *lease) provision(ctx context.Context) (capability.CapacityReceipt, error) {
+	receipt, err := rental.subject.Provider.ProvisionCapacity(ctx, rental.command)
+	rental.learn(receipt.NativeRef)
+	if err != nil && receipt.NativeRef == "" {
+		rental.unanswered = err
+	}
+	return receipt, err
+}
+
+// giveBack destroys every machine this lease is known to hold. It runs even when
+// the promise already failed, because a suite that leaks a machine on its way to
+// reporting a broken promise bills for the report.
+func (rental *lease) giveBack(ctx context.Context) error {
+	if rental.command.RentalID == "" {
 		return nil
 	}
-	if _, err := subject.Provider.TerminateCapacity(ctx, mutate(command, nativeRef, capability.CapacityTerminate)); err != nil {
-		return fmt.Errorf("give machine %q back: %w", nativeRef, err)
+	failures := rental.nameWhatWentUnanswered(ctx)
+	for _, nativeRef := range rental.machines {
+		if _, err := rental.subject.Provider.TerminateCapacity(ctx, rental.act(nativeRef, capability.CapacityTerminate)); err != nil {
+			failures = errors.Join(failures, fmt.Errorf("give machine %q back: %w", nativeRef, err))
+		}
 	}
-	return nil
+	return failures
+}
+
+// nameWhatWentUnanswered is reclamation for the machine nobody named. The ref is
+// not in the suite's hands, so what finds it is the mechanism this provider
+// negotiated for exactly this case: a connection that enumerates what it owns is
+// asked what it holds for this Rental, and one that deduplicates on the
+// operation key is sent the same command again, which answers with the machine
+// it already made.
+//
+// A provider that says the outcome is unknown and can then name no machine is
+// reported rather than passed over. Nothing here can destroy what nothing can
+// address, and a lease that returned quietly would be recording a clean return
+// for a machine that may still be billing.
+func (rental *lease) nameWhatWentUnanswered(ctx context.Context) error {
+	if rental.unanswered == nil {
+		return nil
+	}
+	support := rental.subject.Provider.CapacitySupport()
+	switch {
+	case support.ListOwned:
+		owned, err := rental.subject.owned(ctx)
+		if err != nil {
+			return err
+		}
+		for _, machine := range heldFor(owned, rental.rentalID()) {
+			rental.learn(machine.NativeRef)
+		}
+	case len(rental.machines) == 0 && support.IdempotentProvision == capability.IdempotentProvisionOperationKey:
+		if _, err := rental.provision(ctx); err != nil {
+			return fmt.Errorf("ask the operation key of Rental %q for the machine its provision never named: %w", rental.rentalID(), err)
+		}
+	}
+	if len(rental.machines) > 0 || !errors.Is(rental.unanswered, capability.ErrCapacityIndeterminate) {
+		return nil
+	}
+	return fmt.Errorf(
+		"the provision of Rental %q answered %v, and nothing this provider can be asked names a machine for it, so whatever it allocated is still billing",
+		rental.rentalID(), rental.unanswered,
+	)
+}
+
+func (rental *lease) learn(nativeRef string) {
+	if nativeRef == "" || slices.Contains(rental.machines, nativeRef) {
+		return
+	}
+	rental.machines = append(rental.machines, nativeRef)
+}
+
+func (rental *lease) rentalID() string {
+	return rental.command.RentalID
+}
+
+// held names one machine of this lease well enough to observe it.
+func (rental *lease) held(nativeRef string) capability.CapacityRef {
+	return capability.CapacityRef{
+		WorkspaceID:    rental.command.WorkspaceID,
+		ConnectionID:   rental.command.ConnectionID,
+		RentalID:       rental.command.RentalID,
+		NativeRef:      nativeRef,
+		OwnershipToken: rental.command.OwnershipToken,
+	}
+}
+
+// act is one command against a machine of this lease, keyed by the act it
+// performs so a replay of a stop is a replay of that stop rather than of
+// whatever the caller last sent.
+func (rental *lease) act(nativeRef string, operation capability.CapacityOperation) capability.CapacityCommand {
+	return capability.CapacityCommand{
+		CapacityRef:  rental.held(nativeRef),
+		OperationKey: string(operation) + "_" + rental.command.RentalID,
+		Generation:   rental.command.Generation,
+	}
 }
 
 func (subject Subject) owned(ctx context.Context) ([]capability.OwnedCapacity, error) {
@@ -605,27 +716,6 @@ func (subject Subject) check() error {
 		return errors.New("capacitytest: a trial that asks for no reclamation backstop can bill for ever")
 	}
 	return nil
-}
-
-func ref(command capability.ProvisionCommand, nativeRef string) capability.CapacityRef {
-	return capability.CapacityRef{
-		WorkspaceID:    command.WorkspaceID,
-		ConnectionID:   command.ConnectionID,
-		RentalID:       command.RentalID,
-		NativeRef:      nativeRef,
-		OwnershipToken: command.OwnershipToken,
-	}
-}
-
-// mutate is one command against an allocated machine, keyed by the act it
-// performs so a replay of a stop is a replay of that stop rather than of
-// whatever the caller last sent.
-func mutate(command capability.ProvisionCommand, nativeRef string, operation capability.CapacityOperation) capability.CapacityCommand {
-	return capability.CapacityCommand{
-		CapacityRef:  ref(command, nativeRef),
-		OperationKey: string(operation) + "_" + command.RentalID,
-		Generation:   command.Generation,
-	}
 }
 
 func heldFor(owned []capability.OwnedCapacity, rentalID string) []capability.OwnedCapacity {

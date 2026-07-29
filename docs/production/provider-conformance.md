@@ -181,6 +181,18 @@ neither: a provider that deduplicates on an operation key is entitled to
 enumerate nothing it owns, and calling the two owned-capacity promises green
 against one would claim to have read a listing that does not exist.
 
+A promise gives back every machine its Rental is known to hold, not the one
+machine whose receipt it accepted. The second machine a non-idempotent provider
+allocates for one command is destroyed by the same promise that reports it, so a
+connection that enumerates nothing it owns still ends the trial holding nothing.
+A provision answered with `ErrCapacityIndeterminate` names no machine at all, and
+the trial asks the mechanism that provider negotiated: it reads what the
+connection owns for that Rental, or, for a provider that deduplicates on the
+operation key and lists nothing, sends the same command again and is answered
+with the machine it already made. When neither names one, the promise is reported
+broken and says so, because a machine nothing can address may still be billing
+and an operator has to hear about it rather than read a clean return.
+
 ```sh
 export SHADEFORM_API_KEY='sf_...'
 export MERCATOR_CONFORMANCE_LISTEN_ADDR='0.0.0.0:8082'
