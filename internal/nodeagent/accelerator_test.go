@@ -58,15 +58,17 @@ esac
 }
 
 // TestAMachineWithNoDriverEstablishesThatItHasNone is the answer that must not
-// be silence. A machine whose nvidia-smi ran and could not reach its driver has
-// established the thing Placement needs, and a Run that needs a driver is
-// refused there with a code naming the machine rather than one naming an
-// absence of evidence.
+// be silence. A machine whose kernel has no NVIDIA module has established the
+// thing Placement needs, and a Run that needs a driver is refused there with a
+// code naming the machine rather than one naming an absence of evidence.
 func TestAMachineWithNoDriverEstablishesThatItHasNone(t *testing.T) {
 	daemon := standInDaemon(t, cpuOnlyDaemon)
 	noDriver := standInAcceleratorTool(t, "#!/bin/sh\nexit 9\n")
 
-	facts, err := NewDockerRuntime(daemon, WithAcceleratorTool(noDriver)).Facts(context.Background())
+	facts, err := NewDockerRuntime(daemon,
+		WithAcceleratorTool(noDriver),
+		WithKernelReports(standInKernel(t, false)),
+	).Facts(context.Background())
 
 	if err != nil {
 		t.Fatalf("a machine with no driver failed the whole report: %v", err)
@@ -95,7 +97,10 @@ func TestAMachineWhoseVendorToolCannotBeRunEstablishesNothing(t *testing.T) {
 	daemon := standInDaemon(t, cpuOnlyDaemon)
 	unreachable := filepath.Join(t.TempDir(), "nvidia-smi-that-is-not-installed")
 
-	facts, err := NewDockerRuntime(daemon, WithAcceleratorTool(unreachable)).Facts(context.Background())
+	facts, err := NewDockerRuntime(daemon,
+		WithAcceleratorTool(unreachable),
+		WithKernelReports(standInKernel(t, true)),
+	).Facts(context.Background())
 
 	if err != nil {
 		t.Fatalf("a machine whose vendor tool is missing failed the whole report: %v", err)
@@ -156,16 +161,25 @@ esac
 // comes back.
 func TestAWedgedVendorToolDoesNotHoldTheReport(t *testing.T) {
 	daemon := standInDaemon(t, cpuOnlyDaemon)
-	wedged := standInAcceleratorTool(t, "#!/bin/sh\ntrap '' TERM INT\nsleep 600\n")
+	wedged := standInAcceleratorTool(t, wedgedVendorTool)
 
 	started := time.Now()
-	facts, err := NewDockerRuntime(daemon, WithAcceleratorTool(wedged)).Facts(context.Background())
+	facts, err := NewDockerRuntime(daemon,
+		WithAcceleratorTool(wedged),
+		WithKernelReports(standInKernel(t, true)),
+	).Facts(context.Background())
 
 	if err != nil {
 		t.Fatalf("a wedged vendor tool failed the whole report: %v", err)
 	}
-	if held := time.Since(started); held > acceleratorProbeDeadline+acceleratorProbeReapDelay+2*time.Second {
-		t.Fatalf("a wedged vendor tool held the heartbeat for %s", held)
+	// The bound is the deadline and not the deadline plus the reap delay. Waiting
+	// out the reap is waiting on os/exec to give up on a process, which is the
+	// wait this agent must not be doing: Cmd.Wait blocks in Process.Wait before it
+	// ever consults WaitDelay, so a tool the kernel will not let go of holds the
+	// heartbeat for as long as it likes. What comes back at the deadline is this
+	// agent walking away from the call.
+	if held := time.Since(started); held < acceleratorProbeDeadline || held > acceleratorProbeDeadline+acceleratorProbeReapDelay {
+		t.Fatalf("a wedged vendor tool held the heartbeat for %s, and the deadline is %s", held, acceleratorProbeDeadline)
 	}
 	if facts.Host.Accelerator.Established {
 		t.Fatalf("a machine whose vendor tool never answered established %+v", facts.Host.Accelerator)
@@ -199,6 +213,77 @@ esac
 		t.Fatalf("a card listed at %d bytes is offered as %+v", listedAs, facts.Host.Accelerator.Devices)
 	}
 }
+
+// TestAnAgentThatCannotSeeTheDriverEstablishesNothing is the failure the exit
+// status cannot tell apart from a machine with no driver, on the machine where
+// getting it wrong costs the most. An agent whose execution context has no
+// device nodes in it, which a unit hardened with PrivateDevices=yes and an agent
+// in a container with only the docker socket both produce, runs nvidia-smi and
+// gets "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA
+// driver" and exit 9: the same words and the same status a machine with no
+// driver gives. The kernel underneath still holds the module and still runs
+// every `--gpus` container the daemon starts. Filed on the exit status alone,
+// an 8xH100 box refused every GPU Run with CAPABILITY_MISMATCH and told its
+// operator to buy a different machine.
+func TestAnAgentThatCannotSeeTheDriverEstablishesNothing(t *testing.T) {
+	daemon := standInDaemon(t, cpuOnlyDaemon)
+	blinded := standInAcceleratorTool(t, `#!/bin/sh
+echo "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver." >&2
+exit 9
+`)
+
+	facts, err := NewDockerRuntime(daemon,
+		WithAcceleratorTool(blinded),
+		WithKernelReports(standInKernel(t, true)),
+	).Facts(context.Background())
+
+	if err != nil {
+		t.Fatalf("an agent that cannot see the driver failed the whole report: %v", err)
+	}
+	if facts.Host.Accelerator.Established {
+		t.Fatalf("a machine whose kernel holds the NVIDIA module established %+v", facts.Host.Accelerator)
+	}
+	if refusals := refusalsForADriver(facts); len(refusals) != 1 || refusals[0].Code != "UNKNOWN_FACT" {
+		t.Fatalf("a Run needing a driver was refused %+v on a machine whose agent could not look", refusals)
+	}
+}
+
+// standInKernel is a machine's own /proc, holding the NVIDIA module's report or
+// not holding it. Hardware is the one thing a case cannot arrange, and the
+// kernel under it is the second: a case that read this host's own /proc would
+// state one machine on the workstation it was written on and another on the
+// build box.
+func standInKernel(t *testing.T, driverLoaded bool) string {
+	t.Helper()
+	root := t.TempDir()
+	// Every Linux kernel publishes this, and a root without it is a machine whose
+	// kernel this agent cannot read at all.
+	if err := os.WriteFile(filepath.Join(root, "version"), []byte("Linux version 7.0.0\n"), 0o644); err != nil {
+		t.Fatalf("write the stand-in kernel report: %v", err)
+	}
+	if !driverLoaded {
+		return root
+	}
+	reports := filepath.Join(root, "driver", "nvidia")
+	if err := os.MkdirAll(reports, 0o755); err != nil {
+		t.Fatalf("make the stand-in driver reports: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reports, "version"), []byte("NVRM version: 595.71.05\n"), 0o644); err != nil {
+		t.Fatalf("write the stand-in driver report: %v", err)
+	}
+	return root
+}
+
+// wedgedVendorTool is an nvidia-smi that never answers and leaves something
+// behind that outlives it. The background sleep inherits this script's stdout
+// pipe, so killing the script does not close the pipe and os/exec's own read
+// keeps waiting: this is the shape of a vendor tool that has to be walked away
+// from rather than waited out, and it is arrangeable, where a process in an
+// uninterruptible ioctl on /dev/nvidiactl is not.
+const wedgedVendorTool = `#!/bin/sh
+sleep 600 &
+exec sleep 600
+`
 
 // refusalsForADriver is what Placement would say about this report to a Run that
 // will not run without an NVIDIA driver, asked of the domain rule Placement and

@@ -41,6 +41,12 @@ type DockerRuntime struct {
 	// the daemon binary above is: a test points it at a machine that answers
 	// differently from this one, and nothing else can.
 	acceleratorBinary string
+	// kernelReports is where this node reads the kernel's own report of itself,
+	// which is /proc on the machine and a stand-in in a test. It is what decides
+	// whether a vendor tool that would not answer is a machine with no driver or
+	// an agent that could not see one, and hardware is the one thing a case
+	// cannot arrange.
+	kernelReports string
 	// artifactRoot is where this node keeps immutable Artifact copies. A daemon
 	// has no concept of one, so it is the agent's own durable storage rather
 	// than anything Docker manages. A runtime given none replicates nothing and
@@ -80,6 +86,13 @@ func WithAcceleratorTool(binary string) RuntimeOption {
 	return func(docker *DockerRuntime) { docker.acceleratorBinary = binary }
 }
 
+// WithKernelReports points this node at the kernel's own reports about itself,
+// which is /proc everywhere but in a case that has to stand in a machine whose
+// NVIDIA module is loaded or absent.
+func WithKernelReports(root string) RuntimeOption {
+	return func(docker *DockerRuntime) { docker.kernelReports = root }
+}
+
 func NewDockerRuntime(binary string, options ...RuntimeOption) *DockerRuntime {
 	if binary == "" {
 		binary = "docker"
@@ -87,6 +100,7 @@ func NewDockerRuntime(binary string, options ...RuntimeOption) *DockerRuntime {
 	runtime := &DockerRuntime{
 		binary:            binary,
 		acceleratorBinary: "nvidia-smi",
+		kernelReports:     "/proc",
 		now:               time.Now,
 		labelPrefix:       "mercator.",
 		network:           newPathMeasurements(),
