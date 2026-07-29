@@ -45,14 +45,6 @@ type ContentCredentialScope struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// Zero reports that this scope states nothing. It is deliberately not what
-// "nothing was minted" means: material carrying no scope is the thing this file
-// exists to catch, so each credential below answers that question about the
-// whole of itself rather than about its bound alone.
-func (scope ContentCredentialScope) Zero() bool {
-	return scope == ContentCredentialScope{}
-}
-
 // Authorises is the check a machine makes before it presents this material. It
 // answers with the reason rather than a bare no, because every way it can fail
 // is a different incident: material with no bound, material minted for somebody
@@ -97,11 +89,12 @@ type RegistryPull struct {
 // than a missing one: a public image needs no credential, and a machine that
 // presents none for it is behaving correctly.
 //
-// It asks about the material as well as the bound, because a value that answered
-// on the bound alone would call a bare username and password "nothing minted"
-// and let the one case worth catching past every reader of this type: material
-// with no scope is the registry account under another name, and it has to be
-// visible to be refused.
+// It asks about the material as well as the bound, and the scope has no such
+// question of its own for that reason. A predicate that answered on the bound
+// alone would call a bare username and password "nothing minted" and let the one
+// case worth catching past every reader of this type: material with no scope is
+// the registry account under another name, and it has to be visible to be
+// refused.
 func (pull RegistryPull) Zero() bool {
 	return pull == RegistryPull{}
 }
