@@ -39,8 +39,17 @@ limits.
   ([#235](https://github.com/benngarcia/mercator/issues/235)).
 - A Shadeform connection needs an `agent_download_url` an operator hosts, because
   Mercator's release archives ship no `mercator-node` binary
-  ([#234](https://github.com/benngarcia/mercator/issues/234)). A connection
-  without one verifies and lists capacity, and refuses to provision.
+  ([#234](https://github.com/benngarcia/mercator/issues/234)), and the control
+  plane needs `MERCATOR_AGENT_VERSION` to say which build that URL serves. Neither
+  has a default: a guessed URL is a paid machine fetching a 404, and a guessed
+  version is a pin nobody chose. A connection or a deployment missing either
+  verifies and lists capacity, and refuses to provision.
+- A provision the provider classified as fatal, such as an authentication failure
+  after a key rotation, is asked again on every advance for ever
+  ([#236](https://github.com/benngarcia/mercator/issues/236)). The capacity build
+  records no classified failure, and the enrolment deadline cannot bound it because
+  it is only consulted once a provision has succeeded. Out of reach today, because
+  a capacity connection publishes no placement candidate yet.
 - An ephemeral execution still commits a Booking against a single-use Rental
   identity. Placement makes that binding unqueueable and records the honest
   `launch_ephemeral` disposition, but the Booking record type is shared with

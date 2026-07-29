@@ -4625,6 +4625,58 @@ complete because it works against a live provider.
     no `op`, which is #235. Full detail, evidence, and the six deliberate breaks
     that proved each rule can fail are in the verification section below.
 
+- [x] 2026-07-29: What two reviewers refuted about the slice above, repaired. Six
+  findings were real and are fixed at the root; one is real and is its own slice.
+  - The slice landed with no Blueprint and no Lab invariant, and the Lab could not
+    have held it: its only `CapacityProvider` deduplicated by Rental
+    unconditionally, so a Blueprint declaring `idempotent_provision: "none"` still
+    compiled into a world with server-side idempotency. The world can now lose a
+    provision answer, and
+    `a-lost-provision-answer-costs-one-repeat-and-not-the-machine` drives that
+    world through the real orchestrator: one machine, adopted under the lease, its
+    agent enrolled on it, the workload launched.
+  - The defect that Blueprint exists for. `Reinvite` minted a fresh token every
+    time and the store wrote it over the old one, and `Enroll` matches the token
+    the record names exactly. `allocateCapacity` asks for the bootstrap before
+    every provision, because it cannot know whether an earlier attempt landed a
+    machine until the provider answers, so a create whose answer was lost and
+    which the next attempt adopts hands the Run a paid machine holding material
+    the control plane invalidated a moment earlier. It enrols nowhere and the Run
+    burns its whole enrolment patience. An invitation still outstanding is now
+    handed back, rebuilt from the record's own digest.
+    `safety.a_machine_holds_material_the_control_plane_will_still_accept` is the
+    rule, and it fails through the real orchestrator when the Lab's registry is
+    put back the way it was.
+  - `agent_download_url` required `{version}` because a URL naming no version is
+    not a pin, and the value substituted into it was the literal `"dev"` in every
+    production deployment: `node.Registry` defaulted to it and nothing ever set
+    `daemon.Config.AgentVersion`. The default is gone rather than corrected, and
+    `MERCATOR_AGENT_VERSION` is where an operator states which build their URL
+    serves. A deployment that states none provisions nothing.
+  - `agent_download_url` is the one bootstrap value an operator writes, and it
+    lands inside a single-quoted word in the `curl` line. The bar on unattended
+    values permitted the single quote, so a URL carrying one closed that word and
+    ran the rest as root on the rented machine. Proved on the build host against a
+    real shell in `busybox:1.37` before the fix, refused after it.
+  - Four paths read the same account listing for the same lease and disagreed
+    about ownership. The reconciler verified only the machine it kept and then
+    destroyed every other instance wearing the Rental tag, which the teardown
+    beside it refuses to touch on exactly that mismatch; and the observation had
+    been narrowed to the machine it was about to report, on the strength of a
+    second generation this provider cannot have, which hid a second machine the
+    account was being billed for. Both now ask about every match.
+  - `capability.ErrCapacityIndeterminate` is a provision whose outcome nobody
+    knows, which was prose in Shadeform and a bare error everywhere else. It is
+    typed now, because callers act on the difference: a failure allocated nothing
+    and can be asked again, and asking this again is how one lost answer becomes
+    two machines.
+  - Not fixed here and filed as #236: a provision the provider classified as fatal
+    is retried for ever. `allocateCapacity` unwraps no `*adapter.ProviderFailure`,
+    records no classified failure, and `EnrolmentDeadlineAt` cannot bound it
+    because it is only consulted after a provision succeeds. That is a new failure
+    path with its own policy decisions and its own Blueprint to write, rather than
+    a defect in code that already exists.
+
 ## Phase status
 
 | Phase | What it delivers | Status |
@@ -4760,6 +4812,20 @@ Phase 1 added:
   facts of Mercator's making rather than one field with itself. A control plane that
   provisions under one generation and mints the token under another fails 15 Lab
   tests mid-drive; before, it was fully green.
+- `safety.a_machine_holds_material_the_control_plane_will_still_accept` (Lab
+  invariant): an invitation that reached a machine is not replaced before that
+  machine redeems it. A rented host is handed its invitation once, in the bootstrap
+  written when it is created, and Mercator opens no connection to it afterwards, so
+  an invitation superseded while the host still has to enrol is that host locked
+  out of the fleet it was paid for. It presents material the registry no longer
+  names, is refused, and has nothing else to try, and nothing about the machine
+  looks wrong from the provider's side. A credential nobody has redeemed yet is not
+  the violation, because that is every machine still booting; the violation is one
+  that reached a machine, was never redeemed, and has been superseded. Added in the
+  review round of phase 5 slice 7, with
+  `a-lost-provision-answer-costs-one-repeat-and-not-the-machine` as the world it
+  fires in: put the Lab's registry back to minting a fresh token on every repeat
+  and the rule reports the invitation mid-drive.
 - `bad-host-facts-rejected-loudly` (green as of phase 5 slice 6): four listings
   for one training image that declares the accelerator stack it was built
   against. The cheapest states outright that it has no working NVIDIA driver and
