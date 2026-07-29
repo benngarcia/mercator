@@ -45,7 +45,8 @@ Source development can remove browser token handling entirely:
 ./bin/mercator serve --dev
 ```
 
-`--dev` refuses to start unless `MERCATOR_ADDR` is loopback, creates an
+`--dev` refuses to start unless `MERCATOR_ADDR` is loopback and
+`MERCATOR_SECRET_KEY` is set, creates an
 ephemeral signing key, and establishes an HTTP-only SameSite=Lax session for
 `developer@localhost`. Browser mutations record that identity. The operator
 bearer token remains available for the CLI and automation, and `--dev` cannot

@@ -16,9 +16,28 @@ limits.
 
 - One bearer token principal plus audited OIDC identities, with no roles or
   per-user workspace authorization.
-- No built-in TLS.
-- No Mercator-managed secret vault, grant API, KMS integration, or key rotation
-  flow exists. Workloads/runtimes own their secret-management backend.
+- Mercator terminates TLS itself and manages no certificates. It reads
+  `MERCATOR_TLS_CERT_FILE` and `MERCATOR_TLS_KEY_FILE` once, at startup, so a
+  renewed certificate is served only after a restart. There is no ACME client,
+  no automatic issuance, no OCSP stapling configuration, no client-certificate
+  (mTLS) mode, no HSTS header, and no plain-HTTP listener that redirects to
+  HTTPS: a deployment that wants port 80 to redirect needs something else on
+  port 80. An operator renewing on a short-lived certificate should expect a
+  process restart per renewal
+  ([#213](https://github.com/benngarcia/mercator/issues/213)).
+- The non-loopback TLS rule reads the bind address and nothing else, which makes
+  it conservative in one real case: a container that binds `0.0.0.0` so that a
+  loopback-only published port can reach it is required to carry a certificate
+  even though nothing off the host can reach the listener. The alternative,
+  inferring exposure from anything other than the address this process binds,
+  would be guessing.
+- No Mercator-managed secret vault, grant API, or KMS integration exists.
+  Workloads and runtimes own their secret-management backend. Master-key
+  rotation does exist: `mercator rekey` re-seals every stored connection
+  credential from `MERCATOR_SECRET_KEY_PREVIOUS` to `MERCATOR_SECRET_KEY` in one
+  transaction. It is offline. There is no online rotation, no rotation of a
+  session-cookie key, and no scheduled or automatic rotation, so the retired key
+  is in the environment for as long as the operator leaves it there.
 - Health, OpenAPI, and UI shell are public on the listen interface.
 
 ## Capacity Reuse
@@ -275,8 +294,10 @@ on that host and still hold.
 
 ## GA Documentation Gaps
 
-- Deployment topology with TLS/reverse proxy.
-- Key-management and rotation procedure.
+- Deployment topology with a reverse proxy in front of a loopback bind.
+- Key-management procedure beyond the rotation command
+  ([security-model.md](security-model.md#master-key-and-rotation)): where the
+  master key lives, who can read it, and how a leak is detected.
 - Registry digest-resolution procedure beyond pre-pinned workload images.
 - External sink configuration and incident runbooks.
 - SQLite migration, backup automation, and restore SLOs.

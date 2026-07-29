@@ -20,6 +20,7 @@ The live integration test is guarded by `MERCATOR_DOCKER_INTEGRATION=1`.
 export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator-docker.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
+export MERCATOR_SECRET_KEY="$(openssl rand -hex 32)"
 
 go run ./cmd/mercator serve
 ```

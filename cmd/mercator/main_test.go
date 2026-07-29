@@ -5,9 +5,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	stdlog "log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/benngarcia/mercator/internal/tlsmaterial"
 )
 
 func TestRunDelegatesVerifyToTheConformanceRunner(t *testing.T) {
@@ -58,6 +64,65 @@ func TestServeRejectsInvalidMasterKeyBeforeOpeningStorage(t *testing.T) {
 	if exitCode != 1 {
 		t.Fatalf("run() = %d, want 1", exitCode)
 	}
+}
+
+// TestServeRefusesANonLoopbackAddressWithoutTLSMaterial states the rule that
+// replaced the old warning: a listener that would carry bearer tokens over the
+// public interface in the clear does not come up at all. The refusal names the
+// variables an operator has to set.
+func TestServeRefusesANonLoopbackAddressWithoutTLSMaterial(t *testing.T) {
+	// Arrange
+	log := captureStartupLog(t)
+
+	// Act
+	exitCode := run(context.Background(), []string{"mercator", "serve"}, map[string]string{
+		"MERCATOR_ADDR":       "0.0.0.0:8080",
+		"MERCATOR_API_TOKEN":  "operator-token",
+		"MERCATOR_SECRET_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"MERCATOR_SQLITE_DSN": "file:" + filepath.Join(t.TempDir(), "mercator.db"),
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+
+	// Assert
+	if exitCode != 1 {
+		t.Fatalf("run() = %d, want 1", exitCode)
+	}
+	if !strings.Contains(log.String(), tlsmaterial.CertFileVar) {
+		t.Fatalf("startup log = %q, want %s named", log.String(), tlsmaterial.CertFileVar)
+	}
+}
+
+// TestServeRequiresAMasterKey: credential sealing, run-report tokens and node
+// identity all derive from MERCATOR_SECRET_KEY and all disable themselves
+// without it, so an absent key stops startup rather than starting a server with
+// three security features quietly off.
+func TestServeRequiresAMasterKey(t *testing.T) {
+	// Arrange
+	log := captureStartupLog(t)
+
+	// Act
+	exitCode := run(context.Background(), []string{"mercator", "serve"}, map[string]string{
+		"MERCATOR_ADDR":       "127.0.0.1:0",
+		"MERCATOR_API_TOKEN":  "operator-token",
+		"MERCATOR_SQLITE_DSN": "file:" + filepath.Join(t.TempDir(), "mercator.db"),
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+
+	// Assert
+	if exitCode != 1 {
+		t.Fatalf("run() = %d, want 1", exitCode)
+	}
+	if !strings.Contains(log.String(), "MERCATOR_SECRET_KEY is required") {
+		t.Fatalf("startup log = %q, want the missing key named", log.String())
+	}
+}
+
+// captureStartupLog redirects the standard logger, which is where startup
+// refusals are written, and restores it when the case ends.
+func captureStartupLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var captured bytes.Buffer
+	stdlog.SetOutput(&captured)
+	t.Cleanup(func() { stdlog.SetOutput(os.Stderr) })
+	return &captured
 }
 
 func TestServeOptionsEnableLocalAuthentication(t *testing.T) {
@@ -170,6 +235,7 @@ func TestServeClosesStorageWhenOIDCDiscoveryFails(t *testing.T) {
 	exitCode := run(context.Background(), []string{"mercator", "serve"}, map[string]string{
 		"MERCATOR_ADDR":                "127.0.0.1:0",
 		"MERCATOR_API_TOKEN":           "operator-token",
+		"MERCATOR_SECRET_KEY":          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		"MERCATOR_SQLITE_DSN":          dsn,
 		"MERCATOR_OIDC_ISSUER":         issuer.URL,
 		"MERCATOR_OIDC_CLIENT_ID":      "client-id",

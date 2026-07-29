@@ -20,6 +20,7 @@ import (
 	"github.com/benngarcia/mercator/internal/conformance"
 	"github.com/benngarcia/mercator/internal/daemon"
 	"github.com/benngarcia/mercator/internal/keymaterial"
+	"github.com/benngarcia/mercator/internal/tlsmaterial"
 	"github.com/benngarcia/mercator/internal/webauth"
 )
 
@@ -42,6 +43,9 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	}
 	if len(args) > 1 && args[1] == "lab" {
 		return runLabCommand(ctx, args, env, stdout, stderr)
+	}
+	if len(args) > 1 && args[1] == "rekey" {
+		return runRekeyCommand(ctx, env, stdout, stderr)
 	}
 	if len(args) > 1 && args[1] != "serve" {
 		return cli.Run(ctx, cli.Config{
@@ -86,8 +90,18 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("load secret key: %v", err)
 		return 1
 	}
-	if !isLoopback(addr) {
-		stdlog.Printf("WARNING: listening on non-loopback address %s over plaintext HTTP; bearer tokens and run data are unencrypted in transit — put a TLS-terminating proxy in front for anything beyond local evaluation", addr)
+	tlsFiles, err := tlsmaterial.FromEnv(func(name string) string { return env[name] })
+	if err != nil {
+		stdlog.Printf("configure TLS: %v", err)
+		return 1
+	}
+	// A non-loopback listener with no certificate would put bearer tokens and
+	// run data on the wire in the clear. That used to be a warning followed by
+	// serving anyway; it is now a refusal, because a warning in a startup log is
+	// not a security control.
+	if !isLoopback(addr) && !tlsFiles.Configured() {
+		stdlog.Printf("configure TLS: MERCATOR_ADDR %s is not loopback and no TLS material is configured; set %s and %s, or bind a loopback address", addr, tlsmaterial.CertFileVar, tlsmaterial.KeyFileVar)
+		return 1
 	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -104,6 +118,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		SQLiteDSN:      dsn,
 		OperatorToken:  apiToken,
 		MasterKey:      masterKey,
+		TLS:            tlsFiles,
 		PublicURL:      env["MERCATOR_PUBLIC_URL"],
 		Getenv:         func(name string) string { return env[name] },
 		WebAuth:        webauthCfg,
@@ -117,14 +132,15 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	// A loopback broker holding a token only this process knows is unusable
 	// until the CLI learns it. Write it down rather than making the operator
 	// copy it out of the log.
+	baseURL := listenURL(tlsFiles, addr)
 	if generatedToken && isLoopback(addr) {
-		shareLocalContext(env, addr, apiToken)
+		shareLocalContext(env, baseURL, apiToken)
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- runtime.Serve(listener) }()
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	stdlog.Printf("mercator listening on %s", addr)
+	stdlog.Printf("mercator listening on %s", baseURL)
 	exitCode := 0
 	select {
 	case err := <-serveErr:
@@ -166,12 +182,22 @@ func isLoopback(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// shareLocalContext hands this machine's CLI the address and token of the
+// listenURL is the base URL a client reaches this server on. The scheme follows
+// the material: a process holding a certificate terminates TLS itself, so
+// telling anyone http:// would be telling them the wrong thing.
+func listenURL(material tlsmaterial.Material, addr string) string {
+	if material.Configured() {
+		return "https://" + addr
+	}
+	return "http://" + addr
+}
+
+// shareLocalContext hands this machine's CLI the base URL and token of the
 // server just started. Failing to write it is not fatal: the token is already
 // in the log above, so the operator can still export it by hand.
-func shareLocalContext(env map[string]string, addr, token string) {
+func shareLocalContext(env map[string]string, baseURL, token string) {
 	path := cli.DefaultConfigPath(env)
-	changed, err := cli.WriteLocalContext(path, "http://"+addr, token)
+	changed, err := cli.WriteLocalContext(path, baseURL, token)
 	if err != nil {
 		stdlog.Printf("could not write the %q CLI context (%v); export MERCATOR_API_TOKEN instead", cli.LocalContextName, err)
 		return
@@ -181,10 +207,16 @@ func shareLocalContext(env map[string]string, addr, token string) {
 	}
 }
 
+// masterKeyFromEnv reads the process master key, which is required. Credential
+// sealing, run-report tokens and node identity each derive a subkey from it,
+// and each of those derivations answers an absent master key by disabling
+// itself. Returning no key here therefore used to start a server with three
+// security features silently off, which is why an absent key is now a startup
+// failure naming the variable.
 func masterKeyFromEnv(values map[string]string) ([]byte, error) {
 	raw := values["MERCATOR_SECRET_KEY"]
 	if raw == "" {
-		return nil, nil
+		return nil, errors.New("MERCATOR_SECRET_KEY is required (32+ decoded bytes, hex or base64)")
 	}
 	return keymaterial.Decode("MERCATOR_SECRET_KEY", raw, 32)
 }
