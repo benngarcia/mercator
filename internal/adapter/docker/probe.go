@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/gpunorm"
 )
@@ -126,7 +127,7 @@ func (c *CLIClient) DiskFreeBytes(ctx context.Context) (int64, error) {
 	return parseDFAvailableBytes(stdout)
 }
 
-// AcceleratorInventory measures the endpoint's GPUs by running `nvidia-smi`
+// AcceleratorFacts measures the endpoint's GPUs by running `nvidia-smi`
 // in a one-shot probe container launched with `--gpus all`. The NVIDIA
 // container runtime injects nvidia-smi and the driver libraries into any
 // container it starts, so the same tiny busybox image as the disk probe
@@ -135,50 +136,58 @@ func (c *CLIClient) DiskFreeBytes(ctx context.Context) (int64, error) {
 // tailnet) because the measurement happens on the daemon's side. Callers
 // should gate on HostInfo.HasNvidiaRuntime(); on a host without the NVIDIA
 // runtime the launch itself fails and the error surfaces here.
-func (c *CLIClient) AcceleratorInventory(ctx context.Context) ([]domain.AcceleratorInventory, error) {
+//
+// It asks for the driver in the same query as the cards, because a probe that
+// listed the cards has proven the driver behind them: the container it just ran
+// could not have enumerated a single card without a loaded NVIDIA driver on the
+// daemon's host. Discarding that and publishing silence had this endpoint refuse
+// a Run declaring facts: ["nvidia_driver"] with UNKNOWN_FACT, which says go and
+// look, seconds after looking.
+func (c *CLIClient) AcceleratorFacts(ctx context.Context) (capability.AcceleratorFacts, error) {
 	stdout, stderr, err := c.runSplit(ctx,
 		"run", "--rm", "--network=none", "--gpus", "all", "--label", "mercator.probe=gpu_inventory",
-		diskProbeImage, "nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits")
+		diskProbeImage, "nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits")
 	if err != nil {
-		return nil, fmt.Errorf("docker gpu probe: %w: %s", err, strings.TrimSpace(stderr))
+		return capability.AcceleratorFacts{}, fmt.Errorf("docker gpu probe: %w: %s", err, strings.TrimSpace(stderr))
 	}
-	return parseNvidiaSMIInventory(stdout)
+	return parseNvidiaSMIFacts(stdout)
 }
 
-// parseNvidiaSMIInventory groups the CSV lines of
-// `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits`
-// (one line per physical GPU, memory in MiB) into accelerator inventory:
-// identical (name, memory) GPUs collapse into one entry with a count. The
-// canonical model id comes from the same gpunorm mapping the runpod adapter
-// uses, so a workload's ModelAnyOf matches the GPU regardless of provider, and
-// the memory goes through the same package for the same reason: a measured
-// framebuffer is a few hundred mebibytes under the capacity the marketplaces
-// list the same card at, and a floor copied from a listing would strike the card
-// out here while admitting it there.
-func parseNvidiaSMIInventory(output string) ([]domain.AcceleratorInventory, error) {
-	var inventory []domain.AcceleratorInventory
+// parseNvidiaSMIFacts groups the CSV lines of
+// `nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits`
+// (one line per physical GPU, memory in MiB) into the accelerator report an
+// offer carries: identical (name, memory) GPUs collapse into one entry with a
+// count, and the driver every line repeats is stated once. The canonical model
+// id comes from the same gpunorm mapping the runpod adapter uses, so a
+// workload's ModelAnyOf matches the GPU regardless of provider, and the memory
+// goes through the same package for the same reason: a measured framebuffer is
+// short of the capacity the marketplaces list the same card at, and a floor
+// copied from a listing would strike the card out here while admitting it there.
+func parseNvidiaSMIFacts(output string) (capability.AcceleratorFacts, error) {
+	facts := capability.AcceleratorFacts{Established: true, Vendor: "nvidia"}
 	index := map[string]int{}
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		name, memory, ok := strings.Cut(line, ",")
-		if !ok {
-			return nil, fmt.Errorf("unexpected nvidia-smi line: %q", line)
+		fields := strings.Split(line, ",")
+		if len(fields) != 3 {
+			return capability.AcceleratorFacts{}, fmt.Errorf("unexpected nvidia-smi line: %q", line)
 		}
-		name = strings.TrimSpace(name)
-		memoryMiB, err := strconv.ParseInt(strings.TrimSpace(memory), 10, 64)
+		name := strings.TrimSpace(fields[0])
+		memoryMiB, err := strconv.ParseInt(strings.TrimSpace(fields[1]), 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("parse nvidia-smi memory.total in line %q: %w", line, err)
+			return capability.AcceleratorFacts{}, fmt.Errorf("parse nvidia-smi memory.total in line %q: %w", line, err)
 		}
+		facts.DriverVersion = strings.TrimSpace(fields[2])
 		key := name + "|" + strconv.FormatInt(memoryMiB, 10)
 		if i, seen := index[key]; seen {
-			inventory[i].Count++
+			facts.Devices[i].Count++
 			continue
 		}
-		index[key] = len(inventory)
-		inventory = append(inventory, domain.AcceleratorInventory{
+		index[key] = len(facts.Devices)
+		facts.Devices = append(facts.Devices, domain.AcceleratorInventory{
 			Vendor:         "NVIDIA",
 			Model:          name,
 			CanonicalModel: gpunorm.Canonical("NVIDIA", name),
@@ -186,10 +195,10 @@ func parseNvidiaSMIInventory(output string) ([]domain.AcceleratorInventory, erro
 			MemoryBytes:    gpunorm.CardMemoryBytes(name, memoryMiB),
 		})
 	}
-	if len(inventory) == 0 {
-		return nil, fmt.Errorf("no GPUs in nvidia-smi output: %q", strings.TrimSpace(output))
+	if len(facts.Devices) == 0 {
+		return capability.AcceleratorFacts{}, fmt.Errorf("no GPUs in nvidia-smi output: %q", strings.TrimSpace(output))
 	}
-	return inventory, nil
+	return facts, nil
 }
 
 // parseDFAvailableBytes extracts the Available column of the root mount from

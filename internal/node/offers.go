@@ -151,7 +151,17 @@ func (registry *Registry) offer(record Record, occupied int) domain.OfferSnapsho
 			// happened to succeed.
 			EphemeralDiskBytes: host.Disk.FreeBytes,
 			EphemeralDiskKnown: host.Disk.Known,
-			Accelerators:       host.Accelerator.Devices,
+			// The cards travel with the same flag beside them, because the reader
+			// that strikes a machine out on a card count is a different reader from
+			// the one that reads the driver fact below, and it had only the empty
+			// list to go on. A machine whose vendor tool would not run published an
+			// empty inventory that a Run pinned to eight A100s read as a measured
+			// zero, so the machine holding the cards was refused
+			// RESOURCE_INSUFFICIENT while the machine's own attestation said
+			// nothing either way. Only a Run that named the driver fact ever saw
+			// the silence, and no GPU Run is written that way.
+			Accelerators:      host.Accelerator.Devices,
+			AcceleratorsKnown: host.Accelerator.Established,
 		},
 		// What this machine established about the substrate under a workload,
 		// carried through as the machine stated it. A node reports the driver it

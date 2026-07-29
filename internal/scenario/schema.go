@@ -1368,6 +1368,15 @@ type ResourcesSpec struct {
 	// measurement say a whole fleet has nothing to offer.
 	DiskUnmeasured bool     `json:"disk_unmeasured,omitempty"`
 	GPU            *GPUSpec `json:"gpu,omitempty"`
+	// GPUUncounted is a machine whose cards nobody counted, which is the third
+	// state on this side too and not a machine with no cards. An enrolled node
+	// whose vendor tool will not run reports exactly this: every other fact about
+	// the machine, and an accelerator inventory it never took. What the corpus
+	// needs it for is the refusal a GPU Run earns there. Read as a measured zero,
+	// a machine holding eight A100s is struck out RESOURCE_INSUFFICIENT by the
+	// count, the model, and the memory floor alike, which says the fleet can
+	// never run this work when what happened is that nobody looked.
+	GPUUncounted bool `json:"gpu_uncounted,omitempty"`
 }
 
 type GPUSpec struct {
@@ -2889,6 +2898,11 @@ func validateInventory(owner string, resources *ResourcesSpec) error {
 	// fixtures in one, and the world would have to pick which half to publish.
 	if resources.DiskUnmeasured && resources.Disk != nil {
 		return fmt.Errorf("%s states a disk and states that nobody measured it", owner)
+	}
+	// The same rule for the cards: a machine that states its cards and states
+	// that nobody counted them is two fixtures in one.
+	if resources.GPUUncounted && resources.GPU != nil {
+		return fmt.Errorf("%s states its cards and states that nobody counted them", owner)
 	}
 	if resources.GPU == nil {
 		return nil

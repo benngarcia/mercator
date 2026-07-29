@@ -416,7 +416,25 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	// nothing is refused too, and separately, because a silence is not a machine
 	// that said no.
 	violations = append(violations, offer.Host.Violations(workload.Spec.Resources.Host)...)
-	if !acceleratorRequirementsSatisfied(workload.Spec.Resources.Accelerators, offer) {
+	// The cards themselves, asked the way the disk is asked. A machine that never
+	// counted its cards is refused too, and not for the same thing: sending a Run
+	// pinned to eight A100s to a machine nobody counted is a launch nobody can
+	// promise, so the refusal stands, but it names an inventory nobody took rather
+	// than a shortfall somebody measured. Read as a shortfall it said the fleet
+	// can never run this work on the strength of one nvidia-smi that would not
+	// run, which is the answer the driver fact above already stopped giving and
+	// the answer every count, model, and memory floor still got.
+	switch {
+	case requiresAccelerators(workload.Spec.Resources.Accelerators) && !offer.Resources.AcceleratorsKnown:
+		violations = append(violations, domain.Violation{
+			Code:     "UNKNOWN_FACT",
+			Path:     "resources.accelerators",
+			Required: workload.Spec.Resources.Accelerators,
+			Offered:  "unknown",
+			Message:  "Offer does not say what accelerators this machine holds.",
+			Unstated: true,
+		})
+	case !acceleratorRequirementsSatisfied(workload.Spec.Resources.Accelerators, offer):
 		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.accelerators", Required: workload.Spec.Resources.Accelerators, Offered: offer.Resources.Accelerators, Message: "Offer has insufficient accelerator inventory."})
 	}
 	if requiresPublicInbound(container) && offer.Capabilities.Network.Inbound != domain.InboundNetworkPublicPort {
@@ -1319,6 +1337,16 @@ func downloadFloorViolations(now time.Time, req domain.NetworkDownloadRequiremen
 func requiresPublicInbound(container domain.ContainerSpec) bool {
 	return slices.ContainsFunc(container.Ports, func(port domain.PortSpec) bool {
 		return port.Exposure == domain.PortExposurePublic
+	})
+}
+
+// requiresAccelerators reports whether this workload asked for a card at all. A
+// Run that asked for none is placed on a machine that counted none and on a
+// machine that counted nothing alike, the same way a Run with no disk floor is
+// placed on a machine whose statfs failed.
+func requiresAccelerators(requirements []domain.AcceleratorRequirement) bool {
+	return slices.ContainsFunc(requirements, func(requirement domain.AcceleratorRequirement) bool {
+		return requirement.Count > 0
 	})
 }
 

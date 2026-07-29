@@ -1,0 +1,52 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One enrolled machine in this world, and nobody counted its cards. Its agent could not run the vendor tool, so it reports its liveness, its containers, and its disk, and establishes no accelerator inventory. A Run pinned to eight cards is refused there, which is right: sending it to a machine nobody counted is a launch nobody can promise. What the refusal says is what this world is for. Read as a measured zero, the empty inventory says this fleet can never run the work, the wait becomes the one other work does not have to respect, and the workspace loses its ordering to one nvidia-smi that would not run. Read as the silence it is, the machine is counted as one that said too little to tell and safety.a_silence_is_not_an_answer_about_capacity recounts the fleet answer off the decision beside it and agrees.",
+  "seed": "mercator-lab-uncounted-cards-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f": {
+        "layers": [
+          {
+            "digest": "sha256:11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a1",
+            "size": "10GB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-nobody-counted",
+        "rate_per_hour_usd": 2.0,
+        "cached_images": [
+          "trainer@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f"
+        ],
+        "resources": {
+          "gpu_uncounted": true
+        }
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "pinned-to-eight-cards",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f",
+          "expected_runtime": "5m",
+          "max_runtime": "20m",
+          "resources": {
+            "gpu": {
+              "model": "A100",
+              "count": 8,
+              "memory": "80GB"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

@@ -71,7 +71,11 @@ func buildOffer(t instanceType, region string, available bool, now time.Time) do
 			MemoryBytes:        int64(cfg.MemoryInGB) * gib,
 			EphemeralDiskBytes: int64(cfg.StorageInGB) * gib,
 			EphemeralDiskKnown: true,
-			Accelerators:       accelerators,
+			// A catalog states the cards it sells with the machine, so this
+			// inventory is one somebody took: a listing with no accelerator
+			// entries is a CPU instance type rather than a machine nobody counted.
+			Accelerators:      accelerators,
+			AcceleratorsKnown: true,
 		},
 		Capabilities: domain.CapabilityProfile{
 			// SupportsEntrypointOverride stays false: the docker launch

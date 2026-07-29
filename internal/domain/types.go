@@ -619,6 +619,22 @@ type ResourceInventory struct {
 	// and the queue is ordered on the difference.
 	EphemeralDiskKnown bool                   `json:"ephemeral_disk_known"`
 	Accelerators       []AcceleratorInventory `json:"accelerators,omitempty"`
+	// AcceleratorsKnown is whether the list above is an inventory somebody took.
+	// A catalog listing its cards took one by selling them. A machine whose agent
+	// could not run the vendor tool took none, and the empty list it leaves
+	// behind is not a machine with no cards.
+	//
+	// It carries the same distinction into the same reader as the disk flag
+	// beside it, and for the same reason. The accelerator half of a report is the
+	// half that is empty on a CPU box and empty on an unmeasured 8xA100 box, so a
+	// reader with only the values cannot tell them apart. Read as an inventory,
+	// the silence strikes a machine holding eight cards out of every accelerator
+	// placement with RESOURCE_INSUFFICIENT, which tells an operator the fleet can
+	// never run this work on the strength of nobody having run nvidia-smi.
+	// Placement still refuses a machine that cannot say what cards it holds,
+	// because a Run pinned to eight A100s cannot be sent to a machine nobody
+	// counted, but it refuses it as a silence that says go and look.
+	AcceleratorsKnown bool `json:"accelerators_known"`
 }
 
 type AcceleratorInventory struct {

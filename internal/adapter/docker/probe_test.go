@@ -132,13 +132,17 @@ func TestHasNvidiaRuntimeFalseForCPUOnlyDaemon(t *testing.T) {
 	}
 }
 
-func TestParseNvidiaSMIInventoryCanonicalizesSingleGPU(t *testing.T) {
-	// Shape emitted by `nvidia-smi --query-gpu=name,memory.total
+func TestParseNvidiaSMIFactsCanonicalizesSingleGPU(t *testing.T) {
+	// Shape emitted by `nvidia-smi --query-gpu=name,memory.total,driver_version
 	// --format=csv,noheader,nounits` inside the probe container (memory in MiB).
-	inventory, err := parseNvidiaSMIInventory("NVIDIA GeForce RTX 5090, 32607\n")
+	facts, err := parseNvidiaSMIFacts("NVIDIA GeForce RTX 5090, 32607, 595.71.05\n")
 	if err != nil {
-		t.Fatalf("parseNvidiaSMIInventory: %v", err)
+		t.Fatalf("parseNvidiaSMIFacts: %v", err)
 	}
+	if !facts.Established || facts.DriverVersion != "595.71.05" {
+		t.Errorf("a probe that listed a card reported %+v", facts)
+	}
+	inventory := facts.Devices
 	if len(inventory) != 1 {
 		t.Fatalf("inventory = %+v, want one entry", inventory)
 	}
@@ -158,14 +162,15 @@ func TestParseNvidiaSMIInventoryCanonicalizesSingleGPU(t *testing.T) {
 	}
 }
 
-func TestParseNvidiaSMIInventoryGroupsIdenticalGPUs(t *testing.T) {
-	output := "NVIDIA H100 80GB HBM3, 81559\n" +
-		"NVIDIA H100 80GB HBM3, 81559\n" +
-		"NVIDIA GeForce RTX 4090, 24564\n"
-	inventory, err := parseNvidiaSMIInventory(output)
+func TestParseNvidiaSMIFactsGroupsIdenticalGPUs(t *testing.T) {
+	output := "NVIDIA H100 80GB HBM3, 81559, 595.71.05\n" +
+		"NVIDIA H100 80GB HBM3, 81559, 595.71.05\n" +
+		"NVIDIA GeForce RTX 4090, 24564, 595.71.05\n"
+	facts, err := parseNvidiaSMIFacts(output)
 	if err != nil {
-		t.Fatalf("parseNvidiaSMIInventory: %v", err)
+		t.Fatalf("parseNvidiaSMIFacts: %v", err)
 	}
+	inventory := facts.Devices
 	if len(inventory) != 2 {
 		t.Fatalf("inventory = %+v, want two grouped entries", inventory)
 	}
@@ -177,11 +182,11 @@ func TestParseNvidiaSMIInventoryGroupsIdenticalGPUs(t *testing.T) {
 	}
 }
 
-func TestParseNvidiaSMIInventoryRejectsGarbageAndEmpty(t *testing.T) {
-	if _, err := parseNvidiaSMIInventory("Failed to initialize NVML: Driver/library version mismatch\n"); err == nil {
+func TestParseNvidiaSMIFactsRejectsGarbageAndEmpty(t *testing.T) {
+	if _, err := parseNvidiaSMIFacts("Failed to initialize NVML: Driver/library version mismatch\n"); err == nil {
 		t.Fatal("expected error parsing nvidia-smi failure output")
 	}
-	if _, err := parseNvidiaSMIInventory(""); err == nil {
+	if _, err := parseNvidiaSMIFacts(""); err == nil {
 		t.Fatal("expected error for empty nvidia-smi output (a probe that reports nothing is not a CPU-only fact)")
 	}
 }

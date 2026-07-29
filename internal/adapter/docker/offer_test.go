@@ -57,7 +57,7 @@ func TestStandingOfferUsesProbedCapacity(t *testing.T) {
 	id := DeriveIdentity("", "dockerhost")
 	info := HostInfo{Architecture: "x86_64", OSType: "linux", NCPU: 8, MemTotalBytes: 16 * 1024 * 1024 * 1024, Name: "dockerhost"}
 
-	offer := StandingOffer(id, "", info, 500*1024*1024*1024, nil, now)
+	offer := StandingOffer(id, "", info, 500*1024*1024*1024, capability.AcceleratorFacts{}, now)
 
 	if offer.AdapterType != "docker" {
 		t.Errorf("AdapterType = %q, want docker", offer.AdapterType)
@@ -94,8 +94,8 @@ func TestTwoDaemonsOnOneBoxAreTwoMachines(t *testing.T) {
 	rootful := HostInfo{ID: "daemon-rootful", NCPU: 4, MemTotalBytes: 1 << 30}
 	rootless := HostInfo{ID: "daemon-rootless", NCPU: 4, MemTotalBytes: 1 << 30}
 
-	first := StandingOffer(DeriveIdentity("unix:///var/run/docker.sock", ""), "", rootful, 0, nil, now)
-	second := StandingOffer(DeriveIdentity("unix:///run/user/1000/docker.sock", ""), "", rootless, 0, nil, now)
+	first := StandingOffer(DeriveIdentity("unix:///var/run/docker.sock", ""), "", rootful, 0, capability.AcceleratorFacts{}, now)
+	second := StandingOffer(DeriveIdentity("unix:///run/user/1000/docker.sock", ""), "", rootless, 0, capability.AcceleratorFacts{}, now)
 
 	if first.ID != second.ID {
 		t.Fatalf("this case is about two endpoints one label cannot tell apart; got %q and %q", first.ID, second.ID)
@@ -116,8 +116,8 @@ func TestOneDaemonReachedTwoWaysIsOneMachine(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	info := HostInfo{ID: "daemon-a", NCPU: 4, MemTotalBytes: 1 << 30}
 
-	byHost := StandingOffer(DeriveIdentity("tcp://10.0.0.5:2375", ""), "", info, 0, nil, now)
-	byContext := StandingOffer(DeriveIdentity("", "gpu-ws"), "", info, 0, nil, now)
+	byHost := StandingOffer(DeriveIdentity("tcp://10.0.0.5:2375", ""), "", info, 0, capability.AcceleratorFacts{}, now)
+	byContext := StandingOffer(DeriveIdentity("", "gpu-ws"), "", info, 0, capability.AcceleratorFacts{}, now)
 
 	byHostKey := domain.CandidateIdentityOf(aggregated(byHost), "sha256:image").Candidate(true)
 	byContextKey := domain.CandidateIdentityOf(aggregated(byContext), "sha256:image").Candidate(true)
@@ -138,7 +138,7 @@ func TestOneDaemonReachedTwoWaysIsOneMachine(t *testing.T) {
 func TestAnUnreachableDaemonNamesNoMachine(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 
-	offer := StandingOffer(DeriveIdentity("tcp://10.0.0.5:2375", ""), "", HostInfo{}, 0, nil, now)
+	offer := StandingOffer(DeriveIdentity("tcp://10.0.0.5:2375", ""), "", HostInfo{}, 0, capability.AcceleratorFacts{}, now)
 
 	if offer.MachineID != "" {
 		t.Fatalf("an endpoint that answered nothing named the machine %q", offer.MachineID)
@@ -155,7 +155,7 @@ func TestStandingOfferAdvertisesProbedFreeDisk(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	diskFree := int64(120 * 1024 * 1024 * 1024)
 
-	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{NCPU: 4, MemTotalBytes: 1 << 30}, diskFree, nil, now)
+	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{NCPU: 4, MemTotalBytes: 1 << 30}, diskFree, capability.AcceleratorFacts{}, now)
 
 	if offer.Resources.EphemeralDiskBytes != diskFree {
 		t.Errorf("EphemeralDiskBytes = %d, want probed %d", offer.Resources.EphemeralDiskBytes, diskFree)
@@ -165,7 +165,7 @@ func TestStandingOfferAdvertisesProbedFreeDisk(t *testing.T) {
 func TestStandingOfferFallsBackWhenDiskUnmeasured(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 
-	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{NCPU: 4, MemTotalBytes: 1 << 30}, 0, nil, now)
+	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{NCPU: 4, MemTotalBytes: 1 << 30}, 0, capability.AcceleratorFacts{}, now)
 
 	if offer.Resources.EphemeralDiskBytes != 16*1024*1024*1024 {
 		t.Errorf("EphemeralDiskBytes = %d, want conservative 16GiB fallback", offer.Resources.EphemeralDiskBytes)
@@ -219,7 +219,7 @@ func TestProbeFactFailedProbeYieldsZeroAndIsCached(t *testing.T) {
 func TestStandingOfferFallsBackWhenProbeEmpty(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	// Empty HostInfo and zero disk simulate an unreachable endpoint / failed probe.
-	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{}, 0, nil, now)
+	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{}, 0, capability.AcceleratorFacts{}, now)
 
 	if offer.Platform.Architecture == "" {
 		t.Error("Architecture must fall back to a default, got empty")
@@ -235,7 +235,7 @@ func TestStandingOfferFallsBackWhenProbeEmpty(t *testing.T) {
 func TestStandingOfferArchOverrideWinsOverProbe(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	info := HostInfo{Architecture: "x86_64", NCPU: 4, MemTotalBytes: 1 << 30}
-	offer := StandingOffer(DeriveIdentity("", ""), "arm64", info, 0, nil, now)
+	offer := StandingOffer(DeriveIdentity("", ""), "arm64", info, 0, capability.AcceleratorFacts{}, now)
 	if offer.Platform.Architecture != "arm64" {
 		t.Errorf("explicit arch override should win: got %q, want arm64", offer.Platform.Architecture)
 	}
@@ -266,30 +266,73 @@ func TestOfferingAdapterServesFreshOffersPerCall(t *testing.T) {
 
 func TestStandingOfferAdvertisesProbedAccelerators(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
-	accelerators := []domain.AcceleratorInventory{{
-		Vendor: "NVIDIA", Model: "NVIDIA GeForce RTX 5090", CanonicalModel: "nvidia-rtx-5090", Count: 1, MemoryBytes: 32 << 30,
-	}}
+	probed := capability.AcceleratorFacts{
+		Established:   true,
+		Vendor:        "nvidia",
+		DriverVersion: "595.71.05",
+		Devices: []domain.AcceleratorInventory{{
+			Vendor: "NVIDIA", Model: "NVIDIA GeForce RTX 5090", CanonicalModel: "nvidia-rtx-5090", Count: 1, MemoryBytes: 32 << 30,
+		}},
+	}
 
-	offer := StandingOffer(DeriveIdentity("ssh://root@ws", ""), "", HostInfo{NCPU: 16, MemTotalBytes: 64 << 30}, 500<<30, accelerators, now)
+	offer := StandingOffer(DeriveIdentity("ssh://root@ws", ""), "", HostInfo{NCPU: 16, MemTotalBytes: 64 << 30}, 500<<30, probed, now)
 
 	if len(offer.Resources.Accelerators) != 1 || offer.Resources.Accelerators[0].CanonicalModel != "nvidia-rtx-5090" {
 		t.Fatalf("offer must advertise the probed GPU inventory, got %+v", offer.Resources.Accelerators)
+	}
+	if !offer.Resources.AcceleratorsKnown {
+		t.Error("an endpoint whose probe listed a card published the inventory as one nobody took")
 	}
 	if len(offer.Capabilities.Resources.GPUVendors) != 1 || offer.Capabilities.Resources.GPUVendors[0] != "NVIDIA" {
 		t.Errorf("GPUVendors = %v, want [NVIDIA]", offer.Capabilities.Resources.GPUVendors)
 	}
 }
 
-func TestStandingOfferWithoutAcceleratorsAdvertisesNone(t *testing.T) {
+// TestAnEndpointThatListedItsCardsAttestsTheDriverBehindThem is the fact the
+// probe already proved and threw away. The GPU probe enumerates the cards by
+// running a container against them with `--gpus all`, which is the same act a
+// Run's own container performs and which no host without a loaded NVIDIA driver
+// can complete. Publishing silence there refused a Run declaring
+// facts: ["nvidia_driver"] with UNKNOWN_FACT, which means go and look, on an
+// endpoint Mercator had looked at seconds earlier.
+func TestAnEndpointThatListedItsCardsAttestsTheDriverBehindThem(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	probed, err := parseNvidiaSMIFacts("NVIDIA GeForce RTX 5090, 32607, 595.71.05\n")
+	if err != nil {
+		t.Fatalf("parseNvidiaSMIFacts: %v", err)
+	}
+
+	offer := StandingOffer(DeriveIdentity("ssh://root@ws", ""), "", HostInfo{NCPU: 16, MemTotalBytes: 64 << 30}, 500<<30, probed, now)
+
+	needsADriver := domain.HostRequirements{Facts: []domain.HostFact{domain.HostFactNvidiaDriver}, MinDriverVersion: "550.0"}
+	if refusals := offer.Host.Violations(needsADriver); len(refusals) != 0 {
+		t.Fatalf("an endpoint that listed an RTX 5090 on driver 595.71.05 was refused %+v", refusals)
+	}
+}
+
+// TestAnEndpointNobodyCouldReachEstablishesNoInventory keeps the two silences
+// apart on this lane. A daemon that answered and registered no NVIDIA runtime
+// cannot hand a container a card, which is an inventory of none somebody took. A
+// daemon Mercator could not reach at all took none, and reading its silence as a
+// measured zero strikes a GPU host out of every accelerator placement for one
+// failed poll.
+func TestAnEndpointNobodyCouldReachEstablishesNoInventory(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 
-	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{NCPU: 8, MemTotalBytes: 32 << 30}, 0, nil, now)
+	answered := StandingOffer(DeriveIdentity("", ""), "", HostInfo{ID: "daemon-1", NCPU: 8, MemTotalBytes: 32 << 30}, 0, capability.AcceleratorFacts{Established: true}, now)
+	unreachable := StandingOffer(DeriveIdentity("", ""), "", HostInfo{}, 0, capability.AcceleratorFacts{}, now)
 
-	if len(offer.Resources.Accelerators) != 0 {
-		t.Errorf("CPU-only offer must advertise no accelerators, got %+v", offer.Resources.Accelerators)
+	if len(answered.Resources.Accelerators) != 0 || !answered.Resources.AcceleratorsKnown {
+		t.Errorf("a CPU-only daemon published %+v known=%v", answered.Resources.Accelerators, answered.Resources.AcceleratorsKnown)
 	}
-	if len(offer.Capabilities.Resources.GPUVendors) != 0 {
-		t.Errorf("CPU-only offer must advertise no GPU vendors, got %v", offer.Capabilities.Resources.GPUVendors)
+	if len(answered.Capabilities.Resources.GPUVendors) != 0 {
+		t.Errorf("CPU-only offer must advertise no GPU vendors, got %v", answered.Capabilities.Resources.GPUVendors)
+	}
+	if unreachable.Resources.AcceleratorsKnown {
+		t.Error("an endpoint nobody could reach published an inventory somebody took")
+	}
+	if unreachable.Host.Attested != nil {
+		t.Errorf("an endpoint nobody could reach attested %+v", unreachable.Host.Attested)
 	}
 }
 
@@ -299,13 +342,16 @@ func TestStandingOfferWithoutAcceleratorsAdvertisesNone(t *testing.T) {
 // CPU-only endpoint's offer is rejected for the same spec.
 func TestGPUSpecSchedulesOnGPUDockerOfferAndRejectsCPUOnlyOffer(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
-	probed, err := parseNvidiaSMIInventory("NVIDIA GeForce RTX 5090, 32607\n")
+	probed, err := parseNvidiaSMIFacts("NVIDIA GeForce RTX 5090, 32607, 595.71.05\n")
 	if err != nil {
-		t.Fatalf("parseNvidiaSMIInventory: %v", err)
+		t.Fatalf("parseNvidiaSMIFacts: %v", err)
 	}
 	hostInfo := HostInfo{Architecture: "x86_64", NCPU: 16, MemTotalBytes: 64 << 30, Runtimes: []string{"io.containerd.runc.v2", "nvidia", "runc"}}
 	gpuOffer := StandingOffer(DeriveIdentity("ssh://root@ws", ""), "", hostInfo, 500<<30, probed, now)
-	cpuOffer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{Architecture: "x86_64", NCPU: 8, MemTotalBytes: 32 << 30}, 500<<30, nil, now)
+	// A daemon that answered and registered no NVIDIA runtime, which is an
+	// inventory of no cards somebody took rather than an endpoint nobody asked.
+	cpuInfo := HostInfo{ID: "daemon-cpu", Architecture: "x86_64", NCPU: 8, MemTotalBytes: 32 << 30, Runtimes: []string{"runc"}}
+	cpuOffer := StandingOffer(DeriveIdentity("", ""), "", cpuInfo, 500<<30, capability.AcceleratorFacts{Established: true}, now)
 
 	revision := domain.WorkloadRevision{ID: "wrev_gpu", Spec: domain.WorkloadSpec{
 		Containers: []domain.ContainerSpec{{
@@ -369,7 +415,7 @@ func stampedLane(t *testing.T, offers []domain.OfferSnapshot) []domain.OfferSnap
 func TestStandingOfferPublishesNoThroughputNothingMeasured(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 
-	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{NCPU: 4, MemTotalBytes: 1 << 30}, 0, nil, now)
+	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{NCPU: 4, MemTotalBytes: 1 << 30}, 0, capability.AcceleratorFacts{}, now)
 
 	if len(offer.Network.Download) != 0 {
 		t.Fatalf("offer publishes %+v, want no throughput fact until something measures this link", offer.Network.Download)

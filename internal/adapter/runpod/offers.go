@@ -82,6 +82,9 @@ func appendCloudOffer(offers []domain.OfferSnapshot, g gpuType, cloud string, pr
 			MemoryBytes:        16 * gib,
 			EphemeralDiskBytes: int64(diskGB) * gib,
 			EphemeralDiskKnown: true,
+			// A catalog states the cards it sells with the machine, so this
+			// inventory is one somebody took.
+			AcceleratorsKnown: true,
 			Accelerators: []domain.AcceleratorInventory{{
 				Vendor:         "NVIDIA",
 				Model:          g.DisplayName,

@@ -105,6 +105,9 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 				MemoryBytes:        int64(o.CPURAMMb) * mib,
 				EphemeralDiskBytes: int64(diskGB) * gib,
 				EphemeralDiskKnown: true,
+				// A catalog states the cards it sells with the machine, so this
+				// inventory is one somebody took.
+				AcceleratorsKnown: true,
 				Accelerators: []domain.AcceleratorInventory{{
 					Vendor:         vendor,
 					Model:          o.GPUName,

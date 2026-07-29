@@ -539,6 +539,7 @@ func HostInventory(resources *ResourcesSpec) domain.ResourceInventory {
 		MemoryBytes:        defaultHostMemoryBytes,
 		EphemeralDiskBytes: defaultHostDiskBytes,
 		EphemeralDiskKnown: true,
+		AcceleratorsKnown:  true,
 	}
 	if resources == nil {
 		return inventory
@@ -557,6 +558,9 @@ func HostInventory(resources *ResourcesSpec) domain.ResourceInventory {
 	// A machine that could not measure its disk established no room, and both
 	// worlds publish that silence rather than the zero it leaves behind.
 	inventory.EphemeralDiskKnown = !resources.DiskUnmeasured
+	// A machine whose cards nobody counted took no inventory, and both worlds
+	// publish that silence rather than the empty list it leaves behind.
+	inventory.AcceleratorsKnown = !resources.GPUUncounted
 	if gpu := resources.GPU; gpu != nil {
 		// The cards arrive grouped the way the machine reports them. A host that
 		// reports one product across several entries is a host every real probe

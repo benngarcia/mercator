@@ -448,6 +448,12 @@ func reporting(disk capability.DiskFacts) fleetOption {
 	return func(f *fleet) { f.runtime.disk = disk }
 }
 
+// counting is what this fleet's machine established about its own cards, which
+// is the fixture a case about an accelerator refusal is written in.
+func counting(cards capability.AcceleratorFacts) fleetOption {
+	return func(f *fleet) { f.runtime.accelerator = cards }
+}
+
 // leasedFor is how long this fleet's daemon keeps trusting a silent node, which
 // is what a case about a machine going quiet is measured in.
 func leasedFor(lease time.Duration) fleetOption {
@@ -780,6 +786,20 @@ func (f *fleet) submitRunNeedingACard(t *testing.T) string {
 		resources := revision["spec"].(map[string]any)["resources"].(map[string]any)
 		resources["accelerators"] = []map[string]any{{"vendor": "nvidia", "count": 1}}
 		resources["host"] = map[string]any{"facts": []string{"nvidia_driver"}}
+		return revision
+	})
+}
+
+// submitRunNeedingCards submits a Run pinned to a number of cards and nothing
+// else, which is how every GPU Run is written. It states no host fact on
+// purpose: the driver attestation is a second question, and a Run that asks it
+// reaches a different rule from the one that counts inventory.
+func (f *fleet) submitRunNeedingCards(t *testing.T, count int) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		resources := revision["spec"].(map[string]any)["resources"].(map[string]any)
+		resources["accelerators"] = []map[string]any{{"vendor": "nvidia", "count": count}}
 		return revision
 	})
 }
@@ -1336,6 +1356,12 @@ type scriptedRuntime struct {
 	// leaves the two cases an operator most needs told apart, a full machine
 	// and an unmeasurable one, unreachable from any fixture.
 	disk capability.DiskFacts
+	// accelerator is what this machine's agent established about its cards and
+	// the driver under them. A runtime that could only answer one way leaves the
+	// two cases apart from a GPU box unreachable from any fixture: a machine that
+	// counted its cards and found none, and a machine whose vendor tool would not
+	// run, which publish the same empty list and earn different refusals.
+	accelerator capability.AcceleratorFacts
 	// clockAhead is how far this machine's clock runs ahead of the control plane's.
 	// It moves both moments this runtime states, because a host with a skewed clock
 	// reads its container's start and its own wall clock off the same clock: two
@@ -1455,6 +1481,7 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 			CPUMillis:        8000,
 			MemoryBytes:      32 << 30,
 			Disk:             runtime.disk,
+			Accelerator:      runtime.accelerator,
 		},
 		Images: images,
 	}, nil
@@ -1949,6 +1976,46 @@ func TestANodeThatCannotMeasureItsDiskWinsNoPlacement(t *testing.T) {
 	}
 	if code := refusal.Candidates[0].Rejections[0].Code; code != "UNKNOWN_FACT" {
 		t.Fatalf("a machine that never measured its disk was refused with %q", code)
+	}
+}
+
+// TestANodeWhoseCardsNobodyCountedIsRefusedAsASilence is the same third answer
+// the disk cases above are about, on the half of the report every GPU Run is
+// actually written against.
+//
+// A Run declares resources.accelerators with a count, a model, or a memory
+// floor. Only a Run that separately declares facts: ["nvidia_driver"] ever
+// reaches the machine's attestation, and no GPU Run is written that way, so an
+// agent that could not run its vendor tool published an empty inventory that the
+// count alone read as a measured zero: the machine holding eight A100s was
+// struck out RESOURCE_INSUFFICIENT, which says this fleet can never run the work
+// and sends its operator to buy a machine that is already in the rack.
+//
+// The two answers are told apart by the flag beside the list and by nothing
+// else, which is why both halves are asserted here: a machine that counted and
+// found none says so, and is refused for the shortfall it measured.
+func TestANodeWhoseCardsNobodyCountedIsRefusedAsASilence(t *testing.T) {
+	uncounted := startFleet(t)
+	counted := startFleet(t, counting(capability.AcceleratorFacts{Established: true}))
+
+	silent := uncounted.nodeOffer(t).Resources
+	if len(silent.Accelerators) != 0 || silent.AcceleratorsKnown {
+		t.Fatalf("a node whose agent never counted its cards offered %+v, known=%v", silent.Accelerators, silent.AcceleratorsKnown)
+	}
+	if measured := counted.nodeOffer(t).Resources; !measured.AcceleratorsKnown {
+		t.Fatal("a node that counted its cards and found none published an inventory nobody took")
+	}
+
+	unknown := uncounted.submitRunNeedingCards(t, 8)
+	uncounted.queueWaitingFor(t, unknown, domain.DeferredCapacityUnstated)
+	if candidate := uncounted.decision(t, unknown).candidate(t, uncounted.nodeID); candidate.Feasible || !refusedAs(candidate, "UNKNOWN_FACT") {
+		t.Fatalf("a Run needing eight cards was weighed against a machine nobody counted as %+v", candidate)
+	}
+
+	insufficient := counted.submitRunNeedingCards(t, 8)
+	counted.queueForWantOfCapacity(t, insufficient)
+	if candidate := counted.decision(t, insufficient).candidate(t, counted.nodeID); candidate.Feasible || !refusedAs(candidate, "RESOURCE_INSUFFICIENT") {
+		t.Fatalf("a Run needing eight cards was weighed against a machine that counted none as %+v", candidate)
 	}
 }
 
