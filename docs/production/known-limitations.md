@@ -289,6 +289,13 @@ on that host and still hold.
   behaviour rests on the recorded fixtures in each adapter's tests and on
   `mercator verify` being run by an operator who holds a key. See
   `docs/production/provider-conformance.md`.
+- Shadeform sells capacity rather than one-shot execution, so the trial that
+  applies to it is `mode: "capacity"`, which rents machines and gives them back.
+  The bounded suite behind it runs on every build against the simulated provider
+  and against Shadeform's own marketplace served over `httptest`, and no machine
+  has ever been rented for real. The live run is
+  [#235](https://github.com/benngarcia/mercator/issues/235); the command is in
+  `docs/production/provider-conformance.md`.
 - The browser-driven console checkpoints cannot run on this workstation at all.
   Playwright's Chromium needs system libraries that are not installed and there
   is no sudo to add them, so the console half of the Lab acceptance flow is

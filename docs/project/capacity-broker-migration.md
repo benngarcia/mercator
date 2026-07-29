@@ -4751,7 +4751,7 @@ complete because it works against a live provider.
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
-| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. A Rental is now a domain aggregate with generations, held in a memory and a SQLite store under one conformance suite, and ending a generation retires the runtime bound to it, which is the first write of `node.StateRetired` in the tree and the first thing that stops a machine Mercator gave up being published as capacity. A Run that ends on a machine provisioned to hold a Rental now releases its workload and leaves the host standing, because the cleanup disposition reads the execution lane as well as the offer kind: only a one-shot product Mercator allocated is destroyed by the end of its own Run. A bootstrapped machine now keeps its session for as long as it works: the registry renews a credential over the node protocol, the agent renews ahead of each lapse, and the invitation it joined with is redeemed exactly once and appears in no event, ledger entry, or Run Bundle. Before it, a real node stopped being able to authenticate about thirty minutes after bootstrapping while its containers went on running, and no test could see it. A machine now states what it has to state to be placed on at all: the agent reports the cards under it and the driver over them, an offer carries both, a workload declares the accelerator stack its image was built against, and Placement refuses a host that said no with `CAPABILITY_MISMATCH` and a host that said nothing with `UNKNOWN_FACT` rather than installing a stack onto somebody's host or finding out at launch. Before it, every enrolled GPU machine advertised zero accelerators and was struck out of every GPU placement it was perfect for. Shadeform is now a CapacityProvider and the first backend in the reusable lane: it rents a VM, hands it a script launch configuration that installs the pinned node agent and starts it under systemd, states a negotiated set that promises no stop, no resume and no persistent disk, and reconciles a repeated provision by scanning the account for the lease's own tag because the API honours no operation key. Its one-shot half went with the promotion, because one connection cannot sell both. No live provider run has happened: this host holds no Shadeform credential, so the whole path is proven under the package's httptest fake and the live half is blocked and filed rather than claimed. The launch is still not addressed to the machine a provisioning built, a capacity connection still publishes no placement candidate, and nothing yet ends the lease of a machine nobody is using |
+| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. A Rental is now a domain aggregate with generations, held in a memory and a SQLite store under one conformance suite, and ending a generation retires the runtime bound to it, which is the first write of `node.StateRetired` in the tree and the first thing that stops a machine Mercator gave up being published as capacity. A Run that ends on a machine provisioned to hold a Rental now releases its workload and leaves the host standing, because the cleanup disposition reads the execution lane as well as the offer kind: only a one-shot product Mercator allocated is destroyed by the end of its own Run. A bootstrapped machine now keeps its session for as long as it works: the registry renews a credential over the node protocol, the agent renews ahead of each lapse, and the invitation it joined with is redeemed exactly once and appears in no event, ledger entry, or Run Bundle. Before it, a real node stopped being able to authenticate about thirty minutes after bootstrapping while its containers went on running, and no test could see it. A machine now states what it has to state to be placed on at all: the agent reports the cards under it and the driver over them, an offer carries both, a workload declares the accelerator stack its image was built against, and Placement refuses a host that said no with `CAPABILITY_MISMATCH` and a host that said nothing with `UNKNOWN_FACT` rather than installing a stack onto somebody's host or finding out at launch. Before it, every enrolled GPU machine advertised zero accelerators and was struck out of every GPU placement it was perfect for. Shadeform is now a CapacityProvider and the first backend in the reusable lane: it rents a VM, hands it a script launch configuration that installs the pinned node agent and starts it under systemd, states a negotiated set that promises no stop, no resume and no persistent disk, and reconciles a repeated provision by scanning the account for the lease's own tag because the API honours no operation key. Its one-shot half went with the promotion, because one connection cannot sell both. No live provider run has happened: this host holds no Shadeform credential, so the whole path is proven under the package's httptest fake and the live half is blocked and filed rather than claimed. The promises every `CapacityProvider` keeps are now a suite rather than a reading of one adapter's code, run against the simulated provider and against Shadeform's own marketplace over `httptest` on every build, and `mercator verify` has the mode that rents a machine and gives it back. The launch is still not addressed to the machine a provisioning built, a capacity connection still publishes no placement candidate, and nothing yet ends the lease of a machine nobody is using |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
 ## Scenario and invariant coverage
@@ -6143,6 +6143,133 @@ the launch.
 
 ## Verification evidence
 
+### Phase 5 the promises every provider keeps
+
+The capacity contract had one implementation and one set of tests, so what a
+`CapacityProvider` promises was readable only as `internal/adapter/shadeform`'s
+code. `internal/capability/capacitytest` states the promises once and runs them
+against any backend: a listing is capacity to acquire, a negotiated set is one a
+provider could keep, a credential check allocates nothing, one provision command
+produces one machine, a lost answer is reconcilable from what the connection owns
+rather than by asking again, terminate is confirmed and stays confirmed, an
+operation the provider never promised is refused rather than quietly succeeding,
+and a trial leaves nothing owned.
+
+Each promise names the Lab rule it is the higher-fidelity half of, and the
+citation is a constant rather than a comment so a failure can be read against the
+rule that holds the same fact. `safety.capacity_lifecycle_is_negotiated` is cited
+and is still deliberately unregistered, for the reason recorded above: nothing in
+the tree stops or resumes a machine, so a Lab rule about it could only fail
+against a hand-written observation. Its production half is
+`broker.Backend.CapacityFor`, and the suite is the provider's own side of the
+same refusal.
+
+What a not-found observation after a terminate means is read off
+`CapacitySupport.ObserveAfterTerminate` as that type documents it: a provider
+that promises a destroyed machine stays observable owes an answer, and one that
+promises nothing of the kind may have no record left, so its silence is the
+confirmation. Neither may report the machine still running. The slice brief read
+the flag the other way round; the type is what the tree acts on, and following
+the brief would have made the suite pass a Shadeform that stopped answering about
+machines it had just destroyed. No `ErrCapacityNotFound` was added to carry the
+distinction, because no backend in the tree produces one and it would have been a
+branch nothing could exercise.
+
+`ErrNotApplicable` is the third answer, and it is why the evidence has three
+outcomes rather than a boolean. A provider that deduplicates on an operation key
+is entitled to enumerate nothing it owns, `CapacitySupport.Validate` permits
+exactly that pairing, and the two owned-capacity promises cannot be looked at
+against one. Reporting them green would be a suite claiming to have read a
+listing that does not exist.
+
+The suite imports no `testing` package, so the `mercator` binary links none when
+the verify command reaches it. The six-line subtest loop is written out in each
+adapter's conformance file instead, which is the cost of that.
+
+The deliberate failing case is kept rather than performed once and deleted.
+`internal/capability/capacitytest` has one stub that keeps the contract and eight
+that each break a single clause, and every case asserts both halves: the promises
+about that clause fail, and the rest do not. A credential check that allocates a
+machine breaks two of them, and that is the suite working rather than a case
+stated loosely, because the machine it left behind is still owned when the trial
+sweeps.
+
+The production halves were broken too, one clause at a time, and each break was
+caught by exactly the promise about it:
+
+```text
+fake, provision ignores its own allocation:
+  one_provision_command_produces_one_machine (safety.idempotent_external_commands)
+fake, the owned listing forgets which machines were destroyed:
+  a_trial_leaves_nothing_owned: this trial's workspace still holds 5 machines
+shadeform, a duplicate provision reports a fresh allocation:
+  one_provision_command_produces_one_machine: a caller would count the effect twice
+shadeform, a repeated terminate reports a second destruction:
+  terminate_is_confirmed_and_stays_confirmed: a reader would count two machines ending
+shadeform, StopCapacity answers a stop it cannot perform:
+  an_operation_the_provider_never_promised_is_refused
+shadeform, the owned listing keeps instances that are deleting:
+  a_trial_leaves_nothing_owned: still holds 5 machines
+```
+
+One break was absorbed, and it is worth writing down. Removing Shadeform's
+pre-scan before create leaves the suite green, because `reconcileDuplicates`
+still keeps the oldest instance carrying the lease's tag and destroys the rest:
+the contract survives and what is lost is one wasted create. The suite reads what
+an account holds rather than how many requests it took to get there, so counting
+requests stays where it already is, in that adapter's own cases. That bound is
+stated in `docs/production/provider-conformance.md` rather than left for a reader
+to discover.
+
+`mercator verify` gains `mode: "capacity"`. It stands up no control plane and
+creates no workspace through the API, because nothing it asserts reads one: what
+it establishes is that a backend keeps the capacity contract, and whether an
+agent then enrols on a rented machine needs the whole daemon and is the launch
+path's job. The workspace it tags machines with is minted from the trial ID, so
+the sweep finds this trial's machines and nobody else's. It rents the cheapest
+listing available at a known USD rate whose cost over the whole timeout stays
+inside `max_expected_cost_usd`, and asks for a provider-side reclamation backstop
+of the same length.
+
+The callback topology rules are unchanged and still refuse a trial without a
+fixed listen port and an origin-only public URL. A capacity trial serves nothing
+itself, and it hands every machine it rents a bootstrap naming that origin: a
+trial that wrote an origin nothing serves onto a real machine could not tell a
+provider defect from a control plane nobody could have reached. The document
+names no image, and one that does is refused, because a capacity trial launches
+no workload.
+
+What this slice does not do.
+
+- No live Shadeform run, again and for the same reason: this host holds no
+  `SHADEFORM_API_KEY` and no `op`. The whole path is proven under the simulated
+  provider, under Shadeform's own marketplace served over `httptest`, and through
+  the verify command's own runner. The live case skips by name, with the command
+  that runs it, and the blocked run stays
+  [#235](https://github.com/benngarcia/mercator/issues/235).
+- The live Go case is gated twice, on `SHADEFORM_API_KEY` and on
+  `MERCATOR_SHADEFORM_LIVE=1`. An exported API key is not consent to rent a GPU
+  inside `go test ./...`, and the deliberate operator act is the verify command.
+- Nothing in the suite waits for an agent. A rented machine is handed an
+  enrolment token nothing minted, so it boots, is turned away, and is destroyed.
+  A token that worked would be a credential left on a host for no reason, and
+  proving a machine enrols is the launch path's question.
+- No scenario and no new Lab invariant. This is step six of the development rule
+  for the slices that made the capacity contract reachable, made Shadeform a
+  provider, and gave the Lab its enrolment rule, and every promise it asserts
+  cites the rule it is the other half of rather than adding one.
+
+On 2026-07-29, on the amd64 Linux workstation with Go 1.25.11, the worktree
+passed:
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/capability/... ./internal/conformance \
+  ./internal/adapter/fake ./internal/adapter/shadeform
+```
+
+`web/app` is untouched by this slice, so its checks were not run.
+
 ### Phase 5 the machine Shadeform rents and the agent it starts
 
 Shadeform is a `CapacityProvider` and is the first backend in the reusable lane.
@@ -6266,7 +6393,9 @@ What this slice does not do, said plainly.
 - The bounded provider conformance suite is not here. The promises every
   `CapacityProvider` keeps are its own slice, and until it lands a `shadeform`
   conformance trial validates and then finds no offers, because the runner
-  launches through the ephemeral lane.
+  launches through the ephemeral lane. It landed on 2026-07-29, and a `shadeform`
+  trial in the launch modes still finds no offers: `mode: "capacity"` is the mode
+  for a backend that sells machines.
 - mercator#208 said the adoption defect had to land before any provider joined
   the reusable lane. It did not, and the hazard it names is nonetheless out of
   reach: `janitor.reclaim` acts on `adapter.OwnedExternalObject`s, a capacity

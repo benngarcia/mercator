@@ -217,8 +217,31 @@ fake. The bootstrap half is proven on a real machine: `go test
 the rendered script under a real shell in a container, with `curl` and
 `systemctl` stubbed, and checks the installed agent, the 0600 environment file
 and the unit.
-The live half is [#235](https://github.com/benngarcia/mercator/issues/235), and
-these are the commands it needs, with a funded account:
+The contract half is proven by the shared `CapacityProvider` suite, which runs on
+every build against this package's marketplace served over `httptest`. The
+command that runs the same suite against the real marketplace, with a funded
+account, is one trial document and one invocation:
+
+```sh
+export SHADEFORM_API_KEY=...          # from 1Password, never a shell rc file
+export MERCATOR_CONFORMANCE_LISTEN_ADDR='0.0.0.0:8082'
+export MERCATOR_CONFORMANCE_PUBLIC_URL='https://reports.example.com'
+
+mercator verify --spec internal/conformance/testdata/shadeform_capacity_trial.json | jq .
+```
+
+Edit `agent_download_url` in that document to a build you have published. The
+trial rents machines and gives every one of them back; it launches no workload
+and waits for no agent, so a passing result says this account keeps the capacity
+contract and says nothing yet about enrolment. The same suite runs from Go with
+`SHADEFORM_API_KEY=... MERCATOR_SHADEFORM_LIVE=1 go test
+./internal/adapter/shadeform -run
+TestShadeformKeepsEveryCapacityPromiseAgainstTheLiveMarketplace`; both gates are
+required, because an exported key is not consent to rent a GPU during a test run.
+
+The live half of the whole path is
+[#235](https://github.com/benngarcia/mercator/issues/235), and these are the
+commands it needs, with a funded account:
 
 ```sh
 export SHADEFORM_API_KEY=...          # from 1Password, never a shell rc file
