@@ -483,15 +483,24 @@ func runningOn(runtime nodeagent.Runtime) fleetOption {
 // drivesRealDocker points this fleet's agent at a container daemon this host
 // really runs, and states the two things that follow from it.
 //
-// The heartbeat is one a machine can keep up with: reading a whole daemon's image
-// inventory fifty times a second is a load test of Docker rather than a case about
-// Mercator. The budget is the live one, because from here on every wait on this
-// fleet covers work this host performs rather than work the harness scripts,
-// starting with the enrolment wait that stands between startFleet and its first
-// offer.
+// The heartbeat is one this machine can answer. A heartbeat is a whole host facts
+// read: docker info, the daemon's image list, one description per image on it, and
+// the cache volumes, and on this workstation, which holds twenty five images, that
+// costs 0.8 to 1.1 seconds idle and 1.1 to 1.6 under the tree's other Docker
+// suites. Asking for it four times a second, as this did, leaves the agent's one
+// heartbeat loop permanently behind: the loop reports a container's exit only after
+// the facts read it is sharing a tick with returns, so an interval shorter than the
+// read starves the very report the live case is waiting for. It was measured
+// starving for forty five seconds under `go test ./...`, which is one of the ways
+// mercator#212 goes red. Five seconds is several times the read and still an order
+// of magnitude quicker than production's twenty.
+//
+// The budget is the live one, because from here on every wait on this fleet covers
+// work this host performs rather than work the harness scripts, starting with the
+// enrolment wait that stands between startFleet and its first offer.
 func (f *fleet) drivesRealDocker(runtime nodeagent.Runtime) {
 	f.agentRuntime = runtime
-	f.heartbeat = 250 * time.Millisecond
+	f.heartbeat = 5 * time.Second
 	f.budget = liveDockerBudget
 }
 
