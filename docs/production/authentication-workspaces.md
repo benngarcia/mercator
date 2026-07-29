@@ -83,8 +83,9 @@ Behavior with OIDC enabled:
   does).
 - Unauthenticated browser loads of the console redirect into `/auth/login`.
 - `/v1/*` requests accept the session cookie as an alternative to the bearer
-  token, carrying the same instance-wide operator authority. A wrong bearer token still fails
-  even if a valid session cookie accompanies it.
+  token, scoped to the signed-in subject's workspace memberships rather than to
+  the whole instance. A wrong bearer token still fails even if a valid session
+  cookie accompanies it.
 - `GET /auth/session` reports the `oidc`, `local`, or `token` mode plus the
   current email when the mode has a browser identity.
 
@@ -110,11 +111,57 @@ credential, and expiry bounds the remaining lifetime of a copied token.
 - Archiving removes a workspace from the default chooser and rejects new runs,
   connections, workloads, and workload revisions. Existing lifecycle commands
   remain available so operators can converge and clean up archived workspaces.
-- Every authenticated principal administers the Mercator instance. Workspaces
-  isolate stored runs, connections, offers, and events from accidental
-  cross-partition queries; they are not per-user authorization boundaries.
+- A workspace is the tenancy boundary. A human subject reaches exactly the
+  workspaces they are a member of, and reaches nothing in any other: every
+  workspace-scoped route answers `403 WORKSPACE_FORBIDDEN` to a subject with no
+  membership, `GET /v1/workspaces` lists only their own, and archiving a
+  workspace they cannot see answers `404 WORKSPACE_NOT_FOUND` rather than
+  confirming it exists.
+- The machine bearer token is the instance credential. It is the deployment
+  acting as itself, so it is not scoped to a workspace and reaches all of them.
+  CI, the CLI with `MERCATOR_API_TOKEN`, and internal automation keep working
+  exactly as before.
+- Creating a workspace makes the creator its admin, in the same transaction
+  that creates it. A workspace created with the bearer token is administered by
+  `bearer`, which no human holds; create workspaces as the human who will own
+  them, using a `mercator login` CLI token or the console.
+- Memberships carry a role, `admin` or `member`. The role is recorded and is
+  not yet what any single operation checks: membership is
+  ([#219](https://github.com/benngarcia/mercator/issues/219)).
 - Connections are created and authorized through `/v1/connections`. Server
   startup never creates or places a connection from environment variables.
+
+## Administrative Surfaces
+
+Some operations change what the deployment is rather than what a workspace
+contains. They answer on an administrative listener and are not routed on the
+public one at all, where they answer `404` exactly as a path this deployment
+does not have would:
+
+- `POST /v1/workspaces` and `POST /v1/workspaces/{id}/archive`
+- `POST /v1/nodes` (node invitation)
+- `POST /v1/sinks/{id}/deliver` and `POST /v1/sinks/{id}/replay`
+
+The reads beside them stay public: listing workspaces, listing nodes, and
+reading sink status are what a console renders from.
+
+```sh
+export MERCATOR_ADDR='0.0.0.0:8443'
+export MERCATOR_ADMIN_ADDR='127.0.0.1:8081'
+./bin/mercator serve
+```
+
+`MERCATOR_ADMIN_ADDR` is required whenever `MERCATOR_ADDR` is not loopback, and
+there is no permissive default: a public deployment that has not named one
+refuses to start. It must name one interface rather than the wildcard, because
+an administrative surface reachable on every interface is not a private one, and
+because the accepting listener's local address is what tells the two apart. Both
+listeners are served by one server with one certificate and one shutdown, so an
+administrative listener on a routable address is served over TLS like the public
+one.
+
+A loopback deployment that sets nothing serves every route on its single
+listener, which is what source development and `--dev` want.
 
 ## Quick Checks
 
@@ -139,8 +186,28 @@ Expected results:
 
 ## Current Limitations
 
-- There is one configured bearer token for machine clients; OIDC sessions add
-  per-user identity for humans but no roles or per-user workspace grants.
-- Recorded principals are an audit trail, not an authorization system.
+- There is one configured bearer token for machine clients, and it is not
+  scoped to a workspace.
+- No route grants a membership. A subject becomes a member by creating a
+  workspace and in no other way over HTTP, because a grant endpoint is a new
+  operation in the API contract
+  ([#219](https://github.com/benngarcia/mercator/issues/219)). Until it lands,
+  adding a second person to a workspace is a SQL statement against the database:
+
+  ```sql
+  INSERT INTO workspace_members (workspace_id, subject, role, granted_at)
+  VALUES ('ws_...', 'person@example.com', 'member', '2026-07-28T00:00:00Z')
+  ON CONFLICT(workspace_id, subject) DO UPDATE SET role = excluded.role;
+  ```
+
+- Upgrading an existing deployment backfills one admin per workspace from
+  `workspaces.created_by`. A workspace whose creator was `bearer`,
+  `system:bootstrap`, or `system:migration` has a machine principal as its only
+  admin, so no human is a member of it and every human is refused there until
+  somebody runs the statement above.
 - Health, OpenAPI, and (without OIDC) the embedded UI shell are public on the
   listening interface; do not bind Mercator directly to an untrusted network.
+- The console creates and archives workspaces through the two administrative
+  routes, so on a deployment with an administrative listener those two console
+  actions answer `404`. Everything else the console does is on the public
+  listener ([#220](https://github.com/benngarcia/mercator/issues/220)).

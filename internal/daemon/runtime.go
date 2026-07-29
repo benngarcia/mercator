@@ -54,7 +54,14 @@ type Config struct {
 	// unconfigured Material serves plaintext, which only a loopback deployment
 	// may do; the process entrypoint enforces that, because only it knows the
 	// listen address.
-	TLS            tlsmaterial.Material
+	TLS tlsmaterial.Material
+	// AdminAddr is the bound address of the administrative listener, wildcards
+	// resolved. Workspace creation and archiving, node invitation and sink
+	// delivery answer there and nowhere else. Empty serves every route on every
+	// listener, which is what a single-listener loopback deployment wants; the
+	// process entrypoint is what refuses a non-loopback deployment that has not
+	// named one.
+	AdminAddr      string
 	PublicURL      string
 	Getenv         func(string) string
 	WebAuth        webauth.Config
@@ -97,6 +104,14 @@ type Runtime struct {
 	storage *sqlitestore.Storage
 	orch    *orchestrator.Orchestrator
 	janitor *janitor.Janitor
+
+	// servesTLS is whether this deployment was given a certificate. The
+	// question cannot be asked of http.Server.TLSConfig, because net/http
+	// installs one of its own the first time it configures HTTP/2 on a
+	// listener: a runtime serving plaintext answers "yes" from its second
+	// listener onwards and then tries to read a certificate from the empty
+	// path.
+	servesTLS bool
 
 	stopReconcile context.CancelFunc
 	reconcileDone chan struct{}
@@ -152,6 +167,16 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 
 	if err := seedFirstWorkspace(ctx, storage.Workspaces()); err != nil {
 		return nil, fmt.Errorf("daemon: seed first workspace: %w", err)
+	}
+	// Local development mode has exactly one human by construction, and it is
+	// whoever started this process. Every workspace-scoped route checks
+	// membership, and the bootstrap workspace was created by the process rather
+	// than by a person, so without this the developer's own console is refused
+	// by their own server.
+	if cfg.LocalAuthEmail != "" {
+		if err := storage.Workspaces().GrantEveryWorkspace(ctx, cfg.LocalAuthEmail, workspace.RoleAdmin, time.Now().UTC()); err != nil {
+			return nil, fmt.Errorf("daemon: grant the local developer workspace membership: %w", err)
+		}
 	}
 
 	resolver := credential.NewResolver(cfg.Getenv, credentialStore, cfg.MasterKey)
@@ -239,6 +264,9 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if signer.Enabled() {
 		serverOptions = append(serverOptions, httpapi.WithReportSigner(signer))
 	}
+	if cfg.AdminAddr != "" {
+		serverOptions = append(serverOptions, httpapi.WithAdminAddr(cfg.AdminAddr))
+	}
 	if cfg.WebAuth.Enabled() {
 		authenticator, authErr := webauth.New(ctx, cfg.WebAuth)
 		if authErr != nil {
@@ -286,6 +314,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 			WriteTimeout:      90 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		},
+		servesTLS:     serverTLS != nil,
 		broker:        providerBroker,
 		storage:       storage,
 		orch:          orch,
@@ -447,11 +476,15 @@ func serverTLSConfig(material tlsmaterial.Material) (*tls.Config, error) {
 // A runtime holding TLS material terminates TLS itself. The empty file names
 // are what tell http.Server to serve the certificates already loaded into
 // TLSConfig rather than read a pair of its own.
+//
+// It may be called more than once, on a listener each. One http.Server serves
+// them all and one Shutdown drains them all, which is how the administrative
+// surface gets an address of its own without a second server to shut down.
 func (r *Runtime) Serve(listener net.Listener) error {
 	if listener == nil {
 		return errors.New("daemon: listener is required")
 	}
-	if r.server.TLSConfig != nil {
+	if r.servesTLS {
 		return r.server.ServeTLS(listener, "", "")
 	}
 	return r.server.Serve(listener)

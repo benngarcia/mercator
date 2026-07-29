@@ -45,6 +45,10 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		_ = log.Close()
 		return nil, err
 	}
+	if err := migrateWorkspaceMembers(ctx, db); err != nil {
+		_ = log.Close()
+		return nil, err
+	}
 	if err := migrateLegacyRunEvents(ctx, db); err != nil {
 		_ = log.Close()
 		return nil, err

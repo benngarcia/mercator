@@ -70,9 +70,13 @@ type workspaceError struct {
 }
 
 // resolveWorkspace resolves the explicit workspace ID from the request body or
-// query. Workspace IDs partition durable event history; server configuration
-// never supplies or authorizes one on the caller's behalf.
-func (s *Server) resolveWorkspace(_ context.Context, bodyWorkspaceID, queryWorkspaceID string) (string, *workspaceError) {
+// query and refuses a subject who has no standing in it. Workspace IDs
+// partition durable event history; server configuration never supplies or
+// authorizes one on the caller's behalf.
+//
+// Every workspace-scoped operation reaches its workspace through here, so this
+// is the single place tenancy is decided.
+func (s *Server) resolveWorkspace(ctx context.Context, bodyWorkspaceID, queryWorkspaceID string) (string, *workspaceError) {
 	workspaceID := bodyWorkspaceID
 	if workspaceID == "" {
 		workspaceID = queryWorkspaceID
@@ -80,7 +84,50 @@ func (s *Server) resolveWorkspace(_ context.Context, bodyWorkspaceID, queryWorks
 	if workspaceID == "" {
 		return "", &workspaceError{Response: apiError("WORKSPACE_ID_REQUIRED", "workspace_id is required.")}
 	}
+	if refusal := s.refuseNonMember(ctx, workspaceID); refusal != nil {
+		return "", refusal
+	}
 	return workspaceID, nil
+}
+
+// refuseNonMember answers with the 403 every workspace-scoped operation already
+// declares when the requesting human belongs to no such workspace.
+//
+// Three requests pass without a membership, and each for its own reason. The
+// instance credential is the deployment acting as itself, and a deployment is
+// not a tenant of its own workspaces. A request carrying no principal at all
+// reached a server started with no operator token, where nothing is
+// authenticated and there is no subject to scope; the daemon refuses to start
+// that way. Everything else is a human, and a human reaches exactly the
+// workspaces they are a member of.
+//
+// A store that cannot answer refuses, and says so in the log. A membership
+// lookup that failed is not evidence of membership.
+func (s *Server) refuseNonMember(ctx context.Context, workspaceID string) *workspaceError {
+	subject := requestMemberScope(ctx)
+	if subject == "" {
+		return nil
+	}
+	if s.workspaces == nil {
+		log.Printf("httpapi: no workspace catalog, so %s cannot be shown a member of %s", subject, workspaceID)
+		return forbiddenWorkspace()
+	}
+	if _, err := s.workspaces.MembershipOf(ctx, workspaceID, subject); err != nil {
+		if !errors.Is(err, workspace.ErrNotMember) {
+			log.Printf("httpapi: read membership of %s in %s: %v", subject, workspaceID, err)
+		}
+		return forbiddenWorkspace()
+	}
+	return nil
+}
+
+// forbiddenWorkspace names the workspace nowhere in its message. A caller who
+// is not a member learns only that they are not one.
+func forbiddenWorkspace() *workspaceError {
+	return &workspaceError{
+		Forbidden: true,
+		Response:  apiError("WORKSPACE_FORBIDDEN", "This subject is not a member of that workspace."),
+	}
 }
 
 func (s *Server) requiredWorkspace(ctx context.Context, queryWorkspaceID string) (string, *workspaceError) {

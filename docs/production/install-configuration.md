@@ -65,13 +65,20 @@ every credential sealed under the previous one. Rotating it later is
 `mercator rekey`, documented in
 [security-model.md](security-model.md#master-key-and-rotation).
 
-Serving anything other than loopback also requires TLS material:
+Serving anything other than loopback also requires TLS material and an
+administrative address:
 
 ```sh
 export MERCATOR_ADDR=0.0.0.0:8443
 export MERCATOR_TLS_CERT_FILE=/etc/mercator/tls.crt
 export MERCATOR_TLS_KEY_FILE=/etc/mercator/tls.key
+export MERCATOR_ADMIN_ADDR=127.0.0.1:8081
 ```
+
+Workspace creation and archiving, node invitation, and sink delivery and replay
+answer on `MERCATOR_ADMIN_ADDR` and are not routed on `MERCATOR_ADDR` at all.
+See
+[authentication-workspaces.md](authentication-workspaces.md#administrative-surfaces).
 
 `serve` registers the Docker adapter type but starts with no connections.
 Create and authorize each local or remote Docker endpoint through the
@@ -91,6 +98,7 @@ server path.
 | Variable | Default | Use |
 | --- | --- | --- |
 | `MERCATOR_ADDR` | `127.0.0.1:8080` | Listen address. A non-loopback address requires TLS material; without it, startup fails. |
+| `MERCATOR_ADMIN_ADDR` | none | Listen address for the administrative operations. Required when `MERCATOR_ADDR` is not loopback; must name one interface rather than the wildcard. |
 | `MERCATOR_TLS_CERT_FILE` | none | PEM certificate chain this process serves. Set it with `MERCATOR_TLS_KEY_FILE` or with neither. A file that cannot be read or parsed stops startup, naming the file. |
 | `MERCATOR_TLS_KEY_FILE` | none | PEM private key for that chain. |
 | `MERCATOR_SQLITE_DSN` | `$XDG_DATA_HOME/mercator/mercator.db`, else `~/.local/share/mercator/mercator.db` | SQLite event-log DSN. The directory is created at startup. The container image sets this to `file:/data/mercator.db`. |

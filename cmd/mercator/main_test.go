@@ -357,7 +357,10 @@ func TestLabServeOptionsNameEveryExecutionInput(t *testing.T) {
 	}
 }
 
-func TestLabServeRejectsNonLoopbackAddress(t *testing.T) {
+// The Lab's containment is no longer a flag check: parsing accepts whatever
+// address the operator names and the Lab server itself refuses to serve one
+// another machine could reach. See TestTheLabRefusesAListenerAnotherMachineCouldReach.
+func TestLabServeParsesAnyAddressAndLeavesContainmentToTheServer(t *testing.T) {
 	// Arrange
 	args := []string{
 		"mercator", "lab", "serve",
@@ -366,11 +369,66 @@ func TestLabServeRejectsNonLoopbackAddress(t *testing.T) {
 	}
 
 	// Act
-	_, err := parseLabServeOptions(args)
+	options, err := parseLabServeOptions(args)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("parse Lab serve options: %v", err)
+	}
+	if options.addr != "0.0.0.0:9090" {
+		t.Fatalf("addr = %q, want the address as given", options.addr)
+	}
+}
+
+func TestServeRefusesAPublicAddressWithNoAdministrativeAddress(t *testing.T) {
+	// Arrange
+	env := map[string]string{
+		"MERCATOR_ADDR":            "0.0.0.0:0",
+		"MERCATOR_API_TOKEN":       "operator-token",
+		"MERCATOR_SECRET_KEY":      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"MERCATOR_SQLITE_DSN":      "file:" + t.Name() + "?mode=memory&cache=shared",
+		"MERCATOR_TLS_CERT_FILE":   "cert.pem",
+		"MERCATOR_TLS_KEY_FILE":    "key.pem",
+		"MERCATOR_PUBLIC_URL":      "https://mercator.example.com",
+		"MERCATOR_ADMIN_ADDR":      "",
+		"MERCATOR_OIDC_CLIENT_ID":  "",
+		"MERCATOR_OIDC_ISSUER":     "",
+		"MERCATOR_OIDC_SECRET_KEY": "",
+	}
+
+	// Act
+	exitCode := run(context.Background(), []string{"mercator", "serve"}, env, io.Discard, io.Discard)
+
+	// Assert
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1 from a public deployment with no administrative address", exitCode)
+	}
+}
+
+func TestABindAdministrativeListenerRefusesTheWildcard(t *testing.T) {
+	// Arrange, Act
+	_, err := bindListeners("127.0.0.1:0", "0.0.0.0:0")
 
 	// Assert
 	if err == nil {
-		t.Fatal("non-loopback Lab address should fail")
+		t.Fatal("an administrative listener on every interface is not a private one")
+	}
+}
+
+func TestBindListenersAnswersTheBoundAdministrativeAddress(t *testing.T) {
+	// Arrange, Act
+	listeners, err := bindListeners("127.0.0.1:0", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind listeners: %v", err)
+	}
+	defer listeners.close()
+
+	// Assert
+	if listeners.adminAddress() != listeners.admin.Addr().String() {
+		t.Fatalf("administrative address = %q, want the address the kernel gave", listeners.adminAddress())
+	}
+	if listeners.adminAddress() == "127.0.0.1:0" {
+		t.Fatal("the administrative address still names the port that was asked for")
 	}
 }
 

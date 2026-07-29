@@ -103,14 +103,24 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("configure TLS: MERCATOR_ADDR %s is not loopback and no TLS material is configured; set %s and %s, or bind a loopback address", addr, tlsmaterial.CertFileVar, tlsmaterial.KeyFileVar)
 		return 1
 	}
-	listener, err := net.Listen("tcp", addr)
+	// Creating a tenant, inviting a machine and forcing a sink to deliver are
+	// not operations the audience of the public API has any business reaching.
+	// A deployment that exposes the API beyond this host must therefore say
+	// where those answer instead, and there is no address they answer on by
+	// default.
+	adminAddr := env[adminAddrVar]
+	if !isLoopback(addr) && adminAddr == "" {
+		stdlog.Printf("configure the administrative listener: MERCATOR_ADDR %s is not loopback, so %s must name a private address for workspace creation, node invitation and sink delivery", addr, adminAddrVar)
+		return 1
+	}
+	listeners, err := bindListeners(addr, adminAddr)
 	if err != nil {
 		stdlog.Printf("listen: %v", err)
 		return 1
 	}
 	dsn, err := sqliteDSN(env)
 	if err != nil {
-		_ = listener.Close()
+		listeners.close()
 		stdlog.Printf("resolve database path: %v", err)
 		return 1
 	}
@@ -119,7 +129,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	// key underneath it.
 	claim, err := claimDatabase(dsn)
 	if err != nil {
-		_ = listener.Close()
+		listeners.close()
 		stdlog.Printf("claim database: %v", err)
 		return 1
 	}
@@ -129,13 +139,14 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		OperatorToken:  apiToken,
 		MasterKey:      masterKey,
 		TLS:            tlsFiles,
+		AdminAddr:      listeners.adminAddress(),
 		PublicURL:      env["MERCATOR_PUBLIC_URL"],
 		Getenv:         func(name string) string { return env[name] },
 		WebAuth:        webauthCfg,
 		LocalAuthEmail: options.localAuthEmail,
 	})
 	if err != nil {
-		_ = listener.Close()
+		listeners.close()
 		stdlog.Printf("configure server: %v", err)
 		return 1
 	}
@@ -145,15 +156,17 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	// The address the kernel gave is what a client can reach. They differ
 	// whenever the operator asked for port 0, and announcing the asked-for
 	// address then names a port nothing is listening on.
-	baseURL := listenURL(tlsFiles, listener.Addr().String())
+	baseURL := listenURL(tlsFiles, listeners.public.Addr().String())
 	if generatedToken && isLoopback(addr) {
 		shareLocalContext(env, baseURL, apiToken)
 	}
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- runtime.Serve(listener) }()
+	serveErr := listeners.serve(runtime)
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	stdlog.Printf("mercator listening on %s", baseURL)
+	if listeners.admin != nil {
+		stdlog.Printf("mercator administrative operations listening on %s", listenURL(tlsFiles, listeners.adminAddress()))
+	}
 	exitCode := 0
 	select {
 	case err := <-serveErr:
@@ -187,6 +200,82 @@ func parseServeOptions(args []string) (serveOptions, error) {
 		return serveOptions{localAuthEmail: localDeveloperEmail}, nil
 	}
 	return serveOptions{}, fmt.Errorf("usage: mercator serve [--dev]")
+}
+
+// adminAddrVar names the private address the administrative operations answer
+// on. It is required whenever the public address is not loopback.
+const adminAddrVar = "MERCATOR_ADMIN_ADDR"
+
+// serverListeners are the sockets this process answers on. One http.Server
+// serves both, so one Shutdown drains both, and the two differ only in which
+// operations are routed on them.
+type serverListeners struct {
+	public net.Listener
+	admin  net.Listener
+}
+
+func bindListeners(publicAddr, adminAddr string) (serverListeners, error) {
+	public, err := net.Listen("tcp", publicAddr)
+	if err != nil {
+		return serverListeners{}, err
+	}
+	if adminAddr == "" {
+		return serverListeners{public: public}, nil
+	}
+	admin, err := net.Listen("tcp", adminAddr)
+	if err != nil {
+		_ = public.Close()
+		return serverListeners{}, err
+	}
+	bound := serverListeners{public: public, admin: admin}
+	if err := requireOneInterface(admin.Addr()); err != nil {
+		bound.close()
+		return serverListeners{}, err
+	}
+	return bound, nil
+}
+
+// requireOneInterface refuses an administrative listener bound to the wildcard.
+// A surface reachable on every interface this machine has is not a private one,
+// and the request's local address is what tells the two listeners apart, which
+// a wildcard bind makes unanswerable.
+func requireOneInterface(addr net.Addr) error {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return fmt.Errorf("%s must name a TCP address, got %s", adminAddrVar, addr)
+	}
+	if tcp.IP.IsUnspecified() {
+		return fmt.Errorf("%s must name one interface rather than the wildcard, got %s", adminAddrVar, addr)
+	}
+	return nil
+}
+
+func (l serverListeners) close() {
+	if l.public != nil {
+		_ = l.public.Close()
+	}
+	if l.admin != nil {
+		_ = l.admin.Close()
+	}
+}
+
+// adminAddress is the bound address administrative operations answer on, which
+// is what the server compares each request's local address against. Empty when
+// this deployment runs one listener.
+func (l serverListeners) adminAddress() string {
+	if l.admin == nil {
+		return ""
+	}
+	return l.admin.Addr().String()
+}
+
+func (l serverListeners) serve(runtime *daemon.Runtime) <-chan error {
+	served := make(chan error, 2)
+	go func() { served <- runtime.Serve(l.public) }()
+	if l.admin != nil {
+		go func() { served <- runtime.Serve(l.admin) }()
+	}
+	return served
 }
 
 func isLoopback(addr string) bool {

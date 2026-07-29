@@ -18,9 +18,14 @@ evaluation. It is not a GA security assurance statement.
   logged-in human identity. Sessions are HMAC-signed under
   `MERCATOR_SESSION_KEY`; OIDC config is fail-closed (partial config refuses
   to boot).
-- Every authenticated principal administers the instance. Workspace ids scope
-  stored records and queries; per-user identity is recorded for audit, not
-  authorization.
+- A workspace is the tenancy boundary. The machine bearer token is the instance
+  credential and reaches every workspace; a human reaches only the workspaces
+  they are a member of, refused everywhere else by the one chokepoint every
+  workspace-scoped route resolves its workspace through.
+- Creating a tenant, inviting a machine, and forcing a sink to deliver answer on
+  the administrative listener named by `MERCATOR_ADMIN_ADDR` and are not routed
+  on the public one. That variable is required whenever `MERCATOR_ADDR` is not
+  loopback.
 - Health, OpenAPI, and (without OIDC) the UI shell are public on the listen
   interface. With OIDC configured, unauthenticated console loads redirect to
   the login flow.
@@ -209,8 +214,11 @@ operator route back is
   only by restarting the process.
 - When `MERCATOR_API_TOKEN` is unset, `serve` logs a generated token to stdout;
   operators shipping logs should set the variable explicitly.
-- There is one machine bearer token; OIDC sessions add per-user identity for
-  humans but no roles or per-user workspace grants.
+- There is one machine bearer token, and it is the instance credential: it
+  reaches every workspace. A human reaches only the workspaces they are a member
+  of, and the only way to become one over HTTP is to create the workspace
+  ([#219](https://github.com/benngarcia/mercator/issues/219)). Membership rows
+  carry a role that nothing yet checks.
 - Secret management is delegated to the workload/runtime. Mercator has no
   secret vault, grant API, or KMS adapter surface.
 - Registry-backed tag resolution is not implemented. Docker connections can

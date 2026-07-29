@@ -14,8 +14,36 @@ limits.
 
 ## Security
 
-- One bearer token principal plus audited OIDC identities, with no roles or
-  per-user workspace authorization.
+- A workspace is now a tenancy boundary a human is refused across, and there is
+  no way to grant a membership over HTTP. A subject becomes a member of a
+  workspace by creating it and in no other way, because a grant endpoint is a
+  new operation in the API contract and this branch does not regenerate the
+  contract ([#219](https://github.com/benngarcia/mercator/issues/219)). Adding a
+  second person to a workspace is a SQL insert into `workspace_members` until
+  that lands; the statement is in
+  [authentication-workspaces.md](authentication-workspaces.md#current-limitations).
+- Upgrading an existing database backfills one admin per workspace from
+  `workspaces.created_by`, which is the only authority fact the old schema
+  recorded. A workspace created by the bearer token, by the bootstrap seed, or
+  by the event-history backfill therefore has a machine principal as its only
+  admin: no human is a member, and every human is refused there until an
+  operator inserts a row. `mercator serve --dev` is the exception and grants the
+  local developer admin everywhere on startup, because that mode has exactly one
+  human by construction.
+- Memberships carry a role, `admin` or `member`, and no operation checks which
+  one a subject holds. Archiving a workspace is the operation that should be
+  admin-only, and its declared response set has no `403`, so saying "you are a
+  member but not an admin" needs a contract change
+  ([#219](https://github.com/benngarcia/mercator/issues/219)).
+- The console creates and archives workspaces through routes that now answer
+  only on the administrative listener, so those two console actions answer `404`
+  on a deployment that has one. The console is not part of this branch and was
+  not changed ([#220](https://github.com/benngarcia/mercator/issues/220)).
+- Administrative and public traffic are told apart by the accepting listener's
+  local address, so `MERCATOR_ADMIN_ADDR` must name one interface. A deployment
+  that wants the administrative surface on a routable address gets the same
+  certificate the public listener uses; there is no separate administrative
+  certificate and no client-certificate requirement in front of it.
 - Mercator terminates TLS itself and manages no certificates. It reads
   `MERCATOR_TLS_CERT_FILE` and `MERCATOR_TLS_KEY_FILE` once, at startup, so a
   renewed certificate is served only after a restart. There is no ACME client,

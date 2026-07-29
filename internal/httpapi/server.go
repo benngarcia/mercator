@@ -86,6 +86,7 @@ type Server struct {
 	webauth      WebAuth
 	manifests    func() []adapter.Manifest
 	nodes        NodeRegistry
+	admin        *adminSurface
 }
 
 // WebAuth is the human-login surface the server mounts at /auth/ when OIDC is

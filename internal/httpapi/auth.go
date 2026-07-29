@@ -11,37 +11,61 @@ import (
 
 type principalContextKey struct{}
 
+// principalKind separates the two authorities that reach this API. The instance
+// credential is the deployment itself: it is how Mercator's own operator and
+// its automation act, and it is scoped to nothing narrower than the process. A
+// human is a subject who signed in, and a subject is only ever authorised for
+// the workspaces they are a member of.
+type principalKind string
+
+const (
+	principalInstance principalKind = "instance"
+	principalHuman    principalKind = "human"
+)
+
 type principal struct {
 	Subject string
+	Kind    principalKind
 }
 
 // requestActor marshals the request principal into the event-envelope actor
 // recorded on human-command facts: {"subject": <email or "bearer">}. Nil when
 // auth is disabled entirely (no principal to record).
 func requestActor(ctx context.Context) json.RawMessage {
-	subject, ok := requestPrincipal(ctx)
+	actor, ok := requestPrincipal(ctx)
 	if !ok {
 		return nil
 	}
-	encoded, err := json.Marshal(map[string]string{"subject": subject})
+	encoded, err := json.Marshal(map[string]string{"subject": actor.Subject})
 	if err != nil {
 		return nil
 	}
 	return encoded
 }
 
-func requestPrincipal(ctx context.Context) (string, bool) {
+func requestPrincipal(ctx context.Context) (principal, bool) {
 	actor, ok := ctx.Value(principalContextKey{}).(principal)
-	return actor.Subject, ok && actor.Subject != ""
+	return actor, ok && actor.Subject != ""
 }
 
 func requirePrincipal(ctx context.Context) (string, *ErrorResponse) {
-	subject, ok := requestPrincipal(ctx)
+	actor, ok := requestPrincipal(ctx)
 	if !ok {
 		response := apiError("UNAUTHORIZED", "An authenticated principal is required.")
 		return "", &response
 	}
-	return subject, nil
+	return actor.Subject, nil
+}
+
+// requestMemberScope is the subject a listing is narrowed to. A human sees the
+// workspaces they belong to; the instance credential, and a deployment running
+// with no authentication at all, see the whole catalog.
+func requestMemberScope(ctx context.Context) string {
+	actor, ok := requestPrincipal(ctx)
+	if !ok || actor.Kind != principalHuman {
+		return ""
+	}
+	return actor.Subject
 }
 
 // maxRequestBodyBytes bounds request bodies server-wide. The largest legitimate
@@ -65,6 +89,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache, no-store")
 		w.Header().Set("X-Accel-Buffering", "no")
 		w = flushingResponseWriter{ResponseWriter: w}
+	}
+	// An operation this listener does not serve answers what a path this
+	// deployment does not have answers, and answers it before authentication,
+	// so a probe on the public address cannot tell an administrative route from
+	// a misspelled one.
+	if s.admin != nil && s.admin.unroutedHere(r) {
+		http.NotFound(w, r)
+		return
 	}
 	operatorAuthRequired := s.security.Token != "" &&
 		strings.HasPrefix(r.URL.Path, "/v1/") &&
@@ -105,8 +137,9 @@ func (w flushingResponseWriter) Unwrap() http.ResponseWriter {
 // CLI token minted by `mercator login`, or (when webauth is mounted) a
 // signed-in human session. A presented bearer credential must verify as one of
 // the two token kinds — a wrong token fails outright rather than silently
-// downgrading to cookie auth. Every principal kind carries the same
-// instance-wide authority; they differ only in their audited subject.
+// downgrading to cookie auth. The machine token authenticates the deployment
+// itself and is scoped to nothing narrower; the other two authenticate a human,
+// who reaches only the workspaces they are a member of.
 func (s *Server) authenticate(r *http.Request) (principal, bool) {
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
@@ -115,18 +148,18 @@ func (s *Server) authenticate(r *http.Request) (principal, bool) {
 			return principal{}, false
 		}
 		if subtle.ConstantTimeCompare([]byte(token), []byte(s.security.Token)) == 1 {
-			return principal{Subject: "bearer"}, true
+			return principal{Subject: "bearer", Kind: principalInstance}, true
 		}
 		if s.webauth != nil {
 			if email, ok := s.webauth.VerifyCLIToken(token); ok {
-				return principal{Subject: email}, true
+				return principal{Subject: email, Kind: principalHuman}, true
 			}
 		}
 		return principal{}, false
 	}
 	if s.webauth != nil {
 		if email, ok := s.webauth.SessionEmail(r); ok {
-			return principal{Subject: email}, true
+			return principal{Subject: email, Kind: principalHuman}, true
 		}
 	}
 	return principal{}, false

@@ -96,9 +96,6 @@ func parseLabServeOptions(args []string) (labServeOptions, error) {
 	if options.policy == "" {
 		return labServeOptions{}, errors.New("mercator lab serve: --policy cannot be empty")
 	}
-	if !isLoopback(options.addr) {
-		return labServeOptions{}, fmt.Errorf("mercator lab serve: --addr must be loopback, got %s", options.addr)
-	}
 	return options, nil
 }
 
