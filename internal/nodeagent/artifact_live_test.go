@@ -276,11 +276,19 @@ func startObjectStore(t *testing.T) string {
 	return endpoint
 }
 
+// awaitObjectStore waits until the store will serve a bucket, which is what
+// these cases need of it.
+//
+// It asks the cluster probe rather than the liveness one. Liveness answers as
+// soon as the process is up, and a store that is up and not yet initialized
+// answers a bucket write with 503 XMinioServerNotInitialized, which is how this
+// case failed on a loaded workstation: the wait returned, the very next request
+// was refused, and the test read it as the node's fault.
 func awaitObjectStore(t *testing.T, endpoint string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		response, err := http.Get(endpoint + "/minio/health/live")
+		response, err := http.Get(endpoint + "/minio/health/cluster")
 		if err == nil {
 			_ = response.Body.Close()
 			if response.StatusCode == http.StatusOK {
