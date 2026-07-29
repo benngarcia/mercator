@@ -4795,9 +4795,19 @@ complete because it works against a live provider.
     now 20 passes in 20. No console source changed, because the product behaves
     correctly in both cases. Recorded here because a test that only fails on fast
     hardware is a test that stops being evidence exactly where it matters most.
-  - Both were invisible until now for the same structural reason: this branch had
-    no upstream for the whole phase, so nothing it did had ever met CI, and the
-    browser cases skip unless an environment flag asks for them.
+  - A third, found by CI itself on the first push and fixed rather than re-run
+    away. `TestAMachineGoesOnWorkingAfterItsFirstSessionCredentialLapses` failed
+    at 10.05s on a two core runner while passing every time here. An agent renews
+    once its credential is within two heartbeats of lapsing, and the harness had
+    paired a twenty millisecond heartbeat with a two second window, so it ran the
+    agent forty milliseconds from a cliff. Losing that race is not a late
+    renewal: the credential lapses, the renewal is refused `SESSION_REFUSED`, and
+    the invitation that would let the machine rejoin was spent at enrolment, so
+    it is locked out for good and the counter never moves again. The slack is now
+    a quarter of whatever window a case asks for.
+  - All three were invisible until now for the same structural reason: this
+    branch had no upstream for the whole phase, so nothing it did had ever met
+    CI, and the browser cases skip unless an environment flag asks for them.
   - Judgment call worth recording: the corpus and invariant figures in this
     document had drifted again, by one Blueprint and two conformance cases and one
     invariant. They are counted off the tree at close-out and the previous wrong
@@ -6277,6 +6287,26 @@ accelerator probe this phase added, and it ran against this host's real RTX 5090
 through a real container rather than against a recorded fixture. That is the
 strongest evidence in the phase for the host-facts work, and it exists only
 because this build host has a GPU and a native daemon.
+
+The first push found a third defect, which is what a first meeting with CI is
+for. `TestAMachineGoesOnWorkingAfterItsFirstSessionCredentialLapses` failed at
+10.05s on the two core runner while passing every time on this host. It is not a
+budget that was too tight. An agent renews once its credential is within two
+heartbeats of lapsing, a margin deliberately tied to the cadence the agent was
+configured for, and the harness had paired a twenty millisecond heartbeat with a
+two second session window. Those two numbers were chosen independently, for
+quick scripted dispatch and for a watchable lapse, and their product is forty
+milliseconds of slack, which is inside what a garbage collection pause costs.
+Losing that race does not renew late. The credential lapses, the control plane
+refuses the renewal `SESSION_REFUSED`, and the invitation the agent would need to
+rejoin was spent when it enrolled, so the machine is locked out for good, which
+is the production behaviour working as designed (#211). Reproduced here by
+freezing the process across the lapse with SIGSTOP, which is what a starved
+runner does to the agent's loop: three runs in three failed at 10.02s with
+`SESSION_REFUSED`, against CI's 10.05s. Under a stall straddling the old margin
+the previous build failed two runs in three and the repaired one passed three in
+three. `renewingEvery` now states the heartbeat and the budget together with the
+window, so the slack is a quarter of whatever window a case asks for.
 
 `TestConsoleRunsNavigation` was genuinely broken here and is now fixed. Two
 defects, both the same shape: the script read a state that settles after the call
