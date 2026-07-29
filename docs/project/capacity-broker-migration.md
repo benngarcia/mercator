@@ -4661,13 +4661,50 @@ Phase 1 added:
   redemption is deliberately not producible through the Lab's own registry, which
   refuses it exactly as production does, and that refusal is asserted so the
   clause is not left checking a state nothing can reach. Added in phase 5 slice 4.
-- `safety.secrets_absent` (Lab invariant, strengthened in phase 5 slice 4): it
-  matched field names, so material in a field called credential, password, or
+- `safety.secrets_absent` (Lab invariant, strengthened in phase 5 slices 4 and 5):
+  it matched field names, so material in a field called credential, password, or
   secret was caught and the same material in a field called enrollment_token was
   not, which is the field a bootstrap would honestly be filed under. It now also
   refuses a signed URL wherever it appears, because a presigned read is a bearer
   credential written as a location, and any credential the world minted whatever
-  field it is filed under.
+  field it is filed under. Slice 5 extended that last clause from bootstrap
+  tokens to the material a machine was handed for one fetch, which the name
+  clause and the signed-URL markers between them do not reach: a registry
+  password filed under a name nobody thought of passed both.
+- `safety.content_credentials_are_scoped_and_expiring` (Lab invariant): every
+  credential Mercator hands a machine so it can fetch content names one
+  operation, one workspace, one piece of content and an expiry; is checked
+  against the command it arrived on rather than against itself; has not lapsed
+  when it is handed over; and stays presentable for no more than an hour. The
+  four clauses fail separately on four hand-written worlds, and the world can
+  really produce the state they are about: a private image asked for with nothing
+  minted is refused by the registry, and the same image with material minted for
+  that operation is served. Added in phase 5 slice 5.
+
+  The clause that is deliberately not there is material uniqueness, which was the
+  obvious fourth and fails on correct behaviour. SigV4 presigns one object for
+  one expiry, so two operations minted for one version in one instant produce the
+  same URL; a registry that only knows how to check a password has one password
+  behind every image it serves. Neither is a defect. The material simply cannot
+  always be narrower than the far side is able to enforce, and what narrows it to
+  the operation is the scope, which the node checks before presenting anything.
+  What can always hold is that the window is bounded, so a read good for a day is
+  caught while a generous window for a large image over a slow link is not. The
+  bound is the Lab's own hour rather than `credential.DefaultMintWindow`, because
+  a rule that read the number production mints with would agree with production
+  by construction and could never fail.
+- `a-private-pull-uses-a-credential-that-expires` (conformance, green): one
+  machine, an occupant holding it for forty minutes, and a queued Run that needs
+  an image at a registry serving nothing to an anonymous reader and a corpus in
+  an object store answering only a signed read. Both fetches carry material
+  minted for that one operation and expiring inside the execution. The occupant's
+  own image is public and is fetched with nothing at all, which is the other half
+  of the claim: minting for content any anonymous reader can have would put an
+  account on a machine that never needed one. `ImageSpec.private` is the schema
+  this needed, and it is a fact about a registry rather than about the control
+  plane: a world where every image is anonymous can never catch a Mercator that
+  mints nothing, because nothing on any machine would notice. Added in phase 5
+  slice 5.
 - `safety.enrolment_names_the_generation_it_was_invited_for` (Lab invariant): an
   agent that opened a session on a machine a provider allocated enrolled under the
   generation that machine was invited for. A generation is what fences a lease, so
@@ -6914,6 +6951,95 @@ daemon case that bootstraps the production `nodeagent.Agent` from the provider's
 own copy of the invitation, runs two Runs on the machine it enrolled, and reads
 the second one warm off the first passed against it. #165 does not reproduce here
 and was left alone.
+
+### Phase 5 the credential a machine fetches content with
+
+`PrepareImageCommand.RegistryCredential` and
+`PrepareArtifactCommand.SourceCredential` had been declared since phase 2 and
+populated by nobody. The node ran a bare `docker pull` and issued a plain
+unauthenticated GET, and the only way a private image ever reached a rented host
+was a registry account written onto the machine, which outlived every pull it was
+ever needed for. This slice fills both fields and makes the far side refuse
+anything else.
+
+What crosses to a machine is `domain.ContentCredentialScope`: one operation, one
+workspace, one piece of content, one expiry, with `RegistryPull` and
+`ArtifactRead` carrying what is presented. `internal/credential.Mint` holds the
+registry accounts and the object-store key, the orchestrator asks it as part of
+deciding what a machine should be holding, and the Broker delivers the answer
+without narrowing anything of its own. A public image is minted nothing, which is
+the answer rather than a failure.
+
+Three seams enforce it, and each is tested where it lives. The registry and the
+object store refuse: in the Lab because `ImageSpec.private` says the world serves
+that image to nobody anonymous and the store answers only a signed read, and on
+this host because distribution behind htpasswd really does. The machine refuses
+before presenting anything: `authorisedPull` and `authorisedRead` check the scope
+against the command, so material minted for another operation never reaches the
+network. And the record refuses to carry any of it.
+
+The Broker hop has its own test because nothing else can see it. The Lab replaces
+the world at the desired-set seam, which sits above `Broker.prepareOnNode`, so a
+Broker that dropped the credential leaves every rule in the corpus green and
+every private pull on a real machine refused. That was verified by breaking it:
+the Lab stays green, `internal/broker` fails.
+
+`PrepareImage` now pulls through the daemon API rather than the CLI, landed in the
+production half of this slice. The CLI reads registry material out of a config
+file, so a private pull through it means writing the credential onto a rented host
+and remembering to remove it, and a pull killed halfway leaves it there.
+`X-Registry-Auth` keeps it in the agent's memory for one request. A refused pull
+arrives as a 500 whose body carries the denial, so the status is read and the
+stream is drained rather than the status alone: a node reading less than that
+reports every image it may not have as content it holds.
+
+Shadeform's standing account is gone. The adapter read `registry_username` and
+`registry_password` out of connection config, undeclared by its own manifest, and
+wrote them verbatim into every create body, from where Shadeform put them on the
+machine. The wire type went with them. The obvious replacement, a credential on
+`adapter.LaunchRequest`, is wrong twice over: that struct is the private payload
+of `launch_intent_recorded`, so minted material on it is a credential in the
+durable record, and `RequestHash` is a canonical hash of the whole struct, so
+material re-minted on a retry moves the operation identity every adapter
+deduplicates on and a redelivered launch creates a second machine. The ephemeral
+lane needs a seam that is not the recorded launch intent, filed as
+[#218](https://github.com/benngarcia/mercator/issues/218); until it lands, an
+ephemeral workload runs an image an anonymous reader can pull. The reusable lane
+is unaffected.
+
+The live half ran on this host. Docker here is native on Linux at 29.6.2 on
+amd64. `registry:3` behind htpasswd, an image built for the case so it shares no
+image object with anything else on the daemon, pushed through the daemon API,
+removed locally, and pulled back three ways: with minted material it arrives,
+with nothing the registry refuses it, and with material minted for another
+operation the node refuses to present it. Each was proven able to fail by
+breaking the production half it covers. The MinIO-backed Artifact cases stay
+green with zero skips.
+
+What this slice does not close.
+`capability.LaunchWorkloadCommand` has no credential field, and the only producer
+of `PrepareImageCommand.RegistryCredential` is the preparation sweep, which runs
+for queued placements. A Run admitted and dispatched straight to an enrolled node
+never passes through prepare, so `LaunchWorkload` runs `docker run` and the daemon
+pulls implicitly, anonymously, and untimed. Whether a private image works there is
+decided by whether prewarm happened to reach that machine first, which is a
+scheduling accident rather than a contract. Filed as
+[#221](https://github.com/benngarcia/mercator/issues/221), where the preferable
+fix is to precede a node launch with a `PrepareImage` so a node has exactly one
+place it ever fetches an image, rather than to grow a second credential path.
+
+One real defect surfaced from running the whole tree rather than one package.
+Tagging a shared image into a local registry adds a repository digest to the image
+object every other case on this daemon reads, and mercator#212's lock does not
+help because the object outlives the lock: `ociresolver`'s conformance case took
+busybox's first repository digest and got a registry on a port nothing listens on
+any more. The case builds its own image now.
+
+```
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/lab ./internal/scenario ./internal/broker ./internal/adapter/shadeform ./internal/credential
+go test -count=1 ./internal/nodeagent -run 'PrivateImage|SameReference|MintedForAnother' -v
+```
 
 ### Phase 4 close-out
 
