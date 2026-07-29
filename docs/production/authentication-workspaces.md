@@ -170,7 +170,9 @@ this host, and there is no permissive default: a deployment that has not named
 one refuses to start. Two facts say it is reachable, and only the operator holds
 the second: `MERCATOR_ADDR` is not loopback, or `MERCATOR_PUBLIC_URL` names
 something other than this machine, which is the reverse proxy and tunnel
-topology where the bind address stays loopback and tells the process nothing.
+topology where the bind address stays loopback and tells the process nothing. A
+`MERCATOR_PUBLIC_URL` that is not an absolute `http://` or `https://` URL naming
+a host refuses to start rather than reading as naming nothing.
 The administrative address must name one interface rather than the wildcard, because
 an administrative surface reachable on every interface is not a private one, and
 because the accepting listener's local address is what tells the two apart. Both

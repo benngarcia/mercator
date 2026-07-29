@@ -109,8 +109,13 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	// not operations the audience of the public API has any business reaching.
 	// A deployment that is reachable beyond this host must therefore say where
 	// those answer instead, and there is no address they answer on by default.
+	announced, err := announcedHost(env[publicURLVar])
+	if err != nil {
+		stdlog.Printf("configure the public URL: %v", err)
+		return 1
+	}
 	adminAddr := env[adminAddrVar]
-	if exposure := publicExposure(addr, env[publicURLVar]); exposure != "" && adminAddr == "" {
+	if exposure := publicExposure(addr, announced); exposure != "" && adminAddr == "" {
 		stdlog.Printf("configure the administrative listener: %s, so %s must name a private address for workspace creation, node invitation and sink delivery", exposure, adminAddrVar)
 		return 1
 	}
@@ -141,7 +146,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		MasterKey:      masterKey,
 		TLS:            tlsFiles,
 		AdminAddr:      listeners.adminAddress(),
-		PublicURL:      env["MERCATOR_PUBLIC_URL"],
+		PublicURL:      env[publicURLVar],
 		Getenv:         func(name string) string { return env[name] },
 		WebAuth:        webauthCfg,
 		LocalAuthEmail: options.localAuthEmail,
@@ -215,40 +220,53 @@ const publicURLVar = "MERCATOR_PUBLIC_URL"
 // publicExposure names the reason this deployment answers to something other
 // than this machine, and is empty when it does not. Two facts say so, and only
 // the operator holds the second one: a bind address that is not loopback says
-// it outright, and a public URL says it through whatever proxy or tunnel is
-// forwarding to a loopback bind, which the listening socket cannot see.
+// it outright, and the host a public URL announces says it through whatever
+// proxy or tunnel is forwarding to a loopback bind, which the listening socket
+// cannot see.
 //
 // The reason is a sentence rather than a boolean because it is what the refusal
 // tells the operator, and a refusal that cannot say which fact tripped it sends
 // them to the wrong variable.
-func publicExposure(addr, publicURL string) string {
+func publicExposure(addr, announced string) string {
 	if !isLoopback(addr) {
 		return fmt.Sprintf("MERCATOR_ADDR %s is not loopback", addr)
 	}
-	if announced := announcedHost(publicURL); announced != "" {
+	if announced != "" {
 		return fmt.Sprintf("%s %s announces this deployment at an address that is not this machine", publicURLVar, announced)
 	}
 	return ""
 }
 
-// announcedHost is the host a public URL announces, empty when the URL
-// announces nothing beyond this machine. A URL naming loopback is a
-// developer pointing reporting at their own process, not an exposure.
-func announcedHost(publicURL string) string {
+// announcedHost is the host MERCATOR_PUBLIC_URL announces this deployment at.
+// It is empty when the variable is unset and when the URL names loopback, which
+// is a developer pointing reporting at their own process rather than an
+// exposure.
+//
+// Anything else that is not a URL a node could dial is a startup failure rather
+// than an empty host. Every reader of this variable needs an absolute URL: the
+// orchestrator hands it to each workload verbatim as MERCATOR_REPORT_URL and
+// webauth appends "/auth/callback" to it for the OIDC redirect. Answering
+// "announces nothing" for a value like "mercator.example.com" or the one-slash
+// "https:/mercator.example.com" would exempt exactly the proxied deployment this
+// check exists to catch, so the two ways of writing an unusable URL both refuse.
+func announcedHost(publicURL string) (string, error) {
 	trimmed := strings.TrimSpace(publicURL)
 	if trimmed == "" {
-		return ""
+		return "", nil
 	}
+	unusable := fmt.Errorf("%s must be an absolute http:// or https:// URL naming a host, got %q", publicURLVar, trimmed)
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		// An unparseable public URL is not evidence that nothing is reachable.
-		return trimmed
+		return "", fmt.Errorf("%w: %s", unusable, err)
 	}
 	host := parsed.Hostname()
-	if host == "" || host == "localhost" || net.ParseIP(host).IsLoopback() {
-		return ""
+	if host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", unusable
 	}
-	return host
+	if host == "localhost" || net.ParseIP(host).IsLoopback() {
+		return "", nil
+	}
+	return host, nil
 }
 
 // serverListeners are the sockets this process answers on. One http.Server

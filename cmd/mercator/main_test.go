@@ -441,13 +441,85 @@ func captureStandardLog(t *testing.T) *bytes.Buffer {
 	return captured
 }
 
+// A public URL that names no host used to answer "announces nothing", which
+// exempted the proxied deployment from the administrative listener entirely.
+// Both of these parse without error, so neither reached the branch that fails
+// closed.
+func TestServeRefusesAPublicURLThatNamesNoHost(t *testing.T) {
+	for name, publicURL := range map[string]string{
+		"no scheme":            "mercator.example.com",
+		"no scheme with port":  "mercator.example.com:8443",
+		"one slash":            "https:/mercator.example.com",
+		"scheme relative":      "//mercator.example.com",
+		"not a URL at all":     "mercator dot example dot com",
+		"unparseable":          "https://mercator.example.com\x7f",
+		"scheme nothing dials": "ftp://mercator.example.com",
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Arrange: the proxied topology, with the public URL mistyped.
+			env := map[string]string{
+				"MERCATOR_ADDR":       "127.0.0.1:0",
+				"MERCATOR_API_TOKEN":  "operator-token",
+				"MERCATOR_SECRET_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				"MERCATOR_SQLITE_DSN": "file:" + t.Name() + "?mode=memory&cache=shared",
+				"MERCATOR_PUBLIC_URL": publicURL,
+				"MERCATOR_ADMIN_ADDR": "",
+			}
+			refusal := captureStandardLog(t)
+			// A deployment that does not refuse serves until it is stopped, and a
+			// cancelled context is what makes that return an exit code rather than
+			// hang this test.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			// Act
+			exitCode := run(ctx, []string{"mercator", "serve"}, env, io.Discard, io.Discard)
+
+			// Assert
+			if exitCode != 1 {
+				t.Fatalf("exit code = %d, want 1 from a public URL naming no host", exitCode)
+			}
+			if !strings.Contains(refusal.String(), publicURLVar) {
+				t.Fatalf("the refusal did not name %s: %s", publicURLVar, refusal)
+			}
+		})
+	}
+}
+
+// The exemption the malformed cases above must not be confused with: a public
+// URL naming this machine announces nothing, and that deployment still serves.
+// Proved by driving startup past the administrative-listener check and failing
+// it on the next thing, so the refusal names the issuer rather than the address.
 func TestALoopbackDeploymentReportingToItselfNeedsNoAdministrativeAddress(t *testing.T) {
-	// Arrange, Act: a public URL naming this machine announces nothing.
-	exposure := publicExposure("127.0.0.1:8080", "http://127.0.0.1:8080")
+	// Arrange
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "discovery unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(issuer.Close)
+	env := map[string]string{
+		"MERCATOR_ADDR":                "127.0.0.1:0",
+		"MERCATOR_API_TOKEN":           "operator-token",
+		"MERCATOR_SECRET_KEY":          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"MERCATOR_SQLITE_DSN":          "file:" + t.Name() + "?mode=memory&cache=shared",
+		"MERCATOR_PUBLIC_URL":          "http://127.0.0.1:8080",
+		"MERCATOR_ADMIN_ADDR":          "",
+		"MERCATOR_OIDC_ISSUER":         issuer.URL,
+		"MERCATOR_OIDC_CLIENT_ID":      "client-id",
+		"MERCATOR_OIDC_CLIENT_SECRET":  "client-secret",
+		"MERCATOR_OIDC_ALLOWED_DOMAIN": "example.com",
+		"MERCATOR_SESSION_KEY":         "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+	}
+	refusal := captureStandardLog(t)
+
+	// Act
+	exitCode := run(context.Background(), []string{"mercator", "serve"}, env, io.Discard, io.Discard)
 
 	// Assert
-	if exposure != "" {
-		t.Fatalf("exposure = %q, want none from a loopback deployment", exposure)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1 from the unreachable issuer this deployment was pointed at", exitCode)
+	}
+	if strings.Contains(refusal.String(), adminAddrVar) {
+		t.Fatalf("a deployment reporting to itself was asked for %s: %s", adminAddrVar, refusal)
 	}
 }
 

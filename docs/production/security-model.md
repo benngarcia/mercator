@@ -95,7 +95,9 @@ serve plaintext because nothing off the host can reach it. That topology still
 needs `MERCATOR_ADMIN_ADDR`, because the proxy makes the loopback bind reachable
 from the internet and the administrative routes must not be among what it
 forwards. Startup refuses a deployment that announces `MERCATOR_PUBLIC_URL` and
-names no administrative address.
+names no administrative address, and refuses a `MERCATOR_PUBLIC_URL` that is not
+an absolute `http://` or `https://` URL naming a host. A schemeless value would
+otherwise announce nothing and exempt the very topology this rule exists for.
 
 The three rules above are `mercator serve`'s. They are enforced in the process
 entrypoint against `MERCATOR_ADDR`, not in the server itself, and `mercator
