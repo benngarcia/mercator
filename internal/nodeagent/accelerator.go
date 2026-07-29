@@ -165,7 +165,8 @@ func smiDevices(report string) []domain.AcceleratorInventory {
 		if err != nil {
 			continue
 		}
-		devices = addCard(devices, strings.TrimSpace(name), gpunorm.CardMemoryBytes(mebibytes))
+		card := strings.TrimSpace(name)
+		devices = addCard(devices, card, gpunorm.CardMemoryBytes(card, mebibytes))
 	}
 	return devices
 }

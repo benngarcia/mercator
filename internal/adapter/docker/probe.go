@@ -183,7 +183,7 @@ func parseNvidiaSMIInventory(output string) ([]domain.AcceleratorInventory, erro
 			Model:          name,
 			CanonicalModel: gpunorm.Canonical("NVIDIA", name),
 			Count:          1,
-			MemoryBytes:    gpunorm.CardMemoryBytes(memoryMiB),
+			MemoryBytes:    gpunorm.CardMemoryBytes(name, memoryMiB),
 		})
 	}
 	if len(inventory) == 0 {

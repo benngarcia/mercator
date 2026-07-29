@@ -96,22 +96,38 @@ func TestNormalizeVendor(t *testing.T) {
 // enrolls it and measures for itself.
 func TestCardMemoryBytesStatesTheCapacityACardIsSoldWith(t *testing.T) {
 	for name, card := range map[string]struct {
+		model          string
 		framebufferMiB int64
 		listedAs       int64
 	}{
 		// Every pair here is a real `nvidia-smi --query-gpu=memory.total` figure
 		// beside what the marketplaces publish for the same part.
-		"an RTX 5090 sold as 32GB":      {framebufferMiB: 32607, listedAs: 32 << 30},
-		"an RTX 4090 sold as 24GB":      {framebufferMiB: 24564, listedAs: 24 << 30},
-		"an H100 SXM sold as 80GB":      {framebufferMiB: 81559, listedAs: 80 << 30},
-		"an H100 PCIe sold as 80GB":     {framebufferMiB: 81008, listedAs: 80 << 30},
-		"an A100 sold as 80GB":          {framebufferMiB: 81920, listedAs: 80 << 30},
-		"an A100 sold as 40GB":          {framebufferMiB: 40960, listedAs: 40 << 30},
-		"a machine that counted no MiB": {framebufferMiB: 0, listedAs: 0},
+		"an RTX 5090 sold as 32GB":  {model: "NVIDIA GeForce RTX 5090", framebufferMiB: 32607, listedAs: 32 << 30},
+		"an RTX 4090 sold as 24GB":  {model: "NVIDIA GeForce RTX 4090", framebufferMiB: 24564, listedAs: 24 << 30},
+		"an H100 SXM sold as 80GB":  {model: "NVIDIA H100 80GB HBM3", framebufferMiB: 81559, listedAs: 80 << 30},
+		"an H100 PCIe sold as 80GB": {model: "NVIDIA H100 PCIe", framebufferMiB: 81008, listedAs: 80 << 30},
+		"an A100 sold as 80GB":      {model: "NVIDIA A100-SXM4-80GB", framebufferMiB: 81920, listedAs: 80 << 30},
+		"an A100 sold as 40GB":      {model: "NVIDIA A100-SXM4-40GB", framebufferMiB: 40960, listedAs: 40 << 30},
+		// The parts that hold ECC out of band give up a sixteenth of the board,
+		// which is a whole gibibyte and more. Rounding to the next gibibyte covered
+		// the reserve on the cards above and left every one of these a gibibyte
+		// short of the floor its own listing taught a caller to write.
+		"a T4 sold as 16GB":             {model: "Tesla T4", framebufferMiB: 15360, listedAs: 16 << 30},
+		"an L4 sold as 24GB":            {model: "NVIDIA L4", framebufferMiB: 23034, listedAs: 24 << 30},
+		"an A10G sold as 24GB":          {model: "NVIDIA A10G", framebufferMiB: 23028, listedAs: 24 << 30},
+		"an L40S sold as 48GB":          {model: "NVIDIA L40S", framebufferMiB: 46068, listedAs: 48 << 30},
+		"a machine that counted no MiB": {model: "NVIDIA A100-SXM4-80GB", framebufferMiB: 0, listedAs: 0},
+		// A partition is not a card. A MIG instance is a slice of a board sold in
+		// slices, and stating it at the size the slice is named after admits a Run
+		// onto less memory than it asked for.
+		"an A100 partitioned into 1g.10gb": {model: "NVIDIA A100-SXM4-40GB MIG 1g.10gb", framebufferMiB: 9856, listedAs: 9856 << 20},
+		// A part this package has never heard of is stated a little low rather
+		// than restated as the next size up, which would be a different card.
+		"a card nobody here has heard of": {model: "NVIDIA Q900", framebufferMiB: 33500, listedAs: 33 << 30},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := CardMemoryBytes(card.framebufferMiB); got != card.listedAs {
-				t.Errorf("CardMemoryBytes(%d MiB) = %d, want %d", card.framebufferMiB, got, card.listedAs)
+			if got := CardMemoryBytes(card.model, card.framebufferMiB); got != card.listedAs {
+				t.Errorf("CardMemoryBytes(%q, %d MiB) = %d, want %d", card.model, card.framebufferMiB, got, card.listedAs)
 			}
 		})
 	}

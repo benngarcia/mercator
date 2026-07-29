@@ -25,31 +25,81 @@ import (
 const mebibyte = int64(1) << 20
 const gibibyte = int64(1) << 30
 
+// soldCapacitiesGiB is every capacity an NVIDIA part is sold with, smallest
+// first, as the number a listing publishes: a card advertised as "16GB" is
+// matched against a floor of 16 GiB, because that is the number a caller who
+// copied the listing wrote down.
+//
+// It is a list rather than an arithmetic rule because the gap between what a
+// card is sold with and what its framebuffer measures is not one width. A
+// driver reserve costs a few hundred mebibytes; ECC on the datacenter parts
+// that carry it out of band costs a sixteenth of the board, which is a whole
+// gibibyte on a T4 and a gibibyte and a half on an L4. Rounding to the next
+// gibibyte covered the first and left the second, so a T4 sold as 16GB was
+// published as 15 GiB and struck out RESOURCE_INSUFFICIENT by the floor its own
+// listing taught the caller to write.
+var soldCapacitiesGiB = []int64{4, 6, 8, 10, 11, 12, 16, 20, 24, 32, 40, 48, 64, 80, 94, 96, 128, 141, 180, 192, 288}
+
+// soldCapacityHeadroom bounds how far above a measurement this package will
+// reach for the capacity a card is sold with, as one part in this many. An
+// eighth is more than the sixteenth ECC holds back plus the driver's own
+// reserve, and it is the bound rather than an unbounded reach because a part
+// this list has never heard of must not be restated as the next part up: a
+// measurement of 33 GiB is a card nobody here knows, and publishing it as the
+// 40 GiB entry beside it would admit a Run onto a fifth less memory than it
+// asked for.
+const soldCapacityHeadroom = 8
+
 // CardMemoryBytes states the memory of a card whose framebuffer a vendor tool
 // measured, in the unit the marketplaces publish the same card in.
 //
 // The two numbers are not the same number and never were. A marketplace lists
 // the capacity a card is sold with, and `nvidia-smi --query-gpu=memory.total`
-// reports the framebuffer left after the driver has held back its own reserved
-// region: this workstation's RTX 5090 is sold as 32GB and measures 32607MiB,
-// and an H100 sold as 80GB measures 81559MiB. Published raw, the measurement is
-// a few hundred mebibytes under every floor a caller copied out of a listing,
-// so the same physical card clears the floor while a provider is renting it and
-// is struck out RESOURCE_INSUFFICIENT the moment Mercator enrolls it.
+// reports the framebuffer left after the driver and ECC have held back their
+// own reserved regions: this workstation's RTX 5090 is sold as 32GB and
+// measures 32607MiB, an H100 sold as 80GB measures 81559MiB, and a T4 sold as
+// 16GB measures 15360MiB. Published raw, the measurement is under every floor a
+// caller copied out of a listing, so the same physical card clears the floor
+// while a provider is renting it and is struck out RESOURCE_INSUFFICIENT the
+// moment Mercator enrolls it.
 //
-// Rounding up to the whole gibibyte is the conversion because the reserved
-// region is exactly what the rounding covers: no card ships with a fractional
-// gibibyte of memory, so the next whole gibibyte at or above the framebuffer is
-// the capacity the part was built with. It is deliberately not a tolerance in
-// the comparison, which would loosen every floor including the ones a caller
-// wrote against a real measurement; this restates one publisher's number in the
-// other's unit, once, where the measurement is read.
-func CardMemoryBytes(framebufferMiB int64) int64 {
+// The conversion is to the capacity the part is sold with, which is what the
+// list above holds, and it is bounded: a measurement with no sold capacity
+// within an eighth of it is published at the whole gibibyte, because a part
+// this package has never heard of is better stated a little low than restated
+// as a bigger card. It is deliberately not a tolerance in the comparison, which
+// would loosen every floor including the ones a caller wrote against a real
+// measurement; this restates one publisher's number in the other's unit, once,
+// where the measurement is read.
+//
+// A partition is not a card and is left as measured. A MIG instance is sold in
+// slices of a board, and its name says so; rounding one up published a
+// 1g.10gb instance measuring 9856MiB as a 10 GiB device, which admits a Run
+// that asked for 10 GiB onto less than it asked for and kills it on capacity
+// Mercator already paid for.
+func CardMemoryBytes(model string, framebufferMiB int64) int64 {
 	if framebufferMiB <= 0 {
 		return 0
 	}
 	measured := framebufferMiB * mebibyte
+	if isPartition(model) {
+		return measured
+	}
+	for _, capacity := range soldCapacitiesGiB {
+		sold := capacity * gibibyte
+		if sold >= measured && (sold-measured)*soldCapacityHeadroom <= sold {
+			return sold
+		}
+	}
 	return (measured + gibibyte - 1) / gibibyte * gibibyte
+}
+
+// isPartition reports whether this is a slice of a board rather than a board.
+// nvidia-smi names a MIG instance after the profile it was cut to, so the name
+// is where the distinction is stated, and it is the only place it is stated:
+// the memory total alone cannot tell a partition from a small card.
+func isPartition(model string) bool {
+	return strings.Contains(strings.ToUpper(model), "MIG ")
 }
 
 var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
