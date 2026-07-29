@@ -2,6 +2,7 @@ package shadeform
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -71,9 +72,6 @@ func TestLaunchCreatesInstanceWithDockerConfigTagsAndAutoDelete(t *testing.T) {
 	}
 	if lc.DockerConfiguration.Args != "python train.py --epochs 10" {
 		t.Errorf("args = %q", lc.DockerConfiguration.Args)
-	}
-	if lc.DockerConfiguration.RegistryCredentials != nil {
-		t.Error("no registry credentials configured; none must be sent")
 	}
 	envs := map[string]string{}
 	for _, e := range lc.DockerConfiguration.Envs {
@@ -206,7 +204,14 @@ func TestLaunchShellQuotesArgsIntoOneString(t *testing.T) {
 	}
 }
 
-func TestLaunchPassesRegistryCredentialsFromConfig(t *testing.T) {
+// TestACreateBodyCarriesNoStandingRegistryAccount is the rule that replaced the
+// one above it. The adapter used to read a registry username and password out of
+// connection config, undeclared by its own manifest, and write them verbatim into
+// every create; Shadeform then wrote them onto the machine, where they outlived
+// every pull they were ever needed for. Content a machine fetches is authorised
+// by material Mercator mints for that fetch, so there is nothing standing here to
+// hand over.
+func TestACreateBodyCarriesNoStandingRegistryAccount(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
 	a := newTestAdapter(t, fake, map[string]string{"registry_username": "bot", "registry_password": "ghp_pat"})
@@ -214,9 +219,14 @@ func TestLaunchPassesRegistryCredentialsFromConfig(t *testing.T) {
 	if _, err := a.Launch(context.Background(), launchRequest()); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
-	creds := fake.creates[0].LaunchConfiguration.DockerConfiguration.RegistryCredentials
-	if creds == nil || creds.Username != "bot" || creds.Password != "ghp_pat" {
-		t.Fatalf("registry credentials = %+v", creds)
+	body, err := json.Marshal(fake.creates[0])
+	if err != nil {
+		t.Fatalf("read back the create body: %v", err)
+	}
+	for _, material := range []string{"bot", "ghp_pat", "registry_credentials"} {
+		if strings.Contains(string(body), material) {
+			t.Fatalf("the create body carries %q: %s", material, body)
+		}
 	}
 }
 

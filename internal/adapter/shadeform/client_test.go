@@ -148,11 +148,10 @@ func TestCreateFailureSanitizesAndBoundsResponseBody(t *testing.T) {
 	request := createRequest{LaunchConfiguration: &launchConfiguration{
 		Type: "docker",
 		DockerConfiguration: &dockerConfiguration{
-			Envs:                []envVar{{Name: "TOKEN", Value: "workload-secret"}},
-			RegistryCredentials: &registryCredentials{Username: "registry-user", Password: "registry-secret"},
+			Envs: []envVar{{Name: "TOKEN", Value: "workload-secret"}},
 		},
 	}}
-	body := `{"code":"INVALID_ARGUMENT","message":"secret-key workload-secret registry-secret registry-user","request":{"launch_configuration":"provider request payload"},"detail":"` + strings.Repeat("x", maxProviderResponseBodyBytes*2) + `"}`
+	body := `{"code":"INVALID_ARGUMENT","message":"secret-key workload-secret","request":{"launch_configuration":"provider request payload"},"detail":"` + strings.Repeat("x", maxProviderResponseBodyBytes*2) + `"}`
 	c := newTestClient(func(*http.Request) (*http.Response, error) {
 		return jsonResponse(http.StatusBadRequest, body), nil
 	})
@@ -166,7 +165,7 @@ func TestCreateFailureSanitizesAndBoundsResponseBody(t *testing.T) {
 	if !failure.ResponseTruncated || len(failure.ResponseBody) > maxProviderResponseBodyBytes {
 		t.Fatalf("response body was not bounded: len=%d truncated=%v", len(failure.ResponseBody), failure.ResponseTruncated)
 	}
-	for _, secret := range []string{"secret-key", "workload-secret", "registry-secret", "registry-user", "provider request payload"} {
+	for _, secret := range []string{"secret-key", "workload-secret", "provider request payload"} {
 		if strings.Contains(failure.ResponseBody, secret) {
 			t.Fatalf("sanitized response contains %q: %s", secret, failure.ResponseBody)
 		}

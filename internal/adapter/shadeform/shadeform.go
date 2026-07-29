@@ -62,8 +62,6 @@ type Adapter struct {
 	// MaxRuntimeSeconds. It is the reclamation backstop for a dead broker,
 	// not the run timeout — the janitor remains the primary cleanup.
 	maxLifetime time.Duration
-	regUser     string
-	regPass     string
 	now         func() time.Time
 }
 
@@ -99,8 +97,6 @@ func New(secret string, config map[string]string) (*Adapter, error) {
 		allowedClouds: allowed,
 		osOverride:    config["os"],
 		maxLifetime:   time.Duration(lifetimeHours) * time.Hour,
-		regUser:       config["registry_username"],
-		regPass:       config["registry_password"],
 		now:           time.Now,
 	}, nil
 }
@@ -191,9 +187,6 @@ func (a *Adapter) createRequestFor(ctx context.Context, req adapter.LaunchReques
 		Image: req.Image,
 		Args:  shellJoin(req.Args),
 		Envs:  launchEnvs(req),
-	}
-	if a.regUser != "" || a.regPass != "" {
-		docker.RegistryCredentials = &registryCredentials{Username: a.regUser, Password: a.regPass}
 	}
 	return createRequest{
 		Cloud:             cloud,

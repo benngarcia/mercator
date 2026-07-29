@@ -88,16 +88,16 @@ type envVar struct {
 	Value string `json:"value"`
 }
 
-type registryCredentials struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
+// dockerConfiguration is the one-shot execution product's own launch body.
+// There is no registry credential on it: a standing account written into every
+// create is the long-lived credential on a rented machine that this phase
+// forbids, and a machine Mercator holds fetches through material minted for one
+// pull. Private images on this lane wait for a seam that is not the recorded
+// launch intent (mercator#218).
 type dockerConfiguration struct {
-	Image               string               `json:"image"`
-	Args                string               `json:"args,omitempty"`
-	Envs                []envVar             `json:"envs,omitempty"`
-	RegistryCredentials *registryCredentials `json:"registry_credentials,omitempty"`
+	Image string   `json:"image"`
+	Args  string   `json:"args,omitempty"`
+	Envs  []envVar `json:"envs,omitempty"`
 }
 
 type launchConfiguration struct {

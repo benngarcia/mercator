@@ -25,7 +25,6 @@ import (
 func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	const (
 		apiKey         = "shadeform-api-secret"
-		registrySecret = "registry-secret"
 		workloadSecret = "workload-secret"
 	)
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -56,9 +55,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		AdapterType: "shadeform",
 		Authorized:  true,
 		Config: map[string]string{
-			"base_url":          provider.URL + "/v1",
-			"registry_username": "registry-user",
-			"registry_password": registrySecret,
+			"base_url": provider.URL + "/v1",
 		},
 		Credential: credential.Credential{Source: credential.SourceEnv, Ref: "SHADEFORM_API_KEY"},
 	}}}
@@ -118,7 +115,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		}
 	}
 	privateText := privateLog.String()
-	for _, secret := range []string{apiKey, registrySecret, workloadSecret, "Bearer " + apiKey} {
+	for _, secret := range []string{apiKey, workloadSecret, "Bearer " + apiKey} {
 		if strings.Contains(privateText, secret) {
 			t.Fatalf("private diagnostic leaked %q: %s", secret, privateText)
 		}
@@ -161,7 +158,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		t.Fatalf("public close = %#v", publicClosed)
 	}
 	publicJSON, _ := json.Marshal(publicEvents)
-	for _, private := range []string{"OUT_OF_STOCK", "response_body", apiKey, registrySecret, workloadSecret} {
+	for _, private := range []string{"OUT_OF_STOCK", "response_body", apiKey, workloadSecret} {
 		if strings.Contains(string(publicJSON), private) {
 			t.Fatalf("public events leaked %q: %s", private, publicJSON)
 		}

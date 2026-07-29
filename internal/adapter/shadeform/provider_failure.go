@@ -83,11 +83,7 @@ func (c *client) sanitizedResponseBody(request createRequest, result httpResult)
 func requestSecrets(apiKey string, request createRequest) []string {
 	secrets := []string{apiKey}
 	if launch := request.LaunchConfiguration; launch != nil && launch.DockerConfiguration != nil {
-		docker := launch.DockerConfiguration
-		if docker.RegistryCredentials != nil {
-			secrets = append(secrets, docker.RegistryCredentials.Username, docker.RegistryCredentials.Password)
-		}
-		for _, env := range docker.Envs {
+		for _, env := range launch.DockerConfiguration.Envs {
 			secrets = append(secrets, env.Value)
 		}
 	}
