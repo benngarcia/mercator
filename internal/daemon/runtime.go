@@ -168,17 +168,6 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if err := seedFirstWorkspace(ctx, storage.Workspaces()); err != nil {
 		return nil, fmt.Errorf("daemon: seed first workspace: %w", err)
 	}
-	// Local development mode has exactly one human by construction, and it is
-	// whoever started this process. Every workspace-scoped route checks
-	// membership, and the bootstrap workspace was created by the process rather
-	// than by a person, so without this the developer's own console is refused
-	// by their own server.
-	if cfg.LocalAuthEmail != "" {
-		if err := storage.Workspaces().GrantEveryWorkspace(ctx, cfg.LocalAuthEmail, workspace.RoleAdmin, time.Now().UTC()); err != nil {
-			return nil, fmt.Errorf("daemon: grant the local developer workspace membership: %w", err)
-		}
-	}
-
 	resolver := credential.NewResolver(cfg.Getenv, credentialStore, cfg.MasterKey)
 	connections, err := storage.Connections(resolver)
 	if err != nil {
@@ -278,7 +267,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		if authErr != nil {
 			return nil, fmt.Errorf("daemon: initialize local login: %w", authErr)
 		}
-		serverOptions = append(serverOptions, httpapi.WithWebAuth(authenticator))
+		serverOptions = append(serverOptions, httpapi.WithWebAuth(authenticator), httpapi.WithSoleOperator(cfg.LocalAuthEmail))
 	}
 
 	handler := httpapi.New(httpapi.Deps{

@@ -75,9 +75,19 @@ export MERCATOR_TLS_KEY_FILE=/etc/mercator/tls.key
 export MERCATOR_ADMIN_ADDR=127.0.0.1:8081
 ```
 
+Behind a reverse proxy or a tunnel the bind address stays loopback and
+`MERCATOR_PUBLIC_URL` is what says the deployment is reachable, so that topology
+needs the administrative address as well:
+
+```sh
+export MERCATOR_ADDR=127.0.0.1:8080
+export MERCATOR_PUBLIC_URL=https://mercator.example.com
+export MERCATOR_ADMIN_ADDR=127.0.0.1:8081
+```
+
 Workspace creation and archiving, node invitation, and sink delivery and replay
 answer on `MERCATOR_ADMIN_ADDR` and are not routed on `MERCATOR_ADDR` at all.
-See
+Forward the proxy to `MERCATOR_ADDR` only. See
 [authentication-workspaces.md](authentication-workspaces.md#administrative-surfaces).
 
 `serve` registers the Docker adapter type but starts with no connections.
@@ -98,7 +108,7 @@ server path.
 | Variable | Default | Use |
 | --- | --- | --- |
 | `MERCATOR_ADDR` | `127.0.0.1:8080` | Listen address. A non-loopback address requires TLS material; without it, startup fails. |
-| `MERCATOR_ADMIN_ADDR` | none | Listen address for the administrative operations. Required when `MERCATOR_ADDR` is not loopback; must name one interface rather than the wildcard. |
+| `MERCATOR_ADMIN_ADDR` | none | Listen address for the administrative operations. Required whenever this deployment is reachable beyond this host, which is either a non-loopback `MERCATOR_ADDR` or a `MERCATOR_PUBLIC_URL` naming anything but this machine. Must name one interface rather than the wildcard. |
 | `MERCATOR_TLS_CERT_FILE` | none | PEM certificate chain this process serves. Set it with `MERCATOR_TLS_KEY_FILE` or with neither. A file that cannot be read or parsed stops startup, naming the file. |
 | `MERCATOR_TLS_KEY_FILE` | none | PEM private key for that chain. |
 | `MERCATOR_SQLITE_DSN` | `$XDG_DATA_HOME/mercator/mercator.db`, else `~/.local/share/mercator/mercator.db` | SQLite event-log DSN. The directory is created at startup. The container image sets this to `file:/data/mercator.db`. |
@@ -149,7 +159,12 @@ prints it to the startup log.
 - Binding `MERCATOR_ADDR` to a non-loopback address requires
   `MERCATOR_TLS_CERT_FILE` and `MERCATOR_TLS_KEY_FILE`; without them the process
   refuses to start rather than serving plaintext. A TLS-terminating reverse
-  proxy in front of a loopback bind is still supported.
+  proxy in front of a loopback bind is still supported, and that topology needs
+  `MERCATOR_ADMIN_ADDR` too: point the proxy at `MERCATOR_ADDR` and leave the
+  administrative address unproxied. The bind address cannot tell the process
+  that a proxy faces the internet, so `MERCATOR_PUBLIC_URL` is what it reads
+  instead, and a deployment that announces one and names no administrative
+  address refuses to start.
 - A renewed certificate is read only at startup. Restart the process after
   renewal.
 - Mercator does not expose a secret vault. Put stable non-sensitive defaults in

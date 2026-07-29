@@ -12,6 +12,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/node"
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scheduler"
@@ -119,6 +120,100 @@ func TestAGrantedMemberReachesTheWorkspaceTheyWereGranted(t *testing.T) {
 	}
 }
 
+func TestAStrangerCannotCreateAWorkloadInAnothersWorkspace(t *testing.T) {
+	// Arrange
+	handler, _ := newTenantHandler(t)
+	workspaceID := createWorkspaceAs(t, handler, ana, "Ana's workspace")
+	body := `{"workspace_id":"` + workspaceID + `","workload_id":"wrk_squat","name":"squatted"}`
+
+	// Act
+	refused := createWorkloadAs(t, handler, brij, body, "idem_probe_1")
+
+	// Assert
+	if refused.Code != http.StatusForbidden {
+		t.Fatalf("a stranger creating a workload = %d, want 403: %s", refused.Code, refused.Body)
+	}
+	// The stream is opened at version 0, so a create that landed would have
+	// taken the id. Ana taking it afterwards is what proves none did.
+	byTheMember := createWorkloadAs(t, handler, ana, body, "idem_probe_2")
+	if byTheMember.Code != http.StatusAccepted {
+		t.Fatalf("the member creating the same workload = %d, want 202: %s", byTheMember.Code, byTheMember.Body)
+	}
+}
+
+func TestAStrangerCannotListAnothersNodes(t *testing.T) {
+	// Arrange
+	registry := node.NewRegistry(node.NewMemoryStore(), node.NewSigner(node.DeriveKey([]byte("test-master-key"))), "https://mercator.example.com")
+	handler, _ := newTenantHandler(t, WithNodes(registry))
+	workspaceID := createWorkspaceAs(t, handler, ana, "Ana's workspace")
+	inviteNode(t, registry, workspaceID, "nod_secret")
+
+	// Act
+	refused := requestAs(t, handler, brij, http.MethodGet, "/v1/nodes?workspace_id="+workspaceID, "")
+
+	// Assert
+	if refused.Code == http.StatusOK {
+		t.Fatalf("a stranger listing another tenant's nodes = 200: %s", refused.Body)
+	}
+	if bytes.Contains(refused.Body.Bytes(), []byte("nod_secret")) {
+		t.Fatalf("the refusal handed the stranger the inventory: %s", refused.Body)
+	}
+	listed := requestAs(t, handler, ana, http.MethodGet, "/v1/nodes?workspace_id="+workspaceID, "")
+	if listed.Code != http.StatusOK || !bytes.Contains(listed.Body.Bytes(), []byte("nod_secret")) {
+		t.Fatalf("the member listing their own nodes = %d: %s", listed.Code, listed.Body)
+	}
+}
+
+func TestAStrangerCannotInviteANodeIntoAnothersWorkspace(t *testing.T) {
+	// Arrange
+	registry := node.NewRegistry(node.NewMemoryStore(), node.NewSigner(node.DeriveKey([]byte("test-master-key"))), "https://mercator.example.com")
+	handler, _ := newTenantHandler(t, WithNodes(registry))
+	workspaceID := createWorkspaceAs(t, handler, ana, "Ana's workspace")
+	invitation := `{"workspace_id":"` + workspaceID + `","node_id":"nod_intruder","rental_id":"rnt_intruder","shadow_price_usd_per_hour":1.5}`
+
+	// Act
+	refused := requestAs(t, handler, brij, http.MethodPost, "/v1/nodes", invitation)
+
+	// Assert
+	if refused.Code == http.StatusCreated {
+		t.Fatalf("a stranger inviting a node into another tenant's workspace = 201: %s", refused.Body)
+	}
+	if bytes.Contains(refused.Body.Bytes(), []byte("enrollment_token")) {
+		t.Fatalf("the refusal handed the stranger enrollment material: %s", refused.Body)
+	}
+	records, err := registry.List(t.Context(), workspaceID)
+	if err != nil {
+		t.Fatalf("list nodes: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("the refused invitation left %d node(s) in the workspace: %+v", len(records), records)
+	}
+}
+
+func createWorkloadAs(t *testing.T, handler http.Handler, subject, body, idempotencyKey string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer cli:"+subject)
+	request.Header.Set("Idempotency-Key", idempotencyKey)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func inviteNode(t *testing.T, registry *node.Registry, workspaceID, nodeID string) {
+	t.Helper()
+	if _, err := registry.Invite(t.Context(), node.Invitation{
+		WorkspaceID:           workspaceID,
+		NodeID:                nodeID,
+		RentalID:              "rnt_" + nodeID,
+		Generation:            1,
+		ShadowPriceUSDPerHour: 1.5,
+	}); err != nil {
+		t.Fatalf("invite node: %v", err)
+	}
+}
+
 func TestTheInstanceCredentialIsNotScopedToAWorkspace(t *testing.T) {
 	// Arrange
 	handler, _ := newTenantHandler(t)
@@ -133,6 +228,26 @@ func TestTheInstanceCredentialIsNotScopedToAWorkspace(t *testing.T) {
 	// Assert
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("the instance credential = %d, want 200: %s", recorder.Code, recorder.Body)
+	}
+}
+
+func TestTheSoleOperatorOfADevelopmentServerIsNotScopedToAWorkspace(t *testing.T) {
+	// Arrange: `serve --dev` authenticates exactly one human, who is the
+	// deployment's own operator and already holds its bearer token.
+	handler, _ := newTenantHandler(t, WithSoleOperator(brij))
+	workspaceID := createWorkspaceAs(t, handler, ana, "Ana's workspace")
+
+	// Act
+	byTheSoleOperator := getRunsAs(t, handler, brij, workspaceID)
+
+	// Assert
+	if byTheSoleOperator.Code != http.StatusOK {
+		t.Fatalf("the sole operator reading a workspace = %d, want 200: %s", byTheSoleOperator.Code, byTheSoleOperator.Body)
+	}
+	// Nobody else is unscoped by it, including on the same server.
+	stranger := getRunsAs(t, handler, "cleo@example.com", workspaceID)
+	if stranger.Code != http.StatusForbidden {
+		t.Fatalf("another human on a sole-operator server = %d, want 403: %s", stranger.Code, stranger.Body)
 	}
 }
 

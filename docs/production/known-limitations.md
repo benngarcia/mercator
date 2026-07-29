@@ -27,9 +27,15 @@ limits.
   recorded. A workspace created by the bearer token, by the bootstrap seed, or
   by the event-history backfill therefore has a machine principal as its only
   admin: no human is a member, and every human is refused there until an
-  operator inserts a row. `mercator serve --dev` is the exception and grants the
-  local developer admin everywhere on startup, because that mode has exactly one
-  human by construction.
+  operator inserts a row. `mercator serve --dev` is the exception: its one human
+  is the deployment's own operator, unscoped by membership, because that mode has
+  exactly one human by construction and hands them the instance bearer token
+  anyway.
+- `GET /v1/nodes` and `POST /v1/nodes` refuse a non-member with `400` carrying
+  the code `WORKSPACE_FORBIDDEN`, because neither declares `403` in the API
+  contract and this branch does not regenerate it. The refusal is the same one
+  every other workspace-scoped route makes; only the status differs
+  ([#222](https://github.com/benngarcia/mercator/issues/222)).
 - Memberships carry a role, `admin` or `member`, and no operation checks which
   one a subject holds. Archiving a workspace is the operation that should be
   admin-only, and its declared response set has no `403`, so saying "you are a
@@ -343,7 +349,10 @@ on that host and still hold.
 
 ## GA Documentation Gaps
 
-- Deployment topology with a reverse proxy in front of a loopback bind.
+- Deployment topology with a reverse proxy in front of a loopback bind. The
+  administrative-listener half of it is now documented and enforced
+  ([install-configuration.md](install-configuration.md)); what remains is the
+  proxy's own configuration, header handling, and timeouts.
 - Key-management procedure beyond the rotation command
   ([security-model.md](security-model.md#master-key-and-rotation)): where the
   master key lives, who can read it, and how a leak is detected.

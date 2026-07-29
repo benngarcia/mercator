@@ -74,8 +74,10 @@ type workspaceError struct {
 // partition durable event history; server configuration never supplies or
 // authorizes one on the caller's behalf.
 //
-// Every workspace-scoped operation reaches its workspace through here, so this
-// is the single place tenancy is decided.
+// Every operation that names a workspace reaches it through here, and archiving
+// a workspace names it in the path and asks refuseNonMember directly. Those two
+// are the whole of where tenancy is decided; a handler that reads a workspace id
+// off the request itself is a hole, and two of them were.
 func (s *Server) resolveWorkspace(ctx context.Context, bodyWorkspaceID, queryWorkspaceID string) (string, *workspaceError) {
 	workspaceID := bodyWorkspaceID
 	if workspaceID == "" {

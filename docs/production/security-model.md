@@ -21,11 +21,18 @@ evaluation. It is not a GA security assurance statement.
 - A workspace is the tenancy boundary. The machine bearer token is the instance
   credential and reaches every workspace; a human reaches only the workspaces
   they are a member of, refused everywhere else by the one chokepoint every
-  workspace-scoped route resolves its workspace through.
+  workspace-scoped route resolves its workspace through. The two node routes
+  refuse a non-member with `400 WORKSPACE_FORBIDDEN` rather than `403`, because
+  neither declares `403` in the API contract
+  ([#222](https://github.com/benngarcia/mercator/issues/222)). `serve --dev`
+  authenticates one human who is the deployment's own operator, and that subject
+  is not scoped to memberships.
 - Creating a tenant, inviting a machine, and forcing a sink to deliver answer on
   the administrative listener named by `MERCATOR_ADMIN_ADDR` and are not routed
-  on the public one. That variable is required whenever `MERCATOR_ADDR` is not
-  loopback.
+  on the public one. That variable is required whenever this deployment is
+  reachable beyond this host: a non-loopback `MERCATOR_ADDR`, or a
+  `MERCATOR_PUBLIC_URL` naming anything but this machine, which is the reverse
+  proxy topology.
 - Health, OpenAPI, and (without OIDC) the UI shell are public on the listen
   interface. With OIDC configured, unauthenticated console loads redirect to
   the login flow.
@@ -70,20 +77,25 @@ export MERCATOR_TLS_KEY_FILE=/etc/mercator/tls.key    # PEM private key
 The listener floors at TLS 1.2 and offers `h2` ahead of `http/1.1` through
 ALPN, so an HTTP/2 client gets HTTP/2. A modern client negotiates TLS 1.3.
 
-Three absences stop startup rather than degrading the listener:
+Four absences stop startup rather than degrading the listener:
 
 | Situation | Result |
 | --- | --- |
 | A configured certificate or key file cannot be read or parsed | Startup fails naming the file |
 | One of the two variables is set and the other is not | Startup fails naming the missing variable |
 | `MERCATOR_ADDR` is not a loopback address and no TLS material is configured | Startup fails naming both variables |
+| This deployment is reachable beyond this host and `MERCATOR_ADMIN_ADDR` is unset | Startup fails naming which fact made it reachable |
 
 The last rule replaces a warning that was logged before serving plaintext
 anyway. A warning in a startup log is not a security control.
 
 Terminating TLS in front of Mercator with a proxy is still supported. Bind
 `MERCATOR_ADDR` to loopback and point the proxy at it; a loopback listener may
-serve plaintext because nothing off the host can reach it.
+serve plaintext because nothing off the host can reach it. That topology still
+needs `MERCATOR_ADMIN_ADDR`, because the proxy makes the loopback bind reachable
+from the internet and the administrative routes must not be among what it
+forwards. Startup refuses a deployment that announces `MERCATOR_PUBLIC_URL` and
+names no administrative address.
 
 The three rules above are `mercator serve`'s. They are enforced in the process
 entrypoint against `MERCATOR_ADDR`, not in the server itself, and `mercator

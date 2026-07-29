@@ -152,15 +152,26 @@ func (s *Server) authenticate(r *http.Request) (principal, bool) {
 		}
 		if s.webauth != nil {
 			if email, ok := s.webauth.VerifyCLIToken(token); ok {
-				return principal{Subject: email, Kind: principalHuman}, true
+				return s.humanPrincipal(email), true
 			}
 		}
 		return principal{}, false
 	}
 	if s.webauth != nil {
 		if email, ok := s.webauth.SessionEmail(r); ok {
-			return principal{Subject: email, Kind: principalHuman}, true
+			return s.humanPrincipal(email), true
 		}
 	}
 	return principal{}, false
+}
+
+// humanPrincipal is what a signed-in email acts as. Ordinarily a human, scoped
+// to the workspaces they are a member of. On a deployment whose only human is
+// its operator (see WithSoleOperator), that person is the deployment acting as
+// itself and is scoped to nothing narrower.
+func (s *Server) humanPrincipal(email string) principal {
+	if s.soleOperator != "" && email == s.soleOperator {
+		return principal{Subject: email, Kind: principalInstance}
+	}
+	return principal{Subject: email, Kind: principalHuman}
 }

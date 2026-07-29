@@ -44,13 +44,6 @@ func (m Membership) validate() error {
 	if strings.TrimSpace(m.WorkspaceID) == "" {
 		return fmt.Errorf("workspace: membership workspace_id is required")
 	}
-	return m.validateStanding()
-}
-
-// validateStanding checks everything about a standing except which workspace it
-// is in, which is what a grant made across the whole catalog leaves to the
-// catalog to supply.
-func (m Membership) validateStanding() error {
 	if strings.TrimSpace(m.Subject) == "" {
 		return fmt.Errorf("workspace: membership subject is required")
 	}

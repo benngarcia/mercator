@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workspace"
@@ -54,13 +53,18 @@ func TestTheMemberBackfillIsIdempotentAndKeepsLaterGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open storage: %v", err)
 	}
-	if err := store.Workspaces().Grant(ctx, workspace.Membership{
-		WorkspaceID: "ws_research",
-		Subject:     "brij@example.com",
-		Role:        workspace.RoleMember,
-		GrantedAt:   mustTime(t, "2026-07-01T09:00:00Z"),
-	}); err != nil {
-		t.Fatalf("grant membership: %v", err)
+	// The later grant that constrains this is one on the row the backfill would
+	// write again: ws_research was created by Ana, so a re-run inserts her as its
+	// admin. Standing her down to member is the change a second backfill must
+	// leave alone. Granting a stranger instead proves nothing, because the
+	// backfill never touches that row.
+	for _, later := range []workspace.Membership{
+		{WorkspaceID: "ws_research", Subject: "ana@example.com", Role: workspace.RoleMember, GrantedAt: mustTime(t, "2026-07-01T09:00:00Z")},
+		{WorkspaceID: "ws_research", Subject: "brij@example.com", Role: workspace.RoleMember, GrantedAt: mustTime(t, "2026-07-01T09:00:00Z")},
+	} {
+		if err := store.Workspaces().Grant(ctx, later); err != nil {
+			t.Fatalf("grant membership: %v", err)
+		}
 	}
 
 	// Act
@@ -70,12 +74,14 @@ func TestTheMemberBackfillIsIdempotentAndKeepsLaterGrants(t *testing.T) {
 	}
 
 	// Assert
-	membership, err := reopened.Workspaces().MembershipOf(ctx, "ws_research", "brij@example.com")
-	if err != nil {
-		t.Fatalf("membership after reopen: %v", err)
-	}
-	if membership.Role != workspace.RoleMember {
-		t.Fatalf("role after reopen = %q, want %q", membership.Role, workspace.RoleMember)
+	for _, subject := range []string{"ana@example.com", "brij@example.com"} {
+		membership, err := reopened.Workspaces().MembershipOf(ctx, "ws_research", subject)
+		if err != nil {
+			t.Fatalf("membership of %s after reopen: %v", subject, err)
+		}
+		if membership.Role != workspace.RoleMember {
+			t.Fatalf("role of %s after reopen = %q, want %q", subject, membership.Role, workspace.RoleMember)
+		}
 	}
 }
 
@@ -136,37 +142,5 @@ func TestCreatingAWorkspaceMakesTheCreatorItsAdmin(t *testing.T) {
 	}
 	if membership.Role != workspace.RoleAdmin {
 		t.Fatalf("creator role = %q, want %q", membership.Role, workspace.RoleAdmin)
-	}
-}
-
-func TestGrantingEveryWorkspaceLeavesExistingStandingsAlone(t *testing.T) {
-	// Arrange
-	ctx := context.Background()
-	db := openFixtureDatabase(t, "workspaces_without_members.sql")
-	store, err := sqlitestore.New(ctx, db)
-	if err != nil {
-		t.Fatalf("open storage: %v", err)
-	}
-	catalog := store.Workspaces()
-
-	// Act
-	if err := catalog.GrantEveryWorkspace(ctx, "ana@example.com", workspace.RoleMember, time.Now().UTC()); err != nil {
-		t.Fatalf("grant every workspace: %v", err)
-	}
-
-	// Assert
-	research, err := catalog.MembershipOf(ctx, "ws_research", "ana@example.com")
-	if err != nil {
-		t.Fatalf("membership of the workspace Ana created: %v", err)
-	}
-	if research.Role != workspace.RoleAdmin {
-		t.Fatalf("Ana's standing in the workspace she created = %q, want it left at %q", research.Role, workspace.RoleAdmin)
-	}
-	platform, err := catalog.MembershipOf(ctx, "ws_platform", "ana@example.com")
-	if err != nil {
-		t.Fatalf("membership of the workspace Ana was granted: %v", err)
-	}
-	if platform.Role != workspace.RoleMember {
-		t.Fatalf("Ana's granted standing = %q, want %q", platform.Role, workspace.RoleMember)
 	}
 }

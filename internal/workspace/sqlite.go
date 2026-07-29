@@ -78,23 +78,6 @@ func (c *SQLiteCatalog) Grant(ctx context.Context, membership Membership) error 
 	return nil
 }
 
-// GrantEveryWorkspace gives one subject the same standing in every workspace
-// this database holds, leaving alone any workspace where they already have one.
-// It exists for the deployment that has exactly one human by construction, and
-// says so in one statement rather than by walking the catalog.
-func (c *SQLiteCatalog) GrantEveryWorkspace(ctx context.Context, subject string, role Role, at time.Time) error {
-	if err := (Membership{Subject: subject, Role: role, GrantedAt: at}).validateStanding(); err != nil {
-		return err
-	}
-	if _, err := c.db.ExecContext(ctx, `INSERT INTO workspace_members (workspace_id, subject, role, granted_at)
-		SELECT workspace_id, ?, ?, ? FROM workspaces
-		WHERE true
-		ON CONFLICT(workspace_id, subject) DO NOTHING`, subject, string(role), formatTime(at)); err != nil {
-		return fmt.Errorf("workspace: grant %s every workspace: %w", subject, err)
-	}
-	return nil
-}
-
 // MembershipOf answers what a subject may do in a workspace, and answers
 // ErrNotMember when the answer is nothing.
 func (c *SQLiteCatalog) MembershipOf(ctx context.Context, workspaceID, subject string) (Membership, error) {

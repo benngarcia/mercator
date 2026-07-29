@@ -52,6 +52,13 @@ ephemeral signing key, and establishes an HTTP-only SameSite=Lax session for
 bearer token remains available for the CLI and automation, and `--dev` cannot
 be combined with OIDC configuration.
 
+That one identity is the deployment's own operator rather than a tenant of it,
+so it is not scoped to workspace memberships: this mode has exactly one human by
+construction, and that human is already holding the instance bearer token the
+server printed to their terminal. Scoping their session would protect nothing
+and would refuse the developer the workspace their own server seeded. No other
+subject is unscoped, and no other mode has a sole operator.
+
 ## Configure OIDC Login (Optional)
 
 Any spec-compliant OIDC issuer works; Google is one common choice. Register an
@@ -117,6 +124,11 @@ credential, and expiry bounds the remaining lifetime of a copied token.
   membership, `GET /v1/workspaces` lists only their own, and archiving a
   workspace they cannot see answers `404 WORKSPACE_NOT_FOUND` rather than
   confirming it exists.
+- The two node routes are the exception in the code they answer with, not in
+  what they refuse. `GET /v1/nodes` and `POST /v1/nodes` ask the same membership
+  question and refuse a non-member, but neither declares `403` in the API
+  contract, so the refusal is `400` carrying the same `WORKSPACE_FORBIDDEN` code
+  ([#222](https://github.com/benngarcia/mercator/issues/222)).
 - The machine bearer token is the instance credential. It is the deployment
   acting as itself, so it is not scoped to a workspace and reaches all of them.
   CI, the CLI with `MERCATOR_API_TOKEN`, and internal automation keep working
@@ -142,8 +154,10 @@ does not have would:
 - `POST /v1/nodes` (node invitation)
 - `POST /v1/sinks/{id}/deliver` and `POST /v1/sinks/{id}/replay`
 
-The reads beside them stay public: listing workspaces, listing nodes, and
-reading sink status are what a console renders from.
+The reads beside them stay on the public listener: listing workspaces, listing
+nodes, and reading sink status are what a console renders from. Public listener
+does not mean public data. Listing workspaces answers only the caller's own, and
+listing nodes answers only a workspace the caller is a member of.
 
 ```sh
 export MERCATOR_ADDR='0.0.0.0:8443'
@@ -151,17 +165,21 @@ export MERCATOR_ADMIN_ADDR='127.0.0.1:8081'
 ./bin/mercator serve
 ```
 
-`MERCATOR_ADMIN_ADDR` is required whenever `MERCATOR_ADDR` is not loopback, and
-there is no permissive default: a public deployment that has not named one
-refuses to start. It must name one interface rather than the wildcard, because
+`MERCATOR_ADMIN_ADDR` is required whenever this deployment is reachable beyond
+this host, and there is no permissive default: a deployment that has not named
+one refuses to start. Two facts say it is reachable, and only the operator holds
+the second: `MERCATOR_ADDR` is not loopback, or `MERCATOR_PUBLIC_URL` names
+something other than this machine, which is the reverse proxy and tunnel
+topology where the bind address stays loopback and tells the process nothing.
+The administrative address must name one interface rather than the wildcard, because
 an administrative surface reachable on every interface is not a private one, and
 because the accepting listener's local address is what tells the two apart. Both
 listeners are served by one server with one certificate and one shutdown, so an
 administrative listener on a routable address is served over TLS like the public
 one.
 
-A loopback deployment that sets nothing serves every route on its single
-listener, which is what source development and `--dev` want.
+A loopback deployment that announces no public URL serves every route on its
+single listener, which is what source development and `--dev` want.
 
 ## Quick Checks
 

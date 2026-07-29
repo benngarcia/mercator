@@ -405,6 +405,52 @@ func TestServeRefusesAPublicAddressWithNoAdministrativeAddress(t *testing.T) {
 	}
 }
 
+func TestServeRefusesAProxiedLoopbackDeploymentWithNoAdministrativeAddress(t *testing.T) {
+	// Arrange: the documented reverse-proxy topology. The bind address tells
+	// this process nothing, because the proxy is what faces the internet.
+	env := map[string]string{
+		"MERCATOR_ADDR":       "127.0.0.1:0",
+		"MERCATOR_API_TOKEN":  "operator-token",
+		"MERCATOR_SECRET_KEY": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"MERCATOR_SQLITE_DSN": "file:" + t.Name() + "?mode=memory&cache=shared",
+		"MERCATOR_PUBLIC_URL": "https://mercator.example.com",
+		"MERCATOR_ADMIN_ADDR": "",
+	}
+	refusal := captureStandardLog(t)
+
+	// Act
+	exitCode := run(context.Background(), []string{"mercator", "serve"}, env, io.Discard, io.Discard)
+
+	// Assert
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1 from a proxied deployment with no administrative address", exitCode)
+	}
+	if !strings.Contains(refusal.String(), adminAddrVar) {
+		t.Fatalf("the refusal did not name %s: %s", adminAddrVar, refusal)
+	}
+}
+
+// captureStandardLog collects what startup refuses with. `serve` reports
+// configuration failures through the standard logger, which is where an
+// operator reads them from.
+func captureStandardLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	captured := &bytes.Buffer{}
+	stdlog.SetOutput(captured)
+	t.Cleanup(func() { stdlog.SetOutput(os.Stderr) })
+	return captured
+}
+
+func TestALoopbackDeploymentReportingToItselfNeedsNoAdministrativeAddress(t *testing.T) {
+	// Arrange, Act: a public URL naming this machine announces nothing.
+	exposure := publicExposure("127.0.0.1:8080", "http://127.0.0.1:8080")
+
+	// Assert
+	if exposure != "" {
+		t.Fatalf("exposure = %q, want none from a loopback deployment", exposure)
+	}
+}
+
 func TestABindAdministrativeListenerRefusesTheWildcard(t *testing.T) {
 	// Arrange, Act
 	_, err := bindListeners("127.0.0.1:0", "0.0.0.0:0")
@@ -449,6 +495,10 @@ func TestServeClosesStorageWhenOIDCDiscoveryFails(t *testing.T) {
 		"MERCATOR_OIDC_ALLOWED_DOMAIN": "example.com",
 		"MERCATOR_SESSION_KEY":         "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
 		"MERCATOR_PUBLIC_URL":          "https://mercator.example.com",
+		// Announcing a public URL is what makes this a deployment reachable from
+		// elsewhere, so it needs an administrative address to get as far as
+		// opening storage at all.
+		"MERCATOR_ADMIN_ADDR": "127.0.0.1:0",
 	}, &bytes.Buffer{}, &bytes.Buffer{})
 	if exitCode != 1 {
 		t.Fatalf("run() = %d, want 1", exitCode)

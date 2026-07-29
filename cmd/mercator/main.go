@@ -10,9 +10,11 @@ import (
 	stdlog "log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -105,12 +107,11 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	}
 	// Creating a tenant, inviting a machine and forcing a sink to deliver are
 	// not operations the audience of the public API has any business reaching.
-	// A deployment that exposes the API beyond this host must therefore say
-	// where those answer instead, and there is no address they answer on by
-	// default.
+	// A deployment that is reachable beyond this host must therefore say where
+	// those answer instead, and there is no address they answer on by default.
 	adminAddr := env[adminAddrVar]
-	if !isLoopback(addr) && adminAddr == "" {
-		stdlog.Printf("configure the administrative listener: MERCATOR_ADDR %s is not loopback, so %s must name a private address for workspace creation, node invitation and sink delivery", addr, adminAddrVar)
+	if exposure := publicExposure(addr, env[publicURLVar]); exposure != "" && adminAddr == "" {
+		stdlog.Printf("configure the administrative listener: %s, so %s must name a private address for workspace creation, node invitation and sink delivery", exposure, adminAddrVar)
 		return 1
 	}
 	listeners, err := bindListeners(addr, adminAddr)
@@ -203,8 +204,52 @@ func parseServeOptions(args []string) (serveOptions, error) {
 }
 
 // adminAddrVar names the private address the administrative operations answer
-// on. It is required whenever the public address is not loopback.
+// on. It is required whenever this deployment is reachable beyond this host.
 const adminAddrVar = "MERCATOR_ADMIN_ADDR"
+
+// publicURLVar is the base URL this deployment is reachable at from outside.
+// Nodes dial it and workloads report to it, and an operator behind a proxy or a
+// tunnel sets it while binding loopback.
+const publicURLVar = "MERCATOR_PUBLIC_URL"
+
+// publicExposure names the reason this deployment answers to something other
+// than this machine, and is empty when it does not. Two facts say so, and only
+// the operator holds the second one: a bind address that is not loopback says
+// it outright, and a public URL says it through whatever proxy or tunnel is
+// forwarding to a loopback bind, which the listening socket cannot see.
+//
+// The reason is a sentence rather than a boolean because it is what the refusal
+// tells the operator, and a refusal that cannot say which fact tripped it sends
+// them to the wrong variable.
+func publicExposure(addr, publicURL string) string {
+	if !isLoopback(addr) {
+		return fmt.Sprintf("MERCATOR_ADDR %s is not loopback", addr)
+	}
+	if announced := announcedHost(publicURL); announced != "" {
+		return fmt.Sprintf("%s %s announces this deployment at an address that is not this machine", publicURLVar, announced)
+	}
+	return ""
+}
+
+// announcedHost is the host a public URL announces, empty when the URL
+// announces nothing beyond this machine. A URL naming loopback is a
+// developer pointing reporting at their own process, not an exposure.
+func announcedHost(publicURL string) string {
+	trimmed := strings.TrimSpace(publicURL)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		// An unparseable public URL is not evidence that nothing is reachable.
+		return trimmed
+	}
+	host := parsed.Hostname()
+	if host == "" || host == "localhost" || net.ParseIP(host).IsLoopback() {
+		return ""
+	}
+	return host
+}
 
 // serverListeners are the sockets this process answers on. One http.Server
 // serves both, so one Shutdown drains both, and the two differ only in which
