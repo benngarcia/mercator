@@ -1,6 +1,13 @@
 package docker
 
-import "testing"
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/benngarcia/mercator/internal/domain"
+)
 
 func TestNormalizeArchMapsDockerArchToOCI(t *testing.T) {
 	cases := map[string]string{
@@ -189,4 +196,58 @@ func TestParseNvidiaSMIFactsRejectsGarbageAndEmpty(t *testing.T) {
 	if _, err := parseNvidiaSMIFacts(""); err == nil {
 		t.Fatal("expected error for empty nvidia-smi output (a probe that reports nothing is not a CPU-only fact)")
 	}
+}
+
+// TestIntegrationThisEndpointCountsItsOwnCardsAndNamesTheirDriver is the live
+// half of the GPU probe, against the daemon and the cards this suite is running
+// on.
+//
+// It is the case that would have caught the probe image. The NVIDIA container
+// runtime injects the host's own nvidia-smi and driver libraries into the
+// container it starts, and those are linked against glibc, so the probe run
+// inside busybox died with "error while loading shared libraries: libdl.so.2" on
+// every endpoint there has ever been. Nothing in the unit cases could see it:
+// they parse the output a working probe would have printed.
+//
+// The driver is asserted beside the cards because the offer now carries it. A
+// container that enumerated a card proves a loaded driver on the daemon's host,
+// which is what makes this endpoint answer a Run declaring facts:
+// ["nvidia_driver"] instead of sending its operator to go and look.
+func TestIntegrationThisEndpointCountsItsOwnCardsAndNamesTheirDriver(t *testing.T) {
+	if os.Getenv("MERCATOR_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set MERCATOR_DOCKER_INTEGRATION=1 to run live Docker adapter integration")
+	}
+	client := NewCLIClient("")
+	info, err := client.Info(context.Background())
+	if err != nil {
+		t.Fatalf("live docker info: %v", err)
+	}
+	if !info.HasNvidiaRuntime() {
+		t.Skip("this daemon registers no NVIDIA runtime, so no container it starts can be handed a card")
+	}
+
+	facts, err := client.AcceleratorFacts(context.Background())
+
+	if err != nil {
+		t.Fatalf("live GPU probe: %v", err)
+	}
+	if !facts.Established || facts.DriverVersion == "" {
+		t.Fatalf("a probe that ran against this host's cards reported %+v", facts)
+	}
+	cards := 0
+	for _, device := range facts.Devices {
+		if device.MemoryBytes%(1<<30) != 0 {
+			t.Errorf("this endpoint offers %s with %d bytes, which is not the whole gibibytes a listing publishes the same card in", device.Model, device.MemoryBytes)
+		}
+		cards += device.Count
+	}
+	if cards == 0 {
+		t.Fatal("a probe that answered listed no cards on a daemon with the NVIDIA runtime")
+	}
+	needsADriver := domain.HostRequirements{Facts: []domain.HostFact{domain.HostFactNvidiaDriver}}
+	offer := StandingOffer(DeriveIdentity("", ""), "", info, 0, facts, time.Now().UTC())
+	if refusals := offer.Host.Violations(needsADriver); len(refusals) != 0 {
+		t.Fatalf("an endpoint running driver %s was refused %+v", facts.DriverVersion, refusals)
+	}
+	t.Logf("this endpoint offers %d card(s) on driver %s: %+v", cards, facts.DriverVersion, facts.Devices)
 }

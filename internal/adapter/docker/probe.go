@@ -107,6 +107,16 @@ func (c *CLIClient) Info(ctx context.Context) (HostInfo, error) {
 // probes reuse the daemon's cached image.
 const diskProbeImage = "busybox:1.37"
 
+// acceleratorProbeImage runs the one-shot GPU probe container. It is not the
+// image above, and it cannot be. The NVIDIA container runtime injects the host's
+// own nvidia-smi and driver libraries into the container, and those are linked
+// against glibc: run inside busybox, which is musl, the injected binary dies
+// with "error while loading shared libraries: libdl.so.2". That is every
+// endpoint, so the probe this adapter builds its GPU inventory from could never
+// have succeeded anywhere, and the offer it produced advertised no cards on a
+// machine holding eight. A small glibc userland is the whole requirement.
+const acceleratorProbeImage = "debian:12-slim"
+
 // DiskFreeBytes measures the ephemeral disk actually available to workload
 // containers on the endpoint by running a one-shot probe container and reading
 // POSIX `df` of its root filesystem. A container's `/` sits on the daemon's
@@ -146,7 +156,7 @@ func (c *CLIClient) DiskFreeBytes(ctx context.Context) (int64, error) {
 func (c *CLIClient) AcceleratorFacts(ctx context.Context) (capability.AcceleratorFacts, error) {
 	stdout, stderr, err := c.runSplit(ctx,
 		"run", "--rm", "--network=none", "--gpus", "all", "--label", "mercator.probe=gpu_inventory",
-		diskProbeImage, "nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits")
+		acceleratorProbeImage, "nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits")
 	if err != nil {
 		return capability.AcceleratorFacts{}, fmt.Errorf("docker gpu probe: %w: %s", err, strings.TrimSpace(stderr))
 	}
