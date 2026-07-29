@@ -57,6 +57,22 @@ func (f *fakeShadeform) instanceByID(id string) *instance {
 	return nil
 }
 
+// ServeHTTP is the same marketplace over a real socket. A round tripper stands
+// in for the transport, and the transport is part of what a conformance case is
+// there to exercise, so the conformance case serves this rather than injecting
+// it.
+func (f *fakeShadeform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	response, err := f.RoundTrip(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = response.Body.Close() }()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
+}
+
 func (f *fakeShadeform) RoundTrip(r *http.Request) (*http.Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
