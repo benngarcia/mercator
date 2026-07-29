@@ -2160,6 +2160,21 @@ func TestThisMachinesCardsReachAPlacementAndAnOutgrownDriverDoesNot(t *testing.T
 	if offer.Resources.AcceleratorCount() < 1 {
 		t.Fatalf("this machine holds cards and offers %+v", offer.Resources.Accelerators)
 	}
+	// The unit a memory floor is written in. A caller copies memory_min_bytes out
+	// of a marketplace listing, which publishes the capacity the card is sold
+	// with, and this machine measures the framebuffer left after the driver's
+	// reserved region: this workstation's card is sold as 32GB and measures
+	// 32607MiB. Published raw, the same physical card clears the floor while a
+	// provider rents it and is struck out RESOURCE_INSUFFICIENT the moment
+	// Mercator enrolls it, which is the silent strike-out this slice exists to
+	// remove, on the lane phase 5 is about. Whole gibibytes is asserted rather
+	// than a number, because naming one would go stale the next time this host's
+	// card changes and no card ships with a fraction of a gibibyte.
+	for _, card := range offer.Resources.Accelerators {
+		if card.MemoryBytes%(1<<30) != 0 {
+			t.Fatalf("this machine offers %s with %d bytes, which is not the whole gibibytes a listing publishes the same card in", card.Model, card.MemoryBytes)
+		}
+	}
 	t.Logf("this node offers %d card(s) on driver %s supporting CUDA %s: %+v",
 		offer.Resources.AcceleratorCount(), offer.Host.Driver.Version, offer.Host.Driver.Capability, offer.Resources.Accelerators)
 

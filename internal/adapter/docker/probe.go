@@ -150,7 +150,11 @@ func (c *CLIClient) AcceleratorInventory(ctx context.Context) ([]domain.Accelera
 // (one line per physical GPU, memory in MiB) into accelerator inventory:
 // identical (name, memory) GPUs collapse into one entry with a count. The
 // canonical model id comes from the same gpunorm mapping the runpod adapter
-// uses, so a workload's ModelAnyOf matches the GPU regardless of provider.
+// uses, so a workload's ModelAnyOf matches the GPU regardless of provider, and
+// the memory goes through the same package for the same reason: a measured
+// framebuffer is a few hundred mebibytes under the capacity the marketplaces
+// list the same card at, and a floor copied from a listing would strike the card
+// out here while admitting it there.
 func parseNvidiaSMIInventory(output string) ([]domain.AcceleratorInventory, error) {
 	var inventory []domain.AcceleratorInventory
 	index := map[string]int{}
@@ -179,7 +183,7 @@ func parseNvidiaSMIInventory(output string) ([]domain.AcceleratorInventory, erro
 			Model:          name,
 			CanonicalModel: gpunorm.Canonical("NVIDIA", name),
 			Count:          1,
-			MemoryBytes:    memoryMiB * 1024 * 1024,
+			MemoryBytes:    gpunorm.CardMemoryBytes(memoryMiB),
 		})
 	}
 	if len(inventory) == 0 {

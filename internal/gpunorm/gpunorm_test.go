@@ -87,3 +87,32 @@ func TestNormalizeVendor(t *testing.T) {
 		}
 	}
 }
+
+// TestCardMemoryBytesStatesTheCapacityACardIsSoldWith is the second half of a
+// card's identity surviving the trip between publishers. A marketplace lists the
+// capacity the card is sold with and a vendor tool measures the framebuffer left
+// after the driver's reserved region, so a caller who copies memory_min_bytes
+// out of a listing was writing a floor the very same card fails once Mercator
+// enrolls it and measures for itself.
+func TestCardMemoryBytesStatesTheCapacityACardIsSoldWith(t *testing.T) {
+	for name, card := range map[string]struct {
+		framebufferMiB int64
+		listedAs       int64
+	}{
+		// Every pair here is a real `nvidia-smi --query-gpu=memory.total` figure
+		// beside what the marketplaces publish for the same part.
+		"an RTX 5090 sold as 32GB":      {framebufferMiB: 32607, listedAs: 32 << 30},
+		"an RTX 4090 sold as 24GB":      {framebufferMiB: 24564, listedAs: 24 << 30},
+		"an H100 SXM sold as 80GB":      {framebufferMiB: 81559, listedAs: 80 << 30},
+		"an H100 PCIe sold as 80GB":     {framebufferMiB: 81008, listedAs: 80 << 30},
+		"an A100 sold as 80GB":          {framebufferMiB: 81920, listedAs: 80 << 30},
+		"an A100 sold as 40GB":          {framebufferMiB: 40960, listedAs: 40 << 30},
+		"a machine that counted no MiB": {framebufferMiB: 0, listedAs: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := CardMemoryBytes(card.framebufferMiB); got != card.listedAs {
+				t.Errorf("CardMemoryBytes(%d MiB) = %d, want %d", card.framebufferMiB, got, card.listedAs)
+			}
+		})
+	}
+}

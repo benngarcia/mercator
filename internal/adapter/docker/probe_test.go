@@ -149,8 +149,12 @@ func TestParseNvidiaSMIInventoryCanonicalizesSingleGPU(t *testing.T) {
 	if gpu.CanonicalModel != "nvidia-rtx-5090" {
 		t.Errorf("CanonicalModel = %q, want nvidia-rtx-5090 (matches the runpod spelling)", gpu.CanonicalModel)
 	}
-	if want := int64(32607) * 1024 * 1024; gpu.MemoryBytes != want {
-		t.Errorf("MemoryBytes = %d, want %d (MiB * 1024 * 1024)", gpu.MemoryBytes, want)
+	// The capacity the card is sold with, which is what a caller's memory floor
+	// is copied out of a marketplace listing in. The framebuffer nvidia-smi
+	// measured is 32607MiB, a few hundred mebibytes under it, and published raw
+	// it strikes this card out of a floor written for this card.
+	if want := int64(32) << 30; gpu.MemoryBytes != want {
+		t.Errorf("MemoryBytes = %d, want %d (the 32GB this card is listed at)", gpu.MemoryBytes, want)
 	}
 }
 

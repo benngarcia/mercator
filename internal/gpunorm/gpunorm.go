@@ -12,13 +12,45 @@
 //
 // Granularity is model-level: memory/SKU variants of one marketing model share
 // a single id (e.g. A100 40GB and 80GB both map to "nvidia-a100"); callers
-// distinguish them via AcceleratorRequirement.MemoryMinBytes.
+// distinguish them via AcceleratorRequirement.MemoryMinBytes. That second half
+// of the identity has to survive the same trip across publishers as the first,
+// which is what CardMemoryBytes is for.
 package gpunorm
 
 import (
 	"regexp"
 	"strings"
 )
+
+const mebibyte = int64(1) << 20
+const gibibyte = int64(1) << 30
+
+// CardMemoryBytes states the memory of a card whose framebuffer a vendor tool
+// measured, in the unit the marketplaces publish the same card in.
+//
+// The two numbers are not the same number and never were. A marketplace lists
+// the capacity a card is sold with, and `nvidia-smi --query-gpu=memory.total`
+// reports the framebuffer left after the driver has held back its own reserved
+// region: this workstation's RTX 5090 is sold as 32GB and measures 32607MiB,
+// and an H100 sold as 80GB measures 81559MiB. Published raw, the measurement is
+// a few hundred mebibytes under every floor a caller copied out of a listing,
+// so the same physical card clears the floor while a provider is renting it and
+// is struck out RESOURCE_INSUFFICIENT the moment Mercator enrolls it.
+//
+// Rounding up to the whole gibibyte is the conversion because the reserved
+// region is exactly what the rounding covers: no card ships with a fractional
+// gibibyte of memory, so the next whole gibibyte at or above the framebuffer is
+// the capacity the part was built with. It is deliberately not a tolerance in
+// the comparison, which would loosen every floor including the ones a caller
+// wrote against a real measurement; this restates one publisher's number in the
+// other's unit, once, where the measurement is read.
+func CardMemoryBytes(framebufferMiB int64) int64 {
+	if framebufferMiB <= 0 {
+		return 0
+	}
+	measured := framebufferMiB * mebibyte
+	return (measured + gibibyte - 1) / gibibyte * gibibyte
+}
 
 var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 
