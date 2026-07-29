@@ -6021,22 +6021,44 @@ them apart. `Established` is the agent saying it looked, whatever it found, and
 `NodeFacts.Established` erases what an unestablished report happened to carry, so
 no reader downstream has two answers to choose between.
 
-What separates stated-false from silence is whether the vendor tool answered,
-and not whether the agent liked the answer. An `nvidia-smi` that ran and exited
-non-zero has established the thing Placement needs, which is that there is no
-working NVIDIA driver here: that is the stated-false case. An `nvidia-smi` this
-process could not run at all has established nothing about the hardware, and it
-is the silence, beside the third-party `NodeRuntime` that never implemented this.
+What separates stated-false from silence is the kernel, and not the vendor
+tool's exit status. What the tool establishes is what it printed: a machine whose
+`nvidia-smi` named a driver has one, and the cards it went on to list are the
+inventory. Every other outcome is this agent failing to reach an answer.
 
-The first cut of this slice collapsed the two, and the review round after it
-reversed that. `exec.ErrNotFound` is not a machine with no cards. It is the tool
-off this unit's `PATH`, or unreadable to this user, or wedged, and an 8xH100 box
-published as having established it has no driver is refused `CAPABILITY_MISMATCH
-facts.nvidia_driver`, which tells its operator to buy a different machine when
-the fix is one `PATH` entry. The slice hit this inside its own daemon fleet and
-answered it in the test rather than in the product. `-nvidia-smi` and
-`MERCATOR_NODE_NVIDIA_SMI` on `cmd/mercator-node` are the operator's half of that
-answer, matching `-docker` beside them.
+Reading a non-zero exit as the stated-false case was the third thing this slice
+got wrong about the same question, and the review round that caught it
+reproduced the harm on this workstation, whose driver works:
+
+    unshare -rm sh -c 'mount -t tmpfs none /dev && nvidia-smi --version'
+    -> NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA
+       driver.  (exit 9)
+
+A hardened unit with `PrivateDevices=yes`, and an agent in a container with only
+the docker socket mounted, are both in that execution context, and both give the
+same words and the same status a machine with no driver gives. Filed as the
+established negative, an 8xH100 box refuses every GPU Run with
+`CAPABILITY_MISMATCH facts.nvidia_driver` and tells its operator to buy a
+different machine, which is exactly the harm the round before it fixed for
+`exec.ErrNotFound`.
+
+So the kernel is asked. A loaded NVIDIA driver publishes its version under
+`/proc/driver/nvidia/version`, so a tool that failed beside a kernel holding the
+module is an agent that could not see what is there, and a tool that failed
+beside a kernel with no module is a machine that has established it runs no
+NVIDIA driver. A kernel this agent cannot read establishes nothing, which is what
+a host with no procfs is. `nodeagent.WithKernelReports` points the read at a
+stand-in, because hardware is the one thing a case cannot arrange and the kernel
+under it is the second: a case reading this host's own `/proc` would state one
+machine on the workstation it was written on and another on the build box. It
+also deletes a state: the tool's exit status no longer decides anything, so the
+three-way `smiAnswer` collapses into whether this agent got to ask.
+
+`exec.ErrNotFound` is still not a machine with no cards. It is the tool off this
+unit's `PATH`, or unreadable to this user, or wedged. The slice hit that inside
+its own daemon fleet and answered it in the test rather than in the product.
+`-nvidia-smi` and `MERCATOR_NODE_NVIDIA_SMI` on `cmd/mercator-node` are the
+operator's half of that answer, matching `-docker` beside them.
 
 The two calls also fail independently, and the driver is stated as soon as
 `--version` yields it. A card that has fallen off the bus answers `--version`
@@ -6046,29 +6068,65 @@ no driver and that it never stated one, in a single Booking Decision, which is
 exactly the distinction `domain.HostFacts` exists to keep. The cards it could not
 count are an empty inventory, which is the true answer for a card that is gone.
 
-Both calls are bounded, at three seconds with a one second reap delay, because
-`Facts` runs on the heartbeat select loop. That is the goroutine command work was
-deliberately moved off so nothing long-running could stop the heartbeats and have
-the control plane declare a healthy machine lost in the middle of the work it
-asked for, and this slice put a new external command directly onto it. An Xid 79
-puts `nvidia-smi` into a wait the kernel will not interrupt, so the SIGKILL behind
-the deadline lands on a process that cannot take it; `Cmd.WaitDelay` is what makes
-the bound real, and the heartbeat reports the silence while the good cards keep
-their workload.
+Both calls are bounded at three seconds, because `Facts` runs on the heartbeat
+select loop. That is the goroutine command work was deliberately moved off so
+nothing long-running could stop the heartbeats and have the control plane declare
+a healthy machine lost in the middle of the work it asked for, and this slice put
+a new external command directly onto it.
+
+The bound is this agent's own, and the earlier claim that `Cmd.WaitDelay` made it
+real was wrong. `os/exec`'s `Cmd.Wait` runs `c.Process.Wait()` as its first
+statement and only afterwards reads the watch result carrying the `WaitDelay`
+timer, so nothing in `os/exec` returns while the process is still there. An Xid
+79 puts `nvidia-smi` into an uninterruptible ioctl on `/dev/nvidiactl`, where the
+SIGKILL behind the deadline is a signal left pending on a process that never
+exits, and the heartbeat stops with seven good cards still running work. The call
+now runs on its own goroutine and the heartbeat waits on the deadline, so the
+report comes back whether or not the process ever does. `WaitDelay` stays for
+what it really does, which is keeping the abandoned call from holding a goroutine
+and a stdout pipe for the six hundred seconds the tool asked for.
+
+The regression case was defanged for the same reason and is now honest about what
+it arranges. Its stand-in trapped `TERM` and `INT`, which `SIGKILL` ignores, so
+the trap was inert; what held the call open was an orphaned grandchild on the
+stdout pipe, which is [go.dev/issue/23019](https://go.dev/issue/23019) and not the
+unkillable process the text described. The fixture spawns that orphan on purpose
+now, and the assertion is that the report comes back at the deadline rather than
+at the deadline plus the reap delay, so deleting the goroutine bound goes red. A
+process in `TASK_UNINTERRUPTIBLE` is not arrangeable from a test, which is why the
+bound is written so that no case has to arrange one.
 
 The memory a card states goes through `gpunorm.CardMemoryBytes`, for the reason
 its model name goes through `gpunorm.Canonical`. A marketplace lists the capacity
 a card is sold with and `--query-gpu=memory.total` measures the framebuffer left
-after the driver's reserved region: this workstation's RTX 5090 is sold as 32GB
-and measures 32607MiB. Published raw, a `memory_min_bytes` a caller copied out of
-a listing admitted the Shadeform 5090 and refused the enrolled 5090, which is the
-silent strike-out this slice exists to remove, on the lane phase 5 is about. The
-conversion is rounding up to the whole gibibyte rather than a tolerance in the
-comparison, which would loosen every floor including the ones written against a
-real measurement. `internal/adapter/docker`'s GPU probe published the same raw
-measurement and now shares the conversion. It closes the split for the parts
-whose marketing size is binary; an L40S is sold as a decimal 48GB and measures
-44.99GiB, which is a unit assumption on the Shadeform adapter's side and is
+after the driver and ECC have held their own regions back: this workstation's RTX
+5090 is sold as 32GB and measures 32607MiB. Published raw, a `memory_min_bytes` a
+caller copied out of a listing admitted the Shadeform 5090 and refused the
+enrolled 5090, which is the silent strike-out this slice exists to remove, on the
+lane phase 5 is about.
+
+Rounding up to the whole gibibyte was not the conversion. It covers a driver
+reserve of a few hundred mebibytes and leaves every part that holds ECC out of
+band a whole gibibyte short: a T4 is sold as 16GB and measures 15360MiB, which is
+exactly 15 GiB, and an L4 and an A10G sold as 24GB measure 23 GiB. All three are
+in `gpunorm`'s own alias table, and the pinned fixtures were an RTX 5090, an RTX
+4090, two H100s and two A100s, every one of which has a sub-gibibyte gap, so
+nothing could go red where the rule failed. The conversion is now to the capacity
+a part is sold with, from the list of capacities parts are sold in, and it is
+bounded: a measurement with no sold capacity within an eighth of it is published
+at the whole gibibyte, because a part `gpunorm` has never heard of is better
+stated a little low than restated as the next size up.
+
+A partition is not a card and is left as measured. A MIG `1g.10gb` instance
+measures about 9856MiB, and publishing it as 10 GiB admits a Run that asked for
+10 GiB onto less than it asked for, which is the same silent wrong answer in the
+other direction. `nvidia-smi` names a MIG instance after the profile it was cut
+to, so the model travels beside the measurement and the name is where the
+distinction is read. The conversion is still not a tolerance in the comparison,
+which would loosen every floor including the ones written against a real
+measurement. `internal/adapter/docker`'s GPU probe shares it. The remaining unit
+assumption is on the Shadeform adapter's side, where a listing's own number is
+read as binary, and it is
 [#231](https://github.com/benngarcia/mercator/issues/231).
 
 What an offer carries. `domain.HostFacts` is its own field on `OfferSnapshot`
@@ -6136,9 +6194,11 @@ failing world is one a test constructs.
 drives it: two rentals, one on a driver the image outgrew, and a Run that lands
 on the other.
 
-At L2, `TestANodeReportsTheCardsAndTheDriverUnderThem` and
-`TestAMachineWithNoDriverEstablishesThatItHasNone` drive the real agent against a
-scripted vendor tool, because hardware is the one thing a case cannot arrange.
+At L2, `TestANodeReportsTheCardsAndTheDriverUnderThem`,
+`TestAMachineWithNoDriverEstablishesThatItHasNone` and
+`TestAnAgentThatCannotSeeTheDriverEstablishesNothing` drive the real agent
+against a scripted vendor tool and a stand-in `/proc`, because hardware is the
+one thing a case cannot arrange and the kernel under it is the second.
 
 At L3, on this workstation, the live half ran. `TestThisMachineReportsItsOwnCardsAndDriver`
 checks the real agent against `nvidia-smi` asked directly, and
@@ -6162,24 +6222,81 @@ that every card the node offers states a whole number of gibibytes, which is the
 unit a marketplace floor is written in; asserting a number instead would go stale
 the next time this host's card changes.
 
-What is still missing, and it is the provider lane rather than this one. Nothing
-in `internal/adapter` writes `OfferSnapshot.Host`: `internal/node/offers.go` is
-the only production writer of `domain.HostFacts`, so a Run declaring
-`min_driver_version` or `facts: ["ssh"]` is refused `UNKNOWN_FACT` on every
-Shadeform, RunPod, Vast, and Docker offer and can only ever be satisfied by an
-enrolled node. That refusal is the true answer for a catalog that publishes no
-driver version, and `ssh` is deliberately a provider's promise about a machine
-nobody has allocated yet, which is where the corpus states it. It is a gap in
-coverage rather than a defect in the rule, and it is
+`Established` reaching only the facts half of the offer was the blocking defect
+of the round after that, and it is the one that mattered most. A node whose agent
+could not run the vendor tool published `Resources.Accelerators` as an empty list
+with no flag beside it, and `Resources` is where the count, the model, and the
+memory floor are read: a Run declaring `resources.accelerators [{count: 8,
+model_any_of: ["nvidia-a100"]}]` was refused `RESOURCE_INSUFFICIENT` on the
+machine holding the cards, and only a Run that separately declared
+`facts: ["nvidia_driver"]` ever reached the silence. No GPU Run is written that
+way. `ResourceInventory.AcceleratorsKnown` now travels beside the list the way
+`EphemeralDiskKnown` travels beside the room, every publisher states it, and the
+scheduler asks it the way it asks the disk: `UNKNOWN_FACT` against a machine
+nobody counted, `RESOURCE_INSUFFICIENT` against a machine that counted and came
+up short.
+
+The Docker lane publishes host facts now, and the claim that it was a catalog
+with nothing to say was wrong. Its GPU probe enumerates the cards by running a
+container with `--gpus all`, which is the same act a Run's own container
+performs and which no endpoint without a loaded NVIDIA driver can complete, so a
+probe that listed the cards has established the driver behind them in the pass
+that built the offer. It asks for `driver_version` in the same query and returns
+the same `capability.AcceleratorFacts` an enrolled node reports, so one
+vocabulary states what a machine established about its cards on both lanes. A
+daemon that answered and registered no NVIDIA runtime cannot hand a container a
+card, which is an inventory of none somebody took; a daemon nobody could reach
+establishes nothing.
+
+That probe had also never worked. The NVIDIA container runtime injects the
+host's own `nvidia-smi` and driver libraries into the container it starts, and
+those are linked against glibc, so running them inside `busybox:1.37` dies with
+`error while loading shared libraries: libdl.so.2` on every endpoint there has
+ever been. Every Docker endpoint therefore advertised no cards whatever it was
+holding, and no unit case could see it, because they all parse the output a
+working probe would have printed. The GPU probe runs in `debian:12-slim` now; the
+disk probe keeps busybox, which is the right image for `df`.
+
+What is still missing on the provider lane. Nothing in `internal/adapter` outside
+`docker` writes `OfferSnapshot.Host`, so a Run declaring `min_driver_version` or
+`facts: ["ssh"]` is refused `UNKNOWN_FACT` on every Shadeform, RunPod, and Vast
+offer. That refusal is the true answer for a catalog that publishes no driver
+version, and `ssh` is deliberately a provider's promise about a machine nobody
+has allocated yet, which is where the corpus states it. It is a gap in coverage
+rather than a defect in the rule, and it is
 [#230](https://github.com/benngarcia/mercator/issues/230).
 
-`go build ./... && go vet ./... && go test ./...` is green. `go test -race
--count=1 ./internal/lab ./internal/scenario ./cmd/mercator` is green at 267.1s,
-7.7s, and 4.7s. The review round adds five cases to `internal/nodeagent`, each
-shown to fail against the code it corrects: a vendor tool that cannot be run
-establishing nothing, a driver surviving cards that could not be counted, a
-wedged tool not holding the report, a card stating the capacity it is sold with,
-and the whole-gibibyte arm of the live placement case.
+What is still missing on the node lane, which the round before this one wrongly
+implied was the covered one. Nothing in `internal/lab` or `internal/scenario`
+imports `internal/nodeagent`, and `node.NewRegistry` is wired only in
+`internal/daemon/runtime.go`, so neither simulated world runs the agent or
+`node.Registry.offer`: `lab/world.go` builds its offers itself and stands in for
+enrolment with its own `Invite`. Deleting the `Host` block from
+`internal/node/offers.go`, or `gpunorm.CardMemoryBytes` from `smiDevices`, leaves
+the whole Blueprint corpus green, and only the Go cases and the live daemon case
+catch it. The accelerator-knownness rule this round added is stated in the corpus
+because both worlds read `scenario.HostInventory`, which is where the flag is
+set; the writers above it are not. That is
+[#233](https://github.com/benngarcia/mercator/issues/233).
+
+`go build ./... && go vet ./... && go test ./...` is green. The corpus gains
+`a-machine-nobody-counted-is-not-a-machine-with-no-cards` as a green Blueprint
+and its arrival-driven copy under `internal/lab/testdata/blueprints`, so the Lab
+grades the refusal against
+`safety.a_silence_is_not_an_answer_about_capacity` rather than against a
+fixture's expectation. Reverting the scheduler clause turns the Blueprint red
+with `NO_CAPACITY_FITS` where it expects `CAPACITY_UNSTATED`, which is its
+deliberate failing case. The Lab found one more thing on its first run:
+`safety.decision_is_reproducible` failed because `CanonicalHash` hashed the Go
+value rather than the document it becomes, so a refusal carrying a struct in
+`Required` hashed one way where it was built and another where it was read back.
+It hashes the document now.
+
+On this host, the live half ran again and further: the real Docker daemon, the
+real RTX 5090, and the real driver, through both the node agent and the Docker
+adapter's own probe. `TestIntegrationThisEndpointCountsItsOwnCardsAndNamesTheirDriver`
+reports one card at 32 GiB on driver 595.71.05 and a Run needing an NVIDIA driver
+not refused there.
 
 ### Phase 5 the session a machine keeps
 
