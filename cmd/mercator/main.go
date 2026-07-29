@@ -49,6 +49,9 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	if len(args) > 1 && args[1] == "rekey" {
 		return runRekeyCommand(ctx, env, stdout, stderr)
 	}
+	if len(args) > 1 && args[1] == "backup" {
+		return runBackupCommand(ctx, args, env, stdout, stderr)
+	}
 	if len(args) > 1 && args[1] != "serve" {
 		return cli.Run(ctx, cli.Config{
 			BaseURL:     envValue(env, "MERCATOR_API_URL", ""),

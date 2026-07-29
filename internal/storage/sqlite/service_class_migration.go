@@ -72,39 +72,49 @@ var legacyObjectiveSites = []legacyObjectiveSite{
 	{"workload", "data_json", "$.revision.spec.placement.objective", "$.revision.spec.placement.service_class"},
 }
 
-// migrateLegacyPlacementObjectives rewrites the vocabulary and reports whether it
-// rewrote anything. The answer is what tells the read model derived from this log
-// that it is no longer derived from it: a projection is stored rather than
-// recomputed, so a Run whose events were rewritten underneath it keeps answering
-// in the vocabulary the rename deleted.
-func migrateLegacyPlacementObjectives(ctx context.Context, db *sql.DB) (bool, error) {
+// migrateLegacyPlacementObjectives rewrites the vocabulary, and in the same
+// transaction says that the read model derived from this log is no longer derived
+// from it. A projection is stored rather than recomputed, so a Run whose events
+// were rewritten underneath it keeps answering in the vocabulary the rename
+// deleted until something asks for a rebuild.
+//
+// Those two writes commit together because a process that dies between them
+// leaves no trace that either happened: the rewrite is idempotent and finds
+// nothing to do on the next boot, so a staleness mark that has not landed by then
+// never lands at all.
+func migrateLegacyPlacementObjectives(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("sqlite storage: begin service class migration: %w", err)
+		return fmt.Errorf("sqlite storage: begin service class migration: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if err := refuseOpenLegacyObjectives(ctx, tx); err != nil {
-		return false, err
+		return err
 	}
 	if err := refuseUnmappableObjectives(ctx, tx); err != nil {
-		return false, err
+		return err
 	}
 	if err := recordTheWeightsHistoryWasScoredAt(ctx, tx); err != nil {
-		return false, err
+		return err
 	}
 	rewritten := int64(0)
 	for _, site := range legacyObjectiveSites {
 		renamed, err := renameObjectiveToServiceClass(ctx, tx, site)
 		if err != nil {
-			return false, err
+			return err
 		}
 		rewritten += renamed
 	}
-	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("sqlite storage: commit service class migration: %w", err)
+	if rewritten > 0 {
+		if err := markRunProjectionStale(ctx, tx); err != nil {
+			return err
+		}
 	}
-	return rewritten > 0, nil
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite storage: commit service class migration: %w", err)
+	}
+	return nil
 }
 
 // refuseOpenLegacyObjectives stops the migration while a Run that stated an

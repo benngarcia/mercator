@@ -102,6 +102,100 @@ func TestOpenCompletesV052BookingDecisionMigration(t *testing.T) {
 	assertMigratedLegacyBooking(t, ctx, storage)
 }
 
+// TestAMigratedBookingDecisionAsksForARunProjectionRebuild is the other
+// migration that rewrites the events the Run projection is reduced from.
+//
+// The service class rename was the one this was noticed on, and closing it there
+// left the general statement untrue everywhere else: renaming a placement
+// decision to a booking decision rewrites the same events, on the same run
+// streams, and nothing marked the projection stale for it. The stored read model
+// kept answering with Runs reduced from an event type that no longer exists in
+// the log while RequiresRebuild called itself current, which is the identical
+// failure with no crash needed to reach it.
+func TestAMigratedBookingDecisionAsksForARunProjectionRebuild(t *testing.T) {
+	// Arrange: a pre-rename database whose projection sits at the current schema
+	// version, which is what every deployment's does before an upgrade. Its
+	// events already speak the service class vocabulary, so the rename under
+	// test is the only migration here with anything to rewrite and the only one
+	// that can be marking the projection stale.
+	ctx, db := openLegacyEventFixture(t)
+	if _, err := db.ExecContext(ctx, `
+		UPDATE events
+		SET data_json = json_remove(
+			json_set(data_json, '$.decision.policy.service_class', 'standard'),
+			'$.decision.policy.objective'
+		)
+	`); err != nil {
+		t.Fatalf("state the fixture in the current placement vocabulary: %v", err)
+	}
+	writeCurrentRunProjection(t, ctx, db)
+
+	// Act
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	// Assert
+	rebuild, err := storage.Runs().RequiresRebuild(ctx)
+	if err != nil {
+		t.Fatalf("inspect the Run projection: %v", err)
+	}
+	if !rebuild {
+		t.Fatal("the migration rewrote the log the Run projection is derived from and nothing asked for a rebuild")
+	}
+}
+
+// writeCurrentRunProjection puts the projection metadata a database that has
+// been serving carries into a fixture that predates it.
+//
+// The version it writes is read out of a database Mercator built rather than
+// written down here, so an arrangement that means "this deployment's projection
+// is current" cannot quietly stop meaning it the day the version changes.
+func writeCurrentRunProjection(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE run_projection_metadata (
+			singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+			schema_version INTEGER NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create the fixture's Run projection metadata: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO run_projection_metadata (singleton, schema_version) VALUES (1, ?)`,
+		currentRunProjectionVersion(t),
+	); err != nil {
+		t.Fatalf("mark the fixture's Run projection current: %v", err)
+	}
+}
+
+func currentRunProjectionVersion(t *testing.T) int {
+	t.Helper()
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "rebuilt.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	defer func() { _ = storage.Close() }()
+	if err := storage.Runs().MarkRebuilt(ctx); err != nil {
+		t.Fatalf("mark a freshly built Run projection: %v", err)
+	}
+	var version int
+	if err := db.QueryRowContext(ctx, `
+		SELECT schema_version FROM run_projection_metadata WHERE singleton = 1
+	`).Scan(&version); err != nil {
+		t.Fatalf("read the current Run projection version: %v", err)
+	}
+	return version
+}
+
 // TestOpenRenamesLegacyPlacementObjectives is the service class rename on
 // history. A Run that stated an objective carries a word nothing reads, in three
 // places: the public request, the private one, and the policy its Booking Decision

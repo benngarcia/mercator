@@ -6,6 +6,17 @@ import (
 	"fmt"
 )
 
+// migrateLegacyRunEvents renames a placement decision to the booking decision it
+// became, and synthesises the booking a decision taken before bookings existed
+// would have carried.
+//
+// Like the service class rename, it rewrites the run events the Run projection
+// is reduced from, so it says in the same transaction that the stored projection
+// is no longer derived from this log. Marking it separately would not survive a
+// process killed in between: the rewrite is idempotent and finds nothing to do
+// on the next boot, so a mark that has not landed by then never lands, and the
+// projection answers with a Run whose decision has no booking while
+// RequiresRebuild calls itself current for the life of the database.
 func migrateLegacyRunEvents(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -42,7 +53,7 @@ func migrateLegacyRunEvents(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("sqlite storage: cannot migrate open legacy placement decisions")
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	rewritten, err := tx.ExecContext(ctx, `
 		UPDATE events
 		SET event_type = 'compute.run.booking_decided.v1',
 		    data_json = CASE
@@ -67,8 +78,18 @@ func migrateLegacyRunEvents(ctx context.Context, db *sql.DB) error {
 		     AND COALESCE(json_extract(data_json, '$.decision.selected_offer_snapshot_id'), '') != ''
 		     AND json_type(data_json, '$.decision.booking') IS NULL
 		   )
-	`); err != nil {
+	`)
+	if err != nil {
 		return fmt.Errorf("sqlite storage: migrate run event names: %w", err)
+	}
+	renamed, err := rewritten.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite storage: count migrated run events: %w", err)
+	}
+	if renamed > 0 {
+		if err := markRunProjectionStale(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("sqlite storage: commit run event migration: %w", err)

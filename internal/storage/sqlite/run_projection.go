@@ -19,6 +19,17 @@ const createRuns = `CREATE TABLE IF NOT EXISTS runs (
 	PRIMARY KEY(workspace_id, run_id)
 )`
 
+// createRunProjectionMetadata is where the projection's staleness is recorded.
+// It is a separate statement from the projection's own table because a
+// migration that rewrites the log marks the projection stale from inside its
+// own transaction, and that migration may be the first thing a database ever
+// runs. Both callers create it; whichever of them runs first wins, and the
+// other finds it already there.
+const createRunProjectionMetadata = `CREATE TABLE IF NOT EXISTS run_projection_metadata (
+	singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+	schema_version INTEGER NOT NULL
+)`
+
 const runProjectionSchemaVersion = 1
 
 func migrateRuns(ctx context.Context, db *sql.DB) error {
@@ -31,12 +42,7 @@ func migrateRuns(ctx context.Context, db *sql.DB) error {
 	`); err != nil {
 		return fmt.Errorf("index Run projection: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS run_projection_metadata (
-			singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-			schema_version INTEGER NOT NULL
-		)
-	`); err != nil {
+	if _, err := db.ExecContext(ctx, createRunProjectionMetadata); err != nil {
 		return fmt.Errorf("migrate Run projection metadata: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, `
@@ -73,13 +79,27 @@ func (store *RunStore) RequiresRebuild(ctx context.Context) (bool, error) {
 // reduced from events that no longer exist in that form, and RequiresRebuild is
 // already the one question the daemon asks about it.
 //
-// It runs on the schema the projection migration creates, so it is asked after it
-// and never before.
-func markRunProjectionStale(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `
-		UPDATE run_projection_metadata
-		SET schema_version = 0
-		WHERE singleton = 1
+// It takes the transaction the rewrite is happening in rather than the database,
+// because the two facts are one fact. A process killed between a committed
+// rewrite and a separate staleness mark would boot into a projection answering in
+// a vocabulary the log no longer speaks, while the rewrite finds nothing left to
+// do and so never marks it stale again: the read model would stay wrong for the
+// life of the database with nothing able to notice.
+//
+// It carries the table it writes to rather than depending on a migration order
+// to have created it. The alternative was to run the projection's own migration
+// ahead of every migration that rewrites the log, which makes the order of
+// unrelated migrations load-bearing in a way nobody adding the next one can
+// see. The DDL is idempotent and the row is upserted, so this says the same
+// thing whether it runs before or after migrateRuns.
+func markRunProjectionStale(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, createRunProjectionMetadata); err != nil {
+		return fmt.Errorf("mark Run projection stale: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO run_projection_metadata (singleton, schema_version)
+		VALUES (1, 0)
+		ON CONFLICT(singleton) DO UPDATE SET schema_version = 0
 	`); err != nil {
 		return fmt.Errorf("mark Run projection stale: %w", err)
 	}

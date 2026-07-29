@@ -8,7 +8,27 @@ limits.
 
 - Single-process only; no multi-process leader election, failover, or replicated
   event log.
-- SQLite backup/restore is manual.
+- Backup is a command an operator runs. `mercator backup <path>` takes an online
+  copy of the database this deployment serves from, and nothing schedules it,
+  prunes old copies, reports when the last one succeeded, or checks that a copy
+  opens. A deployment whose cron entry is broken looks exactly like one that is
+  backing up correctly
+  ([#225](https://github.com/benngarcia/mercator/issues/225)).
+- Recovery is to the last backup. There is no continuous archiving and no
+  point-in-time recovery, so the exposure is everything written since
+  `mercator backup` last ran
+  ([#225](https://github.com/benngarcia/mercator/issues/225)).
+- Restore-critical state is in two places and only one of them is in the backup.
+  `mercator backup` copies the database. `MERCATOR_SECRET_KEY` is not in the
+  database, and a copy restored without it holds every event and no readable
+  provider credential. Backing up the key is the operator's, once, when they
+  generate it.
+- A commit is durable against power loss because SQLite's compiled-in
+  `synchronous` default is `FULL` under the driver this branch pins, not because
+  Mercator asks for it. Nothing sets the pragma and nothing asserts it, so a
+  driver upgrade could quietly downgrade every commit to "in the operating
+  system's cache" with no test failing
+  ([#226](https://github.com/benngarcia/mercator/issues/226)).
 - No schema migration runbook exists yet.
 - Health checks are shallow process/API checks.
 
