@@ -205,14 +205,18 @@ func (a *Adapter) ObserveCapacity(ctx context.Context, ref capability.CapacityRe
 		return capability.CapacityObservation{}, err
 	}
 	matches := matchingRental(instances, ref.RentalID)
-	for _, match := range matches {
-		if err := verifyOwnership(match, ref.OwnershipToken); err != nil {
-			return capability.CapacityObservation{}, err
-		}
-	}
 	observed, found := oldest(liveMatches(matches))
 	if !found {
 		observed, found = oldest(matches)
+	}
+	if found {
+		// Only the machine about to be reported on. A terminal record left by an
+		// earlier generation of this lease was held under that generation's token,
+		// and refusing the whole observation over it would leave the machine
+		// running now unobservable.
+		if err := verifyOwnership(observed, ref.OwnershipToken); err != nil {
+			return capability.CapacityObservation{}, err
+		}
 	}
 	if !found {
 		return capability.CapacityObservation{
@@ -333,11 +337,21 @@ func (a *Adapter) findLiveRental(ctx context.Context, rentalID, ownershipToken s
 	return held, true, nil
 }
 
+// receipt reports the machine as the provider's own record has it, which is why
+// the moment on it is the instance's rather than this adapter's clock. A
+// duplicate is a machine allocated before this command was sent, and dating it
+// now would put the whole of somebody else's acquisition inside whichever stage
+// the caller happens to be timing. A record with no moment falls back to this
+// one, because a receipt with a zero time is one no stage can be measured from.
 func (a *Adapter) receipt(held instance, duplicate bool) capability.CapacityReceipt {
+	acceptedAt := held.CreatedAt.UTC()
+	if acceptedAt.IsZero() {
+		acceptedAt = a.now().UTC()
+	}
 	return capability.CapacityReceipt{
 		NativeRef:  held.ID,
 		State:      capacityState(held.Status),
-		AcceptedAt: a.now().UTC(),
+		AcceptedAt: acceptedAt,
 		Duplicate:  duplicate,
 	}
 }

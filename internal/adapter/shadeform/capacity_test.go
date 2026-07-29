@@ -449,6 +449,37 @@ func TestObserveReportsAMachineThatLeftTheListingAsTerminated(t *testing.T) {
 	}
 }
 
+func TestObserveRefusesAMachineHeldUnderAnotherOwnershipToken(t *testing.T) {
+	fake := newFakeShadeform()
+	fake.addInstance(rentedInstance("inst_1", "rent_1", "ws_1", "someone-else", "active", fake.base))
+	adapter := newTestAdapter(t, fake, nil)
+
+	_, err := adapter.ObserveCapacity(context.Background(), capability.CapacityRef{
+		WorkspaceID: "ws_1", RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "ownership token") {
+		t.Fatalf("want a refusal naming the ownership conflict, got %v", err)
+	}
+}
+
+func TestProvisionReportsTheMomentTheProviderAllocatedTheMachine(t *testing.T) {
+	fake := newFakeShadeform()
+	fake.types = []instanceType{vmType()}
+	allocatedAnHourAgo := fake.base.Add(-time.Hour)
+	fake.addInstance(rentedInstance("inst_9", "rent_1", "ws_1", "own1", "active", allocatedAnHourAgo))
+	adapter := newTestAdapter(t, fake, nil)
+
+	receipt, err := adapter.ProvisionCapacity(context.Background(), provisionCommand())
+
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if !receipt.AcceptedAt.Equal(allocatedAnHourAgo) {
+		t.Fatalf("accepted at = %s, want the moment the machine was allocated rather than the moment this command asked", receipt.AcceptedAt)
+	}
+}
+
 func TestStopAndResumeAreRefusedRatherThanQuietlySucceeding(t *testing.T) {
 	adapter := newTestAdapter(t, newFakeShadeform(), nil)
 	command := capability.CapacityCommand{
