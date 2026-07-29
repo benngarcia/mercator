@@ -45,9 +45,10 @@ type ContentCredentialScope struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// Zero reports that nothing was minted. It is a real answer rather than a
-// missing one: a public image needs no credential, and a machine that presents
-// none for it is behaving correctly.
+// Zero reports that this scope states nothing. It is deliberately not what
+// "nothing was minted" means: material carrying no scope is the thing this file
+// exists to catch, so each credential below answers that question about the
+// whole of itself rather than about its bound alone.
 func (scope ContentCredentialScope) Zero() bool {
 	return scope == ContentCredentialScope{}
 }
@@ -92,6 +93,19 @@ type RegistryPull struct {
 	Secret   string `json:"secret"`
 }
 
+// Zero reports that nothing was minted for this pull. It is a real answer rather
+// than a missing one: a public image needs no credential, and a machine that
+// presents none for it is behaving correctly.
+//
+// It asks about the material as well as the bound, because a value that answered
+// on the bound alone would call a bare username and password "nothing minted"
+// and let the one case worth catching past every reader of this type: material
+// with no scope is the registry account under another name, and it has to be
+// visible to be refused.
+func (pull RegistryPull) Zero() bool {
+	return pull == RegistryPull{}
+}
+
 // ArtifactRead is one object-store read minted as a location. A presigned GET is
 // a bearer credential written as a URL, which is why it is modelled here beside
 // the registry material rather than as an address: anything holding it can read
@@ -105,4 +119,11 @@ type RegistryPull struct {
 type ArtifactRead struct {
 	ContentCredentialScope
 	Location string `json:"location"`
+}
+
+// Zero reports that nothing was minted for this read, on the same terms as a
+// pull: a signed location with no bound beside it is exactly what must not go
+// unnoticed, so the location counts.
+func (read ArtifactRead) Zero() bool {
+	return read == ArtifactRead{}
 }

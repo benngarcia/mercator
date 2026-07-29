@@ -183,6 +183,87 @@ func TestThisWorldServesAPrivatePullTheControlPlaneMintedFor(t *testing.T) {
 	}
 }
 
+// TestAnAccountHandedOverUnderAnotherNameIsRecordedAndCaught is the world state
+// the first clause of the rule exists for, and until this case existed the clause
+// could not be reached from any of them. The world recorded a credential only when
+// its scope was non-zero, so the one defect worth catching, a machine handed the
+// registry account itself with no operation, no workspace, no content and no
+// expiry, was filtered out before it was written down: the rule then iterated an
+// empty ledger and passed, and safety.secrets_absent never learned the string
+// either, so the same execution could have written the password into an event and
+// stayed green.
+//
+// Everything about the arrangement is the account. It is what a control plane
+// that reached for the material and skipped the mint would hand over, and it is
+// what a registry accepts, so nothing on the far side objects to it.
+func TestAnAccountHandedOverUnderAnotherNameIsRecordedAndCaught(t *testing.T) {
+	world := labWorldFor(t, "../scenario/scenarios/conformance/a-private-pull-uses-a-credential-that-expires.json")
+	item := adapter.PrepareItem{
+		Kind:            adapter.PrepareImage,
+		OfferSnapshotID: "builder",
+		RunID:           "run-analysis",
+		Image:           privatePullImage,
+	}
+	item.RegistryCredential = domain.RegistryPull{
+		Registry: domain.ReferenceRegistry(privatePullImage),
+		Username: "mercator-lab",
+		Secret:   pullSecret,
+	}
+
+	if _, err := world.Prepare(context.Background(), adapter.PrepareRequest{
+		WorkspaceID:  labWorkspace,
+		OperationKey: "prepare/unbounded",
+		Wanted:       []adapter.PrepareItem{item},
+	}); err != nil {
+		t.Fatalf("ask the machine to prepare the private image: %v", err)
+	}
+
+	handed := world.invariantFacts().ContentCredentials
+	if len(handed) != 1 {
+		t.Fatalf("the world recorded %d credentials, want the account it watched cross to a machine", len(handed))
+	}
+	if material := handed[0].Material; material != pullSecret {
+		t.Fatalf("the world recorded %q as the material, want the secret the machine was handed", material)
+	}
+	if err := contentCredentialsAreScopedAndExpiring(InvariantObservation{ContentCredentials: handed}); err == nil {
+		t.Fatal("a machine was handed a registry account with no bound of any kind and the rule passed")
+	}
+}
+
+// TestThisWorldsMachineRefusesToPresentMaterialWithNoBound is the other half of
+// that arrangement, and it is the machine's answer rather than the registry's.
+// A password registry checks the password and has never heard of an operation, a
+// workspace, a digest or an expiry, so the account above is material it would
+// serve; what refuses it is Mercator's own code on the node, and the world has to
+// model the two separately or it describes a registry that does not exist.
+func TestThisWorldsMachineRefusesToPresentMaterialWithNoBound(t *testing.T) {
+	world := labWorldFor(t, "../scenario/scenarios/conformance/a-private-pull-uses-a-credential-that-expires.json")
+	item := adapter.PrepareItem{
+		Kind:            adapter.PrepareImage,
+		OfferSnapshotID: "builder",
+		RunID:           "run-analysis",
+		Image:           privatePullImage,
+	}
+	item.RegistryCredential = domain.RegistryPull{
+		Registry: domain.ReferenceRegistry(privatePullImage),
+		Username: "mercator-lab",
+		Secret:   pullSecret,
+	}
+
+	receipt, err := world.Prepare(context.Background(), adapter.PrepareRequest{
+		WorkspaceID:  labWorkspace,
+		OperationKey: "prepare/unbounded",
+		Wanted:       []adapter.PrepareItem{item},
+	})
+
+	if err != nil {
+		t.Fatalf("ask the machine to prepare the private image: %v", err)
+	}
+	if len(receipt.Refused) != 1 {
+		t.Fatalf("the machine refused %d fetches, want the one it holds no bounded material for", len(receipt.Refused))
+	}
+}
+
 func mintedForThePull(now time.Time) contentCredential {
 	return contentCredential{
 		Kind:        adapter.PrepareImage,
