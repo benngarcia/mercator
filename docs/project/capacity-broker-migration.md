@@ -8708,7 +8708,7 @@ unset ([#228](https://github.com/benngarcia/mercator/issues/228)).
 ### Phase 6 security and durability verification
 
 On 2026-07-29, on an amd64 Linux workstation with 24 cores and a native Docker
-Engine, `beng/security-and-durability` at `55a3453` passed:
+Engine, `beng/security-and-durability` at `ca39e15` passed:
 
 ```text
 go build ./...
@@ -8756,3 +8756,18 @@ drive:
   have to create, and a memory-backed DSN. That a half-finished rotation cannot
   be observed is a property of the single transaction the re-seals commit in
   rather than a test that interrupts one.
+
+One defect reached CI and could not have been caught here. The Playwright
+console flow failed with `GET /v1/runs` and `GET /v1/console/events` both
+answering `403` to a console that had just signed in. A deployment that
+authenticates exactly one human creates its first workspace with the instance
+bearer token, so that human is a member of nothing, and the concession that
+makes them the deployment's own operator was expressed as a second option every
+wiring site had to remember to pass beside the authenticator. Three sites build
+a local authenticator and one of them remembered. The fact now lives on the
+authenticator itself, which every site already passes, and the option is
+deleted. The reproduction is kept as
+`TestTheConsoleSessionReachesTheWorkspaceTheInstanceTokenCreated`, which drives
+the real authenticator, a real session cookie and the real handler with no
+browser at all, so the next break of this class fails on a workstation
+([#197](https://github.com/benngarcia/mercator/issues/197) is why that matters).
