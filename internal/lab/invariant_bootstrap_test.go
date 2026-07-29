@@ -99,7 +99,8 @@ func TestABootstrapUsedOnceAndKeptNowhereHolds(t *testing.T) {
 func TestTheWorldHandsOneInvitationToTwoMachinesAndSaysSo(t *testing.T) {
 	ctx := context.Background()
 	world := labWorldFor(t, "../scenario/scenarios/conformance/a-machine-keeps-working-past-its-first-session.json")
-	bootstrap, err := world.Invite(ctx, node.Invitation{
+	registry := labRegistryFor(world)
+	bootstrap, err := registry.Invite(ctx, node.Invitation{
 		WorkspaceID:           labWorkspace,
 		NodeID:                renewingNode,
 		RentalID:              renewingLease,
@@ -149,7 +150,8 @@ func TestTheWorldHandsOneInvitationToTwoMachinesAndSaysSo(t *testing.T) {
 func TestThisWorldRefusesAnInvitationASecondMachineAlreadyRedeemed(t *testing.T) {
 	ctx := context.Background()
 	world := labWorldFor(t, "../scenario/scenarios/conformance/a-machine-keeps-working-past-its-first-session.json")
-	bootstrap, err := world.Invite(ctx, node.Invitation{
+	registry := labRegistryFor(world)
+	bootstrap, err := registry.Invite(ctx, node.Invitation{
 		WorkspaceID:           labWorkspace,
 		NodeID:                renewingNode,
 		RentalID:              renewingLease,
@@ -175,7 +177,9 @@ func TestThisWorldRefusesAnInvitationASecondMachineAlreadyRedeemed(t *testing.T)
 	}
 
 	world.setNow(world.now.Add(10 * time.Minute))
-	world.deliverEnrolments()
+	if err := world.deliverEnrolments(ctx, registry); err != nil {
+		t.Fatalf("deliver the enrolment: %v", err)
+	}
 
 	credentials := world.invariantFacts().BootstrapCredentials
 	if len(credentials) != 1 {
@@ -229,12 +233,12 @@ func TestEveryClauseOfTheSecretsRuleCanFail(t *testing.T) {
 	}
 }
 
-// supersededOnTheMachine is the credential a machine is holding that nothing
-// will accept: it reached a host, that host never redeemed it, and a later
-// invitation for the same identity took its place.
-func supersededOnTheMachine() bootstrapCredential {
+// refusedOnTheMachine is the credential a machine presented and the registry
+// would not take: it reached a host, that host offered it, and the one door it
+// has was shut.
+func refusedOnTheMachine() bootstrapCredential {
 	credential := mintedFor(1, 0)
-	credential.Superseded = true
+	credential.Refused = true
 	return credential
 }
 

@@ -330,7 +330,8 @@ func TestTheWorldRecordsTheGenerationTheAgentRedeems(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			world := labWorldFor(t, "../scenario/scenarios/conformance/provisioned-capacity-becomes-a-machine-mercator-holds.json")
-			bootstrap, err := world.Invite(ctx, node.Invitation{
+			registry := labRegistryFor(world)
+			bootstrap, err := registry.Invite(ctx, node.Invitation{
 				WorkspaceID:           labWorkspace,
 				NodeID:                "nod_disagreeing",
 				RentalID:              strandedRental,
@@ -354,7 +355,9 @@ func TestTheWorldRecordsTheGenerationTheAgentRedeems(t *testing.T) {
 			}
 
 			world.setNow(world.now.Add(10 * time.Minute))
-			world.deliverEnrolments()
+			if err := world.deliverEnrolments(ctx, registry); err != nil {
+				t.Fatalf("deliver the enrolment: %v", err)
+			}
 
 			err = enrolmentNamesTheGenerationItWasInvitedFor(handWrittenLedger(world.now, world.effectRecords()...))
 			if provisioned.holds && err != nil {
@@ -387,6 +390,13 @@ func labWorldFor(t *testing.T, path string) *simulatedWorld {
 		t.Fatalf("build the world: %v", err)
 	}
 	return world
+}
+
+// labRegistryFor is Mercator's own node registry over this world's clock, which
+// is the one an Execution wires in. A case that invited through anything else
+// would be stating what a copy does.
+func labRegistryFor(world *simulatedWorld) *labRegistry {
+	return newLabRegistry(node.NewMemoryStore(), world)
 }
 
 func provisionEffect(generation uint64) EffectRecord {

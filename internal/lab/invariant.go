@@ -173,7 +173,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{
 			id:          "liveness.lost_response_reconciliation",
 			assumptions: []string{"the provider preserves operation identity", "provider observation remains available"},
-			bound:       5 * time.Minute,
+			bound:       lostResponseBound,
 			check:       lostResponseReconciliation,
 		},
 		invariantRule{
@@ -2806,6 +2806,14 @@ func admittedRunProgress(observation InvariantObservation) error {
 	return nil
 }
 
+// lostResponseBound is how long an answer Mercator never got may stay
+// unreconciled. It is a bound and not an instant because reconciliation is the
+// next sweep's work rather than the failing call's: the deployment's loop
+// records what it could not settle and comes back, and a rule demanding the
+// answer inside the same moment would be a rule that no reconcile loop can keep
+// and that only a control plane asking again in the same breath ever passes.
+const lostResponseBound = 5 * time.Minute
+
 func lostResponseReconciliation(observation InvariantObservation) error {
 	runs := runsByID(observation.Runs)
 	active := map[string]bool{}
@@ -2828,7 +2836,13 @@ func lostResponseReconciliation(observation InvariantObservation) error {
 		if active[effect.CorrelationID] || run.ID != "" || settledLease[effect.CorrelationID] {
 			continue
 		}
-		return fmt.Errorf("lost response for %q has neither active consequence nor projected Run", effect.CorrelationID)
+		if unreconciled := observation.Now.Sub(effect.At); unreconciled <= lostResponseBound {
+			continue
+		}
+		return fmt.Errorf(
+			"lost response for %q has had neither active consequence nor projected Run for %s",
+			effect.CorrelationID, observation.Now.Sub(effect.At),
+		)
 	}
 	return nil
 }

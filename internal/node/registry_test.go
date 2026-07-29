@@ -828,6 +828,40 @@ func TestARetiredRuntimeIsAskedForNothingFurther(t *testing.T) {
 	}
 }
 
+// TestTheRegistryAnswersAboutANodeAndAGenerationTogether holds the one question
+// provisioning asks while a machine is being built: has the agent arrived. The
+// pair is what every act against a machine is addressed to, and answering
+// "enrolled, healthy" about a generation the identity is not on would be
+// answering about a machine that no longer exists.
+//
+// An identity nobody has heard from is not an error. A node invited and never
+// filled is exactly the state provisioning waits in.
+func TestTheRegistryAnswersAboutANodeAndAGenerationTogether(t *testing.T) {
+	registry, _ := newRegistry(t)
+	invite(t, registry)
+
+	invited, err := registry.EnrolledAt(context.Background(), capability.NodeRef{
+		WorkspaceID: testWorkspace, NodeID: testNode, Generation: 1,
+	})
+	if err != nil {
+		t.Fatalf("the generation this node was invited for was refused: %v", err)
+	}
+	if !invited.IsZero() {
+		t.Fatalf("a node nothing has enrolled on reads as though its agent had opened a session at %s", invited)
+	}
+
+	_, err = registry.EnrolledAt(context.Background(), capability.NodeRef{
+		WorkspaceID: testWorkspace, NodeID: testNode, Generation: 2,
+	})
+
+	if err == nil {
+		t.Fatal("a question about a generation this node is not on was answered rather than refused")
+	}
+	if !strings.Contains(err.Error(), "is generation 1, not 2") {
+		t.Fatalf("the refusal does not say which generation the node is on: %v", err)
+	}
+}
+
 // Helpers below keep each case to arrange, act, assert.
 
 const (

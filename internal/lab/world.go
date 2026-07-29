@@ -476,16 +476,13 @@ type simulatedWorld struct {
 	observed   map[string]hostState
 	observedAt time.Time
 	// leases is every machine this world holds under the capacity contract, keyed
-	// by the Rental it was allocated for, and invitations the node identities
-	// reserved for them. See capacity.go.
-	leases      map[string]*capacityLease
-	invitations map[string]*labInvitation
-	// credentials is every enrollment token this world ever minted, keyed by the
-	// token itself, and what became of each. It is kept apart from the invitations
-	// because an invitation holds only the credential it currently offers, and the
-	// question a rule about single use asks is about credentials nobody offers any
-	// more: a machine reinvited after a lost response holds one of those, and it is
-	// exactly the one that must never be redeemable twice.
+	// by the Rental it was allocated for. See capacity.go.
+	leases map[string]*capacityLease
+	// credentials is every enrollment token Mercator minted while this world was
+	// watching, keyed by the token itself, and what became of each. The registry
+	// keeps only a digest, deliberately, so this is the one place the material
+	// itself is known and the only thing a rule about a secret in the record can
+	// search for.
 	credentials map[string]*bootstrapCredential
 	// pulls is image content still moving onto a host.
 	pulls []pendingPull
@@ -618,7 +615,6 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		faults:             slices.Clone(tape.Faults),
 		usedFaults:         map[string]bool{},
 		leases:             map[string]*capacityLease{},
-		invitations:        map[string]*labInvitation{},
 		credentials:        map[string]*bootstrapCredential{},
 	}
 	for reference, image := range tape.InitialWorld.Images {

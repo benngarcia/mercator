@@ -357,7 +357,7 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		// machine redeemed it. The host is up, it is billing, and the only material
 		// it will ever present is one the registry no longer names.
 		"safety.a_machine_holds_material_the_control_plane_will_still_accept": func(observation *InvariantObservation) {
-			observation.BootstrapCredentials = []bootstrapCredential{supersededOnTheMachine()}
+			observation.BootstrapCredentials = []bootstrapCredential{refusedOnTheMachine()}
 		},
 		"safety.locality_provenance": func(observation *InvariantObservation) {
 			observation.World.Offers = []domain.OfferSnapshot{{

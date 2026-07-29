@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -50,6 +51,10 @@ type capacityLease struct {
 	// would resolve it on the next look without anything ever being asked twice.
 	Unlisted bool
 	Enrolled bool
+	// Refused is a machine whose agent presented its bootstrap and was turned
+	// away. It holds one credential and can be told nothing more, so the refusal
+	// is terminal for this machine rather than something it retries out of.
+	Refused bool
 	// SessionExpires is when the credential the agent on this machine currently
 	// holds stops authenticating anything. It is held per machine rather than per
 	// invitation because it outlives the invitation: the token that opened the
@@ -276,99 +281,94 @@ func (world *simulatedWorld) capacityProgressOf(lease *capacityLease) capacityPr
 	}
 }
 
-// Invite reserves the node identity a machine allocated for this Rental
-// generation will enrol under, and mints the material it redeems. The Lab is its
-// own registry here for the reason it is its own provider: what a Blueprint
-// states about a bootstrap has to be something this world performs rather than
-// something a second component performs beside it.
-func (world *simulatedWorld) Invite(_ context.Context, invitation node.Invitation) (capability.NodeBootstrap, error) {
-	world.mu.Lock()
-	defer world.mu.Unlock()
-	if invitation.NodeID == "" || invitation.RentalID == "" {
-		return capability.NodeBootstrap{}, fmt.Errorf("Lab invitation needs a node and a Rental")
-	}
-	if _, exists := world.invitations[invitation.NodeID]; exists {
-		return capability.NodeBootstrap{}, fmt.Errorf("%w: %s", node.ErrIdentityExists, invitation.NodeID)
-	}
-	world.invitations[invitation.NodeID] = &labInvitation{
-		NodeID:                invitation.NodeID,
-		RentalID:              invitation.RentalID,
-		Generation:            invitation.Generation,
-		WorkspaceID:           invitation.WorkspaceID,
-		ShadowPriceUSDPerHour: invitation.ShadowPriceUSDPerHour,
-	}
-	return world.bootstrapFor(invitation.NodeID), nil
-}
-
-// Reinvite is the invitation an identity that already exists is redeemable on,
-// which is what an allocation whose answer Mercator lost comes back through.
+// labRegistry is Mercator's own node registry with this world watching what
+// leaves it. The registry is control-plane code and not external behaviour, so
+// the Lab runs the real one: a Blueprint that states what a machine holds is
+// stating something about the component a deployment runs, and a copy of it here
+// would be a specification of the copy.
 //
-// An invitation nobody has redeemed is handed back rather than replaced, which
-// is the rule node.Registry holds and the reason it holds it: provisioning asks
-// for this before it can know whether an earlier attempt landed a machine, and a
-// fresh token would leave that machine holding material nothing will accept.
-func (world *simulatedWorld) Reinvite(_ context.Context, _, nodeID string) (capability.NodeBootstrap, error) {
+// What the world adds is the account of what it saw leave. A credential is World
+// Truth about material Mercator handed out, and the registry deliberately keeps
+// none: it stores a digest, so nothing inside Mercator can tell a rule about a
+// secret in the record which string to look for.
+type labRegistry struct {
+	*node.Registry
+	world *simulatedWorld
+	// answering is the moment of the inbound call from a machine this registry is
+	// handling, and the zero time whenever it is answering the control plane
+	// instead. An agent calls Mercator to enrol, so the registry dates the session
+	// when it was opened; a registry that dated it from the sweep which noticed
+	// would make how long a machine took to become usable a property of how often
+	// Mercator looks, and would refuse a machine whose window closed between its
+	// own arrival and the next tick.
+	answering time.Time
+}
+
+func newLabRegistry(store node.Store, world *simulatedWorld) *labRegistry {
+	registry := &labRegistry{world: world}
+	registry.Registry = node.NewRegistry(
+		store,
+		node.NewSigner(node.DeriveKey([]byte("mercator-lab-node-key"))),
+		"https://lab.mercator.test",
+		node.WithClock(registry.clock),
+		node.WithAgentVersion("lab"),
+	)
+	return registry
+}
+
+func (registry *labRegistry) clock() time.Time {
+	if registry.answering.IsZero() {
+		return registry.world.nowTime()
+	}
+	return registry.answering
+}
+
+// enrol is one machine presenting its bootstrap, dated at the moment the agent
+// on it opened the session rather than at the tick this world got round to
+// delivering the call.
+func (registry *labRegistry) enrol(ctx context.Context, at time.Time, request capability.EnrollmentRequest) (capability.Enrollment, error) {
+	registry.answering = at
+	defer func() { registry.answering = time.Time{} }()
+	return registry.Enroll(ctx, request)
+}
+
+func (registry *labRegistry) Invite(ctx context.Context, invitation node.Invitation) (capability.NodeBootstrap, error) {
+	bootstrap, err := registry.Registry.Invite(ctx, invitation)
+	if err != nil {
+		return capability.NodeBootstrap{}, err
+	}
+	registry.world.notedInvitation(bootstrap)
+	return bootstrap, nil
+}
+
+func (registry *labRegistry) Reinvite(ctx context.Context, workspaceID, nodeID string) (capability.NodeBootstrap, error) {
+	bootstrap, err := registry.Registry.Reinvite(ctx, workspaceID, nodeID)
+	if err != nil {
+		return capability.NodeBootstrap{}, err
+	}
+	registry.world.notedInvitation(bootstrap)
+	return bootstrap, nil
+}
+
+// notedInvitation records material Mercator minted. An invitation handed back
+// rather than replaced is the same credential and is noted once, which is the
+// difference the rule about single use is counting.
+func (world *simulatedWorld) notedInvitation(bootstrap capability.NodeBootstrap) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
-	invitation, exists := world.invitations[nodeID]
-	if !exists {
-		return capability.NodeBootstrap{}, fmt.Errorf("%w: %s", node.ErrNotFound, nodeID)
+	if _, known := world.credentials[bootstrap.EnrollmentToken]; known {
+		return
 	}
-	if !invitation.Enrolled && invitation.Token != "" {
-		return world.bootstrap(invitation, invitation.Token), nil
+	world.credentials[bootstrap.EnrollmentToken] = &bootstrapCredential{
+		NodeID:     bootstrap.NodeID,
+		Generation: bootstrap.Generation,
+		Token:      bootstrap.EnrollmentToken,
 	}
-	return world.bootstrapFor(nodeID), nil
 }
 
-// EnrolledAt is when the agent on this machine opened its session, and the zero
-// time while none has. An identity nobody has heard from is not an error: a node
-// invited and never filled is exactly the state provisioning waits in.
-//
-// A question about a generation this identity is not on is an error, exactly as
-// node.Registry makes it one. The registry answers about a node and a generation
-// together, because that pair is what every act against a machine is addressed
-// to, and a world that answered "enrolled and healthy" to a question about the
-// wrong generation would report a machine ready to launch on where the real
-// deployment cannot make progress at all.
-func (world *simulatedWorld) EnrolledAt(_ context.Context, ref capability.NodeRef) (time.Time, error) {
-	world.mu.Lock()
-	defer world.mu.Unlock()
-	invitation, exists := world.invitations[ref.NodeID]
-	if !exists {
-		return time.Time{}, nil
-	}
-	if ref.Generation != 0 && invitation.Generation != ref.Generation {
-		return time.Time{}, fmt.Errorf("node: %q is generation %d, not %d", ref.NodeID, invitation.Generation, ref.Generation)
-	}
-	return invitation.EnrolledAt, nil
-}
-
-// labInvitation is one node identity this world reserved before any machine
-// existed to fill it.
-type labInvitation struct {
-	NodeID                string
-	RentalID              string
-	Generation            uint64
-	WorkspaceID           string
-	ShadowPriceUSDPerHour float64
-	// EnrolledAt is the moment the agent redeemed this invitation, which is the
-	// moment its machine's whole provisioning ended. It is the agent's arrival and
-	// not the sweep that noticed it: the registry is called by the machine, so it
-	// knows when the session was opened, and a world that dated it from the next
-	// look would make a stage's duration a property of how often Mercator asks.
-	EnrolledAt time.Time
-	Enrolled   bool
-	// Token is the credential this identity's current invitation hands out. An
-	// earlier one is not forgotten when a fresh invitation supersedes it: what
-	// became of every credential this world ever minted is kept beside the
-	// invitations, because a rule about single use has to be able to read a token
-	// nobody is offering any more.
-	Token string
-}
-
-// bootstrapCredential is one enrollment token this world minted and what became
-// of it: how many accepted allocations carried it to a machine, and how many
-// times a machine redeemed it. Both are counted rather than flagged, because the
+// bootstrapCredential is one enrollment token Mercator minted and what became of
+// it: how many accepted allocations carried it to a machine, and how many times
+// a machine redeemed it. Both are counted rather than flagged, because the
 // violations they exist to catch are second occurrences and a flag cannot tell a
 // second from a first.
 //
@@ -381,37 +381,12 @@ type bootstrapCredential struct {
 	Token       string
 	Provisions  int
 	Redemptions int
-	// Superseded is a credential a later invitation for the same identity took
-	// the place of. It is what tells a credential nobody has got round to
-	// redeeming from one nobody ever can, and those are two different worlds: the
-	// first is a machine still booting, and the second is a paid machine the
-	// control plane locked out of its own fleet.
-	Superseded bool
-}
-
-func (world *simulatedWorld) bootstrapFor(nodeID string) capability.NodeBootstrap {
-	invitation := world.invitations[nodeID]
-	if previous, minted := world.credentials[invitation.Token]; minted {
-		previous.Superseded = true
-	}
-	invitation.Token = DeterministicID(world.seed, "enrollment", fmt.Sprintf("%s/%d/%d", nodeID, invitation.Generation, len(world.effects)))
-	world.credentials[invitation.Token] = &bootstrapCredential{
-		NodeID:     nodeID,
-		Generation: invitation.Generation,
-		Token:      invitation.Token,
-	}
-	return world.bootstrap(invitation, invitation.Token)
-}
-
-func (world *simulatedWorld) bootstrap(invitation *labInvitation, token string) capability.NodeBootstrap {
-	return capability.NodeBootstrap{
-		ControlPlaneURL: "https://lab.mercator.test",
-		NodeID:          invitation.NodeID,
-		RentalID:        invitation.RentalID,
-		Generation:      invitation.Generation,
-		EnrollmentToken: token,
-		AgentVersion:    "lab",
-	}
+	// Refused is material a machine presented and the registry would not take. It
+	// is the answer the real registry gave rather than anything this world
+	// decided, so it covers both doors that close on an invitation: one replaced
+	// by a later mint, and one whose window ran out while the machine was still
+	// booting. Either way the host is paid for and can enrol nowhere.
+	Refused bool
 }
 
 // deliverEnrolments is every agent in this world whose machine has finished
@@ -434,47 +409,140 @@ func (world *simulatedWorld) bootstrap(invitation *labInvitation, token string) 
 // enrols as somebody the provider is not holding a machine for. Recording the
 // lease's own generation here would be this world copying the provision into the
 // enrolment and then agreeing with itself.
-func (world *simulatedWorld) deliverEnrolments() {
+// It is a real call to Mercator's own registry with the material the machine is
+// holding, so what happens to an agent presenting an invitation nothing will
+// take is what would happen to it in a deployment: the registry refuses it, the
+// machine has nothing else to try, and this world records the refusal rather
+// than deciding one.
+func (world *simulatedWorld) deliverEnrolments(ctx context.Context, registry *labRegistry) error {
+	for _, pending := range world.dueEnrolments() {
+		enrolment, err := registry.enrol(ctx, pending.arrives, capability.EnrollmentRequest{
+			NodeID:          pending.bootstrap.NodeID,
+			RentalID:        pending.bootstrap.RentalID,
+			Generation:      pending.bootstrap.Generation,
+			EnrollmentToken: pending.bootstrap.EnrollmentToken,
+			AgentVersion:    pending.bootstrap.AgentVersion,
+			Facts:           capability.NodeFacts{Host: capability.HostFacts{OS: "linux", ContainerRuntime: "docker"}},
+		})
+		if err != nil {
+			if err := world.recordRefusal(pending, err); err != nil {
+				return err
+			}
+			continue
+		}
+		world.recordEnrolment(pending, enrolment)
+	}
+	return nil
+}
+
+// pendingEnrolment is one machine whose agent has finished booting, and the
+// material it is about to present. The bootstrap is the machine's own copy, so
+// an agent enrols as whoever Mercator wrote onto it rather than as whoever the
+// lease says it should be.
+type pendingEnrolment struct {
+	rentalID  string
+	nativeRef string
+	arrives   time.Time
+	bootstrap capability.NodeBootstrap
+}
+
+// dueEnrolments is read under the lock and answered outside it, because what
+// happens next is a call into the control plane and the control plane reads this
+// world's clock.
+//
+// They are delivered in the order the agents arrived. Two machines holding the
+// same invitation is a state a rule here is about, and which of them opens the
+// session is the one that got there first rather than whichever lease sorts
+// earliest.
+func (world *simulatedWorld) dueEnrolments() []pendingEnrolment {
 	world.mu.Lock()
 	defer world.mu.Unlock()
+	var due []pendingEnrolment
 	for _, rentalID := range slices.Sorted(maps.Keys(world.leases)) {
 		lease := world.leases[rentalID]
-		invitation, invited := world.invitations[lease.Bootstrap.NodeID]
-		if lease.Terminated || lease.Enrolled || !invited {
+		if lease.Terminated || lease.Enrolled || lease.Refused || lease.Bootstrap.NodeID == "" {
 			continue
 		}
 		arrives := lease.arrivesAt(world.truth[lease.OfferID].provisioning)
 		if world.truth[lease.OfferID].neverEnrolls || world.now.Before(arrives) {
 			continue
 		}
-		credential, minted := world.credentials[lease.Bootstrap.EnrollmentToken]
-		if !minted || invitation.Token != lease.Bootstrap.EnrollmentToken || credential.Redemptions > 0 {
-			continue
-		}
-		lease.Enrolled = true
-		lease.SessionExpires = arrives.Add(node.DefaultSession)
-		invitation.Enrolled = true
-		invitation.EnrolledAt = arrives
-		credential.Redemptions++
-		redeemed := lease.Bootstrap
-		world.recordEffect(
-			OperationNodeEnrolled,
-			fmt.Sprintf("%s/generation-%d", redeemed.NodeID, redeemed.Generation),
-			EffectCommandAccepted,
-			EffectResponseDelivered,
-			lease.NativeRef,
-			"enrolment",
-			"",
-			map[string]any{
-				"machine_id": lease.NativeRef,
-				"rental_id":  redeemed.RentalID,
-				"node_id":    redeemed.NodeID,
-				"generation": redeemed.Generation,
-			},
-			map[string]any{"node_id": redeemed.NodeID, "fencing_token": redeemed.Generation},
-			"",
-		)
+		due = append(due, pendingEnrolment{
+			rentalID:  rentalID,
+			nativeRef: lease.NativeRef,
+			arrives:   arrives,
+			bootstrap: lease.Bootstrap,
+		})
 	}
+	slices.SortStableFunc(due, func(left, right pendingEnrolment) int {
+		return left.arrives.Compare(right.arrives)
+	})
+	return due
+}
+
+func (world *simulatedWorld) recordEnrolment(pending pendingEnrolment, enrolment capability.Enrollment) {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	lease := world.leases[pending.rentalID]
+	lease.Enrolled = true
+	lease.SessionExpires = enrolment.SessionExpires
+	world.credentials[pending.bootstrap.EnrollmentToken].Redemptions++
+	redeemed := pending.bootstrap
+	world.recordEffect(
+		OperationNodeEnrolled,
+		fmt.Sprintf("%s/generation-%d", redeemed.NodeID, redeemed.Generation),
+		EffectCommandAccepted,
+		EffectResponseDelivered,
+		pending.nativeRef,
+		"enrolment",
+		"",
+		map[string]any{
+			"machine_id": pending.nativeRef,
+			"rental_id":  redeemed.RentalID,
+			"node_id":    redeemed.NodeID,
+			"generation": redeemed.Generation,
+		},
+		map[string]any{"node_id": redeemed.NodeID, "fencing_token": enrolment.FencingToken},
+		"",
+	)
+}
+
+// recordRefusal is a paid machine turned away at the one door it has. The two
+// refusals a bootstrap can meet are the ones a rule about locked-out hosts is
+// for: material the record no longer names, and material whose window closed.
+// Anything else is this world doing something no machine does, and it stops the
+// execution rather than being filed as a machine's misfortune.
+//
+// The machine is not asked again. It holds one bootstrap and can be told
+// nothing more, so an agent refused once is an agent refused for ever, and a
+// world that retried every tick would fill the ledger with the same rejection.
+func (world *simulatedWorld) recordRefusal(pending pendingEnrolment, refusal error) error {
+	if !errors.Is(refusal, node.ErrEnrollmentInvalid) && !errors.Is(refusal, node.ErrEnrollmentSpent) {
+		return fmt.Errorf("Lab agent on Rental %q could not enrol: %w", pending.rentalID, refusal)
+	}
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	world.leases[pending.rentalID].Refused = true
+	world.credentials[pending.bootstrap.EnrollmentToken].Refused = true
+	refused := pending.bootstrap
+	world.recordEffect(
+		OperationNodeEnrolled,
+		fmt.Sprintf("%s/generation-%d", refused.NodeID, refused.Generation),
+		EffectCommandRejected,
+		EffectResponseDelivered,
+		pending.nativeRef,
+		"enrolment",
+		"",
+		map[string]any{
+			"machine_id": pending.nativeRef,
+			"rental_id":  refused.RentalID,
+			"node_id":    refused.NodeID,
+			"generation": refused.Generation,
+		},
+		map[string]any{"node_id": refused.NodeID, "refusal": refusal.Error()},
+		"",
+	)
+	return nil
 }
 
 // sessionRenewalMargin is how far ahead of expiry an agent in this world takes a

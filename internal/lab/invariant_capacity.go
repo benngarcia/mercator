@@ -130,19 +130,22 @@ func settledCapacity(effects []EffectRecord) (map[string]bool, error) {
 // provider answers, because nothing can know whether an earlier attempt already
 // landed a machine until it does, and an attempt that adopts or reconciles onto
 // an earlier machine then hands the Run a host carrying the earlier invitation.
-// So an identity asked for again has to answer with what is already out there.
+// So an identity asked for again has to answer with what is already out there,
+// and it has to stay redeemable for as long as the machine holding it has to
+// boot.
 //
-// A credential nobody has redeemed is not the violation. That is every machine
-// still booting. The violation is one that reached a machine, was never
-// redeemed, and has been superseded, which is the state that can no longer end
-// in an enrolment.
+// A credential nobody has redeemed yet is not the violation. That is every
+// machine still booting. The violation is a machine that presented its bootstrap
+// and was turned away, which is Mercator's own registry answering rather than
+// anything this world decided, and it covers both doors that close on an
+// invitation: one a later mint replaced, and one whose window ran out.
 func aMachineHoldsMaterialTheControlPlaneWillStillAccept(observation InvariantObservation) error {
 	for _, credential := range observation.BootstrapCredentials {
-		if credential.Provisions == 0 || credential.Redemptions > 0 || !credential.Superseded {
+		if !credential.Refused {
 			continue
 		}
 		return fmt.Errorf(
-			"the invitation for %s generation %d went onto a machine and was then replaced before that machine redeemed it, so the host Mercator is paying for can enrol nowhere",
+			"the machine holding the invitation for %s generation %d presented it and the registry would not take it, so the host Mercator is paying for can enrol nowhere",
 			credential.NodeID, credential.Generation,
 		)
 	}

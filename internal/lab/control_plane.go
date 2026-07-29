@@ -45,7 +45,13 @@ type controlPlane struct {
 	// registries its private images live at, and the object store its Artifacts
 	// are durable in. It survives a restart because it is the deployment's
 	// configuration rather than anything this execution produced.
-	credentials   *credential.Mint
+	credentials *credential.Mint
+	// nodes is Mercator's own node registry, the real one, with this world
+	// watching what leaves it. Provisioning is only an act if the identity it
+	// mints is one a machine can really redeem, so an invitation handed back,
+	// spent twice, claimed for the wrong generation, or presented after its
+	// window closed behaves here exactly as it does in production.
+	nodes         *labRegistry
 	restarts      uint64
 	faultPosition eventlog.GlobalPosition
 }
@@ -218,6 +224,7 @@ func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error)
 		credentials: mint,
 		janitor:     janitor.New(world, janitor.WithEventLog(storage.EventLog())),
 	}
+	runtime.nodes = newLabRegistry(storage.Nodes(), world)
 	runtime.restartOrchestrator()
 	return runtime, nil
 }
@@ -363,13 +370,8 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 	}); err != nil {
 		return fmt.Errorf("create Lab Run %q: %w", arrival.Name, err)
 	}
-	if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil {
-		if !indeterminate(err) {
-			return fmt.Errorf("advance Lab Run %q: %w", arrival.Name, err)
-		}
-		if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil {
-			return fmt.Errorf("reconcile ambiguous Lab Run %q: %w", arrival.Name, err)
-		}
+	if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil && !indeterminate(err) {
+		return fmt.Errorf("advance Lab Run %q: %w", arrival.Name, err)
 	}
 	return nil
 }
@@ -384,7 +386,9 @@ func indeterminate(err error) bool {
 
 func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 	runtime.world.setNow(now)
-	runtime.deliverEnrolments()
+	if err := runtime.deliverEnrolments(ctx); err != nil {
+		return err
+	}
 	runtime.renewSessions()
 	if err := runtime.deliverReadiness(ctx); err != nil {
 		return err
@@ -418,7 +422,9 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 // arrived is a fact about a machine the same sweep then reasons over, and a
 // registry that only learned of one when somebody asked would make the answer a
 // property of how often Mercator asks.
-func (runtime *controlPlane) deliverEnrolments() { runtime.world.deliverEnrolments() }
+func (runtime *controlPlane) deliverEnrolments(ctx context.Context) error {
+	return runtime.world.deliverEnrolments(ctx, runtime.nodes)
+}
 
 // renewSessions is the agents that are already here keeping the sessions they
 // opened. It runs beside the enrolments for the same reason and in the same
@@ -440,21 +446,24 @@ func (runtime *controlPlane) deliverReadiness(ctx context.Context) error {
 }
 
 // advanceWorkspace drives one tenant's open Runs. An ambiguous launch and an
-// ambiguous provision are both reconciled by advancing again, which is what a
-// control plane does with a response it never got: it asks what it is holding
-// rather than asking for the thing again.
+// ambiguous provision end the sweep for that Run and are settled by the next
+// one, which is what the deployment's reconcile loop does: it records what it
+// could not settle and comes back to ask what Mercator is holding rather than
+// asking for the thing again.
+//
+// It matters that the next sweep is a later moment. A world that asked again
+// inside the same instant would be a control plane whose two attempts cannot be
+// told apart, and a bootstrap signs the moment it stops being redeemable, so the
+// second mint would come out byte for byte the first and no Blueprint could ever
+// show what a repeat costs the machine already holding one.
 func (runtime *controlPlane) advanceWorkspace(ctx context.Context, workspace string) error {
-	_, err := runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
-	if indeterminate(err) {
-		_, err = runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
-	}
-	if err != nil {
+	if _, err := runtime.orchestrator.AdvanceOpenRuns(ctx, workspace); err != nil && !indeterminate(err) {
 		return err
 	}
 	// The orphan sweep is last because what capacity Mercator holds live work for
 	// is whatever the Runs just settled into, so a sweep that ran first would find
 	// a machine orphaned that a Run was about to be launched on.
-	_, err = runtime.janitor.Sweep(ctx, workspace)
+	_, err := runtime.janitor.Sweep(ctx, workspace)
 	return err
 }
 
@@ -487,7 +496,7 @@ func (runtime *controlPlane) restartOrchestrator() {
 		// acts through: the lease that allocates a machine, and the registry that
 		// says which node it will be and whether an agent ever arrived.
 		orchestrator.WithCapacity(runtime.world),
-		orchestrator.WithInviter(runtime.world),
+		orchestrator.WithInviter(runtime.nodes),
 	)
 }
 
