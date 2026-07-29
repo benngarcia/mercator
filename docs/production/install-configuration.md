@@ -123,7 +123,11 @@ prints it to the startup log.
 
 - Keep the SQLite database and its WAL/shm siblings on durable local storage.
 - Run one Mercator process against one SQLite DSN. The event log sets SQLite max
-  open connections to one inside the process.
+  open connections to one inside the process, and a running process claims the
+  database through a `-lock` file beside it, so a second `serve` or a
+  `mercator rekey` against the same DSN is refused while it runs.
+- `MERCATOR_SECRET_KEY` is restore-critical. Back it up with, and separately
+  from, the database: see [backup-recovery.md](backup-recovery.md).
 - If `MERCATOR_API_TOKEN` is omitted, the generated token is printed to the
   startup log and changes across restarts. Because the token lands in stdout,
   operators who ship or aggregate logs should always set `MERCATOR_API_TOKEN`

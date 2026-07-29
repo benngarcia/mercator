@@ -142,7 +142,10 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	// A loopback broker holding a token only this process knows is unusable
 	// until the CLI learns it. Write it down rather than making the operator
 	// copy it out of the log.
-	baseURL := listenURL(tlsFiles, addr)
+	// The address the kernel gave is what a client can reach. They differ
+	// whenever the operator asked for port 0, and announcing the asked-for
+	// address then names a port nothing is listening on.
+	baseURL := listenURL(tlsFiles, listener.Addr().String())
 	if generatedToken && isLoopback(addr) {
 		shareLocalContext(env, baseURL, apiToken)
 	}

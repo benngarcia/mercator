@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -81,7 +80,7 @@ func TestRekeyRefusesWithoutTheRetiredKey(t *testing.T) {
 func TestRekeyRefusesWhileAServerIsUsingTheDatabase(t *testing.T) {
 	// Arrange: a server started the way an operator starts it, on a real file.
 	dsn := "file:" + filepath.Join(t.TempDir(), "mercator.db")
-	serveUntilCleanup(t, dsn)
+	serveDatabase(t, dsn, hex.EncodeToString(retiredMasterKey))
 
 	// Act: rotate the master key without stopping it first.
 	var stdout, stderr bytes.Buffer
@@ -99,31 +98,6 @@ func TestRekeyRefusesWhileAServerIsUsingTheDatabase(t *testing.T) {
 		!strings.Contains(stderr.String(), "stop the server") {
 		t.Fatalf("stderr = %q, want the running server named", stderr.String())
 	}
-}
-
-// serveUntilCleanup starts the real serve command on dsn and returns once it is
-// listening, so a case can state what happens to a command that arrives while a
-// server is up. The server is stopped when the case ends.
-func serveUntilCleanup(t *testing.T, dsn string) {
-	t.Helper()
-	startupLog := captureStartupLog(t)
-	serveCtx, stopServing := context.WithCancel(context.Background())
-	served := make(chan int, 1)
-	go func() {
-		served <- run(serveCtx, []string{"mercator", "serve"}, map[string]string{
-			"MERCATOR_ADDR":       "127.0.0.1:0",
-			"MERCATOR_API_TOKEN":  "operator-token",
-			"MERCATOR_SECRET_KEY": hex.EncodeToString(retiredMasterKey),
-			"MERCATOR_SQLITE_DSN": dsn,
-		}, io.Discard, io.Discard)
-	}()
-	t.Cleanup(func() {
-		stopServing()
-		if exitCode := <-served; exitCode != 0 {
-			t.Errorf("serve exited %d", exitCode)
-		}
-	})
-	startupLog.waitFor(t, "mercator listening on")
 }
 
 func seal(t *testing.T, dsn string, masterKey []byte, workspaceID, connectionID, secret string) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	stdlog "log"
 	"net/http"
 	"net/http/httptest"
@@ -115,6 +116,116 @@ func TestServeRequiresAMasterKey(t *testing.T) {
 	if !strings.Contains(log.String(), "MERCATOR_SECRET_KEY is required") {
 		t.Fatalf("startup log = %q, want the missing key named", log.String())
 	}
+}
+
+// listeningPhrase is how a started server announces the address it serves.
+const listeningPhrase = "mercator listening on "
+
+// operatorToken is the bearer token the servers a case starts are configured
+// with. It is fixed rather than generated so that nothing writes a CLI context
+// on the machine running the tests.
+const operatorToken = "operator-token"
+
+// mercatorServer is one real `mercator serve` command, running, on a real
+// database. A case takes one when it needs to state what happens to something
+// else while a server is up, or what a restored database serves.
+type mercatorServer struct {
+	baseURL  string
+	stopOnce sync.Once
+	cancel   context.CancelFunc
+	exited   chan int
+	t        *testing.T
+}
+
+// serveDatabase starts the serve command on dsn and returns once it is
+// listening. The server is stopped when the case ends, or earlier if the case
+// stops it.
+func serveDatabase(t *testing.T, dsn, masterKey string) *mercatorServer {
+	t.Helper()
+	startup := captureStartupLog(t)
+	serveCtx, cancel := context.WithCancel(context.Background())
+	server := &mercatorServer{cancel: cancel, exited: make(chan int, 1), t: t}
+	go func() {
+		server.exited <- run(serveCtx, []string{"mercator", "serve"}, map[string]string{
+			"MERCATOR_ADDR":       "127.0.0.1:0",
+			"MERCATOR_API_TOKEN":  operatorToken,
+			"MERCATOR_SECRET_KEY": masterKey,
+			"MERCATOR_SQLITE_DSN": dsn,
+		}, io.Discard, io.Discard)
+	}()
+	t.Cleanup(server.stop)
+	startup.waitFor(t, listeningPhrase)
+	server.baseURL = announcedURL(t, startup.String())
+	return server
+}
+
+// stop shuts the server down and reports an exit code that says it failed.
+func (s *mercatorServer) stop() {
+	s.stopOnce.Do(func() {
+		s.cancel()
+		if exitCode := <-s.exited; exitCode != 0 {
+			s.t.Errorf("serve exited %d", exitCode)
+		}
+	})
+}
+
+// get reads a path from the server with the operator's bearer token.
+func (s *mercatorServer) get(t *testing.T, path string) string {
+	t.Helper()
+	return s.send(t, http.MethodGet, path, "", nil)
+}
+
+// post writes to the server, carrying the idempotency key every mutation route
+// requires.
+func (s *mercatorServer) post(t *testing.T, path, idempotencyKey string, body any) string {
+	t.Helper()
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("encode %s body: %v", path, err)
+	}
+	return s.send(t, http.MethodPost, path, idempotencyKey, encoded)
+}
+
+func (s *mercatorServer) send(t *testing.T, method, path, idempotencyKey string, body []byte) string {
+	t.Helper()
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	request, err := http.NewRequestWithContext(t.Context(), method, s.baseURL+path, reader)
+	if err != nil {
+		t.Fatalf("build %s %s: %v", method, path, err)
+	}
+	request.Header.Set("Authorization", "Bearer "+operatorToken)
+	request.Header.Set("Content-Type", "application/json")
+	if idempotencyKey != "" {
+		request.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	answered, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read %s %s: %v", method, path, err)
+	}
+	if response.StatusCode >= http.StatusBadRequest {
+		t.Fatalf("%s %s = %d: %s", method, path, response.StatusCode, answered)
+	}
+	return string(answered)
+}
+
+// announcedURL reads the address out of what the server said, so a case reaches
+// the port the kernel chose without guessing one.
+func announcedURL(t *testing.T, startupLog string) string {
+	t.Helper()
+	_, announced, found := strings.Cut(startupLog, listeningPhrase)
+	if !found {
+		t.Fatalf("startup log = %q, want %q", startupLog, listeningPhrase)
+	}
+	url, _, _ := strings.Cut(announced, "\n")
+	return strings.TrimSpace(url)
 }
 
 // captureStartupLog redirects the standard logger, which is where startup
