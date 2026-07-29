@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -419,6 +420,11 @@ type fleet struct {
 	// prewarm is what this fleet's control plane is allowed to have in flight for
 	// work it has not admitted. Nil is the production default.
 	prewarm *orchestrator.PrewarmPolicy
+	// registryAccount is the username and secret an operator logged in to this
+	// fleet's registry with, if any. Empty is a deployment holding no account,
+	// which is what every case about where a Run lands has: the fleet's registry
+	// serves anyone.
+	registryAccount [2]string
 	// budget is how long every wait on this fleet gets, and it belongs to the
 	// fleet because what a wait is really on is the runtime its agent drives. The
 	// same awaitOffer is a scripted answer from memory in most cases here and this
@@ -481,6 +487,37 @@ func runningOn(runtime nodeagent.Runtime) fleetOption {
 	return func(f *fleet) { f.drivesRealDocker(runtime) }
 }
 
+// loggedInTo is the operator having run `docker login` against this fleet's own
+// registry before starting the daemon. It is the whole of what configuring a
+// registry account is: the control plane reads the accounts a machine must never
+// hold out of the same file the CLI writes, so a case about minting a pull says
+// this and says nothing else.
+func loggedInTo(username, secret string) fleetOption {
+	return func(f *fleet) { f.registryAccount = [2]string{username, secret} }
+}
+
+// environment is what this fleet's daemon reads its configuration from. It is
+// empty unless a case stated an account, so every other case keeps the daemon
+// off whoever ran the suite's own Docker credentials.
+func (f *fleet) environment(t *testing.T, registry string) func(string) string {
+	t.Helper()
+	if f.registryAccount == [2]string{} {
+		return anonymousEnvironment
+	}
+	directory := t.TempDir()
+	config := fmt.Sprintf(`{"auths":{%q:{"username":%q,"password":%q}}}`,
+		registry, f.registryAccount[0], f.registryAccount[1])
+	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(config), 0o600); err != nil {
+		t.Fatalf("write the registry account this operator logged in with: %v", err)
+	}
+	return func(name string) string {
+		if name == "DOCKER_CONFIG" {
+			return directory
+		}
+		return ""
+	}
+}
+
 // drivesRealDocker points this fleet's agent at a container daemon this host
 // really runs, and states the two things that follow from it.
 //
@@ -530,7 +567,8 @@ func startFleet(t *testing.T, options ...fleetOption) *fleet {
 	for _, option := range options {
 		option(harness)
 	}
-	harness.address, harness.control = startRuntimeWithNodeWindows(t, harness.lease, harness.session, harness.prewarm)
+	harness.address, harness.control = startRuntimeWithNodeWindows(
+		t, harness.lease, harness.session, harness.prewarm, harness.environment(t, registry))
 	bootstrap := harness.invite(t, 1.25)
 	harness.nodeID = bootstrap.NodeID
 	harness.bootstrapToken = bootstrap.EnrollmentToken
@@ -1239,6 +1277,12 @@ type scriptedRuntime struct {
 	// prepared is every image the control plane asked this machine to fetch for
 	// work it had not admitted here.
 	prepared []string
+	// preparations is the command each of those arrived with, kept whole so a
+	// case can ask what this machine was actually handed to fetch with. A
+	// runtime that recorded only the digest cannot tell a control plane that
+	// mints from one that populates the field with nothing, which is the state
+	// every deployment was in while the Lab said otherwise.
+	preparations map[string]capability.PrepareImageCommand
 	// refusePulls is content this machine cannot fetch, by manifest digest. It is
 	// removed the first time it is asked for, so the second ask for the same
 	// content succeeds: a failed pull leaves nothing behind and a machine that
@@ -1270,6 +1314,7 @@ func newScriptedRuntime(unpacks map[string][]string) *scriptedRuntime {
 		platforms:    map[string]domain.Platform{},
 		observations: map[string]capability.WorkloadObservation{},
 		launches:     map[string]capability.LaunchWorkloadCommand{},
+		preparations: map[string]capability.PrepareImageCommand{},
 		refusePulls:  map[string]bool{},
 		disk:         capability.DiskFacts{Known: true, TotalBytes: 500 << 30, FreeBytes: 400 << 30},
 	}
@@ -1386,6 +1431,7 @@ func (runtime *scriptedRuntime) PrepareImage(_ context.Context, command capabili
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	runtime.prepared = append(runtime.prepared, command.ManifestDigest)
+	runtime.preparations[command.ManifestDigest] = command
 	if runtime.refusePulls[command.ManifestDigest] {
 		delete(runtime.refusePulls, command.ManifestDigest)
 		return fmt.Errorf("pull failed: registry unreachable")
@@ -1407,6 +1453,14 @@ func (runtime *scriptedRuntime) preparedImages() []string {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	return slices.Clone(runtime.prepared)
+}
+
+// pullOf is what this machine was handed to fetch one image with, which is the
+// only place a case can read whether the control plane minted anything at all.
+func (runtime *scriptedRuntime) pullOf(digest string) domain.RegistryPull {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.preparations[digest].RegistryCredential
 }
 
 func (runtime *scriptedRuntime) LaunchWorkload(_ context.Context, command capability.LaunchWorkloadCommand) error {

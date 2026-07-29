@@ -178,6 +178,10 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if err != nil {
 		return nil, err
 	}
+	mint, err := contentMint(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	signer := reporting.NewSigner(reporting.DeriveKey(cfg.MasterKey))
 	sched := scheduler.New()
@@ -194,6 +198,15 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		// does, which is what makes the prepare half of capability.NodeRuntime
 		// reachable from the control plane at all.
 		orchestrator.WithPrewarm(providerBroker, prewarmPolicy(cfg.Prewarm), storage.Preparation()),
+		// The accounts a rented machine must never hold. Without this every fetch
+		// a node makes is anonymous, so a private image is a pull the registry
+		// denies and a durable Artifact is a read the object store refuses, and
+		// both of them fail on the machine rather than here.
+		orchestrator.WithContentCredentials(mint),
+		// The accounts a rented machine must never hold. Without this every fetch
+		// a node makes is anonymous, so a private image is a pull the registry
+		// denies and a durable Artifact is a read the object store refuses, and
+		// both of them fail on the machine rather than here.
 		// A placement that chose to provision allocates a machine through the
 		// Broker's capacity lease and invites the node it will be through the
 		// registry. They are two seams because they are two contracts: the Broker
@@ -418,6 +431,85 @@ func registryManifests(cfg Config) (*ociresolver.RegistryResolver, error) {
 		return nil, fmt.Errorf("daemon: read registry credentials: %w", err)
 	}
 	return ociresolver.NewRegistryResolver(ociresolver.WithCredentials(credentials)), nil
+}
+
+// contentMint is the control plane's authority to let one machine fetch one
+// piece of content. It is built from the accounts this deployment already
+// states, and stating them is the whole of what an operator has to do: a
+// registry the host has run `docker login` against is one Mercator can mint a
+// pull from, and an object store named in the environment is one it can sign a
+// read of.
+//
+// Neither is required and neither is defaulted. A Mercator with no registry
+// account mints nothing for a private image, which is correct for the many
+// deployments that run only public ones, and the node's pull is refused by the
+// registry rather than by a guess made here. A Mercator with no object store
+// refuses to mint a read at all, which is the loud failure: a durable Artifact
+// is a location nothing can be fetched from without one.
+func contentMint(cfg Config) (*credential.Mint, error) {
+	getenv := cfg.Getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	registries, err := registryAccounts(getenv)
+	if err != nil {
+		return nil, err
+	}
+	store, err := objectStoreAccount(getenv)
+	if err != nil {
+		return nil, err
+	}
+	mint, err := credential.NewMint(credential.MintConfig{Registries: registries, ObjectStore: store})
+	if err != nil {
+		return nil, fmt.Errorf("daemon: %w", err)
+	}
+	return mint, nil
+}
+
+// registryAccounts is every registry this host holds an account for, read from
+// the file `docker login` writes. It is deliberately the same source the
+// manifest resolver reads: an operator who has logged in has said which
+// registries this Mercator can reach and as whom, and asking them to say it
+// again in the environment would be two places to configure one fact and one of
+// them silently wrong.
+func registryAccounts(getenv func(string) string) ([]credential.RegistryAccount, error) {
+	path := ociresolver.DefaultDockerConfigPath(getenv)
+	if path == "" {
+		return nil, nil
+	}
+	held, err := ociresolver.DockerConfigAccounts(path)
+	if err != nil {
+		return nil, fmt.Errorf("daemon: read registry accounts: %w", err)
+	}
+	accounts := make([]credential.RegistryAccount, 0, len(held))
+	for host, account := range held {
+		if account.Password == "" {
+			continue
+		}
+		accounts = append(accounts, credential.RegistryAccount{
+			Registry: host, Username: account.Username, Secret: account.Password,
+		})
+	}
+	return accounts, nil
+}
+
+// objectStoreAccount is the durable Artifact authority as the environment states
+// it. Nil is a Mercator that has none, which is a real deployment. Anything
+// partially stated is an error rather than a nil: an operator who named a bucket
+// and forgot the key meant to configure this, and the failure they would
+// otherwise read is a node reporting that it was handed no read.
+func objectStoreAccount(getenv func(string) string) (*credential.ObjectStoreAccount, error) {
+	account := credential.ObjectStoreAccount{
+		Endpoint:  getenv("MERCATOR_OBJECT_STORE_ENDPOINT"),
+		Bucket:    getenv("MERCATOR_OBJECT_STORE_BUCKET"),
+		Region:    getenv("MERCATOR_OBJECT_STORE_REGION"),
+		AccessKey: getenv("MERCATOR_OBJECT_STORE_ACCESS_KEY"),
+		Secret:    getenv("MERCATOR_OBJECT_STORE_SECRET"),
+	}
+	if account == (credential.ObjectStoreAccount{}) {
+		return nil, nil
+	}
+	return &account, nil
 }
 
 // Serve runs the production HTTP server on a listener allocated by the caller.

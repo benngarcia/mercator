@@ -333,3 +333,70 @@ func (f *fleet) cancelRun(t *testing.T, runID string) {
 	t.Helper()
 	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/cancel?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusOK)
 }
+
+// The account an operator logged in to this fleet's registry with. It is the one
+// thing the whole case turns on: the control plane holds it, and what reaches the
+// machine is minted from it rather than being it.
+const (
+	fleetRegistryUsername = "mercator"
+	fleetRegistrySecret   = "registry-password-the-control-plane-keeps"
+)
+
+// TestTheShippedDaemonMintsThePullItAsksAMachineToMake is the production half of
+// the minted-fetch slice, and until it existed the slice had none. The mint, the
+// scope and the expiry were all built and all reachable from the Lab and from the
+// live conformance cases, which construct a credential.Mint of their own, and
+// nothing in the shipped daemon ever constructed one: every PrepareItem in a real
+// deployment carried a zero credential, and the sweep had just moved the pull off
+// the Docker CLI, which reads config.json itself, and onto the daemon API, which
+// does not. A private image therefore went from pulling to unpullable, and the
+// only symptom was a machine that never became warm.
+//
+// The arrangement is what an operator really does: `docker login` against the
+// registry their images are at, then start the daemon. Everything after that is
+// the shipped graph.
+func TestTheShippedDaemonMintsThePullItAsksAMachineToMake(t *testing.T) {
+	fleet := startFleet(t, loggedInTo(fleetRegistryUsername, fleetRegistrySecret))
+	fleet.holdsImageAlready(t, trainerIndexDigest)
+	running := fleet.submitRun(t)
+	fleet.runtime.awaitLaunch(t, running)
+	fleet.submitRunFor(t, fleet.rebuiltImage)
+
+	fleet.prepareUntil(t, func() bool {
+		return len(fleet.runtime.preparedImages()) > 0
+	}, "the queued Run's host was never asked to prepare anything")
+
+	pull := fleet.runtime.pullOf(rebuiltIndexDigest)
+	if pull.Secret != fleetRegistrySecret {
+		t.Fatalf("the machine was handed %+v to pull with, and a registry serving nothing anonymously would refuse it", pull.ContentCredentialScope)
+	}
+	if pull.Content != rebuiltIndexDigest {
+		t.Fatalf("the pull was minted for %q, want the one digest it was asked to fetch", pull.Content)
+	}
+	if pull.WorkspaceID != daemon.DefaultWorkspaceID {
+		t.Fatalf("the pull reaches workspace %q", pull.WorkspaceID)
+	}
+	if window := time.Until(pull.ExpiresAt); window <= 0 || window > time.Hour {
+		t.Fatalf("the pull stays presentable for %s, and a credential a machine keeps is the account behind it", window)
+	}
+}
+
+// TestADeploymentHoldingNoAccountMintsNothing is what stops the case above from
+// being "the daemon puts a credential on everything". A registry Mercator holds
+// no account for is one any anonymous reader reaches, and minting material for it
+// would put an account on a machine that never needed one.
+func TestADeploymentHoldingNoAccountMintsNothing(t *testing.T) {
+	fleet := startFleet(t)
+	fleet.holdsImageAlready(t, trainerIndexDigest)
+	running := fleet.submitRun(t)
+	fleet.runtime.awaitLaunch(t, running)
+	fleet.submitRunFor(t, fleet.rebuiltImage)
+
+	fleet.prepareUntil(t, func() bool {
+		return len(fleet.runtime.preparedImages()) > 0
+	}, "the queued Run's host was never asked to prepare anything")
+
+	if pull := fleet.runtime.pullOf(rebuiltIndexDigest); !pull.Zero() {
+		t.Fatalf("a machine was handed %+v to read an image any anonymous reader can have", pull)
+	}
+}
