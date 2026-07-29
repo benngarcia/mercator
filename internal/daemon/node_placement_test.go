@@ -497,8 +497,34 @@ func leasedFor(lease time.Duration) fleetOption {
 // It is what a case about a machine that goes on working past its first
 // credential is measured in, because at the production thirty minutes every case
 // in this package finishes inside the window and none of them can see the lapse.
+//
+// Shortening the window is not enough on its own, and skipping the rest of this
+// is how the case passed on a 24 core build host and failed the first time it
+// ever met CI. An agent renews once its credential is within two heartbeats of
+// lapsing, so the heartbeat is what decides how much of the window it has to get
+// the renewal in. Against this package's twenty millisecond heartbeat that is
+// forty milliseconds of slack on a two second window, and forty milliseconds is
+// inside what a garbage collection pause or a busy two core runner costs. The
+// agent does not renew late when it loses that race. It lapses, and a lapsed
+// credential is refused SESSION_REFUSED, and the invitation it would need to
+// join again was spent when it enrolled, so the machine is locked out for good
+// and the count this case waits on never moves again.
+//
+// Tying the heartbeat to the window makes the slack a stated fraction of the
+// window, a quarter of it, rather than whatever the default heartbeat left over.
+// Reproduced before the change by freezing the process across the lapse with
+// SIGSTOP: three runs in three failed at 10.02s with SESSION_REFUSED, which is
+// the failure CI reported at 10.05s.
+//
+// The budget goes with it, because from here a wait on this fleet is a wait on
+// real session windows elapsing, which is the one thing scriptedBudget says it
+// is not measuring.
 func renewingEvery(session time.Duration) fleetOption {
-	return func(f *fleet) { f.session = session }
+	return func(f *fleet) {
+		f.session = session
+		f.heartbeat = session / 8
+		f.budget = 8 * session
+	}
 }
 
 // keepingAClockAhead makes this fleet's machine read a wall clock ahead of the
