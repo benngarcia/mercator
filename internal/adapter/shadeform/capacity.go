@@ -165,7 +165,10 @@ func (a *Adapter) reconcileDuplicates(
 		}
 		live := liveMatches(matchingRental(instances, command.RentalID))
 		if winner, found := oldest(live); found {
-			if err := verifyOwnership(winner, command.OwnershipToken); err != nil {
+			// Every machine wearing this lease's tag, and not merely the one about to
+			// be kept. The rest of this loop destroys them, and a machine held under
+			// somebody else's token is not this reconciler's to destroy.
+			if err := verifyOwnershipOfAll(live, command.OwnershipToken); err != nil {
 				return capability.CapacityReceipt{}, err
 			}
 			for _, duplicate := range live {
@@ -199,24 +202,24 @@ func (a *Adapter) reconcileDuplicates(
 // allocated: it was destroyed, or the auto_delete backstop reclaimed it, and a
 // caller told "unknown" would go on waiting for an agent that has no machine to
 // arrive from.
+//
+// Ownership is asked of every machine wearing the lease's tag rather than of the
+// one about to be reported. A second machine tagged for this lease under another
+// token is another deployment or a stale script on this account, and reporting
+// the one this Rental recognises would leave the account quietly billing for the
+// other for as long as nobody looked.
 func (a *Adapter) ObserveCapacity(ctx context.Context, ref capability.CapacityRef) (capability.CapacityObservation, error) {
 	instances, err := a.client.listInstances(ctx)
 	if err != nil {
 		return capability.CapacityObservation{}, err
 	}
 	matches := matchingRental(instances, ref.RentalID)
+	if err := verifyOwnershipOfAll(matches, ref.OwnershipToken); err != nil {
+		return capability.CapacityObservation{}, err
+	}
 	observed, found := oldest(liveMatches(matches))
 	if !found {
 		observed, found = oldest(matches)
-	}
-	if found {
-		// Only the machine about to be reported on. A terminal record left by an
-		// earlier generation of this lease was held under that generation's token,
-		// and refusing the whole observation over it would leave the machine
-		// running now unobservable.
-		if err := verifyOwnership(observed, ref.OwnershipToken); err != nil {
-			return capability.CapacityObservation{}, err
-		}
 	}
 	if !found {
 		return capability.CapacityObservation{
@@ -263,10 +266,8 @@ func (a *Adapter) TerminateCapacity(ctx context.Context, command capability.Capa
 		return capability.CapacityReceipt{}, err
 	}
 	targets := liveMatches(matchingRental(instances, command.RentalID))
-	for _, target := range targets {
-		if err := verifyOwnership(target, command.OwnershipToken); err != nil {
-			return capability.CapacityReceipt{}, err
-		}
+	if err := verifyOwnershipOfAll(targets, command.OwnershipToken); err != nil {
+		return capability.CapacityReceipt{}, err
 	}
 	for _, target := range targets {
 		if err := a.client.deleteInstance(ctx, target.ID); err != nil {
@@ -327,12 +328,13 @@ func (a *Adapter) findLiveRental(ctx context.Context, rentalID, ownershipToken s
 	if err != nil {
 		return instance{}, false, err
 	}
-	held, found := oldest(liveMatches(matchingRental(instances, rentalID)))
+	live := liveMatches(matchingRental(instances, rentalID))
+	if err := verifyOwnershipOfAll(live, ownershipToken); err != nil {
+		return instance{}, false, err
+	}
+	held, found := oldest(live)
 	if !found {
 		return instance{}, false, nil
-	}
-	if err := verifyOwnership(held, ownershipToken); err != nil {
-		return instance{}, false, err
 	}
 	return held, true, nil
 }

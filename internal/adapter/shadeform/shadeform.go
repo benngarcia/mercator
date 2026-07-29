@@ -244,3 +244,23 @@ func verifyOwnership(held instance, ownershipToken string) error {
 	}
 	return nil
 }
+
+// verifyOwnershipOfAll is the ownership question asked of every machine carrying
+// one Rental's tag, which is the only way to ask it that means anything. A tag
+// is a label anybody with this account can write, and the ownership token is
+// what says a machine wearing it is really this lease's; a path that checked
+// only the machine it was about to act on would read a foreign machine as absent
+// and go on to observe, adopt or destroy around it.
+//
+// It refuses on the first mismatch rather than reporting the set, because there
+// is nothing safe to do with the rest: this account is holding a machine under
+// this lease's name that this lease did not take out, and that is an answer for
+// an operator rather than a state to converge from.
+func verifyOwnershipOfAll(matches []instance, ownershipToken string) error {
+	for _, match := range matches {
+		if err := verifyOwnership(match, ownershipToken); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -367,6 +367,49 @@ func TestProvisionReconcilesAConcurrentDuplicateKeepingTheOldest(t *testing.T) {
 	}
 }
 
+// TestReconciliationDestroysNoMachineHeldUnderAnotherOwnershipToken is the same
+// rule the teardown holds, asked of the path that destroys machines nobody
+// named. A tag is a label anybody with this account can write, so a second
+// machine wearing this lease's tag under another token is another deployment's,
+// and the reconciler that would keep the oldest and destroy the rest must refuse
+// the whole convergence rather than delete somebody else's host.
+func TestReconciliationDestroysNoMachineHeldUnderAnotherOwnershipToken(t *testing.T) {
+	fake := newFakeShadeform()
+	fake.types = []instanceType{vmType()}
+	fake.beforeCreateReturns = func(f *fakeShadeform) {
+		f.instances = append(f.instances, rentedInstance("inst_0", "rent_1", "ws_1", "someone-else", "active", f.base.Add(time.Hour)))
+	}
+	adapter := newTestAdapter(t, fake, nil)
+
+	_, err := adapter.ProvisionCapacity(context.Background(), provisionCommand())
+
+	if err == nil || !strings.Contains(err.Error(), "ownership token") {
+		t.Fatalf("want a refusal naming the ownership conflict, got %v", err)
+	}
+	if len(fake.deletes) != 0 {
+		t.Fatalf("a machine held under another token must not be destroyed, got deletes=%v", fake.deletes)
+	}
+}
+
+// TestObserveSurfacesASecondMachineHeldUnderAnotherOwnershipToken is the case
+// the narrow check hid. The machine this Rental recognises is right there and
+// reportable, and reporting it would leave the account billing for the other one
+// for as long as nobody went and looked at the console.
+func TestObserveSurfacesASecondMachineHeldUnderAnotherOwnershipToken(t *testing.T) {
+	fake := newFakeShadeform()
+	fake.addInstance(rentedInstance("inst_1", "rent_1", "ws_1", "own1", "active", fake.base))
+	fake.addInstance(rentedInstance("inst_2", "rent_1", "ws_1", "someone-else", "active", fake.base.Add(time.Minute)))
+	adapter := newTestAdapter(t, fake, nil)
+
+	_, err := adapter.ObserveCapacity(context.Background(), capability.CapacityRef{
+		WorkspaceID: "ws_1", RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "ownership token") {
+		t.Fatalf("want a refusal naming the ownership conflict, got %v", err)
+	}
+}
+
 // TestAnIndeterminateProvisionIsReconciledByTagScanRatherThanASecondCreate is the
 // whole reason the Rental identity travels to the provider. Shadeform's create
 // carries no operation key, so a lost answer is indistinguishable from a command
