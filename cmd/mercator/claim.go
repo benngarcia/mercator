@@ -63,6 +63,17 @@ func (c databaseClaim) release() {
 // beside the -wal and -shm files SQLite keeps there. It holds no state. An
 // empty answer means this DSN names no file on disk.
 func lockPath(dsn string) string {
+	path := databasePath(dsn)
+	if path == "" {
+		return ""
+	}
+	return path + "-lock"
+}
+
+// databasePath is the file a DSN names. An empty answer means the DSN names no
+// file on disk, which is a memory-backed database: private to the process that
+// opened it, gone when that process exits.
+func databasePath(dsn string) string {
 	path := strings.TrimPrefix(dsn, "file:")
 	if mark := strings.IndexByte(path, '?'); mark >= 0 {
 		if inMemory(path[mark+1:]) {
@@ -70,10 +81,10 @@ func lockPath(dsn string) string {
 		}
 		path = path[:mark]
 	}
-	if path == "" || path == ":memory:" {
+	if path == ":memory:" {
 		return ""
 	}
-	return path + "-lock"
+	return path
 }
 
 func inMemory(rawQuery string) bool {

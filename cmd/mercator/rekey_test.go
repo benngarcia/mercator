@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -97,6 +98,85 @@ func TestRekeyRefusesWhileAServerIsUsingTheDatabase(t *testing.T) {
 	if !strings.Contains(stderr.String(), "another mercator process") ||
 		!strings.Contains(stderr.String(), "stop the server") {
 		t.Fatalf("stderr = %q, want the running server named", stderr.String())
+	}
+}
+
+// TestRekeyRefusesADatabaseItWouldHaveToCreate drives the real command against
+// a path that holds no database. Opening a SQLite store creates the file and
+// its schema, so without the refusal the rotation succeeds against an empty
+// database, reports zero rows, and tells the operator to delete the key every
+// real credential is still sealed under.
+func TestRekeyRefusesADatabaseItWouldHaveToCreate(t *testing.T) {
+	// Arrange: the DSN an operator mistypes, or one a root shell never exported.
+	absent := filepath.Join(t.TempDir(), "mercator.db")
+
+	// Act
+	var stdout, stderr bytes.Buffer
+	exitCode := run(context.Background(), []string{"mercator", "rekey"}, map[string]string{
+		"MERCATOR_SQLITE_DSN": "file:" + absent,
+		"MERCATOR_SECRET_KEY": hex.EncodeToString(newMasterKey),
+		previousMasterKeyVar:  hex.EncodeToString(retiredMasterKey),
+	}, &stdout, &stderr)
+
+	// Assert
+	if exitCode != 1 {
+		t.Fatalf("run() = %d, want 1; stdout = %q", exitCode, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), absent) {
+		t.Fatalf("stderr = %q, want the database path named", stderr.String())
+	}
+	if _, err := os.Stat(absent); !os.IsNotExist(err) {
+		t.Fatalf("os.Stat(%s) = %v, want the refusal to have created nothing", absent, err)
+	}
+}
+
+// TestRekeyRefusesAMemoryBackedDatabase: a memory DSN stores nothing past the
+// process that opened it, so rotating one moves no credential anywhere.
+func TestRekeyRefusesAMemoryBackedDatabase(t *testing.T) {
+	// Arrange, Act
+	var stdout, stderr bytes.Buffer
+	exitCode := run(context.Background(), []string{"mercator", "rekey"}, map[string]string{
+		"MERCATOR_SQLITE_DSN": "file::memory:?mode=memory&cache=shared",
+		"MERCATOR_SECRET_KEY": hex.EncodeToString(newMasterKey),
+		previousMasterKeyVar:  hex.EncodeToString(retiredMasterKey),
+	}, &stdout, &stderr)
+
+	// Assert
+	if exitCode != 1 {
+		t.Fatalf("run() = %d, want 1; stdout = %q", exitCode, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "memory-backed") {
+		t.Fatalf("stderr = %q, want the memory-backed database named", stderr.String())
+	}
+}
+
+// TestRekeyNamesTheDatabaseWhenItMovesNothing: zero rows in a database that
+// does exist is ordinary, and is also what rotating the wrong file looks like,
+// so the report names the file instead of reading as a plain success.
+func TestRekeyNamesTheDatabaseWhenItMovesNothing(t *testing.T) {
+	// Arrange: a real database with no sealed credential in it.
+	path := filepath.Join(t.TempDir(), "mercator.db")
+	dsn := "file:" + path
+	storage, err := sqlitestore.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	_ = storage.Close()
+
+	// Act
+	var stdout, stderr bytes.Buffer
+	exitCode := run(context.Background(), []string{"mercator", "rekey"}, map[string]string{
+		"MERCATOR_SQLITE_DSN": dsn,
+		"MERCATOR_SECRET_KEY": hex.EncodeToString(newMasterKey),
+		previousMasterKeyVar:  hex.EncodeToString(retiredMasterKey),
+	}, &stdout, &stderr)
+
+	// Assert
+	if exitCode != 0 {
+		t.Fatalf("run() = %d, stderr = %s", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "re-sealed 0 credential(s)") || !strings.Contains(stdout.String(), path) {
+		t.Fatalf("stdout = %q, want zero rows and the database named", stdout.String())
 	}
 }
 

@@ -50,9 +50,15 @@ limits.
   Workloads and runtimes own their secret-management backend. Master-key
   rotation does exist: `mercator rekey` re-seals every stored connection
   credential from `MERCATOR_SECRET_KEY_PREVIOUS` to `MERCATOR_SECRET_KEY` in one
-  transaction. It is offline. There is no online rotation, no rotation of a
-  session-cookie key, and no scheduled or automatic rotation, so the retired key
-  is in the environment for as long as the operator leaves it there.
+  transaction. It is offline, and it covers stored credentials only: an
+  in-flight run's report token and an enrolled node's credentials were signed
+  under the retired key and are not carried across, so runs have to reach a
+  terminal phase and nodes have to be bootstrapped again
+  ([#215](https://github.com/benngarcia/mercator/issues/215),
+  [#217](https://github.com/benngarcia/mercator/issues/217)). There is no online
+  rotation, no rotation of a session-cookie key, and no scheduled or automatic
+  rotation, so the retired key is in the environment for as long as the operator
+  leaves it there.
 - Health, OpenAPI, and UI shell are public on the listen interface.
 
 ## Capacity Reuse

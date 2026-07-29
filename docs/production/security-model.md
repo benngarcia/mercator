@@ -112,11 +112,15 @@ The key is never generated for you. A generated key would change on every
 restart and orphan every credential sealed under the previous one, so an absent
 key is a startup failure naming the variable.
 
-Rotate it with `mercator rekey`. The command refuses to run while a server holds
-the database, so the order below is enforced rather than advised:
+Rotate it with `mercator rekey`. Two ways of rotating the wrong thing are
+refusals rather than advice: the command will not run while another process
+holds the database, and it will not run against a database it would have to
+create. What it cannot see is a rotation against some other database that does
+exist, so the DSN below has to be the one the server runs with, and the value
+here is the one [install-configuration.md](install-configuration.md) prescribes.
 
 ```sh
-export MERCATOR_SQLITE_DSN='file:/data/mercator.db'
+export MERCATOR_SQLITE_DSN='file:/var/lib/mercator/mercator.db'
 export MERCATOR_SECRET_KEY="$(openssl rand -hex 32)"     # the new key
 export MERCATOR_SECRET_KEY_PREVIOUS='<the retired key>'
 mercator rekey
@@ -155,14 +159,40 @@ So the rotation procedure is: stop admitting work, let in-flight runs reach a
 terminal phase, then stop the server and rotate. Mercator has no drain command;
 `mercator run list` is how you see what is still running.
 
-Node enrollment tokens and node sessions genuinely are short-lived and are
-re-signed as they are minted, and browser sessions signed under
-`MERCATOR_SESSION_KEY` are unaffected by a master-key rotation. An enrolled node
-holding a session issued under the retired key stops verifying at the restart
-and re-enrolls on its next attempt.
+Browser sessions are signed under `MERCATOR_SESSION_KEY`, which is separate
+material, so a logged-in human is unaffected by a master-key rotation.
 
 Report-token expiry and re-issue is
 [#215](https://github.com/benngarcia/mercator/issues/215).
+
+### Retire The Nodes Too
+
+A node's two credentials are both short-lived, and neither survives a rotation.
+An enrolled node does not come back on its own.
+
+Both are HMACs under the node subkey of the master key: the session token it
+authenticates with, valid 30 minutes from enrollment, and the enrollment token
+it was bootstrapped with, valid 30 minutes from the moment the identity was
+invited. Nothing re-signs an issued one, and the enrollment token is the only
+input to the one route that mints a session. So after the restart the node's
+heartbeats, events, and results are all refused; the agent goes on presenting
+the credential it holds, which a refusal does not replace; and the enrollment it
+eventually falls back to is refused as well, because that token was signed under
+the retired key too and its own window closed 30 minutes after the identity was
+invited. The lease expires, the control plane records the node lost, the rental
+keeps billing, and its workloads are orphaned.
+
+Recovery is an operator action rather than the node's next attempt. Inviting the
+same `node_id` again is refused because the identity already exists, and that
+refusal arrives today as a `500` naming a unique-constraint failure, so the
+machine needs a fresh identity and a fresh agent state file. The procedure is
+therefore to drain enrolled nodes and retire their identities before rotating,
+and to bootstrap them again afterwards.
+
+Carrying node credentials across a rotation is
+[#217](https://github.com/benngarcia/mercator/issues/217), and the missing
+operator route back is
+[#211](https://github.com/benngarcia/mercator/issues/211).
 
 ## Idempotency And Side Effects
 
