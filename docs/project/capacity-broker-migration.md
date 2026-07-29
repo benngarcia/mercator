@@ -4743,15 +4743,76 @@ complete because it works against a live provider.
     path with its own policy decisions and its own Blueprint to write, rather than
     a defect in code that already exists.
 
+- [x] 2026-07-29: State what every `CapacityProvider` promises once, and run both
+  backends against it. Until this, the contract was readable only as
+  `internal/adapter/shadeform`'s code, so the second provider would have
+  discovered the promises by disagreeing with the first.
+  `internal/capability/capacitytest` holds eight promises: a listing is capacity
+  to acquire, a negotiated set is one a provider could keep, a credential check
+  allocates nothing, one provision command produces one machine, a lost answer is
+  reconcilable, terminate is confirmed and stays confirmed, an operation the
+  provider never promised is refused rather than quietly succeeding, and a trial
+  leaves nothing owned. Each names the Lab rule it is the higher-fidelity half of,
+  as a constant rather than a comment. The suite imports no `testing` package, so
+  the `mercator` binary links none when `verify` reaches it, and `mercator verify
+  --mode capacity` is the mode that rents a machine and gives it back.
+  - The deliberate failing case is kept rather than performed once and deleted:
+    one stub keeps the contract and eight break a single clause each, and every
+    case asserts both halves, that the promises about that clause fail and that
+    the rest do not.
+  - Recovery is two mechanisms in sequence rather than a choice between them. The
+    first revision made it a `switch`, so a provider declaring both an owned
+    listing and an operation key was asked the listing, learned nothing, and never
+    reached the repeat, which is exactly the pairing `fake` and Shadeform both
+    declare. The listing is asked first because it allocates nothing, and the
+    repeat follows only when nothing has been named.
+  - An operation key names the machine as well as the lease. `lease.act` keyed on
+    operation plus Rental ID, so a lease holding two machines sent both terminates
+    under one key, and the production sweep had the same collision on exactly the
+    machines it exists to find. Latent rather than leaking today, because neither
+    the Lab nor Shadeform caches a terminate by key.
+  - An acceptance that names no machine is carried as
+    `capability.ErrCapacityIndeterminate`, because that is the position it leaves
+    a caller in. It previously recorded nothing, ran no recovery, and reported
+    nothing.
+
+- [x] 2026-07-29: Close phase 5 out. Full verification re-run on the Linux build
+  host and recorded below, documentation brought level with the tree, and every
+  blocked or deferred piece of phase scope filed as its own issue rather than left
+  in a report.
+  - Two code changes, both defects the close-out's own verification found rather
+    than anything the phase built. `internal/httpapi/contract.gen.go` was
+    hand-edited rather than regenerated when the host-facts slice added
+    `AcceleratorDriver`, `HostFacts` and `HostRequirements`, so CI's `go generate
+    ./...` followed by `git diff --exit-code` would have failed on the first push.
+    Regenerating also restored the `HostRequirementsFacts` enum the hand-written
+    copy had flattened to `[]string`.
+  - `TestConsoleRunsNavigation` failed four runs in six here while passing in CI.
+    Two races in the browser script, both of the same shape: it read a state that
+    settles after the call it was waiting on returned. Focus restoration was
+    compared by DOM node identity and sampled immediately; sheet dismissal goes
+    back through router history and nothing waited for it. Fixed at the root and
+    now 20 passes in 20. No console source changed, because the product behaves
+    correctly in both cases. Recorded here because a test that only fails on fast
+    hardware is a test that stops being evidence exactly where it matters most.
+  - Both were invisible until now for the same structural reason: this branch had
+    no upstream for the whole phase, so nothing it did had ever met CI, and the
+    browser cases skip unless an environment flag asks for them.
+  - Judgment call worth recording: the corpus and invariant figures in this
+    document had drifted again, by one Blueprint and two conformance cases and one
+    invariant. They are counted off the tree at close-out and the previous wrong
+    figures are named, because a number quoted from memory is how the last three
+    revisions got it wrong.
+
 ## Phase status
 
 | Phase | What it delivers | Status |
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
-| 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
+| 2 | Node protocol and Go agent | done; hand enrolment was all it delivered, and phase 5 added the bootstrap that lets provisioned capacity enrol itself |
 | 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
-| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. A Rental is now a domain aggregate with generations, held in a memory and a SQLite store under one conformance suite, and ending a generation retires the runtime bound to it, which is the first write of `node.StateRetired` in the tree and the first thing that stops a machine Mercator gave up being published as capacity. A Run that ends on a machine provisioned to hold a Rental now releases its workload and leaves the host standing, because the cleanup disposition reads the execution lane as well as the offer kind: only a one-shot product Mercator allocated is destroyed by the end of its own Run. A bootstrapped machine now keeps its session for as long as it works: the registry renews a credential over the node protocol, the agent renews ahead of each lapse, and the invitation it joined with is redeemed exactly once and appears in no event, ledger entry, or Run Bundle. Before it, a real node stopped being able to authenticate about thirty minutes after bootstrapping while its containers went on running, and no test could see it. A machine now states what it has to state to be placed on at all: the agent reports the cards under it and the driver over them, an offer carries both, a workload declares the accelerator stack its image was built against, and Placement refuses a host that said no with `CAPABILITY_MISMATCH` and a host that said nothing with `UNKNOWN_FACT` rather than installing a stack onto somebody's host or finding out at launch. Before it, every enrolled GPU machine advertised zero accelerators and was struck out of every GPU placement it was perfect for. Shadeform is now a CapacityProvider and the first backend in the reusable lane: it rents a VM, hands it a script launch configuration that installs the pinned node agent and starts it under systemd, states a negotiated set that promises no stop, no resume and no persistent disk, and reconciles a repeated provision by scanning the account for the lease's own tag because the API honours no operation key. Its one-shot half went with the promotion, because one connection cannot sell both. No live provider run has happened: this host holds no Shadeform credential, so the whole path is proven under the package's httptest fake and the live half is blocked and filed rather than claimed. The promises every `CapacityProvider` keeps are now a suite rather than a reading of one adapter's code, run against the simulated provider and against Shadeform's own marketplace over `httptest` on every build, and `mercator verify` has the mode that rents a machine and gives it back. The launch is still not addressed to the machine a provisioning built, a capacity connection still publishes no placement candidate, and nothing yet ends the lease of a machine nobody is using |
+| 5 | One true VM provider with agent bootstrap and conformance | done under simulation and conformance, and unproven against a live marketplace: every promise below is held by the Blueprint corpus, the Lab, the shared provider conformance suite, and this host's real Docker daemon, and none of them has been checked against a billed Shadeform account, because this host holds no credential (#235). The corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. A Rental is now a domain aggregate with generations, held in a memory and a SQLite store under one conformance suite, and ending a generation retires the runtime bound to it, which is the first write of `node.StateRetired` in the tree and the first thing that stops a machine Mercator gave up being published as capacity. A Run that ends on a machine provisioned to hold a Rental now releases its workload and leaves the host standing, because the cleanup disposition reads the execution lane as well as the offer kind: only a one-shot product Mercator allocated is destroyed by the end of its own Run. A bootstrapped machine now keeps its session for as long as it works: the registry renews a credential over the node protocol, the agent renews ahead of each lapse, and the invitation it joined with is redeemed exactly once and appears in no event, ledger entry, or Run Bundle. Before it, a real node stopped being able to authenticate about thirty minutes after bootstrapping while its containers went on running, and no test could see it. A machine now states what it has to state to be placed on at all: the agent reports the cards under it and the driver over them, an offer carries both, a workload declares the accelerator stack its image was built against, and Placement refuses a host that said no with `CAPABILITY_MISMATCH` and a host that said nothing with `UNKNOWN_FACT` rather than installing a stack onto somebody's host or finding out at launch. Before it, every enrolled GPU machine advertised zero accelerators and was struck out of every GPU placement it was perfect for. Shadeform is now a CapacityProvider and the first backend in the reusable lane: it rents a VM, hands it a script launch configuration that installs the pinned node agent and starts it under systemd, states a negotiated set that promises no stop, no resume and no persistent disk, and reconciles a repeated provision by scanning the account for the lease's own tag because the API honours no operation key. Its one-shot half went with the promotion, because one connection cannot sell both. No live provider run has happened: this host holds no Shadeform credential, so the whole path is proven under the package's httptest fake and the live half is blocked and filed rather than claimed. The promises every `CapacityProvider` keeps are now a suite rather than a reading of one adapter's code, run against the simulated provider and against Shadeform's own marketplace over `httptest` on every build, and `mercator verify` has the mode that rents a machine and gives it back. `enrolled-node-survives-its-first-run`, the phase 1 target that named this whole phase, is green: the placement world provisions, enrols, and publishes the machine a listing became, and the second Run reuses it. What the phase does not deliver, each filed: the launch is still not addressed to the machine a provisioning built (#207), a capacity connection still publishes no placement candidate so no production Run can reach a rented machine (#200), nothing yet ends the lease of a machine nobody is using (#206), a provision the provider classified as fatal is retried for ever (#236), and no live marketplace run has happened (#235) |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
 ## Scenario and invariant coverage
@@ -4761,17 +4822,26 @@ Phase 1 added:
 - `ephemeral-execution-is-never-a-rental` (green): a one-shot product is the
   cheapest and fastest candidate and still records `launch_ephemeral`, because
   nothing survives the workload's exit.
-- `enrolled-node-survives-its-first-run` (target, missing `node_bootstrap` and
-  `execution_warms_capacity`): capacity provisioned for the first Run is still
-  there when the second arrives, and the second reuses it rather than provisioning
-  again. It carried `rental_schedule` as a third pending reason until phase 5
-  slice 1, and that debt is paid: the Rental Schedule store, its versioning, and
-  its reservation are wired end to end and four green fixtures exercise them, so
-  what the second step waits on is the provisioned-to-enrolled transition twice
-  over. Its first step no longer waits on anything: the first Run releases its
-  workload rather than terminating its host, which is the disposition half of this
-  target and the half that had to be true before there could be a machine for the
-  second Run to find at all.
+- `enrolled-node-survives-its-first-run` (green since 2026-07-28): capacity
+  provisioned for the first Run is still there when the second arrives, and the
+  second reuses it rather than provisioning again. This was the phase 1 target
+  that named the whole of phase 5, and it went green in four instalments rather
+  than one. `rental_schedule` was paid off in phase 5 slice 1, when the Rental
+  Schedule store, its versioning, and its reservation were wired end to end.
+  `execution_warms_capacity` was paid off by the disposition slice: the first Run
+  releases its workload rather than terminating its host, which had to be true
+  before there could be a machine for the second Run to find at all.
+  `node_bootstrap` was paid off when the placement world learned to provision,
+  enrol, and publish the machine a listing became, so the two Runs win two
+  different things wearing two different names and the listing is refused a
+  second time rather than sold twice.
+  Read what its green status does and does not prove. It is a Blueprint, so it is
+  green against the simulated world, and what it holds is Mercator's own
+  reasoning: that a provisioning becomes an enrolment, that the machine and the
+  listing it came from are distinct offers, and that the second Run lands on the
+  machine. It does not prove that a rented VM anywhere boots and enrols, which is
+  what the blocked live trial in
+  [#235](https://github.com/benngarcia/mercator/issues/235) is for.
 - `safety.ephemeral_capacity_not_reused` (Lab invariant): no Run is ever queued
   behind one-shot capacity, and capacity held for a one-shot execution never
   accumulates a second Booking.
@@ -6043,9 +6113,12 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 62 regression Blueprints: 61 green and 1 target, beside two demo
-documents, one minimized case, and forty three conformance Blueprints, all of
-them green. The count is read off the
+The corpus is 63 regression Blueprints: 62 green and 1 target, beside two demo
+documents, one minimized case, and forty five conformance Blueprints, all of
+them green. Counted on 2026-07-29 at the phase 5 close-out; the previous
+revision of this paragraph said 62 regression and forty three conformance and
+was one and two behind respectively, which is the drift the assertion below
+exists to stop. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.
@@ -6064,10 +6137,11 @@ machine a listing became. `bad-host-facts-rejected-loudly` went green on
 under a workload, a Run declares what its image needs of that substrate, and
 Placement refuses a stated no and a silence under different codes.
 
-The Lab registry holds fifty two invariants, forty four safety and eight
+The Lab registry holds fifty three invariants, forty five safety and eight
 liveness. The figure is counted off `DefaultInvariantRegistry` rather than
 remembered; an earlier revision of this section said forty five and was already
-two behind, and a later one said forty eight. Every one carries a deliberate failing case, which
+two behind, a later one said forty eight, and the one before this said fifty two.
+Every one carries a deliberate failing case, which
 `TestEveryDefaultInvariantHasADeliberatelyFailingCase` requires of the registry
 itself: an invariant nothing can make fail is not evidence, so one cannot be
 registered without the world that breaks it.
@@ -6080,11 +6154,15 @@ afterwards, and what survived a control-plane restart.
 ## What phase 2 does not yet do
 
 Placement now routes Runs to enrolled nodes, and one node runs successive
-workloads. What is still missing is how a node comes to exist on capacity
-Mercator rents: a provisioned machine arrives with no agent, so only a node an
-operator enrolled by hand is reusable. That is phase 5, and it is why
-`enrolled-node-survives-its-first-run` stays a target scenario alongside the
-Rental Schedule work.
+workloads. What phase 2 left missing was how a node comes to exist on capacity
+Mercator rents: a provisioned machine arrived with no agent, so only a node an
+operator enrolled by hand was reusable. Phase 5 answered that. A Shadeform
+connection rents a VM and hands it a launch script that installs the pinned agent
+and starts it under systemd, the invitation it carries lasts exactly as long as
+Mercator waits, and the session renews itself for as long as the machine works.
+What is still true is that no production placement reaches that machine: a
+capacity connection publishes no offers, which is
+[#200](https://github.com/benngarcia/mercator/issues/200).
 
 Enrolling the local Docker host is a manual two-step: invite a node through
 `POST /v1/nodes`, then run `mercator-node` with the returned bootstrap. There is
@@ -6142,6 +6220,183 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 5 close-out
+
+Run on 2026-07-29 on the Linux build host (`ws`, amd64, 24 cores, Go 1.25.11,
+native Docker), against `222860e` plus the contract regeneration described below.
+Every command below was executed in this worktree and its real result is
+recorded. Nothing here is quoted from a previous run.
+
+```text
+go build ./...                       exit 0
+go vet ./...                         exit 0
+go test ./...                        exit 0, 38 packages ok
+go test ./... -count=1 -v            1847 subtests PASS, 10 SKIP, 0 FAIL
+```
+
+The verbose run is the one to read, and the first draft of this section got it
+wrong in a way worth recording. `go test ./...` without `-v` prints no SKIP lines
+at all, so counting them in its output returns zero on a tree that skipped ten
+cases. A skip is how this repository's live suites report a missing daemon, a
+missing credential, or a rate-limited registry, which makes an unread skip count
+exactly the wrong thing to be confident about. Re-run with `-v`, the ten are:
+
+```text
+opt-in behind an environment flag, not missing capability:
+  TestIntegrationDockerAdapterLaunchObserveRelease            MERCATOR_DOCKER_INTEGRATION
+  TestIntegrationOneDaemonReachedTwoWaysIsOneMachine          MERCATOR_DOCKER_INTEGRATION
+  TestIntegrationTheJanitorConvergesOneAttemptsContainer...   MERCATOR_DOCKER_INTEGRATION
+  TestIntegrationThisEndpointCountsItsOwnCardsAndNames...     MERCATOR_DOCKER_INTEGRATION
+  TestE2EFakeAdapterHTTPAndCLI                                MERCATOR_E2E_FAKE
+  TestConsoleRunsNavigation                                   MERCATOR_BROWSER_TEST
+  TestLabConsoleUsesNormalAPIAndSSE                           MERCATOR_BROWSER_TEST
+genuinely not runnable here:
+  TestShadeformKeepsEveryCapacityPromiseAgainstTheLive...     no credential, #235
+  TestRegistryResolverAgreesWithDockerAboutAPublicImage       docker.io 429, #178
+a target Blueprint reporting itself pending, which is the corpus working:
+  TestPlacementScenarios/queued-booking-deadline-expiry       #190
+```
+
+Seven of the ten were skipping behind a flag rather than behind a missing
+capability, so they were run:
+
+```text
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+  4 PASS against Docker Engine 29.6.2 on Ubuntu 26.04
+MERCATOR_E2E_FAKE=1 go test ./internal/cli -run TestE2EFakeAdapterHTTPAndCLI
+  PASS
+MERCATOR_BROWSER_TEST=1 go test ./internal/lab -run TestLabConsoleUsesNormalAPIAndSSE
+  PASS
+MERCATOR_BROWSER_TEST=1 go test ./internal/httpapi -run TestConsoleRunsNavigation
+  FAILED 4 runs in 6, see below
+```
+
+`TestIntegrationThisEndpointCountsItsOwnCardsAndNamesTheirDriver` is the
+accelerator probe this phase added, and it ran against this host's real RTX 5090
+through a real container rather than against a recorded fixture. That is the
+strongest evidence in the phase for the host-facts work, and it exists only
+because this build host has a GPU and a native daemon.
+
+`TestConsoleRunsNavigation` was genuinely broken here and is now fixed. Two
+defects, both the same shape: the script read a state that settles after the call
+it was waiting on returned. The focus hand-back when the create sheet closes was
+compared by DOM node identity against a handle taken before the sheet opened, and
+sampled the instant `waitForURL` resolved, so it lost two races at once, because
+the hand-back happens after the URL returns and the event feed refetching
+`useRuns` re-renders the header and replaces the button element. Behind it, and
+never reached while it kept failing, dismissing the sheet with Escape goes back
+through the router's history and nothing waited for that, so the next scenario
+could capture `?action=create` as the address it later expects `goBack` to return
+to and then wait out its full thirty second timeout for a URL the app will never
+show again. Before: 2 passes in 6. After both fixes: 20 passes in 20. No console
+source changed, because the product hands focus back correctly and the router
+returns correctly; only the test's idea of when to look was wrong.
+
+Worth stating for the next reader, because it cuts against a filed issue:
+[#197](https://github.com/benngarcia/mercator/issues/197) says the console can
+only be verified in CI because Playwright's Chromium will not run on a dev
+workstation. It runs here. Both browser cases execute against a real headless
+Chromium on this host, which is how the two races above were found at all. The
+issue is true of the machine it was written on rather than of every workstation.
+
+After that, three of the original ten remain unrun, and none of them can be run
+here: the live Shadeform trial needs a credential this host does not hold, the
+public-image registry comparison needs a Docker Hub quota this address has spent,
+and the target Blueprint is the corpus correctly reporting unbuilt work.
+
+```text
+go test -race -count=1 <every package this phase touched>
+  32 packages, 26 ok, 6 with no test files, 0 FAIL, 0 SKIP
+```
+
+The package list is derived rather than remembered: every directory holding a Go
+file that differs between `beng/prediction-and-service-classes` and this branch.
+
+```text
+go test ./internal/scenario -run 'TestPlacementScenarios|TestCorpusCoversBothStatuses' -v -count=1
+  TestCorpusCoversBothStatuses: corpus: 62 green, 1 target
+  TestPlacementScenarios: 62 subtests PASS, 1 SKIP
+```
+
+The one skip is `queued-booking-deadline-expiry`, which is the corpus reporting a
+target case as pending rather than a failure. It waits on `schedule_advancement`,
+which is [#190](https://github.com/benngarcia/mercator/issues/190) and belongs to
+the Lab rather than to this phase.
+`enrolled-node-survives-its-first-run`, the target that named this phase in
+phase 1, is among the 62 that pass.
+
+The console changed, because the generated API contract did:
+
+```text
+cd web/app
+bun run typecheck   exit 0
+bun run test        7 files, 46 tests, all passed
+bun run build       3 artifacts
+```
+
+The remaining CI gates were run rather than assumed, because this branch had
+never been pushed and so had never met them:
+
+```text
+go generate ./... && git diff --exit-code     initially FAILED, see below
+scripts/check-open-source-launch.sh           25 checks passed
+scripts/build-release-archives.sh v0.0.0-ci   5 archives built
+```
+
+`go generate` is the one that found something. `internal/httpapi/contract.gen.go`
+had been hand-edited rather than regenerated when the host-facts slice added
+`AcceleratorDriver`, `HostFacts` and `HostRequirements`, so the first push would
+have failed CI's `git diff --exit-code` immediately after it. Two differences: the
+hand-written types were appended at the end of the file where the generator emits
+them in schema order, which is cosmetic and would still have failed the gate; and
+`HostRequirements.facts`, which `openapi.json` declares as an enum of `ssh` and
+`nvidia_driver`, had been flattened to `[]string`, dropping the named
+`HostRequirementsFacts` type and its `Valid` method that the generator produces
+for every other enum in the contract. Regenerating restores both. Nothing in Go
+reads those three types (they carry no `x-go-type`, so unlike `Run` they are wire
+shapes rather than aliases onto the domain, and their consumer is the generated
+TypeScript client), `domain.HostRequirements` and `domain.HostFact` are untouched,
+and a second `go generate` now leaves the tree clean.
+
+`scripts/check-open-source-launch.sh` needs Ruby, which CI installs and this host
+does not carry on the default PATH. Reported four failures until
+`~/.local/share/mise/installs/ruby/3.4.7/bin` was put in front, then passed all
+twenty five. Three of those four were the missing interpreter reported once per
+check that uses it, so nothing was actually wrong with the tree. Worth knowing
+before somebody reads a red audit here as a defect.
+
+Two files are not `gofmt` clean, `internal/adapter/vast/client.go` and
+`internal/scheduler/scheduler_test.go`. Both were already unformatted on
+`beng/prediction-and-service-classes`, CI runs no `gofmt` gate, and three phase 5
+slices each noticed them and each left them alone to keep its diff to the
+findings under review. That is the right call per slice and the wrong outcome
+across a phase, so it is filed as
+[#240](https://github.com/benngarcia/mercator/issues/240) with the gate that
+would stop the next one, rather than reformatted here inside a documentation
+commit.
+
+Platform note, because the phase brief asked for one. Every earlier phase 5 slice
+was built on arm64 macOS and this close-out ran on amd64 Linux. Nothing failed
+here for a reason that was about the instruction set, and two things failed here
+for reasons about the host, which is a distinction worth keeping.
+
+The contract drift is a logic defect that would have failed on either platform
+and had simply never been checked, because the branch had no upstream and CI had
+never seen it. The two console races are the interesting kind: neither is a
+platform difference and both are speed differences. The assertions were always
+wrong, and they were wrong in a direction that only loses on a machine fast
+enough to finish the synchronous work before the asynchronous work settles. A
+slower laptop and a two core CI runner both hide them. A 24 core workstation
+does not. Anything of that shape will surface here first and should be read as a
+real defect rather than as this host misbehaving, which is what happened.
+
+What this evidence does not establish, said plainly: none of it touched a live
+provider. Every Shadeform statement in this phase is held by the package's
+`httptest` fake, the shared conformance suite, and the Lab, because this host
+holds no `SHADEFORM_API_KEY` and no `op` to read one with. The blocked run is
+[#235](https://github.com/benngarcia/mercator/issues/235) and carries the exact
+command an operator runs.
 
 ### Phase 5 the promises every provider keeps
 

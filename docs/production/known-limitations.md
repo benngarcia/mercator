@@ -20,6 +20,20 @@ limits.
 - No Mercator-managed secret vault, grant API, KMS integration, or key rotation
   flow exists. Workloads/runtimes own their secret-management backend.
 - Health, OpenAPI, and UI shell are public on the listen interface.
+- A registry credential minted for one pull is the operator's standing account
+  verbatim ([#238](https://github.com/benngarcia/mercator/issues/238)).
+  `credential.Mint.RegistryPull` wraps the account from the operator's
+  `config.json` in a scope naming one operation, one workspace, one digest and an
+  expiry no longer than an hour, and that scope is enforced by Mercator's own
+  agent on the machine. A password registry sees none of it: it sees a username
+  and a password valid for everything that account can read, for as long as the
+  account exists. An attacker who takes a rented host takes the whole account.
+  Narrowing it needs a per-registry token exchange, which nothing in the tree
+  performs. Contrast an Artifact read, where the scope is real on the far side
+  too, because a presigned GET is a signature over one object path and one
+  expiry. Operators renting machines from a provider whose physical security they
+  do not control should give Mercator a registry account scoped to only the
+  images it needs to pull.
 
 ## Capacity Reuse
 
@@ -60,6 +74,26 @@ limits.
   every repeat under a lease with the machine that lease already has, so neither
   `capacityAlreadyHeld` nor the clause about one invitation reaching two machines
   is exercised by any world.
+- A provisioned Rental is never handed back
+  ([#206](https://github.com/benngarcia/mercator/issues/206)). Nothing ends the
+  lease of a machine nobody is using, so a machine that is rented, bootstrapped
+  and enrolled goes on being billed until an operator destroys it out of band.
+  The pieces exist (`Leases.EndGeneration` retires the runtime bound to the
+  generation, and `TerminateCapacity` gives the machine back), and nothing calls
+  them on an idle machine. Out of reach for a Run today only because a capacity
+  connection publishes no placement candidate; it is reachable right now through
+  the capacity seam, and `mercator verify --mode capacity` is the one path that
+  reliably gives a machine back, because the trial sweeps its own workspace.
+- The capacity conformance suite cannot see a second machine hidden behind a
+  lease that already holds one
+  ([#239](https://github.com/benngarcia/mercator/issues/239)). When a lease
+  already knows a machine and a later provision comes back indeterminate, the
+  repeat that would surface a duplicate is skipped, because on a conforming
+  provider that repeat answers with the machine that already exists and reporting
+  it would cry wolf. Nothing in the contract distinguishes the two, so a machine
+  really allocated by a lost answer can be billed and never named. Unreachable
+  today because nothing in the tree puts two machines under one lease, and it
+  becomes reachable the moment a lease grows a second generation.
 - An ephemeral execution still commits a Booking against a single-use Rental
   identity. Placement makes that binding unqueueable and records the honest
   `launch_ephemeral` disposition, but the Booking record type is shared with
@@ -263,9 +297,27 @@ limits.
 
 These are gaps in the evidence rather than in the product, recorded so a reader
 knows which promises rest on CI or on a credential this repository does not
-carry. Stated as of the phase 4 close-out on 2026-07-27, from an amd64 Linux
-workstation running Docker Engine 29.6.2. The phase 3 entries below were restated
-on that host and still hold.
+carry. Restated at the phase 5 close-out on 2026-07-29, from the same amd64 Linux
+workstation, now running Docker Engine 29.6.2 on Ubuntu 26.04 with an RTX 5090.
+The phase 3 and phase 4 entries below were re-checked on that host.
+
+Three of them are narrower than they were, and one is wrong as written:
+
+- The accelerator probe this phase added ran against a real GPU through a real
+  container, rather than against a recorded fixture, so the host-facts work is
+  not in the unproven column at all.
+- Playwright's Chromium does run here. Both browser-driven console cases execute
+  against real headless Chromium on this host, which is how two races in the
+  runs-navigation script were found and fixed at the phase 5 close-out. Issue
+  [#197](https://github.com/benngarcia/mercator/issues/197) says the console can
+  only be verified in CI, and that is true of the machine it was written on
+  rather than of every workstation. The entry below is kept because the claim it
+  makes about CI finding console defects still holds, and because nothing here
+  guarantees another workstation can run the browser.
+- Seven of the ten cases that skip under a bare `go test ./...` skip behind an
+  environment flag rather than behind a missing capability, and all seven pass
+  here when asked. A reader counting skips should ask which kind each one is
+  before concluding anything about coverage.
 
 - The prediction key's recurrence is unproven against any live marketplace, which
   is phase 4's largest untested assumption
@@ -308,9 +360,21 @@ on that host and still hold.
   order without a browser), so the same class of break fails locally next time.
   Anyone changing an event payload, a schema, or a placement weight should
   assume the console is affected and cannot confirm it here.
-- Provisioned reusable capacity has no live coverage at all, because no provider
-  bootstraps a node agent yet. Everything about a node that a real daemon proves
-  here was proven on this workstation's own daemon.
+- Provisioned reusable capacity has no live coverage at all. A provider does
+  bootstrap a node agent now, and no machine has ever been rented to carry one:
+  the bootstrap script is proven by running it under a real shell in a container
+  on this host, and the provider half is proven against Shadeform's API served
+  over `httptest`. Everything about a node that a real daemon proves here was
+  proven on this workstation's own daemon. What only a rented machine can
+  establish is whether a provider's image carries `systemd`, `curl` and a working
+  Docker daemon, and whether the script runs as root once the instance is active
+  ([#235](https://github.com/benngarcia/mercator/issues/235)).
+- The whole of phase 5 was developed on a branch with no upstream, so nothing it
+  built met CI until the close-out. Two defects survived every local slice and
+  every adversarial review for exactly that reason: a hand-edited generated file
+  that `go generate` plus `git diff --exit-code` catches immediately, and a
+  browser case that skips unless `MERCATOR_BROWSER_TEST` asks for it. Work kept
+  off CI for a long stretch should assume the same two classes are hiding in it.
 
 ## GA Documentation Gaps
 
