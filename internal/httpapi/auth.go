@@ -166,11 +166,18 @@ func (s *Server) authenticate(r *http.Request) (principal, bool) {
 }
 
 // humanPrincipal is what a signed-in email acts as. Ordinarily a human, scoped
-// to the workspaces they are a member of. On a deployment whose only human is
-// its operator (see WithSoleOperator), that person is the deployment acting as
-// itself and is scoped to nothing narrower.
+// to the workspaces they are a member of. On a deployment whose authenticator
+// can establish exactly one identity, that person is the deployment acting as
+// itself and is scoped to nothing narrower: `mercator serve --dev` and the Lab
+// bind loopback, mint a session for whoever is at the keyboard, and print the
+// instance bearer token to their terminal, so scoping them to their memberships
+// would refuse them their own console while protecting nothing they cannot
+// already reach with the token they were just handed.
+//
+// The authenticator is asked rather than a separate option read, because the
+// authenticator is what knows.
 func (s *Server) humanPrincipal(email string) principal {
-	if s.soleOperator != "" && email == s.soleOperator {
+	if sole := s.webauth.SoleOperator(); sole != "" && email == sole {
 		return principal{Subject: email, Kind: principalInstance}
 	}
 	return principal{Subject: email, Kind: principalHuman}

@@ -87,17 +87,23 @@ type Server struct {
 	manifests    func() []adapter.Manifest
 	nodes        NodeRegistry
 	admin        *adminSurface
-	soleOperator string
 }
 
 // WebAuth is the human-login surface the server mounts at /auth/ when OIDC is
 // configured: it serves the login/callback/logout/session endpoints, answers
-// which signed-in human a request's session cookie belongs to, and verifies
-// the bearer tokens `mercator login` mints for CLI users.
+// which signed-in human a request's session cookie belongs to, verifies the
+// bearer tokens `mercator login` mints for CLI users, and says whether the one
+// human it can authenticate is the deployment's own operator.
+//
+// SoleOperator is on this interface rather than beside it so that an
+// authenticator which can only ever establish one identity cannot be mounted
+// without saying so. Every implementation has to answer, and the answer travels
+// with the authenticator through whatever wires it.
 type WebAuth interface {
 	http.Handler
 	SessionEmail(*http.Request) (string, bool)
 	VerifyCLIToken(token string) (string, bool)
+	SoleOperator() string
 }
 
 // connectionVerifier is the narrow capability the server needs from the Broker
@@ -135,21 +141,6 @@ func WithReportSigner(signer *reporting.Signer) Option {
 // subject, and unauthenticated console page loads are routed into /auth/login.
 func WithWebAuth(auth WebAuth) Option {
 	return func(s *Server) { s.webauth = auth }
-}
-
-// WithSoleOperator names the one human a deployment with exactly one human by
-// construction authenticates. `mercator serve --dev` is that deployment: it
-// binds loopback, mints a session for whoever is at the keyboard, and prints
-// the instance bearer token to their terminal. Scoping that person's session to
-// their workspace memberships would protect nothing they cannot already reach
-// with the token they were just handed, and would refuse the developer their
-// own console.
-//
-// Everyone else is a human scoped to their memberships. Nothing sets this in a
-// deployment that authenticates more than one person, because OIDC and local
-// login cannot both be configured.
-func WithSoleOperator(email string) Option {
-	return func(s *Server) { s.soleOperator = email }
 }
 
 // WithAdapterManifests wires the registered adapters' onboarding manifests

@@ -17,6 +17,7 @@ import (
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
+	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
 	"github.com/benngarcia/mercator/internal/workspace"
 )
@@ -190,6 +191,78 @@ func TestAStrangerCannotInviteANodeIntoAnothersWorkspace(t *testing.T) {
 	}
 }
 
+// TestTheConsoleSessionReachesTheWorkspaceTheInstanceTokenCreated is the
+// browser acceptance flow with the browser taken out of it. `mercator serve
+// --dev` and `mercator lab serve` both create their first workspace with the
+// instance bearer token and then hand a human a local session, so the human is
+// no member of anything. Every console read is a 403 unless the deployment says
+// that its one human is its operator.
+//
+// It is here rather than only in the Playwright flow because that flow runs in
+// CI alone: this workstation has no Chromium (mercator#197). The break it
+// catches reached CI once, as GET /v1/runs and GET /v1/console/events both
+// answering 403 to a console that had just signed in.
+func TestTheConsoleSessionReachesTheWorkspaceTheInstanceTokenCreated(t *testing.T) {
+	// Arrange: the real local authenticator, wired the way `serve --dev` wires
+	// it, and a workspace created by the deployment rather than by the human.
+	const developer = "developer@localhost"
+	localAuth, err := webauth.NewLocal(developer)
+	if err != nil {
+		t.Fatalf("build local authentication: %v", err)
+	}
+	handler, _ := newTenantHandler(t, WithWebAuth(localAuth))
+	workspaceID := createWorkspaceAsTheInstance(t, handler, "The deployment's own workspace")
+	session := establishLocalSession(t, handler)
+
+	// Act
+	request := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id="+workspaceID, nil)
+	request.AddCookie(session)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	// Assert
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("the local developer reading their own console = %d, want 200: %s", recorder.Code, recorder.Body)
+	}
+}
+
+// createWorkspaceAsTheInstance creates a workspace with the deployment's own
+// bearer token, which is what leaves it with no human member.
+func createWorkspaceAsTheInstance(t *testing.T, handler http.Handler, displayName string) string {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/v1/workspaces", bytes.NewBufferString(`{"display_name":"`+displayName+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer secret-token")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create workspace as the instance = %d: %s", recorder.Code, recorder.Body)
+	}
+	var response struct {
+		Workspace workspace.Workspace `json:"workspace"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode created workspace: %v", err)
+	}
+	return response.Workspace.ID
+}
+
+// establishLocalSession signs in the way the console does, by asking the
+// authenticator's own session endpoint for one.
+func establishLocalSession(t *testing.T, handler http.Handler) *http.Cookie {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/auth/session", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("establish local session = %d: %s", recorder.Code, recorder.Body)
+	}
+	cookies := (&http.Response{Header: recorder.Header()}).Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("the local session endpoint set no cookie")
+	}
+	return cookies[0]
+}
+
 func createWorkloadAs(t *testing.T, handler http.Handler, subject, body, idempotencyKey string) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewBufferString(body))
@@ -233,8 +306,9 @@ func TestTheInstanceCredentialIsNotScopedToAWorkspace(t *testing.T) {
 
 func TestTheSoleOperatorOfADevelopmentServerIsNotScopedToAWorkspace(t *testing.T) {
 	// Arrange: `serve --dev` authenticates exactly one human, who is the
-	// deployment's own operator and already holds its bearer token.
-	handler, _ := newTenantHandler(t, WithSoleOperator(brij))
+	// deployment's own operator and already holds its bearer token. The
+	// authenticator is what says so.
+	handler, _ := newTenantHandler(t, WithWebAuth(stubWebAuth{sole: brij}))
 	workspaceID := createWorkspaceAs(t, handler, ana, "Ana's workspace")
 
 	// Act

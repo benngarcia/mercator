@@ -13,8 +13,12 @@ import (
 )
 
 // stubWebAuth authenticates any request carrying the X-Test-Session header as
-// that header's value, standing in for the real cookie-verifying webauth.
-type stubWebAuth struct{}
+// that header's value, standing in for the real cookie-verifying webauth. The
+// zero value authenticates many humans, like OIDC does; sole names the one
+// human a local-login deployment can ever establish.
+type stubWebAuth struct{ sole string }
+
+func (s stubWebAuth) SoleOperator() string { return s.sole }
 
 func (stubWebAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/auth/session" {

@@ -65,6 +65,20 @@ func (a *LocalAuthenticator) VerifyCLIToken(string) (string, bool) {
 	return "", false
 }
 
+// SoleOperator names the one human this authenticator can ever authenticate.
+// Local login establishes a single configured identity and refuses every other
+// email, so the person holding that session is the deployment's own operator
+// rather than a tenant of it. The API gate reads this to decide that scoping
+// them to their workspace memberships would protect nothing: they are already
+// holding the instance bearer token this mode prints to their terminal.
+//
+// It is answered by the authenticator rather than configured beside it because
+// this is the fact that makes it true, and a wiring site that had to remember
+// to state it separately would eventually forget. One did.
+func (a *LocalAuthenticator) SoleOperator() string {
+	return a.email
+}
+
 func (a *LocalAuthenticator) login(w http.ResponseWriter, r *http.Request) {
 	if err := a.establishSession(w, r); err != nil {
 		http.Error(w, "failed to establish local session", http.StatusInternalServerError)

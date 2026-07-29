@@ -267,7 +267,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		if authErr != nil {
 			return nil, fmt.Errorf("daemon: initialize local login: %w", authErr)
 		}
-		serverOptions = append(serverOptions, httpapi.WithWebAuth(authenticator), httpapi.WithSoleOperator(cfg.LocalAuthEmail))
+		serverOptions = append(serverOptions, httpapi.WithWebAuth(authenticator))
 	}
 
 	handler := httpapi.New(httpapi.Deps{

@@ -88,6 +88,14 @@ func (a *Authenticator) SessionEmail(r *http.Request) (string, bool) {
 	return s.Email, true
 }
 
+// SoleOperator is empty for every OIDC deployment. An identity provider
+// authenticates whoever it is willing to authenticate, so no email reaching
+// this authenticator is the deployment acting as itself, and every one of them
+// is a tenant scoped to their workspace memberships.
+func (a *Authenticator) SoleOperator() string {
+	return ""
+}
+
 // VerifyCLIToken returns the email a `mercator login` bearer token belongs to.
 func (a *Authenticator) VerifyCLIToken(token string) (string, bool) {
 	var t cliToken
