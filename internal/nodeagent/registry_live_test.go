@@ -45,9 +45,9 @@ import (
 
 const (
 	registryImage = "registry:3"
-	// seedImage is the content this case puts behind the registry. Anything
-	// small does: what is under test is the material, not the bytes.
-	seedImage = "busybox:1.37"
+	// baseImage is what the content this case pushes is built on. Anything small
+	// does: what is under test is the material, not the bytes.
+	baseImage = "busybox:1.37"
 	// privateRepository is where it goes. A repository nothing else on this host
 	// pushes to, so a pull that succeeds fetched what this case put there.
 	privateRepository = "mercator/analyst"
@@ -175,18 +175,31 @@ func privateImageServedFromThisHost(t *testing.T, runtime *DockerRuntime) string
 	t.Helper()
 	requireDocker(t)
 	pull(t, registryImage)
-	pull(t, seedImage)
+	pull(t, baseImage)
 	endpoint := startPrivateRegistry(t)
 	repository := endpoint + "/" + privateRepository
 	tag := fmt.Sprintf("live-%d", time.Now().UnixNano())
-	if output, err := exec.Command("docker", "tag", seedImage, repository+":"+tag).CombinedOutput(); err != nil {
-		t.Fatalf("tag %s for this host's registry: %v\n%s", seedImage, err, output)
-	}
+	buildPrivateImage(t, repository+":"+tag)
 	digest := pushToPrivateRegistry(t, runtime, repository, tag)
 	reference := repository + "@" + digest
 	forget(repository+":"+tag, reference)
 	t.Cleanup(func() { forget(repository+":"+tag, reference) })
 	return reference
+}
+
+// buildPrivateImage makes this case its own image rather than retagging one that
+// is already here. Tagging a shared image into a local registry adds a repository
+// digest to the object every other case on this daemon reads, and mercator#212's
+// lock does not help: the image survives the lock, and a case that inspects
+// busybox's first repository digest gets this registry's instead, pointing at a
+// port nothing listens on any more. That was observed, not imagined.
+func buildPrivateImage(t *testing.T, reference string) {
+	t.Helper()
+	build := exec.Command("docker", "build", "--quiet", "--tag", reference, "-")
+	build.Stdin = strings.NewReader("FROM " + baseImage + "\nRUN echo mercator > /mercator-private\n")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build the image this case serves: %v\n%s", err, output)
+	}
 }
 
 // startPrivateRegistry runs distribution behind htpasswd on a port this host
