@@ -23,19 +23,32 @@ limits.
 
 ## Capacity Reuse
 
-- Every provider backend is in the ephemeral lane. Docker, RunPod, Shadeform,
-  and Vast each create capacity for one workload and destroy it afterwards, so
-  no machine those backends allocate survives a Run and nothing is warm for the
-  next one. The reusable lane is reached only through the Mercator node runtime,
-  which today means a Docker host an operator enrolled by hand.
+- Shadeform is the only provider backend in the reusable lane. It rents a VM and
+  hands it a script that installs and starts the pinned node agent, so the
+  machine enrols itself and outlives the workloads run on it. Docker, RunPod and
+  Vast each still create capacity for one workload and destroy it afterwards, so
+  no machine those three allocate survives a Run.
+- A Shadeform connection publishes no placement candidate, so no Run can be
+  placed on it in production yet. A capacity connection is not asked for offers
+  ([#200](https://github.com/benngarcia/mercator/issues/200)) and a launch is
+  still addressed through the selected offer's native ref rather than the machine
+  a provisioning built ([#207](https://github.com/benngarcia/mercator/issues/207)).
+  Renting works; nothing production-side asks for a machine yet.
+- Shadeform has had no live run since it became a capacity provider. The path is
+  proven under its package's httptest fake only
+  ([#235](https://github.com/benngarcia/mercator/issues/235)).
+- A Shadeform connection needs an `agent_download_url` an operator hosts, because
+  Mercator's release archives ship no `mercator-node` binary
+  ([#234](https://github.com/benngarcia/mercator/issues/234)). A connection
+  without one verifies and lists capacity, and refuses to provision.
 - An ephemeral execution still commits a Booking against a single-use Rental
   identity. Placement makes that binding unqueueable and records the honest
   `launch_ephemeral` disposition, but the Booking record type is shared with
   reusable placements, so a reader of the schema alone cannot tell them apart.
-- Reuse works only on nodes an operator enrolled by hand. Provisioned capacity
-  arrives with no agent on it, so renting a machine still produces one-shot
-  execution. Bootstrapping the agent through a provider is
-  [#155](https://github.com/benngarcia/mercator/issues/155) phase 5.
+- Reuse works end to end only on nodes an operator enrolled by hand. A machine
+  Shadeform rents is bootstrapped with an agent, but the two issues above stop a
+  Run from being placed on the result, so a provisioned machine is reachable
+  today only through the capacity seam rather than through a Run.
 - Enrolling a node is a manual two-step: `POST /v1/nodes` for the bootstrap,
   then run `mercator-node` with it. There is no CLI command and no quickstart
   step.

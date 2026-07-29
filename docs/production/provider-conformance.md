@@ -32,7 +32,10 @@ The command returns JSON evidence on stdout. `passed` exits 0. `failed` or
 ```
 
 `adapter_type` accepts `docker`, `runpod`, `shadeform`, or `vast`. Cloud
-providers require `credential_env`; Docker rejects it. `image` must be an OCI
+providers require `credential_env`; Docker rejects it. A `shadeform` trial
+validates and then finds no offers: this runner launches through the ephemeral
+lane, and Shadeform sells capacity rather than one-shot execution. The bounded
+suite for what a `CapacityProvider` promises is a separate piece of work. `image` must be an OCI
 digest reference. Resolve the published probe tag to its current digest before
 creating the trial. `config` accepts the same keys documented by the selected
 provider manifest. `mode` defaults to `probe`, which requires a signed zero

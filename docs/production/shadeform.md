@@ -1,33 +1,61 @@
 # Shadeform Provider Runbook
 
-Mercator's `shadeform` adapter provisions GPU **VMs** through Shadeform
+Mercator's `shadeform` adapter **rents GPU VMs** through Shadeform
 (api.shadeform.ai), a marketplace aggregator that fronts ~21 provider clouds
 (Lambda, Nebius, Crusoe, Voltage Park, Vultr, Paperspace, and more) behind one
-API and one invoice. Each run creates an instance whose **docker launch
-configuration** pulls and runs exactly one container with `--network=host`.
+API and one invoice, and **bootstraps a Mercator node agent onto every machine
+it rents**.
+
+It is a capacity provider and nothing else. A machine it rents is one Mercator
+holds across Runs, so what executes there is the enrolled agent's business: the
+create body carries a bootstrap script and never a workload image. Shadeform is
+therefore in the **reusable** lane, and the one-shot launch path this adapter
+used to have is gone. If you need a one-shot container on a rented VM, use the
+`runpod` or `vast` connections.
 
 Shadeform's lifecycle is **VM-only**: an instance reports
 `creating → pending_provider → pending → active → deleting → deleted` (with an
-`error` off-ramp) and stays `active` forever no matter what the container does.
-There is no container status, no exit code, no logs endpoint, and no webhooks.
-Mercator therefore observes only the VM phase, and the **workload's signed exit
-report** (see `workload-reporting.md`) is the authoritative run outcome — the
-same pessimistic pattern as the RunPod adapter.
+`error` off-ramp). There is no stop, no resume, and no suspend. `ObserveCapacity`
+reports the machine and says nothing about the work on it; what makes work on
+that machine observable is the node's own session (see `node-agent.md`).
+
+## What the connection can and cannot promise
+
+| Promise | Shadeform | Why |
+|---|---|---|
+| Stop | no | `/instances/{id}/delete` destroys a machine; nothing suspends one. |
+| Resume | no | Nothing was suspended. |
+| Persistent disk across a stop | no | A disk that survives a stop is a claim about a provider that can stop. |
+| Spot / interruptible | no | Not offered through this API. |
+| Exact pricing | yes | The catalog states an hourly price in cents. |
+| Idempotent provision | by tag reconciliation | Create honours no operation key, so the Rental's own tag is the identity. |
+| Owned capacity listable | yes | `GET /instances` returns the whole account, filtered client-side. |
+| Observable after terminate | yes, briefly | A destroyed instance stays listed while it is `deleting`, then disappears. |
+
+Mercator refuses a stop or a resume at the seam, before any API call, with
+`capability: operation unsupported by this backend`.
 
 ## Adding the connection
 
-<!-- Follow-up for the beng/connection-wizard branch: once the adapter-manifest
-contract merges, serve this section as a Shadeform manifest (display metadata +
-setup steps + credential form) from the API instead of docs-only prose. -->
-
-1. Mint an API key at **platform.shadeform.ai → Settings → API**. Note:
-   Shadeform API keys are **admin-scoped** — there are no read-only or
-   restricted keys, so treat the key like a billing credential. The adapter
-   sends it as the `X-API-KEY` header.
+1. Mint an API key at **platform.shadeform.ai → Settings → API**. Shadeform API
+   keys are **admin-scoped** — there are no read-only or restricted keys, so
+   treat the key like a billing credential. The adapter sends it as the
+   `X-API-KEY` header.
    ```sh
    export SHADEFORM_API_KEY=...      # never commit this
    ```
-2. Add the connection (UI **Connections → Add connection**, adapter type
+2. Publish the `mercator-node` binary where a rented machine can fetch it over
+   https. Mercator's release archives do not carry it today
+   ([#234](https://github.com/benngarcia/mercator/issues/234)), so build and host
+   it yourself:
+   ```sh
+   GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
+     -o mercator-node ./cmd/mercator-node
+   # upload it to, for example, https://downloads.example.com/mercator-node/$VERSION/linux-amd64
+   ```
+   The URL you configure must contain `{version}`, which Mercator replaces with
+   the agent build the bootstrap pinned.
+3. Add the connection (UI **Connections → Add connection**, adapter type
    `shadeform`), or via the API:
    ```sh
    curl -X POST "$MERCATOR/v1/connections" \
@@ -36,92 +64,113 @@ setup steps + credential form) from the API instead of docs-only prose. -->
      -H 'Content-Type: application/json' \
      -d '{"workspace_id":"ws_1","connection_id":"conn_shadeform_main",
           "adapter_type":"shadeform",
+          "config":{"agent_download_url":"https://downloads.example.com/mercator-node/{version}/linux-amd64"},
           "credential":{"source":"env","ref":"SHADEFORM_API_KEY"}}'
    ```
-3. Authorize it (runs a cheap `GET /instances` to validate the key):
+4. Authorize it (runs a cheap `GET /instances` to validate the key):
    ```sh
    curl -X POST "$MERCATOR/v1/connections/conn_shadeform_main/authorize?workspace_id=ws_1" \
      -H "Authorization: Bearer $MERCATOR_API_TOKEN"
    ```
 
-## Connection config (optional)
+## Connection config
 
-| Key | Default | Meaning |
-|-----|---------|---------|
-| `shade_cloud` | `true` | `true` launches in Shadeform's managed account (one invoice); `false` uses your linked bring-your-own-cloud accounts. |
-| `allowed_clouds` | *(all)* | Comma-separated allow-list of provider cloud slugs (e.g. `lambdalabs,nebius`). When set, offers are filtered to it and launches outside it are rejected. This is the only "secure cloud" control: the API exposes no per-provider trust attributes (SOC2/Tier claims are platform-level marketing), so vetting a provider means putting it on this list. |
-| `max_lifetime_hours` | `24` | Reclamation backstop, **not** the run timeout. Every instance gets Shadeform `auto_delete` thresholds: a date threshold and a spend cap of the catalog hourly price over that window. When the run carries an execution bound (`max_runtime_seconds`), the horizon is that bound plus one hour of slack; this config is the horizon only for runs without one. Zero-priced catalog entries (bring-your-own-cloud inventory bills through your provider, not Shadeform) get the date threshold only — Shadeform leaves `"0.00"` spend-threshold semantics undefined. If the whole broker dies, Shadeform reclaims the instance on its own. |
-| `os` | *(auto)* | Explicit OS image. By default the adapter picks the first `*_shade_os` option for the instance type — those images bake in GPU drivers and the container runtime the docker launch configuration depends on. If a type offers no shade_os image, launches on it fail loudly rather than booting a VM whose container may never start; set this key explicitly to override. |
-| `registry_username` / `registry_password` | *(none)* | Registry credentials passed through to `docker_configuration.registry_credentials` for private images. Username/password is all Shadeform supports (no token exchange); for ghcr.io, use a GitHub PAT with `read:packages` as the password. |
+| Key | Required | Default | Meaning |
+|-----|----------|---------|---------|
+| `agent_download_url` | yes | *(none)* | Where a rented machine fetches the node agent. Must be https and must contain `{version}`, replaced with the build the bootstrap pinned. There is no default: Mercator publishes no agent binary, so a guessed URL would be a paid machine fetching a 404 and never enrolling. A connection without it still verifies and still lists capacity; it refuses to provision. |
+| `shade_cloud` | no | `true` | `true` rents in Shadeform's managed account (one invoice); `false` uses your linked bring-your-own-cloud accounts. |
+| `allowed_clouds` | no | *(all)* | Comma-separated allow-list of provider cloud slugs (e.g. `lambdalabs,nebius`). When set, listings are filtered to it and a provision outside it is rejected. This is the only "secure cloud" control: the API exposes no per-provider trust attributes, so vetting a provider means putting it on this list. |
+| `max_lifetime_hours` | no | `24` | Reclamation backstop, **not** the lease. Every instance gets Shadeform `auto_delete` thresholds: a date threshold and a spend cap of the catalog hourly price over that window. When the provision command carries a lifetime bound, the horizon is that bound plus one hour of slack. Zero-priced catalog entries (bring-your-own-cloud inventory bills through your provider, not Shadeform) get the date threshold only — Shadeform leaves `"0.00"` spend-threshold semantics undefined. If the whole broker dies, Shadeform reclaims the instance on its own. |
+| `os` | no | *(auto)* | Explicit OS image. By default the adapter picks the first `*_shade_os` option for the instance type — those images bake in the GPU driver and the container runtime the node agent needs to run anything. If a type offers no shade_os image, provisioning on it fails loudly rather than renting a machine whose agent can start no container; set this key to override. |
+| `base_url` | no | `https://api.shadeform.ai/v1` | Shadeform API origin. Set it to reach Shadeform through an egress proxy of your own. |
 
-## How offers work
+## What a rented machine holds
 
-`GET /instances/types?available=true&sort=price` is the catalog. Placement on
-Shadeform is an explicit **(cloud, region, shade_instance_type)** triple, so
-each available region of each type becomes one offer whose native ref is that
-triple. Offers carry the catalog's `hourly_price` (cents → USD/second) and
-`boot_time` estimates so the scheduler can score cost and start latency.
+The create body's `launch_configuration` is a **script**, base64-encoded, that
+runs once the instance is active. It:
 
-Only `deployment_type: "vm"` inventory is offered. The docs never define what a
-docker launch configuration means on `container`- or `baremetal`-typed
-inventory; the adapter excludes those and logs the excluded count (open
-question with Shadeform support).
+- installs the pinned `mercator-node` binary from `agent_download_url` to
+  `/usr/local/bin/mercator-node`;
+- writes the node identity and the enrollment token to
+  `/etc/mercator-node/bootstrap.env`, mode `0600`;
+- installs and starts `mercator-node.service` with `Restart=always`, so a crashed
+  agent comes back on a machine nobody can log into.
 
-The catalog exposes no host CPU architecture, so offers advertise `amd64`
+The machine therefore holds **one credential**: a single-use enrollment token
+that expires in 30 minutes and is spent the moment the agent redeems it. No
+Mercator API token, no provider credential, and no registry account is ever
+written to it. It listens on nothing, publishes no Docker socket, and every
+exchange with the control plane is one the agent opens outbound. See
+`node-agent.md` for what happens to the session after that.
+
+Values that no unattended script can carry (empty, or containing whitespace or
+non-printable characters) are refused before an instance is created, and the
+refusal never quotes the value, because one of them is a credential.
+
+## How listings work
+
+`GET /instances/types?sort=price` is the catalog. Placement on Shadeform is an
+explicit **(cloud, region, shade_instance_type)** triple, so each listed region
+of each type becomes one listing whose native ref is that triple. Listings carry
+the catalog's `hourly_price` (cents → USD/second) and `boot_time` estimates.
+
+A listing states the machine, and nothing about what executing on it would be
+like. A container runtime, an idempotent launch and a concurrency limit are the
+enrolled agent's facts, established from the machine itself, and they arrive on
+that node's own offer once an agent is on it.
+
+Only `deployment_type: "vm"` inventory is listed. The docs never define what a
+launch configuration means on `container`- or `baremetal`-typed inventory; the
+adapter excludes those and logs the excluded count (open question with Shadeform
+support).
+
+A region with no stock right now is published as capacity that is unavailable
+rather than dropped: a sold-out region is a wait, and a machine type nobody
+sells is a shape that has to be added, and the queue is ordered on the
+difference.
+
+The catalog exposes no host CPU architecture, so listings advertise `amd64`
 except Grace-superchip types (GH200/GB200), which are advertised as `arm64` —
-placing an amd64 image on a Grace host would die at exec, invisibly to the
+renting a Grace host for an amd64 image would die at exec, invisibly to the
 VM-only status. Verify the architecture of any new exotic type before relying
 on it.
 
-## Lifecycle, ownership, and cleanup
+## Lifecycle, ownership, and reconciliation
 
-- Instances are named `mercator-<launchKey>` and carry `mercator:*` **tags**
-  (launch key, workspace, run, attempt, ownership token, request hash, cleanup
-  locator) plus the matching `MERCATOR_*` container env.
-- Shadeform's create has **no idempotency key**, so Launch is made idempotent
-  client-side: scan for a live tagged instance before creating; scan again
-  after creating and, if a concurrent duplicate slipped through, keep the
-  oldest and delete the rest. The residual race (both launchers crash before
-  reconciling) is bounded by every later path — Observe, cleanup, and the
-  janitor all resolve **every** tagged match — plus the `auto_delete` caps.
-- Offers are **provisionable** ⇒ disposition **terminate** ⇒ cleanup calls
-  `POST /instances/{id}/delete`. `Release` does exactly the same thing (the
-  instance is both "our slot" and "the host we own"). `/restart` is never used:
-  whether it re-runs the launch configuration is undocumented.
-- The janitor's `ListOwned` filters the full-account `GET /instances` list
-  (the endpoint has no query parameters) client-side by our tag namespace and
-  **excludes instances already in `deleting`** — Shadeform stops billing when
-  `deleting` starts.
-- An `error` status observes as **failed**; an instance that disappeared (or is
-  deleting/deleted) observes as **released**.
+- Instances are named `mercator-<rentalID>` and carry `mercator:*` **tags**:
+  rental, generation, workspace, and ownership token. Those are exactly the
+  fields the reconciler reads back, because the account listing is the only place
+  it can read them from.
+- Create has **no idempotency key**, so provisioning is made idempotent
+  client-side: scan for a live instance tagged with this Rental before creating;
+  scan again afterwards and, if a concurrent duplicate slipped through, keep the
+  oldest and destroy the rest. A create whose outcome is unknown is reconciled
+  the same way rather than by a second create. The residual race (two
+  provisioners both pass the pre-scan and both die before reconciling) is bounded
+  by every later path plus the `auto_delete` caps.
+- `TerminateCapacity` destroys **every** live instance tagged with the Rental,
+  not merely the one named, so a reconciliation that failed halfway converges
+  back to zero. A terminate that finds nothing live reports a duplicate: the
+  machine is already gone.
+- `ListOwnedCapacity` filters the full-account `GET /instances` list (the
+  endpoint has no query parameters) client-side by the **Rental tag** and
+  excludes instances already `deleting` — Shadeform stops billing when `deleting`
+  starts. A machine carrying no Rental tag is not capacity Mercator holds.
+- An instance that has left the listing entirely observes as **terminated**:
+  either it was destroyed or `auto_delete` reclaimed it, and a caller told
+  "unknown" would go on waiting for an agent that has no machine to arrive from.
+- The observation carries no `state_since`. The only moment a Shadeform instance
+  record holds is `created_at`, which is when the machine was asked for rather
+  than when it reached the state being reported.
+- An `error` status observes as **unknown**. The machine may still exist and
+  still bill, so it is not reported terminated; the enrolment deadline reclaims
+  it.
 
-## Workload semantics and limits
-
-- **One container per run.** `launch_configuration.type: "docker"` runs exactly
-  one image. Multi-container workloads are infeasible on this adapter.
-- **No entrypoint override.** Shadeform's docker configuration has no
-  entrypoint field. Offers declare this incapability, so the scheduler never
-  places an entrypoint-overriding workload here (it falls back to adapters
-  that support it); a launch that reaches the adapter anyway is rejected
-  loudly. Bake the entrypoint into the image or express it as args.
-- **Args are one shell string.** Mercator's argv is shell-quoted and joined
-  before it reaches `docker_configuration.args`.
-- **No port mappings, host networking.** The adapter maps no ports and offers
-  no inbound network capability, so workloads that need public inbound ports
-  never schedule here. Because the container runs with `--network=host`, any
-  port the workload happens to listen on is exposed as far as the provider's
-  firewall allows — treat these instances as egress-only workers and don't
-  bind services you wouldn't expose.
-- **GPU passthrough is implicit.** `*_shade_os` images bake in drivers and
-  there is no `--gpus` equivalent in the API; the docs treat GPU visibility
-  inside the container as automatic. Verify with `nvidia-smi` on first use of a
-  new instance type (see below).
-
-## Correlating provider launch failures
+## Correlating provider failures
 
 The public run event identifies the failure without exposing Shadeform's
-response. Read the run's events and find
-`compute.run.launch_failed.v1` or `compute.run.launch_indeterminate.v1`:
+response. Read the run's events and find `compute.run.launch_failed.v1` or
+`compute.run.launch_indeterminate.v1`:
 
 ```sh
 curl -fsS "$MERCATOR/v1/runs/$RUN_ID/events?workspace_id=$WORKSPACE_ID" \
@@ -131,11 +180,8 @@ curl -fsS "$MERCATOR/v1/runs/$RUN_ID/events?workspace_id=$WORKSPACE_ID" \
 
 The event's `data.code`, `data.retryable`, and `data.side_effect` are stable,
 provider-neutral fields. Use its `correlationid` (the run ID) with the workspace
-ID to find the matching `provider operation failed` process-log record for each
-attempt. Each private structured record includes the attempt, connection,
-adapter, selected offer, HTTP status, Shadeform code, retry count, side-effect
-certainty, and sanitized bounded response body. For the default text log, the
-correlation looks like:
+ID to find the matching `provider operation failed` process-log record. For the
+default text log, the correlation looks like:
 
 ```sh
 grep 'provider operation failed' /path/to/mercator.log \
@@ -144,60 +190,43 @@ grep 'provider operation failed' /path/to/mercator.log \
 ```
 
 Keep that process log on the operator side of the trust boundary. Mercator
-does not publish the provider response body, API key, authorization headers,
-registry credentials, workload environment values, or launch request payload
+redacts the API key and the bootstrap script from any response body it records,
+and publishes no provider response body, authorization header, or request payload
 through run events or sinks.
 
-## Stale Offer replacement
+## Live verification, and what is blocked
 
-Shadeform inventory is provisionable and can disappear after catalog listing.
-Mercator replaces a rejected placement only when Shadeform returns a response
-classified as `capacity_unavailable` and the adapter records
-`side_effect=none`. The completed attempt's exact Broker-assigned Offer
-snapshot ID is excluded from every later decision for that Run. Inventory with
-the same cloud, region, or instance type through another Connection remains a
-different Offer and stays eligible.
-
-The workload's `max_pre_start_attempts` is the complete pre-start bound,
-including the initial attempt. When the bound or eligible Offer set is
-exhausted, the public `compute.run.closed.v1` event carries
-`reason=RETRY_EXHAUSTED`. Read the full sequence through supported Mercator
-surfaces:
+**No live Shadeform run has been performed against this adapter since it became a
+capacity provider.** The whole path is proven under the package's httptest fake.
+The live half is [#235](https://github.com/benngarcia/mercator/issues/235), and
+these are the commands it needs, with a funded account:
 
 ```sh
-go run ./cmd/mercator run events \
-  --workspace-id "$WORKSPACE_ID" --run-id "$RUN_ID" \
-  | jq '.events[] | select(.type == "compute.run.booking_decided.v1" or .type == "compute.run.attempt_created.v1" or .type == "compute.run.launch_intent_recorded.v1" or .type == "compute.run.launch_failed.v1" or .type == "compute.run.launch_indeterminate.v1" or .type == "compute.run.launch_accepted.v1" or .type == "compute.run.cleanup_confirmed.v1" or .type == "compute.run.closed.v1") | {type, data}'
+export SHADEFORM_API_KEY=...          # from 1Password, never a shell rc file
+export MERCATOR=http://127.0.0.1:8080
+export MERCATOR_API_TOKEN=...
 
-go run ./cmd/mercator run decision \
-  --workspace-id "$WORKSPACE_ID" --run-id "$RUN_ID" \
-  | jq '.decision | {selected_offer_snapshot_id, candidates}'
+# 1. Authorize the connection (validates the key with GET /instances).
+curl -fsS -X POST "$MERCATOR/v1/connections/conn_shadeform_main/authorize?workspace_id=ws_1" \
+  -H "Authorization: Bearer $MERCATOR_API_TOKEN"
+
+# 2. Rent one machine and watch its agent enrol.
+go run ./cmd/mercator run create --workspace-id ws_1 ...   # a Run whose placement provisions
+go run ./cmd/mercator run events --workspace-id ws_1 --run-id "$RUN_ID" \
+  | jq '.events[] | select(.type | startswith("compute.run.capacity")) | {type, data}'
+curl -fsS "$MERCATOR/v1/nodes?workspace_id=ws_1" -H "Authorization: Bearer $MERCATOR_API_TOKEN" | jq
+
+# 3. Confirm the machine is destroyed and the account is empty of Mercator tags.
+curl -fsS https://api.shadeform.ai/v1/instances -H "X-API-KEY: $SHADEFORM_API_KEY" \
+  | jq '[.instances[] | select(.tags[]? | startswith("mercator:"))]'
 ```
 
-Timeout, transport, and 5xx Create outcomes are indeterminate. Mercator keeps
-reconciling the original launch key through Observe and ListOwned and does not
-record another placement or attempt. This preserves Shadeform's client-side
-idempotency contract even when Create's response is lost.
-
-## Live verification checklist
-
-With a funded account and `SHADEFORM_API_KEY` exported:
-
-1. Authorize the Connection and list Offers through Mercator. Record the exact
-   Offer snapshot IDs and native refs returned before launch.
-2. Launch a tiny CUDA workload (e.g. `nvidia/cuda:12.2.0-base-ubuntu22.04`
-   running `nvidia-smi`) through `mercator run create` with an explicit
-   `max_pre_start_attempts` bound.
-3. Record `run events`, `run decision`, and the sanitized correlated Mercator
-   process logs. If Shadeform rejects stale capacity, verify that the next
-   decision excludes that exact snapshot and that each attempt has a distinct
-   launch key.
-4. Confirm the workload's exit report finalizes the outcome. Confirm provider
-   cleanup through `run get` (`cleanup=confirmed`) and the matching public
-   `compute.run.cleanup_confirmed.v1` event, which records the `terminate`
-   disposition after Shadeform accepts deletion.
-5. Exercise the `auto_delete` backstop separately only when the evaluation
-   explicitly includes killing the broker and waiting through the configured
-   threshold.
+Two things block step 2 in production regardless of credentials, and both are
+filed: a capacity connection publishes no placement candidate
+([#200](https://github.com/benngarcia/mercator/issues/200)), and a launch is
+still addressed through the selected offer's native ref rather than the machine a
+provisioning built ([#207](https://github.com/benngarcia/mercator/issues/207)).
+Until those land, a live run exercises provisioning through the capacity seam
+directly rather than through a Run.
 
 Rotate the API key after testing — keys are admin-scoped.
