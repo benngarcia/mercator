@@ -2,6 +2,7 @@ package capability
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
@@ -180,6 +181,9 @@ func (facts NodeFacts) Established() NodeFacts {
 	if !facts.Host.Disk.Known {
 		facts.Host.Disk = DiskFacts{}
 	}
+	if !facts.Host.Accelerator.Established {
+		facts.Host.Accelerator = AcceleratorFacts{}
+	}
 	return facts
 }
 
@@ -188,21 +192,78 @@ func (facts NodeFacts) Established() NodeFacts {
 // against these, and never installs a workload's accelerator stack onto the
 // host.
 type HostFacts struct {
-	OS                 string `json:"os"`
-	KernelVersion      string `json:"kernel_version"`
-	Architecture       string `json:"architecture"`
-	ContainerRuntime   string `json:"container_runtime"`
-	RuntimeVersion     string `json:"runtime_version"`
-	AcceleratorToolkit string `json:"accelerator_toolkit,omitempty"`
-	DriverVersion      string `json:"driver_version,omitempty"`
-	// DriverCapability is the highest accelerator capability the driver
-	// supports, expressed in the vendor's own versioning.
-	DriverCapability string                        `json:"driver_capability,omitempty"`
-	Accelerators     []domain.AcceleratorInventory `json:"accelerators,omitempty"`
-	CPUMillis        int64                         `json:"cpu_millis"`
-	MemoryBytes      int64                         `json:"memory_bytes"`
-	Disk             DiskFacts                     `json:"disk,omitzero"`
-	Network          []domain.NetworkFact          `json:"network,omitempty"`
+	OS               string `json:"os"`
+	KernelVersion    string `json:"kernel_version"`
+	Architecture     string `json:"architecture"`
+	ContainerRuntime string `json:"container_runtime"`
+	RuntimeVersion   string `json:"runtime_version"`
+	// AcceleratorToolkit is what the container runtime needs in order to hand a
+	// container the cards at all, which is the runtime's business rather than the
+	// driver's. It sits beside the driver facts rather than inside them because
+	// the three legs of the contract have three owners: the host provides the
+	// driver, the container runtime provides the passthrough, and the image
+	// provides the workload's own accelerator stack.
+	AcceleratorToolkit string               `json:"accelerator_toolkit,omitempty"`
+	Accelerator        AcceleratorFacts     `json:"accelerator,omitzero"`
+	CPUMillis          int64                `json:"cpu_millis"`
+	MemoryBytes        int64                `json:"memory_bytes"`
+	Disk               DiskFacts            `json:"disk,omitzero"`
+	Network            []domain.NetworkFact `json:"network,omitempty"`
+}
+
+// AcceleratorFacts is what this node established about the cards under it and
+// the driver that drives them, and separately whether it established anything
+// at all.
+//
+// The two are stated apart for the reason DiskFacts states them apart, and the
+// cost of not stating them apart is larger here. Every field below is empty on
+// a machine with no cards and empty on a machine whose agent never looked, so a
+// reader with only the values cannot tell a CPU box from an unmeasured GPU box.
+// Read as a measurement, the empty inventory strikes a real GPU machine out of
+// every accelerator placement with RESOURCE_INSUFFICIENT, which says the fleet
+// can never run this work on the strength of nobody having run nvidia-smi.
+//
+// Established is the agent saying it looked, whatever it found. A machine that
+// looked and found no NVIDIA driver has established that there is none, which
+// is a refusal an operator can act on; a machine that never looked has
+// established nothing, and NodeFacts.Established erases whatever it happened to
+// carry so no reader downstream has two answers to choose between.
+type AcceleratorFacts struct {
+	Established bool `json:"established"`
+	// Vendor is who makes the driver this host runs, stated only where there is
+	// one. A machine that looked and found no driver states the fact that it
+	// looked and nothing else.
+	Vendor           string `json:"vendor,omitempty"`
+	DriverVersion    string `json:"driver_version,omitempty"`
+	DriverCapability string `json:"driver_capability,omitempty"`
+	// Devices is the cards this host holds, in the same vocabulary a provider
+	// lists them in, because Placement counts both against one requirement.
+	Devices []domain.AcceleratorInventory `json:"devices,omitempty"`
+}
+
+// Attestations is what this node's accelerator report says in the vocabulary an
+// offer publishes. A node that looked states the driver fact either way; a node
+// that never looked states nothing, so Placement refuses it as a silence rather
+// than as a machine with no driver.
+func (facts AcceleratorFacts) Attestations() map[domain.HostFact]bool {
+	if !facts.Established {
+		return nil
+	}
+	return map[domain.HostFact]bool{
+		domain.HostFactNvidiaDriver: strings.EqualFold(facts.Vendor, "nvidia") && facts.DriverVersion != "",
+	}
+}
+
+// Driver is the host half of the accelerator stack as an offer carries it.
+func (facts AcceleratorFacts) Driver() domain.AcceleratorDriver {
+	if !facts.Established {
+		return domain.AcceleratorDriver{}
+	}
+	return domain.AcceleratorDriver{
+		Vendor:     facts.Vendor,
+		Version:    facts.DriverVersion,
+		Capability: facts.DriverCapability,
+	}
 }
 
 // DiskFacts is the room on the filesystem this node's content lands on, and

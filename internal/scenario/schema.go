@@ -581,6 +581,13 @@ type RentalSpec struct {
 	// are stated here and not on a listing for a machine nobody has allocated.
 	Terms     CapacityTermsSpec `json:"terms,omitzero"`
 	Resources *ResourcesSpec    `json:"resources,omitempty"`
+	// Facts and Driver are what the agent on this machine established about the
+	// substrate under a workload, in the same vocabulary a provider's listing
+	// states them in. A machine already Mercator's is the one that can answer for
+	// itself, which is why an enrolled machine states a driver and a listing for a
+	// machine nobody has allocated states whatever its provider promises.
+	Facts  map[string]bool `json:"facts,omitempty"`
+	Driver *HostDriverSpec `json:"driver,omitempty"`
 	// CapacityConfidence is how sure whoever published this machine's capacity
 	// claim was of it. Omitted means certain, which is what every simulated
 	// provider says about a machine it can see. A fixture states less when the
@@ -815,11 +822,13 @@ type MarketplaceOfferSpec struct {
 	// what makes silence and a clean record two different worlds a fixture must be
 	// able to tell apart.
 	Reliability *ReliabilitySpec `json:"reliability,omitempty"`
-	// Facts are the hardware facts providers owe on the offer (SSH root
-	// access, working NVIDIA driver). Omitted map entries are unknown facts;
-	// an offer missing or failing one must be rejected loudly. Target
-	// ontology: no offer field carries these yet.
-	Facts map[string]bool `json:"facts,omitempty"`
+	// Facts are the promises this listing's provider makes about the substrate
+	// under a workload, and Driver is the accelerator driver the machine behind
+	// it runs. Both are tri-state where it matters: an entry omitted from the map
+	// is a fact nobody established, which is a different world from one stated
+	// false, and Placement refuses the two under different codes.
+	Facts  map[string]bool `json:"facts,omitempty"`
+	Driver *HostDriverSpec `json:"driver,omitempty"`
 	// Capacity is what this listing's provider will do with the machine once it
 	// has allocated one, in the shape a CapacityProvider really negotiates rather
 	// than a translation of it: whether it can stop and resume the machine under
@@ -1257,6 +1266,85 @@ func stated(duration *Duration) time.Duration {
 	return duration.Duration()
 }
 
+// validateHostFacts refuses a machine that states a promise nothing in Mercator
+// knows how to require. The set is closed where a Run declares it too, so a
+// fixture misspelling one would otherwise build a world where a machine states
+// a fact and the Run asking for it is refused UNKNOWN_FACT anyway, and the
+// Blueprint would read as a rule about silence that is really a rule about
+// spelling.
+func validateHostFacts(machine string, facts map[string]bool) error {
+	for name := range facts {
+		if !domain.HostFact(name).Known() {
+			return fmt.Errorf("%s states host fact %q, and Mercator establishes %v", machine, name, domain.KnownHostFacts)
+		}
+	}
+	return nil
+}
+
+// HostDriverSpec is the accelerator driver a fixture says a machine runs: who
+// made it, which version it is, and the highest accelerator capability it
+// supports. It is the host half of the compatibility contract, and a machine
+// that states none is a machine nobody established a driver for rather than a
+// machine with no driver.
+type HostDriverSpec struct {
+	Vendor     string `json:"vendor,omitempty"`
+	Version    string `json:"version,omitempty"`
+	Capability string `json:"capability,omitempty"`
+}
+
+// HostRequirementsSpec is what a fixture's Run declares it needs of the host
+// under it: the promises it will not run without, and the driver its image's
+// own accelerator stack was built against. The floors are strings for the
+// reason the host's own versions are: they are the vendor's numbering, and a
+// fixture that translated them into anything else would be asserting a
+// comparison Mercator does not make.
+type HostRequirementsSpec struct {
+	Facts               []string `json:"facts,omitempty"`
+	MinDriverVersion    string   `json:"min_driver_version,omitempty"`
+	MinDriverCapability string   `json:"min_driver_capability,omitempty"`
+}
+
+// Requirements is this declaration as the workload carries it.
+func (spec *HostRequirementsSpec) Requirements() domain.HostRequirements {
+	if spec == nil {
+		return domain.HostRequirements{}
+	}
+	required := domain.HostRequirements{
+		MinDriverVersion:    spec.MinDriverVersion,
+		MinDriverCapability: spec.MinDriverCapability,
+	}
+	for _, fact := range spec.Facts {
+		required.Facts = append(required.Facts, domain.HostFact(fact))
+	}
+	return required
+}
+
+// PublishedHostFacts is what a machine in either simulated world tells Mercator
+// about the substrate under a workload. Both worlds read it, because a
+// Blueprint that meant one machine in the placement corpus and another in the
+// Lab would be two fixtures wearing one name.
+//
+// A fixture that states nothing publishes nothing, which is the whole point:
+// the corpus is full of machines nobody asked about a driver, and defaulting
+// them to a working one would make every rule about a silence unfalsifiable.
+func PublishedHostFacts(facts map[string]bool, driver *HostDriverSpec) domain.HostFacts {
+	published := domain.HostFacts{}
+	for name, stated := range facts {
+		if published.Attested == nil {
+			published.Attested = map[domain.HostFact]bool{}
+		}
+		published.Attested[domain.HostFact(name)] = stated
+	}
+	if driver != nil {
+		published.Driver = domain.AcceleratorDriver{
+			Vendor:     driver.Vendor,
+			Version:    driver.Version,
+			Capability: driver.Capability,
+		}
+	}
+	return published
+}
+
 // ResourcesSpec describes machine inventory (rentals, marketplace offers) or
 // run requirements (requests). Omitted fields default host-side to a generous
 // GPU-box shape (8 CPUs, 32GB memory, 200GB disk) and request-side to the
@@ -1346,10 +1434,16 @@ func (spec GPUSpec) validate(owner string) error {
 }
 
 type RequestSpec struct {
-	Image           string         `json:"image"`
-	Resources       *ResourcesSpec `json:"resources,omitempty"`
-	MaxRuntime      *Duration      `json:"max_runtime,omitempty"`
-	ExpectedRuntime *Duration      `json:"expected_runtime,omitempty"`
+	Image     string         `json:"image"`
+	Resources *ResourcesSpec `json:"resources,omitempty"`
+	// Host is what this Run needs of the substrate under it rather than of the
+	// cards on it: the promises it will not run without, and the driver its
+	// image's accelerator stack was built against. Counting cards says nothing
+	// about whether the image can talk to them, which is the whole reason a
+	// mismatch used to be something a launch discovered.
+	Host            *HostRequirementsSpec `json:"host,omitempty"`
+	MaxRuntime      *Duration             `json:"max_runtime,omitempty"`
+	ExpectedRuntime *Duration             `json:"expected_runtime,omitempty"`
 	// ExpectedReady is how long this workload says it takes to become ready for
 	// work once its process is running. It is the only prediction of the
 	// application-ready stage there is, because readiness is the application's own
@@ -2610,6 +2704,9 @@ func (w WorldSpec) validate() error {
 		if err := rental.Terms.validate("rental " + rental.ID); err != nil {
 			return err
 		}
+		if err := validateHostFacts("rental "+rental.ID, rental.Facts); err != nil {
+			return err
+		}
 	}
 	rentalsWithSchedules := map[string]bool{}
 	bookingOwners := map[string]string{}
@@ -2690,6 +2787,9 @@ func (w WorldSpec) validate() error {
 			return err
 		}
 		if err := validateInventory("marketplace offer "+offer.ID, offer.Resources); err != nil {
+			return err
+		}
+		if err := validateHostFacts("marketplace offer "+offer.ID, offer.Facts); err != nil {
 			return err
 		}
 	}

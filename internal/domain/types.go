@@ -90,10 +90,15 @@ type PortSpec struct {
 }
 
 type ResourceRequirements struct {
-	CPU           CPURequirement           `json:"cpu"`
-	Memory        MemoryRequirement        `json:"memory"`
-	Accelerators  []AcceleratorRequirement `json:"accelerators,omitempty"`
-	EphemeralDisk DiskRequirement          `json:"ephemeral_disk"`
+	CPU          CPURequirement           `json:"cpu"`
+	Memory       MemoryRequirement        `json:"memory"`
+	Accelerators []AcceleratorRequirement `json:"accelerators,omitempty"`
+	// Host is what this workload needs of the substrate under it rather than of
+	// the cards on it: the promises it will not run without, and the driver its
+	// image's own accelerator stack was built against. Counting cards says
+	// nothing about whether the image can talk to them.
+	Host          HostRequirements `json:"host,omitzero"`
+	EphemeralDisk DiskRequirement  `json:"ephemeral_disk"`
 }
 
 type CPURequirement struct {
@@ -347,6 +352,14 @@ type OfferSnapshot struct {
 	ExpiresAt    time.Time         `json:"expires_at"`
 	Platform     Platform          `json:"platform"`
 	Resources    ResourceInventory `json:"resources"`
+	// Host is what this machine, or the provider selling it, has established
+	// about the substrate under a workload: the promises it makes and the
+	// accelerator driver it runs. It is separate from the resources above
+	// because these are not quantities to compare, and because the answer that
+	// matters most is the one nobody gave. A machine states none of it until
+	// something establishes it, and Placement says which of the three states it
+	// read.
+	Host         HostFacts         `json:"host,omitzero"`
 	Capabilities CapabilityProfile `json:"capabilities"`
 	Network      NetworkFacts      `json:"network"`
 	Pricing      PriceModel        `json:"pricing"`

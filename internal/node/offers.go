@@ -151,7 +151,21 @@ func (registry *Registry) offer(record Record, occupied int) domain.OfferSnapsho
 			// happened to succeed.
 			EphemeralDiskBytes: host.Disk.FreeBytes,
 			EphemeralDiskKnown: host.Disk.Known,
-			Accelerators:       host.Accelerators,
+			Accelerators:       host.Accelerator.Devices,
+		},
+		// What this machine established about the substrate under a workload,
+		// carried through as the machine stated it. A node reports the driver it
+		// runs and Mercator matches an image's declared accelerator stack against
+		// it; nothing here installs a stack onto a host, and a node that never
+		// looked publishes a silence rather than a machine with no driver.
+		//
+		// A node states nothing about SSH, and that is not an omission. Mercator
+		// reaches an enrolled machine over the agent's own outbound session and has
+		// no login on it to report, so a Run that needs a shell on its host is
+		// refused here with UNKNOWN_FACT, which is the true answer.
+		Host: domain.HostFacts{
+			Attested: host.Accelerator.Attestations(),
+			Driver:   host.Accelerator.Driver(),
 		},
 		Capabilities: domain.CapabilityProfile{
 			OfferKinds: []domain.OfferKind{domain.OfferKindStanding},

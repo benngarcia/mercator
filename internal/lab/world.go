@@ -161,7 +161,12 @@ type WorldTruthSnapshot struct {
 	// retired. Offers above are the fleet as it stands; this is what the fleet has
 	// said, which is what a rule about a decision already taken has to ask.
 	PublishedPaths map[string][]domain.NetworkFact `json:"published_paths,omitempty"`
-	CacheMounts    []CacheMountState               `json:"cache_mounts"`
+	// PublishedHostFacts is what every machine in this world stated about the
+	// substrate under a workload, by offer, including machines since retired. A
+	// rule about what a launch landed on has to read what the machine said when
+	// the decision was taken, and the fleet as it stands has forgotten.
+	PublishedHostFacts map[string]domain.HostFacts `json:"published_host_facts,omitempty"`
+	CacheMounts        []CacheMountState           `json:"cache_mounts"`
 	// Disk is what each machine's content is taking up, stated as World Truth
 	// because an offer states only what is left. A rule that read the remainder
 	// could never catch a world that lost track of the difference.
@@ -523,6 +528,11 @@ type simulatedWorld struct {
 	// a rule about one of those decisions has to be able to read what the machine
 	// published while it was here.
 	publishedPaths map[string][]domain.NetworkFact
+	// publishedHostFacts is what every machine in this world has told Mercator
+	// about the substrate under a workload, by offer, including machines this
+	// world has since retired. It is kept for the reason the paths above are: a
+	// launch is decided at one moment and judged at a later one.
+	publishedHostFacts map[string]domain.HostFacts
 
 	// paths is what this world declared about the links its machines cross, read
 	// for the world's own transfer model rather than off the offers Mercator sees.
@@ -577,33 +587,34 @@ type simulatedWorld struct {
 
 func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	world := &simulatedWorld{
-		seed:           tape.Seed,
-		now:            tape.Start,
-		images:         make(map[string]scenario.ImageSpec, len(tape.InitialWorld.Images)),
-		truth:          map[string]hostState{},
-		observed:       map[string]hostState{},
-		runs:           map[string]RunArrival{},
-		store:          newObjectStore(labWorkspace, tape.InitialWorld.Artifacts, tape.Start),
-		replicas:       map[string]map[string]domain.ArtifactReplica{},
-		seededLocality: map[string]map[string]bool{},
-		seededReplicas: map[string]map[string]bool{},
-		cacheMounts:    map[string]map[string]CacheMountState{},
-		prewarm:        tape.InitialWorld.Prewarm,
-		publishedPaths: map[string][]domain.NetworkFact{},
-		paths:          slices.Clone(tape.InitialWorld.Paths),
-		launch:         tape.InitialWorld.Launch,
-		prepared:       map[string]bool{},
-		desired:        map[string]map[string]bool{},
-		executions:     map[string]externalExecution{},
-		orphans:        map[string]orphanedCapacity{},
-		seededOrphans:  map[string]bool{},
-		operations:     map[string]worldOperation{},
-		launchCount:    map[string]int{},
-		faults:         slices.Clone(tape.Faults),
-		usedFaults:     map[string]bool{},
-		leases:         map[string]*capacityLease{},
-		invitations:    map[string]*labInvitation{},
-		credentials:    map[string]*bootstrapCredential{},
+		seed:               tape.Seed,
+		now:                tape.Start,
+		images:             make(map[string]scenario.ImageSpec, len(tape.InitialWorld.Images)),
+		truth:              map[string]hostState{},
+		observed:           map[string]hostState{},
+		runs:               map[string]RunArrival{},
+		store:              newObjectStore(labWorkspace, tape.InitialWorld.Artifacts, tape.Start),
+		replicas:           map[string]map[string]domain.ArtifactReplica{},
+		seededLocality:     map[string]map[string]bool{},
+		seededReplicas:     map[string]map[string]bool{},
+		cacheMounts:        map[string]map[string]CacheMountState{},
+		prewarm:            tape.InitialWorld.Prewarm,
+		publishedPaths:     map[string][]domain.NetworkFact{},
+		publishedHostFacts: map[string]domain.HostFacts{},
+		paths:              slices.Clone(tape.InitialWorld.Paths),
+		launch:             tape.InitialWorld.Launch,
+		prepared:           map[string]bool{},
+		desired:            map[string]map[string]bool{},
+		executions:         map[string]externalExecution{},
+		orphans:            map[string]orphanedCapacity{},
+		seededOrphans:      map[string]bool{},
+		operations:         map[string]worldOperation{},
+		launchCount:        map[string]int{},
+		faults:             slices.Clone(tape.Faults),
+		usedFaults:         map[string]bool{},
+		leases:             map[string]*capacityLease{},
+		invitations:        map[string]*labInvitation{},
+		credentials:        map[string]*bootstrapCredential{},
 	}
 	for reference, image := range tape.InitialWorld.Images {
 		world.images[reference] = scenario.ImageSpec{
@@ -654,7 +665,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			state.offer.Pricing = domain.PriceModel{Currency: "USD"}
 			state.offer.Capabilities.Pricing = domain.PricingCapabilities{}
 		}
-		world.publishOfferFacts(&state.offer, tape.InitialWorld, rental.ID, nil)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, rental.ID, nil, scenario.PublishedHostFacts(rental.Facts, rental.Driver))
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
 				state.heldLayers[layer.Digest] = layer
@@ -698,7 +709,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			}
 			state.heldImages[domain.ReferenceDigest(reference)] = true
 		}
-		world.publishOfferFacts(&state.offer, tape.InitialWorld, host.ID, nil)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, host.ID, nil, domain.HostFacts{})
 		world.seededLocality[host.ID] = state.seededDigests()
 		world.truth[host.ID] = cloneHostState(state)
 		world.seedReplicas(host.ID, host.ArtifactReplicas, tape.InitialWorld, tape.Start)
@@ -730,7 +741,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			provisioning: marketplace.Provisioning,
 			neverEnrolls: marketplace.NeverEnrolls(),
 		}
-		world.publishOfferFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available, scenario.PublishedHostFacts(marketplace.Facts, marketplace.Driver))
 		world.seededLocality[marketplace.ID] = state.seededDigests()
 		state.offer.Provisioning = &domain.Estimate{
 			Expected: marketplace.Provisioning.Expected.Duration().Seconds(),
@@ -908,12 +919,24 @@ func (world *simulatedWorld) enrollTheAgentThisMachineIsHeldThrough(offer domain
 // one, and a rule that asked only the machines still standing would read a
 // correct decision about capacity since retired as a decision priced from
 // nothing.
-func (world *simulatedWorld) publishOfferFacts(offer *domain.OfferSnapshot, spec scenario.WorldSpec, offerID string, available *bool) {
+func (world *simulatedWorld) publishOfferFacts(
+	offer *domain.OfferSnapshot,
+	spec scenario.WorldSpec,
+	offerID string,
+	available *bool,
+	host domain.HostFacts,
+) {
 	if available != nil {
 		offer.Capacity.Available = *available
 	}
 	offer.Network = spec.Paths.PublishedFacts(offerID, spec.Start())
 	world.publishedPaths[offerID] = slices.Clone(offer.Network.Download)
+	// What this machine says about the substrate under a workload, published for
+	// the reason its paths are and kept for the same reason: a launch is judged
+	// after the fact, and a rule that asked only the machines still standing would
+	// read a launch onto capacity since retired as a launch onto nothing.
+	offer.Host = host
+	world.publishedHostFacts[offerID] = host
 }
 
 // prepareRun is the world learning about a Run it will be asked to execute. An
@@ -1326,14 +1349,15 @@ func (world *simulatedWorld) truthSnapshot() WorldTruthSnapshot {
 		return executions[i].LaunchKey < executions[j].LaunchKey
 	})
 	return WorldTruthSnapshot{
-		At:               world.now,
-		Offers:           world.offerSnapshots(world.truth, world.now),
-		ActiveExecutions: executions,
-		Orphans:          world.orphanedCapacity(),
-		ArtifactReplicas: world.artifactReplicas(),
-		CacheMounts:      world.cacheMountStates(),
-		PublishedPaths:   maps.Clone(world.publishedPaths),
-		Disk:             world.diskLedgers(),
+		At:                 world.now,
+		Offers:             world.offerSnapshots(world.truth, world.now),
+		ActiveExecutions:   executions,
+		Orphans:            world.orphanedCapacity(),
+		ArtifactReplicas:   world.artifactReplicas(),
+		CacheMounts:        world.cacheMountStates(),
+		PublishedPaths:     maps.Clone(world.publishedPaths),
+		PublishedHostFacts: maps.Clone(world.publishedHostFacts),
+		Disk:               world.diskLedgers(),
 	}
 }
 

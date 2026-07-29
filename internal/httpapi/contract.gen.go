@@ -1204,7 +1204,38 @@ type ResourceRequirements struct {
 	Accelerators  []AcceleratorRequirement `json:"accelerators,omitempty"`
 	Cpu           CPURequirement           `json:"cpu"`
 	EphemeralDisk DiskRequirement          `json:"ephemeral_disk"`
-	Memory        MemoryRequirement        `json:"memory"`
+
+	// Host What a workload needs of the substrate under it rather than of the cards on it: the host promises it will not run without, and the driver its image's own accelerator stack was built against. The host provides the driver and the image provides the stack, so an image built against a newer driver than the machine runs is refused at placement rather than discovered by a process dying on capacity already paid for. Mercator never answers a mismatch by installing a stack onto somebody's host.
+	Host   HostRequirements  `json:"host,omitempty"`
+	Memory MemoryRequirement `json:"memory"`
+}
+
+// AcceleratorDriver The accelerator driver a host runs and the highest accelerator capability it supports, in the vendor's own versioning. It is the host half of the compatibility contract: the image carries the workload's own accelerator stack, and these two decide whether it can run here at all.
+type AcceleratorDriver struct {
+	Capability string `json:"capability,omitempty"`
+	Vendor     string `json:"vendor,omitempty"`
+	Version    string `json:"version,omitempty"`
+}
+
+// HostFacts What a machine, or the provider selling it, has established about the substrate under a workload. Every promise is tri-state: stated true, stated false, or never stated at all. A machine with no driver can never run an image that needs one and a machine nobody asked is a machine nobody asked, so Placement refuses both and records them under different codes.
+type HostFacts struct {
+	// Attested Every host promise somebody established about this machine, by name. It is not a set of the true ones: false is an answer, and a name absent was never established.
+	Attested map[string]bool `json:"attested,omitempty"`
+
+	// Driver The accelerator driver a host runs and the highest accelerator capability it supports, in the vendor's own versioning. It is the host half of the compatibility contract: the image carries the workload's own accelerator stack, and these two decide whether it can run here at all.
+	Driver AcceleratorDriver `json:"driver,omitempty"`
+}
+
+// HostRequirements What a workload needs of the substrate under it rather than of the cards on it: the host promises it will not run without, and the driver its image's own accelerator stack was built against. The host provides the driver and the image provides the stack, so an image built against a newer driver than the machine runs is refused at placement rather than discovered by a process dying on capacity already paid for. Mercator never answers a mismatch by installing a stack onto somebody's host.
+type HostRequirements struct {
+	// Facts The host promises this Run refuses to run without. A machine that never stated one is refused UNKNOWN_FACT, as loudly as a machine that stated its opposite is refused CAPABILITY_MISMATCH.
+	Facts []string `json:"facts,omitempty"`
+
+	// MinDriverCapability The lowest accelerator capability this workload's image was built for, in the vendor's own versioning. For NVIDIA it is the CUDA version the driver must support.
+	MinDriverCapability string `json:"min_driver_capability,omitempty"`
+
+	// MinDriverVersion The oldest accelerator driver this workload's image runs on, in the vendor's own versioning.
+	MinDriverVersion string `json:"min_driver_version,omitempty"`
 }
 
 // Run defines model for Run.

@@ -36,6 +36,11 @@ type DockerRuntime struct {
 	// labelPrefix namespaces the labels the agent stamps on its containers, so
 	// Observe reports Mercator's workloads and nothing else running on the box.
 	labelPrefix string
+	// acceleratorBinary is the vendor tool this node asks about its own cards and
+	// the driver under them. It is the runtime's own configuration for the reason
+	// the daemon binary above is: a test points it at a machine that answers
+	// differently from this one, and nothing else can.
+	acceleratorBinary string
 	// artifactRoot is where this node keeps immutable Artifact copies. A daemon
 	// has no concept of one, so it is the agent's own durable storage rather
 	// than anything Docker manages. A runtime given none replicates nothing and
@@ -60,11 +65,25 @@ func WithArtifactRoot(root string) RuntimeOption {
 	return func(docker *DockerRuntime) { docker.artifactRoot = root }
 }
 
+// WithAcceleratorTool points this node at the vendor tool it asks about its own
+// cards. It exists so a test can stand in a machine with four A100s or no
+// driver at all, which is the only way the reports this node publishes about
+// hardware can be exercised anywhere but on the hardware.
+func WithAcceleratorTool(binary string) RuntimeOption {
+	return func(docker *DockerRuntime) { docker.acceleratorBinary = binary }
+}
+
 func NewDockerRuntime(binary string, options ...RuntimeOption) *DockerRuntime {
 	if binary == "" {
 		binary = "docker"
 	}
-	runtime := &DockerRuntime{binary: binary, now: time.Now, labelPrefix: "mercator.", network: newPathMeasurements()}
+	runtime := &DockerRuntime{
+		binary:            binary,
+		acceleratorBinary: "nvidia-smi",
+		now:               time.Now,
+		labelPrefix:       "mercator.",
+		network:           newPathMeasurements(),
+	}
 	for _, option := range options {
 		option(runtime)
 	}
@@ -91,6 +110,11 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 		// content publishes nothing here, and Placement prices that silence with
 		// its own stated assumption rather than mistaking it for a slow link.
 		Network: docker.network.facts(facts.ObservedAt),
+		// What this machine holds and what drives it, which are the three fields
+		// phase 2 declared and nothing wrote. Until something did, every enrolled
+		// GPU machine published an empty accelerator inventory and was struck out
+		// of every accelerator placement it was perfect for.
+		Accelerator: docker.acceleratorFacts(ctx),
 	}
 	if slices.Contains(info.runtimeNames(), "nvidia") {
 		facts.Host.AcceleratorToolkit = "nvidia-container-toolkit"

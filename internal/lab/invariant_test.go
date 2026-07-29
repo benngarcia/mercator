@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 51 {
-		t.Fatalf("latest invariant results = %d, want 51", len(latest))
+	if len(latest) != 52 {
+		t.Fatalf("latest invariant results = %d, want 52", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -304,6 +304,32 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 					{Booking: domain.Booking{ID: "booking-waiting", State: domain.BookingStateQueued, ScheduleVersion: 2}},
 				},
 			}
+		},
+		// A host stating a CUDA 12 driver taking a launch whose image declares
+		// CUDA 13. Nothing about the machine is short: it has the cards, the room,
+		// and a driver its provider stands behind, and the image's own accelerator
+		// stack cannot talk to that driver. Before this rule the only thing in the
+		// tree that would have noticed was the process dying, minutes into a
+		// machine Mercator had already paid to provision and boot.
+		"safety.host_supports_the_image_it_was_given": func(observation *InvariantObservation) {
+			observation.World.PublishedHostFacts = map[string]domain.HostFacts{
+				"rental-cuda-12": {
+					Attested: map[domain.HostFact]bool{domain.HostFactNvidiaDriver: true},
+					Driver:   domain.AcceleratorDriver{Vendor: "nvidia", Version: "525.85.12", Capability: "12.0"},
+				},
+			}
+			observation.Workloads["run-cuda-13"] = domain.WorkloadRevision{
+				Spec: domain.WorkloadSpec{Resources: domain.ResourceRequirements{
+					Host: domain.HostRequirements{MinDriverCapability: "13.0"},
+				}},
+			}
+			observation.Effects = []EffectRecord{{
+				Sequence:      1,
+				Operation:     OperationProviderLaunch,
+				Command:       EffectCommandAccepted,
+				CorrelationID: "run-cuda-13",
+				Request:       json.RawMessage(`{"run_id":"run-cuda-13","offer_id":"rental-cuda-12"}`),
+			}}
 		},
 		// A marketplace template publishing a lease. The machine does not exist
 		// yet, nothing has allocated it, and the Rental identity it carries is a

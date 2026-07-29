@@ -113,7 +113,7 @@ func (s *Server) ListNodes(ctx context.Context, request ListNodesRequestObject) 
 
 func nodeSummary(record node.Record) NodeSummary {
 	accelerators := 0
-	for _, accelerator := range record.Facts.Host.Accelerators {
+	for _, accelerator := range record.Facts.Host.Accelerator.Devices {
 		accelerators += accelerator.Count
 	}
 	summary := NodeSummary{

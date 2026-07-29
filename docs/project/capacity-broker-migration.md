@@ -4608,7 +4608,7 @@ complete because it works against a live provider.
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
-| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. A Rental is now a domain aggregate with generations, held in a memory and a SQLite store under one conformance suite, and ending a generation retires the runtime bound to it, which is the first write of `node.StateRetired` in the tree and the first thing that stops a machine Mercator gave up being published as capacity. A Run that ends on a machine provisioned to hold a Rental now releases its workload and leaves the host standing, because the cleanup disposition reads the execution lane as well as the offer kind: only a one-shot product Mercator allocated is destroyed by the end of its own Run. A bootstrapped machine now keeps its session for as long as it works: the registry renews a credential over the node protocol, the agent renews ahead of each lapse, and the invitation it joined with is redeemed exactly once and appears in no event, ledger entry, or Run Bundle. Before it, a real node stopped being able to authenticate about thirty minutes after bootstrapping while its containers went on running, and no test could see it. No provider allocates a machine yet, the launch is not yet addressed to the machine a provisioning built, and nothing yet ends the lease of a machine nobody is using |
+| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. A Rental is now a domain aggregate with generations, held in a memory and a SQLite store under one conformance suite, and ending a generation retires the runtime bound to it, which is the first write of `node.StateRetired` in the tree and the first thing that stops a machine Mercator gave up being published as capacity. A Run that ends on a machine provisioned to hold a Rental now releases its workload and leaves the host standing, because the cleanup disposition reads the execution lane as well as the offer kind: only a one-shot product Mercator allocated is destroyed by the end of its own Run. A bootstrapped machine now keeps its session for as long as it works: the registry renews a credential over the node protocol, the agent renews ahead of each lapse, and the invitation it joined with is redeemed exactly once and appears in no event, ledger entry, or Run Bundle. Before it, a real node stopped being able to authenticate about thirty minutes after bootstrapping while its containers went on running, and no test could see it. A machine now states what it has to state to be placed on at all: the agent reports the cards under it and the driver over them, an offer carries both, a workload declares the accelerator stack its image was built against, and Placement refuses a host that said no with `CAPABILITY_MISMATCH` and a host that said nothing with `UNKNOWN_FACT` rather than installing a stack onto somebody's host or finding out at launch. Before it, every enrolled GPU machine advertised zero accelerators and was struck out of every GPU placement it was perfect for. No provider allocates a machine yet, the launch is not yet addressed to the machine a provisioning built, and nothing yet ends the lease of a machine nobody is using |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
 ## Scenario and invariant coverage
@@ -4735,6 +4735,27 @@ Phase 1 added:
   facts of Mercator's making rather than one field with itself. A control plane that
   provisions under one generation and mints the token under another fails 15 Lab
   tests mid-drive; before, it was fully green.
+- `bad-host-facts-rejected-loudly` (green as of phase 5 slice 6): four listings
+  for one training image that declares the accelerator stack it was built
+  against. The cheapest states outright that it has no working NVIDIA driver and
+  is refused `CAPABILITY_MISMATCH facts.nvidia_driver`; one states a driver four
+  years older than the image needs and is refused
+  `CAPABILITY_MISMATCH host.driver_version`; one is silent about the SSH access
+  the Run's operator will not do without and is refused
+  `UNKNOWN_FACT facts.ssh`; the well-attested host wins at twice the cheapest
+  price. It is the first time the Blueprint's facts map reaches an offer field,
+  and the fourth listing is new, because a map of booleans alone cannot state a
+  driver that is present and too old. It waited on `host_facts` since phase 1.
+- `safety.host_supports_the_image_it_was_given` (Lab invariant): no launch in the
+  world's ledger landed on a machine whose published facts cannot carry the
+  accelerator stack Mercator's own event log says the workload declared, and no
+  Booking Decision called such a machine feasible. The second clause is there
+  because a candidate ranked feasible is one busy machine away from being that
+  launch. Three sources meet in it and none is checking itself: what the machine
+  said is the World Tape's, what the workload declared is Mercator's public log,
+  and whether a launch happened is the world's ledger. Its deliberate failing
+  world is a host stating a CUDA 12 driver accepting a launch whose image
+  declares CUDA 13. Added in phase 5 slice 6.
 
 Phase 3 added:
 
@@ -5862,8 +5883,8 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 61 regression Blueprints: 59 green and 2 target, beside two demo
-documents, one minimized case, and forty one conformance Blueprints, all of
+The corpus is 62 regression Blueprints: 61 green and 1 target, beside two demo
+documents, one minimized case, and forty three conformance Blueprints, all of
 them green. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
@@ -5872,18 +5893,21 @@ subdirectories beside them hold the demo and the one minimized case.
 Blueprint added without a classification fails the build rather than drifting the
 number quoted here.
 
-The two targets are the capabilities no simulated world performs yet.
-`enrolled-node-survives-its-first-run` was the third and is green as of
-2026-07-28: the placement world provisions, enrols, and publishes the machine a
-listing became.
+One target is left, and it is the capability no simulated world performs yet.
 `queued-booking-deadline-expiry` needs
 `schedule_advancement`, which is a Booking expiring past its latest start and its
-Run being placed again. `bad-host-facts-rejected-loudly` needs a world that can
-publish host facts a machine then contradicts.
+Run being placed again, and it is [#190](https://github.com/benngarcia/mercator/issues/190).
+The other two are paid off. `enrolled-node-survives-its-first-run` went green on
+2026-07-28, when the placement world learned to provision, enrol, and publish the
+machine a listing became. `bad-host-facts-rejected-loudly` went green on
+2026-07-29: an offer now carries the promises a machine made about the substrate
+under a workload, a Run declares what its image needs of that substrate, and
+Placement refuses a stated no and a silence under different codes.
 
-The Lab registry holds forty eight invariants, forty safety and eight liveness.
-The figure is counted off `DefaultInvariantRegistry` rather than remembered; an
-earlier revision of this section said forty five and was already two behind. Every one carries a deliberate failing case, which
+The Lab registry holds fifty two invariants, forty four safety and eight
+liveness. The figure is counted off `DefaultInvariantRegistry` rather than
+remembered; an earlier revision of this section said forty five and was already
+two behind, and a later one said forty eight. Every one carries a deliberate failing case, which
 `TestEveryDefaultInvariantHasADeliberatelyFailingCase` requires of the registry
 itself: an invariant nothing can make fail is not evidence, so one cannot be
 registered without the world that breaks it.
@@ -5958,6 +5982,141 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 5 the driver a host provides and the stack an image brings
+
+The defect had two halves and one cause: nothing in the tree ever wrote down
+what accelerator hardware a machine had, so nothing could decide anything about
+it.
+
+`capability.HostFacts` declared `DriverVersion`, `DriverCapability` and
+`Accelerators` in phase 2, and no agent ever populated them. `node.Registry`
+publishes the accelerator inventory straight onto every node offer, so an
+enrolled machine holding eight A100s advertised zero cards and was struck out of
+every accelerator placement with `RESOURCE_INSUFFICIENT`. Read as a decision,
+that says the fleet can never run the work; what happened is that nobody looked.
+It blocked the whole phase, because the machines this phase exists to rent are
+GPU machines.
+
+The other half is compatibility. The host provides the driver and the image
+provides the CUDA runtime that talks to it, and an image built against a newer
+driver than the machine runs cannot start there. Nothing stated either number, so
+the mismatch was something a launch discovered: minutes into a machine Mercator
+had already paid to acquire, boot, and enrol, with a stack trace out of somebody
+else's runtime and nothing in the record naming a driver.
+
+What the agent reports, and the three states it can be in.
+`internal/nodeagent/accelerator.go` asks `nvidia-smi` twice: `--version` for the
+driver and the highest CUDA version that driver supports, and `--query-gpu` for
+the cards. The container runtime's own answer is not a substitute: `docker info`
+naming the nvidia runtime says a container can be handed the cards and says
+nothing about how many there are or which driver is under them, and a toolkit
+installed on a machine whose driver never loaded reports exactly what a working
+workstation reports.
+
+`capability.AcceleratorFacts` is tri-state, like the disk report beside it, and
+the reason is sharper here. Every field is empty on a CPU box and empty on a GPU
+box whose agent never looked, so a reader holding only the values cannot tell
+them apart. `Established` is the agent saying it looked, whatever it found, and
+`NodeFacts.Established` erases what an unestablished report happened to carry, so
+no reader downstream has two answers to choose between. Every way of failing to
+reach a driver is one answer in the agent: no `nvidia-smi`, an `nvidia-smi` that
+cannot reach its driver, and a broken driver have all established the thing
+Placement needs, which is that there is no working NVIDIA driver here. That is
+the stated-false case. Silence is what a third-party `NodeRuntime` that never
+implemented this reports.
+
+What an offer carries. `domain.HostFacts` is its own field on `OfferSnapshot`
+rather than more `ResourceInventory`, because these are promises and not
+quantities, and because the answer that matters most is the one nobody gave.
+`Attested` is a map rather than a set of the true ones: false is an answer.
+Placement refuses a stated no with `CAPABILITY_MISMATCH` and a silence with
+`UNKNOWN_FACT`, and an operator reading the decision then knows whether to buy a
+different machine or to go and find out about this one. `HostFact` is a closed
+set, checked where a Blueprint states one and where a Run declares one, because a
+misspelling on either side is a promise nothing matches and a refusal that reads
+as a fleet too small.
+
+`domain.HostFacts.Violations` and `CompareDottedVersions` live in the domain
+because two readers ask them: Placement deciding, and the Lab judging what
+Placement decided. Two implementations of one rule is how the judge comes to
+agree with the accused. The comparison answers separately whether two versions
+could be ordered at all, because an unparseable component read as zero refuses
+machines that are fine and read as large admits machines that are not. A
+difference settled before the unreadable component is still settled, so a
+distribution's patched `550.54.15-ubuntu3` clears a floor of 535 and is unknown
+against 550.54.16.
+
+A node states nothing about SSH, and that is the true answer rather than an
+omission. Mercator reaches an enrolled machine over the agent's own outbound
+session and holds no login on it, so a Run that wants a shell on its host is
+refused `UNKNOWN_FACT` there. SSH is a provider's promise about a machine nobody
+has allocated yet, which is where the corpus states it.
+
+Evidence, in order of fidelity. At L0, `internal/domain/host_test.go` holds the
+four arms apart: a fact nobody stated refused as a silence, a fact stated false
+refused for what it is, a CUDA 12 driver refused under a CUDA 13 image, and a
+driver nobody can order recorded as unknown; plus the admission refusal, so a
+caller's typo is caught where the Run enters rather than in every Booking
+Decision it would spoil. Reading a missing component as zero turns the fourth
+into `CAPABILITY_MISMATCH` and fails it.
+
+At L1, `bad-host-facts-rejected-loudly` is promoted green with its
+`missing_capabilities` emptied. It gained a fourth listing, because the boolean
+facts map alone cannot state the arm this slice is really about: `driverless-host`
+is refused `CAPABILITY_MISMATCH facts.nvidia_driver`, `old-driver-host` is refused
+`CAPABILITY_MISMATCH host.driver_version` on a 470 driver under a 535 floor,
+`unattested-host` is refused `UNKNOWN_FACT facts.ssh`, and `good-host` wins at
+twice the cheapest price. Deleting the one line that asks the offer's host facts
+makes all four candidates feasible and places the Run on the machine with no
+driver.
+
+`safety.host_supports_the_image_it_was_given` asks two things over three sources
+that are not checking themselves: no launch in the world's ledger landed on a
+machine whose published facts cannot carry the workload Mercator's own event log
+says it declared, and no Booking Decision called such a machine feasible. The
+second clause is there because a candidate ranked feasible is one busy machine
+away from being that launch. Its deliberate failing world is a host stating a
+CUDA 12 driver accepting a launch whose image declares CUDA 13.
+`WorldTruthSnapshot.PublishedHostFacts` keeps what a machine said after the
+machine is gone, for the reason the published paths beside it are kept: a
+placement is decided at one moment and judged at a later one.
+
+What that rule does not yet have is a conformance Blueprint of its own. The
+Blueprint vocabulary reaches both simulated worlds, `RentalSpec` states a driver
+and `lab/world.go` publishes it, and no conformance Blueprint declares a host
+requirement, so the rule passes vacuously on all forty three of them and its only
+failing world is one a test constructs.
+[#227](https://github.com/benngarcia/mercator/issues/227) is the world that
+drives it: two rentals, one on a driver the image outgrew, and a Run that lands
+on the other.
+
+At L2, `TestANodeReportsTheCardsAndTheDriverUnderThem` and
+`TestAMachineWithNoDriverEstablishesThatItHasNone` drive the real agent against a
+scripted vendor tool, because hardware is the one thing a case cannot arrange.
+
+At L3, on this workstation, the live half ran. `TestThisMachineReportsItsOwnCardsAndDriver`
+checks the real agent against `nvidia-smi` asked directly, and
+`TestThisMachinesCardsReachAPlacementAndAnOutgrownDriverDoesNot` runs the real
+`nodeagent.DockerRuntime` against the real Docker daemon under the real node
+registry and the real Placement. The machine reports one NVIDIA GeForce RTX 5090
+with 32607 MiB on driver 595.71.05 supporting CUDA 13.2, the daemon has its
+nvidia runtime, the enrolled node offers that card and that driver, a Run needing
+an accelerator is placed on it, and a Run whose image declares a driver floor of
+596 is refused `CAPABILITY_MISMATCH` in the Booking Decision and never handed to
+the node. Removing the agent's accelerator read makes both fail with a driver of
+`""` against nvidia-smi's 595.71.05; removing the offer projection's host facts
+fails the fleet case the same way.
+
+That live case resolves `nvidia-smi` to an absolute path and passes it through
+`nodeagent.WithAcceleratorTool`. The daemon fleet clears `PATH` so no local
+Docker connection is seeded, and an agent looking the vendor tool up by name
+inside that fleet finds nothing and reports a workstation with no driver.
+
+`go build ./... && go vet ./... && go test ./...` is green. `go test -race
+-count=1` over the nine packages this slice touched is green: `internal/lab` at
+264.3s, `internal/nodeagent` at 58.4s, `internal/daemon` at 45.1s,
+`internal/scenario` at 7.5s, and the rest inside six seconds.
 
 ### Phase 5 the session a machine keeps
 

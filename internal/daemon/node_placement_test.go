@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -767,6 +768,36 @@ func (f *fleet) submitRunUnderBudget(t *testing.T, usd float64) string {
 	})
 }
 
+// submitRunNeedingACard submits a Run that will not run without an accelerator.
+// It names the vendor and no model, because what the case is about is a machine
+// whose cards reach a placement at all: a requirement naming this workstation's
+// own card would be asking the fleet to confirm a string the same fleet
+// published.
+func (f *fleet) submitRunNeedingACard(t *testing.T) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		resources := revision["spec"].(map[string]any)["resources"].(map[string]any)
+		resources["accelerators"] = []map[string]any{{"vendor": "nvidia", "count": 1}}
+		resources["host"] = map[string]any{"facts": []string{"nvidia_driver"}}
+		return revision
+	})
+}
+
+// submitRunNeedingDriver submits a Run whose image declares the driver its own
+// accelerator stack was built against. The host provides the driver and the
+// image provides the stack, so this is the workload half of a compatibility
+// contract Mercator decides before it pays for a machine.
+func (f *fleet) submitRunNeedingDriver(t *testing.T, version string) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		resources := revision["spec"].(map[string]any)["resources"].(map[string]any)
+		resources["host"] = map[string]any{"min_driver_version": version}
+		return revision
+	})
+}
+
 // submitRunInFamily submits a Run that belongs to a family of work and states how
 // wide that family may run. Every member states the width, because a group is a
 // label the work carries rather than an object an operator registers first.
@@ -1104,6 +1135,12 @@ type offerSnapshot struct {
 	Lane      string                   `json:"lane"`
 	ExpiresAt time.Time                `json:"expires_at"`
 	Resources domain.ResourceInventory `json:"resources"`
+	// Host is what this machine established about the substrate under a
+	// workload: the promises it makes and the accelerator driver it runs. It is
+	// read off the catalog because that is where Placement reads it, and because
+	// an offer that carried the node's cards and dropped its driver would be a
+	// projection nothing downstream could catch.
+	Host      domain.HostFacts         `json:"host"`
 	Images    domain.ImageInventory    `json:"images"`
 	Artifacts domain.ArtifactInventory `json:"artifacts"`
 	Capacity  domain.CapacityEvidence  `json:"capacity"`
@@ -2088,6 +2125,108 @@ func TestTheFleetListingReportsTheRoomThisMachineReallyHas(t *testing.T) {
 	if drift := summary.DiskFreeBytes - free; drift > total/1000 || drift < -total/1000 {
 		t.Fatalf("the listing reports %d bytes free, and the daemon's own filesystem has %d", summary.DiskFreeBytes, free)
 	}
+}
+
+// TestThisMachinesCardsReachAPlacementAndAnOutgrownDriverDoesNot is the whole
+// compatibility contract against the hardware under this suite, through the real
+// agent, the real daemon, the real node registry, and the real Placement.
+//
+// The first half is the blocker this slice existed to clear. node.Registry
+// publishes the agent's accelerator inventory straight onto the offer, and
+// nothing wrote that inventory, so every enrolled GPU machine advertised zero
+// cards and was struck out of every accelerator placement with
+// RESOURCE_INSUFFICIENT. What is asserted is the machine's own answer: the cards
+// this host really holds, the driver it really runs, and a Run that needs a card
+// landing here rather than being told the fleet has none.
+//
+// The second half is the refusal. The image declares a driver newer than this
+// machine runs, and the host provides the driver: no amount of provisioning
+// changes it, and Mercator must not answer by installing a stack onto somebody's
+// host. So it is refused in the Booking Decision, naming the driver, and the
+// node is never asked to launch it.
+func TestThisMachinesCardsReachAPlacementAndAnOutgrownDriverDoesNot(t *testing.T) {
+	docker := requireDockerBinary(t)
+	smi, driver := requireNvidiaDriverOn(t, docker)
+	fleet := startFleet(t, runningOn(nodeagent.NewDockerRuntime(docker, nodeagent.WithAcceleratorTool(smi))))
+
+	offer := fleet.nodeOffer(t)
+
+	if offer.Host.Driver.Version != driver {
+		t.Fatalf("the node offers driver %q, and nvidia-smi on this machine says %q", offer.Host.Driver.Version, driver)
+	}
+	if !offer.Host.Attested[domain.HostFactNvidiaDriver] {
+		t.Fatalf("a machine running driver %q attested %+v", driver, offer.Host.Attested)
+	}
+	if offer.Resources.AcceleratorCount() < 1 {
+		t.Fatalf("this machine holds cards and offers %+v", offer.Resources.Accelerators)
+	}
+	t.Logf("this node offers %d card(s) on driver %s supporting CUDA %s: %+v",
+		offer.Resources.AcceleratorCount(), offer.Host.Driver.Version, offer.Host.Driver.Capability, offer.Resources.Accelerators)
+
+	placed := fleet.submitRunNeedingACard(t)
+	fleet.advance(t, placed)
+	if selected := fleet.decision(t, placed).SelectedOfferSnapshotID; selected != fleet.nodeID {
+		t.Fatalf("a Run needing a card was placed on %q, and this machine's cards are on node %q", selected, fleet.nodeID)
+	}
+
+	outgrown := fleet.submitRunNeedingDriver(t, outgrows(driver))
+	fleet.queueForWantOfCapacity(t, outgrown)
+	candidate := fleet.decision(t, outgrown).candidate(t, fleet.nodeID)
+	if candidate.Feasible || !refusedAs(candidate, "CAPABILITY_MISMATCH") {
+		t.Fatalf("a Run needing a driver newer than %s was weighed as %+v", driver, candidate)
+	}
+	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, outgrown) {
+		t.Fatalf("the node was asked to launch %q on a driver its image outgrew: %v", outgrown, launched)
+	}
+}
+
+// requireNvidiaDriverOn is this machine answering for itself before a case
+// asserts anything about it: the daemon's nvidia runtime, so a container here
+// could be handed the cards at all, and the driver under them. Both halves of
+// the case need a real driver, because without one there is no inventory to
+// reach a placement and no version for an image to outgrow, which is a machine
+// this case has nothing to say about rather than a failure.
+//
+// It resolves the vendor tool to an absolute path and hands it back, for the
+// reason the Docker client is resolved before the fleet starts: these cases
+// clear PATH so the daemon seeds no local connection, and an agent looking up
+// nvidia-smi by name inside that fleet would find nothing and report a
+// workstation with no driver.
+func requireNvidiaDriverOn(t *testing.T, docker string) (smi, driver string) {
+	t.Helper()
+	if output, err := exec.Command(docker, "info", "--format", "{{json .Runtimes}}").Output(); err != nil {
+		t.Fatalf("ask the daemon which runtimes it has: %v", err)
+	} else if !strings.Contains(string(output), "nvidia") {
+		t.Skipf("this daemon has no nvidia runtime to hand a container the cards: %s", output)
+	}
+	smi, err := exec.LookPath("nvidia-smi")
+	if err != nil {
+		t.Skipf("this machine has no NVIDIA vendor tool to ask: %v", err)
+	}
+	output, err := exec.Command(smi, "--version").Output()
+	if err != nil {
+		t.Skipf("this machine has no working NVIDIA driver: %v", err)
+	}
+	for line := range strings.SplitSeq(string(output), "\n") {
+		name, value, split := strings.Cut(line, ":")
+		if split && strings.EqualFold(strings.TrimSpace(name), "DRIVER version") {
+			return smi, strings.TrimSpace(value)
+		}
+	}
+	t.Fatalf("nvidia-smi --version names no driver:\n%s", output)
+	return "", ""
+}
+
+// outgrows is a driver one major version past whatever this machine runs, so the
+// case states a floor no machine here can meet without hard-coding a number that
+// would go stale the next time somebody updates the host.
+func outgrows(driver string) string {
+	major, _, _ := strings.Cut(driver, ".")
+	number, err := strconv.Atoi(major)
+	if err != nil {
+		return "999999"
+	}
+	return strconv.Itoa(number + 1)
 }
 
 // requireDockerBinary resolves Docker before the fleet clears PATH, and skips

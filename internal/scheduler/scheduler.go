@@ -408,6 +408,14 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 			Message:  "Offer has less room left than the Run reserved plus the content it would have to land here.",
 		})
 	}
+	// What the host under this workload has to be, as opposed to how many cards
+	// it counts. The host provides the driver and the image provides the
+	// accelerator stack that talks to it, so an image built against a newer
+	// driver than the machine runs is refused here rather than discovered by a
+	// process dying on capacity Mercator already paid for. A machine that stated
+	// nothing is refused too, and separately, because a silence is not a machine
+	// that said no.
+	violations = append(violations, offer.Host.Violations(workload.Spec.Resources.Host)...)
 	if !acceleratorRequirementsSatisfied(workload.Spec.Resources.Accelerators, offer) {
 		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.accelerators", Required: workload.Spec.Resources.Accelerators, Offered: offer.Resources.Accelerators, Message: "Offer has insufficient accelerator inventory."})
 	}

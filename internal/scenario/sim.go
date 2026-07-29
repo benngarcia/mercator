@@ -102,9 +102,6 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		if err := world.AddMachine(machine); err != nil {
 			return nil, err
 		}
-		if len(offer.Facts) > 0 {
-			session.note("offer %q declares host facts, but no offer field can carry them yet", offer.ID)
-		}
 		if offer.Capacity != nil {
 			session.note("offer %q negotiates a capacity capability set, and this harness reaches its provider without a Broker to negotiate against", offer.ID)
 		}
@@ -416,6 +413,10 @@ func simRentalOffer(spec WorldSpec, rental RentalSpec, machineID string) domain.
 		offer.Pricing = domain.PriceModel{Currency: "USD"}
 		offer.Capabilities.Pricing = domain.PricingCapabilities{}
 	}
+	// What the agent on this machine established about the substrate under a
+	// workload. A machine Mercator already holds is the one that can answer for
+	// itself, and a fixture that says nothing publishes nothing.
+	offer.Host = PublishedHostFacts(rental.Facts, rental.Driver)
 	return offer
 }
 
@@ -496,6 +497,11 @@ func simMarketplaceOffer(world WorldSpec, spec MarketplaceOfferSpec) domain.Offe
 	// confidence is. A listing no fixture states a history for publishes none.
 	offer.Reliability = spec.Risk()
 	offer.Lane = spec.Lane
+	// What this listing's provider promises about the substrate under a workload.
+	// It is the first thing a Blueprint's facts map has ever reached, and the
+	// omissions are the point: a fact a provider left out is one Placement refuses
+	// as unknown rather than reading as a no.
+	offer.Host = PublishedHostFacts(spec.Facts, spec.Driver)
 	return offer
 }
 
@@ -769,6 +775,11 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 			}}
 		}
 	}
+	// What this Run needs of the host under it, carried verbatim and stated after
+	// the inventory above because that branch replaces the whole requirement set.
+	// A fixture naming a fact Mercator does not establish is a fixture about the
+	// refusal, exactly as an unknown service class is, so nothing here repairs it.
+	spec.Resources.Host = req.Host.Requirements()
 	// A fixture that says nothing about the kind of work its Run is gets whatever
 	// a caller who says nothing gets, which is normalisation's business rather
 	// than this translation's. A class Mercator does not know is carried through
