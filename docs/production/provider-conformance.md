@@ -70,8 +70,13 @@ mercator verify --spec runpod-trial.json | tee runpod-evidence.json
 ```
 
 Terminate TLS before the verifier and route the public URL to its listen
-address. Keep the endpoint private except for the duration of the trial where
-possible. Per-Run bearer tokens authenticate probe reports.
+address. The verifier's own listener is plaintext and cannot be told otherwise:
+it reads no TLS variables, and unlike `mercator serve` it does not refuse a
+routable address without a certificate
+([#216](https://github.com/benngarcia/mercator/issues/216)). What it serves
+there is the full `/v1` API behind a bearer token it generates for the trial, so
+put a terminator in front of it and keep the address private for the duration of
+the trial. Per-Run bearer tokens authenticate probe reports.
 
 ## Local Docker Proof
 

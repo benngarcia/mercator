@@ -7,8 +7,11 @@ evaluation. It is not a GA security assurance statement.
 
 - Mercator is a single trusted process.
 - SQLite is the internal source of truth.
-- Mercator terminates TLS in its own process when `MERCATOR_TLS_CERT_FILE` and
-  `MERCATOR_TLS_KEY_FILE` are set. There is no plaintext fallback: see
+- `mercator serve` terminates TLS in its own process when
+  `MERCATOR_TLS_CERT_FILE` and `MERCATOR_TLS_KEY_FILE` are set, and has no
+  plaintext fallback off loopback. `mercator verify` is a second server on the
+  same code and does not read those variables, so a remote provider trial serves
+  in cleartext on the address it is given: see
   [Transport Security](#transport-security).
 - `/v1/*` API routes are protected by a configured bearer token, or — when a
   deployment configures OIDC — a signed HTTP-only session cookie carrying a
@@ -77,6 +80,18 @@ Terminating TLS in front of Mercator with a proxy is still supported. Bind
 `MERCATOR_ADDR` to loopback and point the proxy at it; a loopback listener may
 serve plaintext because nothing off the host can reach it.
 
+The three rules above are `mercator serve`'s. They are enforced in the process
+entrypoint against `MERCATOR_ADDR`, not in the server itself, and `mercator
+verify` is the other caller that builds the same server. A provider Conformance
+Trial binds `MERCATOR_CONFORMANCE_LISTEN_ADDR`, which must be a fixed routable
+address for any remote adapter, reads neither TLS variable, and therefore serves
+the whole `/v1` API and its generated operator token in cleartext for the
+duration of the trial. Put a TLS terminator in front of it and keep the address
+private, as [provider-conformance.md](provider-conformance.md) says. Moving the
+rule into the server, where it would cover both callers, needs the trial to be
+able to carry a certificate of its own:
+[#216](https://github.com/benngarcia/mercator/issues/216).
+
 Not covered: certificate reload without a restart, ACME or any automatic
 issuance, client certificates, and an HTTP listener that redirects to HTTPS.
 See [known-limitations.md](known-limitations.md).
@@ -97,7 +112,8 @@ The key is never generated for you. A generated key would change on every
 restart and orphan every credential sealed under the previous one, so an absent
 key is a startup failure naming the variable.
 
-Rotate it with `mercator rekey`, with the server stopped:
+Rotate it with `mercator rekey`. The command refuses to run while a server holds
+the database, so the order below is enforced rather than advised:
 
 ```sh
 export MERCATOR_SQLITE_DSN='file:/data/mercator.db'
@@ -119,10 +135,34 @@ forever, which is the opposite of retiring it. Remove
 `MERCATOR_SECRET_KEY_PREVIOUS` once the command succeeds, and restart the server
 with the new `MERCATOR_SECRET_KEY` only.
 
-Rotation covers stored connection credentials. Report tokens and node
-enrollment tokens are short-lived and are simply re-signed under the new key as
-they are minted; sessions and node tokens issued under the retired key stop
-verifying at the restart.
+### Let The Runs Finish First
+
+Rotation re-seals stored connection credentials. Nothing else that was signed
+under the retired key is carried across, and one of those things is not
+short-lived.
+
+A workload's report token is minted once, when its attempt is dispatched, and is
+never re-issued and never expires. It is an HMAC over the workspace and run id
+under a subkey of the master key, handed to the container as
+`MERCATOR_RUN_TOKEN`, and a six-hour training run holds the one it was given for
+its whole life. Rotate underneath it and every report it sends afterwards is
+answered `401 INVALID_RUN_TOKEN`, permanently: progress, checkpoints, and its own
+terminal verdict. The workload application owns semantic success in this
+architecture, so that run is adjudicated without the one report that would have
+said whether it worked.
+
+So the rotation procedure is: stop admitting work, let in-flight runs reach a
+terminal phase, then stop the server and rotate. Mercator has no drain command;
+`mercator run list` is how you see what is still running.
+
+Node enrollment tokens and node sessions genuinely are short-lived and are
+re-signed as they are minted, and browser sessions signed under
+`MERCATOR_SESSION_KEY` are unaffected by a master-key rotation. An enrolled node
+holding a session issued under the retired key stops verifying at the restart
+and re-enrolls on its next attempt.
+
+Report-token expiry and re-issue is
+[#215](https://github.com/benngarcia/mercator/issues/215).
 
 ## Idempotency And Side Effects
 

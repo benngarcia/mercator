@@ -25,6 +25,21 @@ limits.
   port 80. An operator renewing on a short-lived certificate should expect a
   process restart per renewal
   ([#213](https://github.com/benngarcia/mercator/issues/213)).
+- The non-loopback TLS rule is `mercator serve`'s alone. It is enforced in the
+  process entrypoint against `MERCATOR_ADDR`, and `mercator verify` builds the
+  same server on a listener of its own: a remote provider trial binds the fixed
+  routable `MERCATOR_CONFORMANCE_LISTEN_ADDR` it requires, reads no TLS
+  variable, and serves the full `/v1` API and its generated operator token in
+  cleartext until the trial ends. The documented topology is a TLS terminator in
+  front of it. Moving the rule into the server so it covers both callers needs
+  the trial to be able to carry its own certificate
+  ([#216](https://github.com/benngarcia/mercator/issues/216)).
+- A workload's run-report token is minted once at dispatch and never expires, so
+  a master-key rotation performed while a run is executing answers every later
+  report from that container `401 INVALID_RUN_TOKEN` for the rest of the run,
+  including its terminal verdict. Let in-flight runs finish before rotating;
+  there is no drain command
+  ([#215](https://github.com/benngarcia/mercator/issues/215)).
 - The non-loopback TLS rule reads the bind address and nothing else, which makes
   it conservative in one real case: a container that binds `0.0.0.0` so that a
   loopback-only published port can reach it is required to carry a certificate
