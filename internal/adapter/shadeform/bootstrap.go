@@ -150,6 +150,10 @@ const bootstrapTemplate = `#!/bin/sh
 set -eu
 umask 077
 
+# Every directory this script writes into, rather than the two it invents. A
+# machine whose image ships no /usr/local/bin or /etc/systemd/system is a machine
+# the install would fail on halfway, having already fetched the agent.
+install -d -m 0755 /usr/local/bin /etc/systemd/system
 install -d -m 0700 /etc/mercator-node /var/lib/mercator-node
 
 download="$(mktemp)"

@@ -197,7 +197,12 @@ through run events or sinks.
 ## Live verification, and what is blocked
 
 **No live Shadeform run has been performed against this adapter since it became a
-capacity provider.** The whole path is proven under the package's httptest fake.
+capacity provider.** The provider half is proven under the package's httptest
+fake. The bootstrap half is proven on a real machine: `go test
+./internal/adapter/shadeform -run TestTheBootstrapScriptRunsOnARealMachine` runs
+the rendered script under a real shell in a container, with `curl` and
+`systemctl` stubbed, and checks the installed agent, the 0600 environment file
+and the unit.
 The live half is [#235](https://github.com/benngarcia/mercator/issues/235), and
 these are the commands it needs, with a funded account:
 

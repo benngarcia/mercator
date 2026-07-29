@@ -6093,7 +6093,19 @@ that stops refusing unsafe material accepts a token carrying a heredoc
 terminator; and a create body echoed back unredacted surfaces the whole base64
 bootstrap in the operator's diagnostic.
 
-That last break also found a defect in the test it was breaking. Redaction
+The live half ran, on this host's own Docker daemon, and it found a defect no
+string comparison could. `TestTheBootstrapScriptRunsOnARealMachine` renders the
+script Mercator would hand a machine and runs it under a real shell on a real
+filesystem in a `busybox:1.37` container, with `curl` and `systemctl` stubbed
+because there is no agent binary to fetch and a container is not a booted host.
+The script assumed `/usr/local/bin` and `/etc/systemd/system` already existed: on
+a userland where they do not, it fetched the agent and then failed at `install:
+can't create '/usr/local/bin/mercator-node'`, leaving a paid machine that had
+downloaded an agent it never installed. It now installs every directory it writes
+into. Removing the `systemctl enable --now` afterwards fails the case at the ask
+rather than at the effect, which is what the stub is for.
+
+The one break also found a defect in the test it was breaking. Redaction
 re-marshals the decoded response body, which orders keys alphabetically, and the
 fixture's 8KB padding field was named `detail`: it sorted before `message` and
 pushed the echoed material past the size bound, so the assertion had been passing
@@ -6102,8 +6114,12 @@ renamed to sort last, and only then does removing the redaction fail the test.
 
 What this slice does not do, said plainly.
 
-- No live Shadeform run. This host holds no `SHADEFORM_API_KEY` and no `op`, so
-  the live half is blocked rather than done, and nothing here claims otherwise.
+- No live Shadeform run. The bootstrap runs on a real machine here, and the
+  provider does not: this host holds no `SHADEFORM_API_KEY` and no `op`, so
+  everything that needs the marketplace itself is blocked rather than done, and
+  nothing here claims otherwise. What only a live run can establish is whether a
+  `shade_os` image carries `systemd`, `curl` and a working Docker daemon, and
+  whether Shadeform runs the script as root once the instance is active.
   The exact command an operator runs is in `docs/production/shadeform.md` and the
   blocked run is [#235](https://github.com/benngarcia/mercator/issues/235).
 - A Shadeform connection publishes no placement candidate, so no Run can be
