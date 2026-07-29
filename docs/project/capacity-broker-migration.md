@@ -4675,11 +4675,29 @@ Phase 1 added:
   credential Mercator hands a machine so it can fetch content names one
   operation, one workspace, one piece of content and an expiry; is checked
   against the command it arrived on rather than against itself; has not lapsed
-  when it is handed over; and stays presentable for no more than an hour. The
-  four clauses fail separately on four hand-written worlds, and the world can
-  really produce the state they are about: a private image asked for with nothing
-  minted is refused by the registry, and the same image with material minted for
-  that operation is served. Added in phase 5 slice 5.
+  when it is handed over; and states a window no longer than an hour. The four
+  clauses fail separately on four hand-written worlds, and the world can really
+  produce the state they are about: a private image asked for with nothing minted
+  is refused by the registry, the same image with material minted for that
+  operation is served, and the account handed over with no scope at all is
+  recorded and caught. Added in phase 5 slice 5.
+
+  Read what that last clause says and not more. It reads the bound Mercator
+  attached, never whether the far side can enforce it. Against an object store it
+  is both, because a presigned read is a signature over one object and one
+  window and the store refuses anything else on its own. Against a registry that
+  only knows how to check a password it is neither: the material handed over is
+  the operator's standing account verbatim, `credential.Mint` performs no token
+  exchange for any registry today, and the registry never sees a
+  `ContentCredentialScope`. What holds the machine to the scope there is
+  `authorisedPull` on the node, which is Mercator's own code on a host an
+  operator rents by the hour, so an attacker holding that host has the account
+  and it keeps working for every private image in that registry. Narrowing that
+  needs a registry token exchange, which is its own slice and is not built. The
+  Lab models the split rather than papering over it: the machine's check and the
+  far side's check are separate refusals in `internal/lab/content_credential.go`,
+  because a world where the registry honoured Mercator's scope is a world that
+  proves the control plane agrees with itself.
 
   The clause that is deliberately not there is material uniqueness, which was the
   obvious fourth and fails on correct behaviour. SigV4 presigns one object for
@@ -6970,13 +6988,53 @@ deciding what a machine should be holding, and the Broker delivers the answer
 without narrowing anything of its own. A public image is minted nothing, which is
 the answer rather than a failure.
 
+The shipped daemon builds that mint from what the deployment already states, and
+for one revision of this slice it built none, which made every sentence above
+true of the Lab and false of the product: `daemon.New` composed the orchestrator
+without `WithContentCredentials`, so `mintPull` and `mintRead` returned zero
+silently and every `PrepareItem` in a real deployment carried nothing. That was a
+regression rather than an unbuilt path, because the same slice moved `PrepareImage`
+off the Docker CLI, which reads `config.json` and sends the auth itself, onto the
+daemon API, which does not. Registry accounts now come from the file `docker
+login` writes, read by `ociresolver.DockerConfigAccounts` and keyed the way an
+image reference names a registry, because the manifest resolver already reads that
+file and a second place to say the same thing is one place to say it wrong. The
+object store is `MERCATOR_OBJECT_STORE_ENDPOINT`, `_BUCKET`, `_REGION`,
+`_ACCESS_KEY` and `_SECRET`, with nothing defaulted: unset is a deployment that
+has none, which is real and refuses to mint a read rather than inventing a
+location, and partially set is a startup error rather than a machine reporting it
+was handed nothing.
+
 Three seams enforce it, and each is tested where it lives. The registry and the
 object store refuse: in the Lab because `ImageSpec.private` says the world serves
 that image to nobody anonymous and the store answers only a signed read, and on
 this host because distribution behind htpasswd really does. The machine refuses
 before presenting anything: `authorisedPull` and `authorisedRead` check the scope
 against the command, so material minted for another operation never reaches the
-network. And the record refuses to carry any of it.
+network. And the record holds the bound without the material.
+
+Those last two are one seam rather than two, and keeping them apart is what the
+slice got wrong the first time. A node command is durable so a machine that was
+disconnected still receives it, and `node_operations` is kept for the life of the
+deployment and pruned by nothing, so one encoding used for both the wire and the
+record puts a fifteen minute credential in a SQLite blob for years. `dispatch`
+now marshals twice: the machine gets the command as issued, and the row gets the
+command without its material. The registry secret and the signed location go; the
+operation, the workspace, the content, the expiry and the catalog's own durable
+`Source` stay, which is the record of what Mercator authorised and is presentable
+to nobody. The failure string was the same leak one hop on, because a transport
+error from a presigned GET is a `*url.Error` whose message is the whole URL and
+that string is stored in `node_operations.failure`.
+
+What that costs is a replay. A command outlives the credential inside it, so an
+agent reconnecting to a command issued while it was down is handed the record
+rather than the pull, says so in Mercator's vocabulary, and the identity stays
+reissuable. It replaces a worse failure: before this the same command arrived
+carrying material minted before the disconnection and was refused as expired,
+with the secret still in the row. Neither version recovers on its own, because
+the orchestrator never learns a machine refused a preparation at all, which is
+filed as [#224](https://github.com/benngarcia/mercator/issues/224) and reaches
+every other way a prepare can fail.
 
 The Broker hop has its own test because nothing else can see it. The Lab replaces
 the world at the desired-set seam, which sits above `Broker.prepareOnNode`, so a
@@ -7027,6 +7085,33 @@ scheduling accident rather than a contract. Filed as
 [#221](https://github.com/benngarcia/mercator/issues/221), where the preferable
 fix is to precede a node launch with a `PrepareImage` so a node has exactly one
 place it ever fetches an image, rather than to grow a second credential path.
+
+The Lab does not catch that, it licenses it. `contentRefusal` is consulted from
+`startPrefetch` alone; `pullRunImage` moves the bytes with no reference to
+`ImageSpec.Private` and no credential at all, so a private image launched on a
+machine the sweep never reached is served anonymously and every rule stays green.
+Making the world honest there needs a launch failure path, which needs the launch
+to carry a credential for the corpus to stay green, which is #221's own slice.
+It is recorded on that issue rather than half-changed here, and the Blueprint's
+summary no longer claims a registry that serves nothing to an anonymous reader
+without saying which seam that is true of.
+
+A registry account is still the operator's standing account when it reaches the
+machine. `credential.Mint` performs no token exchange, so what is minted for a
+password registry is the same username and secret with a scope attached that only
+Mercator's own node-side check reads. The rule registry entry above says what
+that does and does not buy, and the live conformance case demonstrates the shape
+rather than counterexampling it: `registryAccountSecret` there is the htpasswd
+account itself. Narrowing it needs a per-registry token exchange, which no seam
+in this phase asks for.
+
+Preparation a machine refuses is never asked for again, whatever the reason:
+`Broker.Prepare` reports what it dispatched rather than what the machine did with
+it, and the orchestrator's in-process memory reads the unchanged desire on the
+next sweep and stays quiet. Filed as
+[#224](https://github.com/benngarcia/mercator/issues/224). It predates the
+credential work and is reached by a broken link, a full disk, or a command
+replayed past the material it was dispatched with.
 
 One real defect surfaced from running the whole tree rather than one package.
 Tagging a shared image into a local registry adds a repository digest to the image
