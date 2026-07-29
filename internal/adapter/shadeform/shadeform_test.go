@@ -75,6 +75,22 @@ func TestTheBootstrapScriptInstallsThePinnedAgentAndOpensNothing(t *testing.T) {
 	}
 }
 
+// TestTheBootstrapRefusesADownloadURLThatWouldCloseItsOwnShellWord is the one
+// value here an operator writes rather than Mercator. It lands inside a
+// single-quoted word in the curl line, so a quote in it closes that word and
+// everything after it is a line this machine runs as root before the agent
+// exists. It parses as a URL and it carries the version placeholder, so nothing
+// else in the path has anything to say about it.
+func TestTheBootstrapRefusesADownloadURLThatWouldCloseItsOwnShellWord(t *testing.T) {
+	breakout := "https://downloads.mercator.test/{version}/linux-amd64'&&touch$IFS/tmp/pwned&&'"
+
+	_, err := bootstrapScript(bootstrap(), breakout)
+
+	if err == nil {
+		t.Fatal("want a refusal before a machine is paid for to run somebody's line as root")
+	}
+}
+
 func TestTheBootstrapRefusesMaterialAnUnattendedScriptCannotCarry(t *testing.T) {
 	cases := map[string]capability.NodeBootstrap{
 		"no control plane": {NodeID: "node_1", RentalID: "rent_1", EnrollmentToken: "enrol-token-1", AgentVersion: "v1"},

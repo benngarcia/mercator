@@ -119,17 +119,26 @@ func bootstrapEnvironment(bootstrap capability.NodeBootstrap) (string, error) {
 // the value was: one of them is a credential, and a refusal that quoted it would
 // put the credential in the Run's failure.
 //
-// The bar is one line of printable ASCII with no spaces. Every value here is
-// Mercator's own (a URL, two identities, a generation, and a minted token), so
-// anything outside that is a bug upstream rather than an operator's input, and
-// the machine is refused before it is paid for rather than handed a heredoc that
-// ends early or a unit file with a second directive in it.
+// The bar is one line of printable ASCII with no spaces and no single quote.
+// Four of the five values are Mercator's own, where anything outside that is a
+// bug upstream; the download URL is not, it is connection configuration an
+// operator writes, and it is interpolated into a single-quoted word in the curl
+// line. A value carrying a quote closes that word and everything after it is a
+// command this machine runs as root before the agent exists. The quote is
+// therefore refused rather than escaped: nothing here has a use for one, and a
+// bootstrap that quoted its way around the problem would be custom escaping
+// standing between an operator's string and a root shell.
+//
+// The refusal happens before an instance is created, so what it costs is a
+// failed provision rather than a machine that boots with a heredoc that ends
+// early, a unit file carrying a second directive, or a shell running somebody
+// else's line.
 func unattendedValue(name, value string) error {
 	if value == "" {
 		return fmt.Errorf("shadeform: bootstrap %s is empty, and a machine cannot be told who it is without it", name)
 	}
 	for _, character := range value {
-		if character <= ' ' || character > '~' {
+		if character <= ' ' || character > '~' || character == '\'' {
 			return fmt.Errorf("shadeform: bootstrap %s carries a character no unattended script can be handed safely", name)
 		}
 	}
