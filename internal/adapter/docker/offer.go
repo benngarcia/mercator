@@ -116,8 +116,9 @@ func (a offeringAdapter) acceleratorFacts(info HostInfo, now time.Time) capabili
 // run per placement decision or offers-endpoint poll. Both facts move slowly
 // (free disk drifts, GPU inventory is fixed hardware), so a short TTL keeps
 // the offer honest without container churn. A failed probe caches the zero
-// value: StandingOffer falls back conservatively for disk, and a zero GPU
-// inventory means the offer honestly advertises no accelerators.
+// value: StandingOffer falls back conservatively for disk, and a zero
+// accelerator report is a report that established nothing, which is the answer a
+// probe that could not run has about the hardware.
 type probeFact[T any] struct {
 	mu         sync.Mutex
 	cached     T
