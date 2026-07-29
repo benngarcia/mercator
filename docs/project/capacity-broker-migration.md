@@ -6019,12 +6019,57 @@ the reason is sharper here. Every field is empty on a CPU box and empty on a GPU
 box whose agent never looked, so a reader holding only the values cannot tell
 them apart. `Established` is the agent saying it looked, whatever it found, and
 `NodeFacts.Established` erases what an unestablished report happened to carry, so
-no reader downstream has two answers to choose between. Every way of failing to
-reach a driver is one answer in the agent: no `nvidia-smi`, an `nvidia-smi` that
-cannot reach its driver, and a broken driver have all established the thing
-Placement needs, which is that there is no working NVIDIA driver here. That is
-the stated-false case. Silence is what a third-party `NodeRuntime` that never
-implemented this reports.
+no reader downstream has two answers to choose between.
+
+What separates stated-false from silence is whether the vendor tool answered,
+and not whether the agent liked the answer. An `nvidia-smi` that ran and exited
+non-zero has established the thing Placement needs, which is that there is no
+working NVIDIA driver here: that is the stated-false case. An `nvidia-smi` this
+process could not run at all has established nothing about the hardware, and it
+is the silence, beside the third-party `NodeRuntime` that never implemented this.
+
+The first cut of this slice collapsed the two, and the review round after it
+reversed that. `exec.ErrNotFound` is not a machine with no cards. It is the tool
+off this unit's `PATH`, or unreadable to this user, or wedged, and an 8xH100 box
+published as having established it has no driver is refused `CAPABILITY_MISMATCH
+facts.nvidia_driver`, which tells its operator to buy a different machine when
+the fix is one `PATH` entry. The slice hit this inside its own daemon fleet and
+answered it in the test rather than in the product. `-nvidia-smi` and
+`MERCATOR_NODE_NVIDIA_SMI` on `cmd/mercator-node` are the operator's half of that
+answer, matching `-docker` beside them.
+
+The two calls also fail independently, and the driver is stated as soon as
+`--version` yields it. A card that has fallen off the bus answers `--version`
+with a working driver and fails `--query-gpu` on the handle; discarding the
+driver there published one report saying both that the machine established it has
+no driver and that it never stated one, in a single Booking Decision, which is
+exactly the distinction `domain.HostFacts` exists to keep. The cards it could not
+count are an empty inventory, which is the true answer for a card that is gone.
+
+Both calls are bounded, at three seconds with a one second reap delay, because
+`Facts` runs on the heartbeat select loop. That is the goroutine command work was
+deliberately moved off so nothing long-running could stop the heartbeats and have
+the control plane declare a healthy machine lost in the middle of the work it
+asked for, and this slice put a new external command directly onto it. An Xid 79
+puts `nvidia-smi` into a wait the kernel will not interrupt, so the SIGKILL behind
+the deadline lands on a process that cannot take it; `Cmd.WaitDelay` is what makes
+the bound real, and the heartbeat reports the silence while the good cards keep
+their workload.
+
+The memory a card states goes through `gpunorm.CardMemoryBytes`, for the reason
+its model name goes through `gpunorm.Canonical`. A marketplace lists the capacity
+a card is sold with and `--query-gpu=memory.total` measures the framebuffer left
+after the driver's reserved region: this workstation's RTX 5090 is sold as 32GB
+and measures 32607MiB. Published raw, a `memory_min_bytes` a caller copied out of
+a listing admitted the Shadeform 5090 and refused the enrolled 5090, which is the
+silent strike-out this slice exists to remove, on the lane phase 5 is about. The
+conversion is rounding up to the whole gibibyte rather than a tolerance in the
+comparison, which would loosen every floor including the ones written against a
+real measurement. `internal/adapter/docker`'s GPU probe published the same raw
+measurement and now shares the conversion. It closes the split for the parts
+whose marketing size is binary; an L40S is sold as a decimal 48GB and measures
+44.99GiB, which is a unit assumption on the Shadeform adapter's side and is
+[#231](https://github.com/benngarcia/mercator/issues/231).
 
 What an offer carries. `domain.HostFacts` is its own field on `OfferSnapshot`
 rather than more `ResourceInventory`, because these are promises and not
@@ -6109,14 +6154,32 @@ the node. Removing the agent's accelerator read makes both fail with a driver of
 fails the fleet case the same way.
 
 That live case resolves `nvidia-smi` to an absolute path and passes it through
-`nodeagent.WithAcceleratorTool`. The daemon fleet clears `PATH` so no local
-Docker connection is seeded, and an agent looking the vendor tool up by name
-inside that fleet finds nothing and reports a workstation with no driver.
+`nodeagent.WithAcceleratorTool`, because the daemon fleet clears `PATH` so no
+local Docker connection is seeded. Since the review round it is the same option
+production uses, and an agent inside that fleet without it now reports a machine
+nobody asked rather than a workstation with no driver. The live case also asserts
+that every card the node offers states a whole number of gibibytes, which is the
+unit a marketplace floor is written in; asserting a number instead would go stale
+the next time this host's card changes.
+
+What is still missing, and it is the provider lane rather than this one. Nothing
+in `internal/adapter` writes `OfferSnapshot.Host`: `internal/node/offers.go` is
+the only production writer of `domain.HostFacts`, so a Run declaring
+`min_driver_version` or `facts: ["ssh"]` is refused `UNKNOWN_FACT` on every
+Shadeform, RunPod, Vast, and Docker offer and can only ever be satisfied by an
+enrolled node. That refusal is the true answer for a catalog that publishes no
+driver version, and `ssh` is deliberately a provider's promise about a machine
+nobody has allocated yet, which is where the corpus states it. It is a gap in
+coverage rather than a defect in the rule, and it is
+[#230](https://github.com/benngarcia/mercator/issues/230).
 
 `go build ./... && go vet ./... && go test ./...` is green. `go test -race
--count=1` over the nine packages this slice touched is green: `internal/lab` at
-264.3s, `internal/nodeagent` at 58.4s, `internal/daemon` at 45.1s,
-`internal/scenario` at 7.5s, and the rest inside six seconds.
+-count=1 ./internal/lab ./internal/scenario ./cmd/mercator` is green at 267.1s,
+7.7s, and 4.7s. The review round adds five cases to `internal/nodeagent`, each
+shown to fail against the code it corrects: a vendor tool that cannot be run
+establishing nothing, a driver surviving cards that could not be counted, a
+wedged tool not holding the report, a card stating the capacity it is sold with,
+and the whole-gibibyte arm of the live placement case.
 
 ### Phase 5 the session a machine keeps
 
