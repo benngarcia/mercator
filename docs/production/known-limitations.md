@@ -23,12 +23,47 @@ limits.
   database, and a copy restored without it holds every event and no readable
   provider credential. Backing up the key is the operator's, once, when they
   generate it.
+- An interrupted backup leaves a partial file behind and nothing removes it.
+  `mercator backup` assembles the copy in `<destination>.partial-<timestamp>`
+  and links it to the destination only when the copy is whole, so a killed run
+  writes nothing to the destination and the retry succeeds. The partial and its
+  `-journal` survive, because the process was signalled before its cleanup ran,
+  and each one is as large as however much of the database had been copied. An
+  operator deletes `<destination>.partial-*`; nothing prunes them
+  ([#225](https://github.com/benngarcia/mercator/issues/225)).
+- The backup destination must be on a filesystem that supports hard links.
+  `mercator backup` puts the finished copy in place with `link(2)` rather than
+  `rename(2)`, so that a destination naming yesterday's backup is refused
+  instead of silently replaced. On exFAT, on some network mounts, and anywhere
+  else `link(2)` is unavailable, the command fails at the last step with the
+  link error naming both paths and leaves the partial behind. It is a refusal
+  with a message rather than a silent downgrade, and it is the accepted cost of
+  never overwriting an existing backup.
+- `mercator rekey` still resolves an unset `MERCATOR_SQLITE_DSN` through the
+  per-user fallback path, so an operator who runs it from a shell that does not
+  export the variable can re-seal a stray database and be told it succeeded.
+  `mercator backup` was made to refuse that case and `rekey` was not, so the
+  three commands do not yet agree on the fail-loudly rule. The command prints
+  the file it opened and the number of rows it moved, which is what an operator
+  has to read to catch it
+  ([#228](https://github.com/benngarcia/mercator/issues/228)).
 - A commit is durable against power loss because SQLite's compiled-in
   `synchronous` default is `FULL` under the driver this branch pins, not because
   Mercator asks for it. Nothing sets the pragma and nothing asserts it, so a
   driver upgrade could quietly downgrade every commit to "in the operating
   system's cache" with no test failing
   ([#226](https://github.com/benngarcia/mercator/issues/226)).
+- Schema migrations carry no version number. They are a fixed list of idempotent
+  functions in `internal/storage/sqlite/storage.go` that run on every boot, each
+  detecting its own work by inspecting the data rather than by reading a
+  schema-version row. There is no down migration and no rollback: a migration
+  that refuses, as the placement-objective one does when it finds an open Run in
+  the retired vocabulary, stops the process from starting and the operator's
+  recovery is to restore the backup and roll the binary back. What this branch
+  closed is narrower: a migration that rewrites the event log now marks the Run
+  projection stale inside the same transaction, so a process killed mid-boot can
+  no longer commit the rewrite while losing the record that the read model
+  derived from it is out of date.
 - No schema migration runbook exists yet.
 - Health checks are shallow process/API checks.
 
@@ -113,6 +148,13 @@ limits.
   rotation, no rotation of a session-cookie key, and no scheduled or automatic
   rotation, so the retired key is in the environment for as long as the operator
   leaves it there.
+- Inviting a node identity that already exists answers `500` with the raw SQLite
+  message `UNIQUE constraint failed: nodes.node_id (2067)` rather than `409`.
+  The SQLite node store never returns the typed `node.ErrIdentityExists` the
+  in-memory store returns, so the handler has nothing to map. An operator
+  recovering an enrolled node after a master-key rotation meets this, because
+  the identity is still in the table and the credentials under it are dead
+  ([#217](https://github.com/benngarcia/mercator/issues/217)).
 - Health, OpenAPI, and UI shell are public on the listen interface.
 
 ## Capacity Reuse
@@ -366,6 +408,25 @@ on that host and still hold.
 - Provisioned reusable capacity has no live coverage at all, because no provider
   bootstraps a node agent yet. Everything about a node that a real daemon proves
   here was proven on this workstation's own daemon.
+
+- Added 2026-07-29, at the close of the security and durability half of phase 6.
+  None of the boundaries that half closed is held by the Scenario Blueprint
+  corpus or by a Lab invariant. Steps 1, 2, 4 and 5 of the development rule were
+  not performed for any of them, because `internal/scenario` and every file in
+  `internal/lab` except `server.go` were phase 5's live working set while this
+  work was built in parallel. The replacement proof is a real boundary rather
+  than a mock in every case: a TLS client completing a handshake against the
+  process's own listener, an HTTP request from a non-member being refused, a
+  backup restored into a second control plane and read back, and a process
+  killed mid-write with its survivors asserted. Two of these rules do belong in
+  the corpus and are blocked on the phase 5 merge, namely a Run refused because
+  its subject is not a member of the workspace, and the Lab endpoint being
+  unreachable off the host. The durability half needs more than the merge: the
+  Lab control plane opens storage at `:memory:`, so it has no vocabulary for a
+  second database file, a backup path, or a process ended part way through
+  copying one ([#229](https://github.com/benngarcia/mercator/issues/229)).
+  Until that lands, a refactor that moves the tenancy check out of middleware
+  leaves the whole corpus green.
 
 ## GA Documentation Gaps
 

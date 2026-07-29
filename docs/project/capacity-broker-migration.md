@@ -8586,3 +8586,173 @@ cd web/app && bun run typecheck && bun run test && bun run build
 `internal/scenario` reports the target scenario as pending rather than passing,
 which is the corpus stating that the reusable-node path is specified and not yet
 built.
+
+## Phase 6, the security and durability half
+
+Phase 6 has two halves that depend on different things. The telemetry half
+(waterfall, calibration, the placement explanation surface, fleet and latency
+reports, shadow-policy counterfactuals) depends on phase 5's provisioning stages
+and on the API contract, and is a later run. The half recorded here owes phase 5
+nothing and could be proven the day it was written: the transport the control
+plane serves on, the tenancy boundary a request crosses, the key a stored
+credential is sealed under, the listener an administrative operation answers on,
+and the backup an operator restores from.
+
+It was built in parallel with phase 5, in a separate worktree, on
+`beng/security-and-durability` off `beng/prediction-and-service-classes`. The
+parallel build is what shaped its scope: `internal/scenario` and every file in
+`internal/lab` except `server.go` were phase 5's live working set and were left
+alone, along with `internal/broker`, `internal/orchestrator`,
+`internal/scheduler`, `internal/capability`, `internal/node`,
+`internal/nodeagent`, `internal/adapter`, `internal/domain`, `cmd/mercator-node`
+and `web/app`. Neither `internal/httpapi/openapi.json` nor
+`web/app/src/lib/api/contract.gen.ts` was regenerated, because a phase 5 slice
+regenerates both to add accelerator and driver facts to offers and two branches
+regenerating a 176KB generated file is a merge nobody wants.
+
+### What closed
+
+**The control plane terminates TLS itself.** There was no reference to
+`crypto/tls` anywhere in the tree before this. `internal/tlsmaterial` loads the
+certificate pair named by `MERCATOR_TLS_CERT_FILE` and `MERCATOR_TLS_KEY_FILE`
+into a `tls.Config` with a TLS 1.2 floor and HTTP/2 offered through ALPN, and
+`internal/daemon` serves it. Half a pair is a configuration error, a named file
+that cannot be loaded stops the process before storage is opened, and a
+non-loopback `MERCATOR_ADDR` with no certificate refuses to start. There is no
+path from broken security material to a served port.
+
+**A workspace is a boundary a subject is refused across.** Membership is a
+stored fact with a role, migrated from `workspaces.created_by` for databases
+that predate it, and enforced in `internal/httpapi` middleware so no route's
+shape or payload changed and no contract regeneration was needed. The proof is a
+request from a non-member answered with a refusal, on every workspace-scoped
+route including the two node routes and the workload routes.
+
+**Administrative operations answer on an administrative listener.** Workspace
+creation and archiving, node invitation, and sink deliver and replay answer only
+on `MERCATOR_ADMIN_ADDR` and answer 404 everywhere else. The surface is matched
+by a `ServeMux` holding the same patterns the router routes, so the two cannot
+drift. The Lab's own server refuses a non-loopback listener from inside
+`internal/lab/server.go`, which moves the containment out of the command that
+starts it: no flag and no environment variable puts the Lab on an address
+another machine can reach.
+
+**A master key is required, and rotating it is a command.** `MERCATOR_SECRET_KEY`
+is now required to start, because the credential sealing key, the run-report
+signing key and the node identity signing key all derive from it and each one
+answered an absent master key by disabling itself. `mercator rekey` re-seals
+every stored connection credential from `MERCATOR_SECRET_KEY_PREVIOUS` to
+`MERCATOR_SECRET_KEY` in one transaction, refuses to run beside a server holding
+the database, and refuses a DSN naming a database that does not exist.
+
+**A backup is a thing this process takes and a thing that restores.**
+`mercator backup <path>` takes an online `VACUUM INTO` copy of the database the
+deployment serves from, assembles it in a per-run partial file and links it into
+place only when whole, so an interrupted run leaves the destination untouched
+and yesterday's backup unreplaced. The proof restores: a second control plane
+boots on the copy and reads the same Runs and the same sealed connection back.
+Crash recovery is proven by killing a real process mid-write and asserting what
+survived, and the migration that rewrites the event log now marks the Run
+projection stale inside the same transaction, closing the window where a kill
+between the two left a read model answering in a vocabulary the log no longer
+spoke and nothing able to notice.
+
+### What did not close, and why
+
+The development rule's steps 1, 2, 4 and 5 were not performed for any of this
+work. `internal/scenario` and `internal/lab` were out of reach for the whole
+track, so no Scenario Blueprint states any of these rules and no Lab invariant
+holds them. That is a real cost rather than a loophole, and it is recorded in
+[#229](https://github.com/benngarcia/mercator/issues/229) with the two rules
+that genuinely belong in the corpus, a Run refused because its subject is not a
+member of its workspace, and the Lab endpoint being unreachable off the host.
+The durability half needs more than the phase 5 merge before it can join them:
+the Lab control plane opens storage at `:memory:` and has no vocabulary for a
+second database file, a backup path, or a process ended part way through copying
+one. In its place each boundary is held against the real component: a TLS client
+completing a handshake against the process's own listener, an HTTP request from
+a non-member being refused, a restore read back out of a second control plane,
+and a killed process's survivors asserted.
+
+One slice was blocked outright. The refusals that should answer `403` and the
+route that would grant a membership over HTTP both change the API contract, so
+`GET /v1/nodes` and `POST /v1/nodes` refuse a non-member with the `400` and the
+`WORKSPACE_FORBIDDEN` code their declared responses already allow
+([#222](https://github.com/benngarcia/mercator/issues/222)), a second person is
+added to a workspace by SQL insert until a grant route exists
+([#219](https://github.com/benngarcia/mercator/issues/219)), and the console's
+workspace create and archive answer 404 on a deployment with an administrative
+listener ([#220](https://github.com/benngarcia/mercator/issues/220)).
+
+Two of phase 6's own security bullets are phase 5 slices and were deliberately
+not built here: short-lived node identity (P5-S4) and registry credential
+exchange (P5-S5). A master-key rotation locks out every enrolled node until it
+is bootstrapped again, which is
+[#217](https://github.com/benngarcia/mercator/issues/217), and it is adjacent to
+P5-S4 rather than something to build twice.
+
+The rest is in
+[docs/production/known-limitations.md](../production/known-limitations.md), which
+this half rewrote: certificate renewal needing a restart
+([#213](https://github.com/benngarcia/mercator/issues/213)), `mercator verify`
+still serving cleartext on a routable address
+([#216](https://github.com/benngarcia/mercator/issues/216)), a run-report token
+that never expires ([#215](https://github.com/benngarcia/mercator/issues/215)),
+nothing scheduling or verifying a backup
+([#225](https://github.com/benngarcia/mercator/issues/225)), commit durability
+resting on a driver default nothing pins
+([#226](https://github.com/benngarcia/mercator/issues/226)), and `mercator rekey`
+still falling back to a per-user database path when `MERCATOR_SQLITE_DSN` is
+unset ([#228](https://github.com/benngarcia/mercator/issues/228)).
+
+### Phase 6 security and durability verification
+
+On 2026-07-29, on an amd64 Linux workstation with 24 cores and a native Docker
+Engine, `beng/security-and-durability` at `55a3453` passed:
+
+```text
+go build ./...
+go vet ./...
+go test -count=1 ./...
+go test -race -count=1 ./cmd/mercator/... ./internal/daemon/... \
+  ./internal/httpapi/... ./internal/lab/... ./internal/storage/sqlite/... \
+  ./internal/tlsmaterial/... ./internal/workspace/... ./internal/credential/...
+```
+
+Build and vet were silent. The uncached suite reported 37 packages ok and no
+failures. The race pass over every package this half touched was clean, with
+`internal/lab` taking 223 seconds under the detector and the rest under twenty
+each. The browser-driven console checkpoints did not run and could not: this
+host has no Chromium ([#197](https://github.com/benngarcia/mercator/issues/197)),
+and this half changed nothing in `web/app`.
+
+The evidence that matters is not the suite being green. It is what the tests
+drive:
+
+- `internal/daemon/tls_handshake_test.go` starts the real runtime on a real
+  listener with a certificate generated at test time and completes a TLS
+  handshake against it with a real client, then asserts that the same runtime
+  configured with an unreadable certificate never binds.
+- `internal/httpapi/authorization_test.go` issues unauthorised requests. A
+  signed-in human who is not a member of a workspace is refused on every
+  workspace-scoped route, and the refusal is read off the response rather than
+  off a mock.
+- `internal/daemon/admin_listener_test.go` and
+  `cmd/mercator/lab_containment_test.go` send administrative requests to the
+  public listener and assert 404, and send the Lab a non-loopback listener and
+  assert it refuses to serve.
+- `cmd/mercator/backup_test.go` populates a database through a real daemon over
+  HTTP, takes the backup with the shipped command while the server is still
+  serving, boots a second control plane on the copy, and reads the same Runs and
+  the same sealed connection back out of it.
+- `internal/storage/sqlite/crash_recovery_test.go` and
+  `cmd/mercator/crash_recovery_test.go` kill a real process mid-write and assert
+  what survived, including a migration killed between its rewrite of the event
+  log and the staleness mark on the projection derived from it.
+- `internal/credential/sqlite_test.go` and `cmd/mercator/rekey_test.go` move
+  real rows: `TestRekeyRotatesTheMasterKeyOfARealStore` seals a credential under
+  one master key, runs the shipped command, and reads it back under the other,
+  and the command refuses a database a server is holding, a database it would
+  have to create, and a memory-backed DSN. That a half-finished rotation cannot
+  be observed is a property of the single transaction the re-seals commit in
+  rather than a test that interrupts one.
