@@ -4627,11 +4627,8 @@ complete because it works against a live provider.
 
 - [x] 2026-07-29: What two reviewers refuted about the slice above, repaired. Six
   findings were real and are fixed at the root; one is real and is its own slice.
-  - The slice landed with no Blueprint and no Lab invariant, and the Lab could not
-    have held it: its only `CapacityProvider` deduplicated by Rental
-    unconditionally, so a Blueprint declaring `idempotent_provision: "none"` still
-    compiled into a world with server-side idempotency. The world can now lose a
-    provision answer, and
+  - The slice landed with no Blueprint and no Lab invariant. The world can now
+    lose a provision answer, and
     `a-lost-provision-answer-costs-one-repeat-and-not-the-machine` drives that
     world through the real orchestrator: one machine, adopted under the lease, its
     agent enrolled on it, the workload launched.
@@ -4645,8 +4642,77 @@ complete because it works against a live provider.
     burns its whole enrolment patience. An invitation still outstanding is now
     handed back, rebuilt from the record's own digest.
     `safety.a_machine_holds_material_the_control_plane_will_still_accept` is the
-    rule, and it fails through the real orchestrator when the Lab's registry is
-    put back the way it was.
+    rule.
+
+- [x] 2026-07-29: What a second review round refuted about the repairs above,
+  repaired. Four findings were real and are fixed at the root; one is rejected
+  with evidence, and one is real and is now #237.
+  - `sqlite.NodeStore.Invite` never returned `node.ErrIdentityExists`. It wrapped
+    the driver's constraint failure verbatim, so the sentinel came only from the
+    in-memory store, the Lab, and two orchestrator doubles, and every deployment
+    storing its fleet durably took the collision as an opaque failure.
+    `bootstrapFor` therefore never reached `Reinvite` in production: a second
+    attempt for a lease failed at the invitation, no capacity was ever recorded
+    as accepted, the enrolment deadline was never consulted, and the machine an
+    earlier attempt rented billed until the provider's own backstop. Any first
+    attempt that failed reaches it, not only one whose answer was lost. The store
+    names the collision now, matched on the constraint code, and the shared store
+    suite asks it of both stores: every case invited one identity once, which is
+    why the one promise the reconciliation path rests on was the one nothing
+    checked. Asking it of both also found the in-memory store answering per
+    workspace where `Find` resolves an identity with no workspace at all.
+  - The Lab had a registry of its own, so the executable specification could not
+    fail on a regression of the production fix: deleting `Reinvite`'s outstanding
+    branch left `./internal/lab` and `./internal/scenario` fully green. The
+    registry is control-plane code rather than external behaviour, so the Lab
+    runs the real one over the same durable store an execution already has, and
+    what the world keeps is the part that is its own: the material Mercator
+    handed out, watched as it leaves. Enrolment is a machine presenting its
+    bootstrap and being answered, so the invariant is now about a paid host
+    turned away at the one door it has, which covers both a superseded
+    invitation and an expired one. Deleting the outstanding branch now fails
+    `a-lost-provision-answer-costs-one-repeat-and-not-the-machine` mid-drive.
+  - Two Lab infidelities had to go first, because they were what made the rule
+    unfalsifiable. The Lab reconciled an ambiguous provision by asking again
+    inside the same instant, which no reconcile loop does and which matters
+    because a bootstrap signs the moment it stops being redeemable: two mints at
+    one instant come out byte for byte the same. And
+    `liveness.lost_response_reconciliation` declared a five minute bound and
+    enforced an instant, which only a control plane asking again in the same
+    breath can keep. Both now match what `reconcileWorkspaces` does.
+  - An invitation was redeemable for thirty minutes, always, unrelated to how
+    long Mercator waits for the agent, which the operator states per connection.
+    A host is handed its material once, when it is created, so a connection whose
+    machines take longer than half an hour to boot rented hosts that could never
+    join the fleet they were paid for. The invitation now lasts exactly as long
+    as the caller says it is waiting, and `Reinvite` hands back an outstanding one
+    only while it covers that wait: material that lapses inside the wait cannot
+    end in an enrolment whoever is holding it, so replacing it is the difference
+    between one machine locked out and two. `provisionedCapacityBound` was thirty
+    minutes, the same number, and compile refuses a Blueprint stating more
+    patience than that bound, so no Blueprint could state the world where the two
+    being unrelated shows. It is an hour now, and
+    `an-invitation-outlives-the-wait-it-was-minted-for` is the world.
+  - `capacity.idempotent_provision` reached nothing. The Blueprint declared that
+    its provider honours no key while the Lab answered every repeat under a lease
+    with the machine that lease already has, so the case read as one about
+    Mercator resolving a duplicate while the simulator was resolving it, and
+    deleting `capacityAlreadyHeld` left it green. Compile refuses any listing
+    declaring a contract this world does not keep, and the Blueprint declares
+    `operation_key`, which is what it always was: a backend resolving duplicates
+    below the capacity seam, which is what the Shadeform adapter does. The world
+    where the repeat really rents a second machine holding a second copy of one
+    single-use invitation is #237, and it is what would hold both the sweep and
+    the adapter's own reconciliation.
+  - Rejected: that `Reinvite` handing back an invitation without extending its
+    window is a defect of `Reinvite`. It is a defect of the window, which is why
+    the repair is above rather than a floor on the remaining time. Extending the
+    window while keeping the token is impossible by construction, because the
+    token is a signature over the expiry, and a floor would supersede the
+    invitation on a machine that is still booting for a machine that may not
+    exist. Tying the window to the wait removes the case instead: every attempt
+    for one Run asks for the same deadline, so the outstanding invitation always
+    covers it and is always handed back.
   - `agent_download_url` required `{version}` because a URL naming no version is
     not a pin, and the value substituted into it was the literal `"dev"` in every
     production deployment: `node.Registry` defaulted to it and nothing ever set
@@ -4813,19 +4879,22 @@ Phase 1 added:
   provisions under one generation and mints the token under another fails 15 Lab
   tests mid-drive; before, it was fully green.
 - `safety.a_machine_holds_material_the_control_plane_will_still_accept` (Lab
-  invariant): an invitation that reached a machine is not replaced before that
-  machine redeems it. A rented host is handed its invitation once, in the bootstrap
-  written when it is created, and Mercator opens no connection to it afterwards, so
-  an invitation superseded while the host still has to enrol is that host locked
-  out of the fleet it was paid for. It presents material the registry no longer
-  names, is refused, and has nothing else to try, and nothing about the machine
-  looks wrong from the provider's side. A credential nobody has redeemed yet is not
-  the violation, because that is every machine still booting; the violation is one
-  that reached a machine, was never redeemed, and has been superseded. Added in the
-  review round of phase 5 slice 7, with
-  `a-lost-provision-answer-costs-one-repeat-and-not-the-machine` as the world it
-  fires in: put the Lab's registry back to minting a fresh token on every repeat
-  and the rule reports the invitation mid-drive.
+  invariant): a machine a provider allocated presented its bootstrap and the
+  registry took it. A rented host is handed its invitation once, in the bootstrap
+  written when it is created, and Mercator opens no connection to it afterwards,
+  so a host refused at that one door is locked out of the fleet it was paid for
+  with nothing else to try, and nothing about the machine looks wrong from the
+  provider's side. The refusal is `node.Registry`'s own answer rather than
+  anything the Lab decides, which is what makes the rule cover both doors that
+  close on an invitation: one a later mint replaced, and one whose window ran out
+  while the machine was still booting. A credential nobody has redeemed yet is not
+  the violation, because that is every machine still booting. Added in the review
+  round of phase 5 slice 7 and rewritten in the round after it, when the Lab
+  stopped running a registry of its own. Two worlds fire it:
+  `a-lost-provision-answer-costs-one-repeat-and-not-the-machine` when
+  `Reinvite`'s outstanding branch is deleted, and
+  `an-invitation-outlives-the-wait-it-was-minted-for` when the invitation goes
+  back to a fixed thirty minute window.
 - `bad-host-facts-rejected-loudly` (green as of phase 5 slice 6): four listings
   for one training image that declares the accelerator stack it was built
   against. The cheapest states outright that it has no working NVIDIA driver and

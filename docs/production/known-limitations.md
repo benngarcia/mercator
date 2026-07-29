@@ -50,6 +50,16 @@ limits.
   records no classified failure, and the enrolment deadline cannot bound it because
   it is only consulted once a provision has succeeded. Out of reach today, because
   a capacity connection publishes no placement candidate yet.
+- A repeated provision against a provider honouring no idempotency key is
+  resolved only by the adapter, and nothing in the Lab holds that
+  ([#237](https://github.com/benngarcia/mercator/issues/237)). Shadeform creates
+  the instance, then scans every instance wearing the lease's tag and destroys
+  the losers, so a create whose answer was lost and then repeated really does
+  rent a second billed machine carrying a second copy of the same single-use
+  invitation, and a failed delete leaves both up. The Lab's provider answers
+  every repeat under a lease with the machine that lease already has, so neither
+  `capacityAlreadyHeld` nor the clause about one invitation reaching two machines
+  is exercised by any world.
 - An ephemeral execution still commits a Booking against a single-use Rental
   identity. Placement makes that binding unqueueable and records the honest
   `launch_ephemeral` disposition, but the Booking record type is shared with
