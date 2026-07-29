@@ -24,6 +24,9 @@ offer's hourly rate multiplied by the trial timeout exceeds
 
 The trial's optional `mode` is `probe` by default. `launch-cancel` proves that
 Mercator can cancel an accepted instance and drive cleanup to completion.
+`capacity` runs the bounded `CapacityProvider` suite against a connection that
+sells machines: it rents and returns machines, launches no workload, names no
+image, and reports every promise by name together with the Lab rule behind it.
 
 The trial names a credential environment variable. Mercator reads that one
 value in-process when it constructs the provider adapter. It does not accept

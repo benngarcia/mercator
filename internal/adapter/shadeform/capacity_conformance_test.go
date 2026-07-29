@@ -95,14 +95,14 @@ func keepEveryPromise(t *testing.T, provider capability.CapacityProvider, trialI
 		Provider: provider,
 		Lease:    lease,
 		Capacity: func(ctx context.Context) (capacitytest.Origin, error) {
-			origin, _, err := capacitytest.Affordable(
+			listing, err := capacitytest.Affordable(
 				ctx,
 				provider,
 				capability.CapacityQuery{WorkspaceID: lease.WorkspaceID},
 				maxTrialCostUSD,
 				lease.MaxLifetime,
 			)
-			return origin, err
+			return capacitytest.OriginOf(listing), err
 		},
 	}
 

@@ -166,10 +166,10 @@ func Affordable(
 	query capability.CapacityQuery,
 	maxCostUSD float64,
 	timeout time.Duration,
-) (Origin, domain.PriceModel, error) {
+) (domain.OfferSnapshot, error) {
 	listings, err := provider.ListCapacity(ctx, query)
 	if err != nil {
-		return Origin{}, domain.PriceModel{}, fmt.Errorf("list capacity: %w", err)
+		return domain.OfferSnapshot{}, fmt.Errorf("list capacity: %w", err)
 	}
 	var chosen domain.OfferSnapshot
 	var found bool
@@ -186,12 +186,17 @@ func Affordable(
 		}
 	}
 	if !found {
-		return Origin{}, domain.PriceModel{}, fmt.Errorf(
+		return domain.OfferSnapshot{}, fmt.Errorf(
 			"none of the %d listings on sale is available at a known USD rate under %.4f over %s",
 			len(listings), maxCostUSD, timeout,
 		)
 	}
-	return Origin{OfferSnapshotID: chosen.ID, NativeRef: chosen.NativeRef}, chosen.Pricing, nil
+	return chosen, nil
+}
+
+// OriginOf names one listing the way a provision command names it.
+func OriginOf(listing domain.OfferSnapshot) Origin {
+	return Origin{OfferSnapshotID: listing.ID, NativeRef: listing.NativeRef}
 }
 
 // listedCapacityIsCapacityToAcquire holds what a capacity listing is. Every
