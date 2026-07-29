@@ -21,6 +21,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/daemon"
+	"github.com/benngarcia/mercator/internal/dockertest"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/nodeagent"
 	"github.com/benngarcia/mercator/internal/orchestrator"
@@ -2036,9 +2037,12 @@ func TestTheFleetListingReportsTheRoomThisMachineReallyHas(t *testing.T) {
 }
 
 // requireDockerBinary resolves Docker before the fleet clears PATH, and skips
-// where there is no daemon to answer.
+// where there is no daemon to answer. Holding the daemon is what makes the live
+// budgets here mean what they say: a wait measured against four other suites
+// working the same machine is measuring them.
 func requireDockerBinary(t *testing.T) string {
 	t.Helper()
+	dockertest.Exclusive(t)
 	binary, err := exec.LookPath("docker")
 	if err != nil {
 		t.Skipf("no Docker client on this machine: %v", err)

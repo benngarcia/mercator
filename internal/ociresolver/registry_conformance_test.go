@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/dockertest"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
@@ -284,6 +285,7 @@ func mustAbs(t *testing.T, path string) string {
 
 func requireDocker(t *testing.T) {
 	t.Helper()
+	dockertest.Exclusive(t)
 	if err := exec.Command("docker", "info").Run(); err != nil {
 		t.Skipf("no reachable Docker daemon to check the resolver against: %v", err)
 	}
