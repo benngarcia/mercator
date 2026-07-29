@@ -66,9 +66,16 @@ func WithArtifactRoot(root string) RuntimeOption {
 }
 
 // WithAcceleratorTool points this node at the vendor tool it asks about its own
-// cards. It exists so a test can stand in a machine with four A100s or no
-// driver at all, which is the only way the reports this node publishes about
-// hardware can be exercised anywhere but on the hardware.
+// cards, by absolute path where the bare name will not resolve.
+//
+// It is operator configuration and not only a test seam. A unit file with a
+// trimmed Environment=PATH, or a distribution that installs the tool somewhere
+// the service PATH does not reach, is a machine whose agent cannot find
+// nvidia-smi by name; on an 8xH100 box that is the difference between a fleet
+// that runs GPU work and one that reports it has none. It is the second reason
+// this exists, the first being that a test can stand in a machine with four
+// A100s or no driver at all, which is the only way the reports this node
+// publishes about hardware can be exercised anywhere but on the hardware.
 func WithAcceleratorTool(binary string) RuntimeOption {
 	return func(docker *DockerRuntime) { docker.acceleratorBinary = binary }
 }

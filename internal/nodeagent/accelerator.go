@@ -2,17 +2,33 @@ package nodeagent
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/gpunorm"
 )
 
-// mebibyte is the unit nvidia-smi reports memory in under --format=nounits.
-const mebibyte = int64(1) << 20
+// acceleratorProbeDeadline bounds one call to the vendor tool, and
+// acceleratorProbeReapDelay bounds the wait after that deadline kills it.
+//
+// Both are here because this probe runs inside Facts, and Facts runs on the
+// heartbeat, which is the goroutine every long-running thing in this agent was
+// deliberately moved off: a probe that never returns stops the heartbeats and
+// has the control plane declare a healthy machine lost in the middle of the work
+// it asked for. A card that has fallen off the bus puts nvidia-smi into a wait
+// the kernel will not interrupt, so the deadline alone is not enough and the
+// SIGKILL behind it lands on a process that cannot take it. The reap delay is
+// what makes the bound real: Wait returns whether or not the process did, this
+// heartbeat reports the silence, and the seven good cards keep their workload.
+const (
+	acceleratorProbeDeadline  = 3 * time.Second
+	acceleratorProbeReapDelay = time.Second
+)
 
 // acceleratorFacts is this machine looking at its own cards and the driver
 // behind them, so an offer can state what an image's accelerator stack has to
@@ -26,41 +42,85 @@ const mebibyte = int64(1) << 20
 // whose driver was never loaded reports exactly the same thing as this
 // workstation.
 //
-// Every way of failing is the same answer here, and that is deliberate. A
-// machine with no nvidia-smi on it, a machine whose nvidia-smi cannot reach its
-// driver, and a machine whose driver is broken have all established the one
-// thing Placement needs: there is no working NVIDIA driver here. It is the
-// established-false case rather than the silent one, so a Run needing a driver
-// is refused with CAPABILITY_MISMATCH naming the machine rather than with the
-// UNKNOWN_FACT that means nobody looked. Silence is what a runtime that never
-// implemented this reports, which is what the flag is for.
+// What separates the two refusals here is whether the tool answered, and not
+// whether this agent liked the answer. An nvidia-smi that ran and could not
+// reach its driver has established the thing Placement needs, that there is no
+// working NVIDIA driver on this machine, and a Run needing one is refused
+// CAPABILITY_MISMATCH naming the machine. An nvidia-smi this process could not
+// run at all has established nothing about the hardware: the tool is off this
+// unit's PATH, or unreadable to this user, or wedged against a card that has
+// fallen off the bus. Filing that as the established negative publishes an
+// 8xH100 box as a machine that has proven it has no driver and tells its
+// operator to buy a different one, when the fix is one PATH entry. It is the
+// silence instead, the same answer diskFacts gives to a statfs it cannot
+// perform, and the refusal it earns is the UNKNOWN_FACT that says go and look.
 func (docker *DockerRuntime) acceleratorFacts(ctx context.Context) capability.AcceleratorFacts {
+	version, answer := docker.nvidiaSMI(ctx, "--version")
+	if answer == smiUnasked {
+		return capability.AcceleratorFacts{}
+	}
 	looked := capability.AcceleratorFacts{Established: true}
-	version, err := docker.nvidiaSMI(ctx, "--version")
-	if err != nil {
+	if answer == smiFailed {
 		return looked
 	}
 	driver, capable := smiVersions(version)
 	if driver == "" {
 		return looked
 	}
-	devices, err := docker.nvidiaSMI(ctx, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits")
-	if err != nil {
-		return looked
-	}
+	// The driver is stated as soon as it is read, before the cards are counted,
+	// because the two calls fail independently. A machine whose --version reports
+	// a working 595.71.05 and whose --query-gpu cannot get a handle on GPU 0 has a
+	// driver; discarding it published one report saying both that the machine
+	// established it has no driver and that it never stated one, which is the
+	// distinction domain.HostFacts exists to keep. The cards it could not count
+	// are an empty inventory, which is the true answer for a card that is gone.
 	looked.Vendor = "nvidia"
 	looked.DriverVersion = driver
 	looked.DriverCapability = capable
-	looked.Devices = smiDevices(devices)
+	cards, answer := docker.nvidiaSMI(ctx, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits")
+	if answer == smiUnasked {
+		return capability.AcceleratorFacts{}
+	}
+	looked.Devices = smiDevices(cards)
 	return looked
 }
 
-func (docker *DockerRuntime) nvidiaSMI(ctx context.Context, args ...string) (string, error) {
-	output, err := exec.CommandContext(ctx, docker.acceleratorBinary, args...).Output()
-	if err != nil {
-		return "", err
+// smiAnswer is what came back from one call to the vendor tool, which is three
+// states rather than the usual two. A tool that ran and failed is the machine
+// answering, and a tool this process could not run or could not wait for is the
+// machine never being asked, and the offer Mercator publishes says different
+// things about the hardware in the two cases.
+type smiAnswer int
+
+const (
+	// smiUnasked is this agent failing to put the question: no such binary, no
+	// permission to execute it, or a call that outlived its deadline.
+	smiUnasked smiAnswer = iota
+	// smiFailed is the tool running and exiting non-zero, which is how nvidia-smi
+	// reports that it cannot communicate with the NVIDIA driver.
+	smiFailed
+	// smiStated is the tool running and printing what it was asked for.
+	smiStated
+)
+
+func (docker *DockerRuntime) nvidiaSMI(ctx context.Context, args ...string) (string, smiAnswer) {
+	bounded, done := context.WithTimeout(ctx, acceleratorProbeDeadline)
+	defer done()
+	probe := exec.CommandContext(bounded, docker.acceleratorBinary, args...)
+	probe.WaitDelay = acceleratorProbeReapDelay
+	output, err := probe.Output()
+	switch {
+	case err == nil:
+		return string(output), smiStated
+	// Checked before the exit status, because a probe the deadline killed exits
+	// on a signal and would otherwise read as the tool answering.
+	case bounded.Err() != nil:
+		return "", smiUnasked
+	case errors.As(err, new(*exec.ExitError)):
+		return "", smiFailed
+	default:
+		return "", smiUnasked
 	}
-	return string(output), nil
 }
 
 // smiVersions reads the driver this host runs and the highest CUDA version that
@@ -89,6 +149,11 @@ func smiVersions(report string) (driver string, capable string) {
 // a workload's requirement the same way it counts a marketplace listing's.
 // Identical cards collapse into one entry with a count, which is what a
 // provider publishes and what the requirement is written against.
+//
+// The memory goes through gpunorm for the same reason the model name does. Both
+// halves of a card's identity have to survive the trip from a vendor tool to the
+// unit a marketplace publishes, or a floor a caller copied out of a listing
+// strikes out the very card it was copied from once Mercator owns it.
 func smiDevices(report string) []domain.AcceleratorInventory {
 	var devices []domain.AcceleratorInventory
 	for line := range strings.SplitSeq(report, "\n") {
@@ -100,7 +165,7 @@ func smiDevices(report string) []domain.AcceleratorInventory {
 		if err != nil {
 			continue
 		}
-		devices = addCard(devices, strings.TrimSpace(name), mebibytes*mebibyte)
+		devices = addCard(devices, strings.TrimSpace(name), gpunorm.CardMemoryBytes(mebibytes))
 	}
 	return devices
 }
