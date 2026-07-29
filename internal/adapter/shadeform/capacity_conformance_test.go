@@ -27,11 +27,19 @@ import (
 func TestShadeformKeepsEveryCapacityPromiseAgainstItsOwnFake(t *testing.T) {
 	marketplace := newFakeShadeform()
 	marketplace.types = []instanceType{vmType()}
+	adapter := adapterAgainst(t, marketplace)
+
+	keepEveryPromise(t, adapter, "sfk01")
+}
+
+// adapterAgainst is this package's own marketplace served over a real socket.
+// The adapter reaches it through its own transport rather than through the round
+// tripper the rest of this package's cases inject, because the layer a unit test
+// replaces is part of what a conformance case is for.
+func adapterAgainst(t *testing.T, marketplace *fakeShadeform) *Adapter {
+	t.Helper()
 	server := httptest.NewServer(marketplace)
 	t.Cleanup(server.Close)
-	// The adapter reaches the server over a real socket rather than through the
-	// round tripper the rest of this package's cases inject, because the layer a
-	// unit test replaces is part of what a conformance case is for.
 	adapter, err := New("secret-key", map[string]string{
 		"base_url":           server.URL + "/v1",
 		"agent_download_url": testAgentDownloadURL,
@@ -40,8 +48,43 @@ func TestShadeformKeepsEveryCapacityPromiseAgainstItsOwnFake(t *testing.T) {
 		t.Fatalf("build the adapter: %v", err)
 	}
 	adapter.client.backoff = 0
+	return adapter
+}
 
-	keepEveryPromise(t, adapter, "sfk01")
+// TestAnAccountWhoseListingLagsIsLeftHoldingNothing is the outcome nobody knows,
+// produced by the adapter that really produces it rather than described. The
+// account registers each create and does not name it in the listing until the
+// visibility scan has given up, so every provision here answers
+// ErrCapacityIndeterminate with no machine named, which is the one case a
+// receipt cannot reclaim.
+//
+// What the suite has to do is ask the account what it holds for the lease and
+// destroy what it names. The promises are broken and that is the point: the
+// machine still has to be given back, and this account keeps every instance it
+// was ever asked to create, so a trial that lost one shows up as an instance
+// nobody deleted.
+func TestAnAccountWhoseListingLagsIsLeftHoldingNothing(t *testing.T) {
+	marketplace := newFakeShadeform()
+	marketplace.types = []instanceType{vmType()}
+	// One look longer than the adapter's own visibility scan, so the create can
+	// never see what it made and the next listing can.
+	marketplace.listingLag = 4
+	adapter := adapterAgainst(t, marketplace)
+	subject := shadeformSubject(adapter, "sfl02")
+
+	var outcomeUnknown bool
+	for _, promise := range capacitytest.Promises() {
+		if errors.Is(promise.Keep(t.Context(), subject), capability.ErrCapacityIndeterminate) {
+			outcomeUnknown = true
+		}
+	}
+
+	if !outcomeUnknown {
+		t.Fatal("no provision came back with an outcome nobody knows, so nothing here was ever reclaimed from one")
+	}
+	if running := marketplace.stillRunning(); len(running) != 0 {
+		t.Fatalf("the machines the lost answers allocated are still running: %v", running)
+	}
 }
 
 // TestShadeformKeepsEveryCapacityPromiseAgainstTheLiveMarketplace rents real
@@ -78,6 +121,24 @@ const (
 // same code, which is the whole reason the suite is shared.
 func keepEveryPromise(t *testing.T, provider capability.CapacityProvider, trialID string) {
 	t.Helper()
+	subject := shadeformSubject(provider, trialID)
+
+	for _, promise := range capacitytest.Promises() {
+		t.Run(promise.Name, func(t *testing.T) {
+			err := promise.Keep(t.Context(), subject)
+			if errors.Is(err, capacitytest.ErrNotApplicable) {
+				t.Skip(err.Error())
+			}
+			if err != nil {
+				t.Fatalf("%s (%s): %v", promise.Name, promise.Rule, err)
+			}
+		})
+	}
+}
+
+// shadeformSubject is the identity every machine this package rents is held
+// under, and the listing a promise rents from.
+func shadeformSubject(provider capability.CapacityProvider, trialID string) capacitytest.Subject {
 	lease := capacitytest.Lease{
 		TrialID:      trialID,
 		WorkspaceID:  "ws_capacity_conformance",
@@ -90,7 +151,7 @@ func keepEveryPromise(t *testing.T, provider capability.CapacityProvider, trialI
 		EnrollmentToken: "enrolment-nothing-minted",
 		MaxLifetime:     30 * time.Minute,
 	}
-	subject := capacitytest.Subject{
+	return capacitytest.Subject{
 		Name:     "shadeform",
 		Provider: provider,
 		Lease:    lease,
@@ -104,18 +165,6 @@ func keepEveryPromise(t *testing.T, provider capability.CapacityProvider, trialI
 			)
 			return capacitytest.OriginOf(listing), err
 		},
-	}
-
-	for _, promise := range capacitytest.Promises() {
-		t.Run(promise.Name, func(t *testing.T) {
-			err := promise.Keep(t.Context(), subject)
-			if errors.Is(err, capacitytest.ErrNotApplicable) {
-				t.Skip(err.Error())
-			}
-			if err != nil {
-				t.Fatalf("%s (%s): %v", promise.Name, promise.Rule, err)
-			}
-		})
 	}
 }
 

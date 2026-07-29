@@ -33,6 +33,12 @@ type fakeShadeform struct {
 	// /instances responses, modeling the async create's listing lag.
 	hideCreated bool
 	createdIDs  map[string]bool
+	// listingLag is how many listings a created instance stays missing from
+	// before the account catches up with it. It is the lag that ends rather than
+	// the one that never does: a create whose instance surfaces on a later look
+	// is what leaves an outcome nobody knows and a machine anybody can then find.
+	listingLag int
+	hiddenFor  map[string]int
 	// beforeCreateReturns injects state right before create responds, e.g. a
 	// concurrent duplicate that the pre-scan could not have seen.
 	beforeCreateReturns func(f *fakeShadeform)
@@ -46,6 +52,21 @@ func (f *fakeShadeform) addInstance(inst instance) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.instances = append(f.instances, inst)
+}
+
+// stillRunning is every instance this account is billing for, whatever any
+// caller believes it gave back. It reads the account rather than the listing,
+// because an instance the listing withholds is billing just the same.
+func (f *fakeShadeform) stillRunning() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var live []string
+	for _, inst := range f.instances {
+		if inst.Status != "deleting" {
+			live = append(live, inst.ID)
+		}
+	}
+	return live
 }
 
 func (f *fakeShadeform) instanceByID(id string) *instance {
@@ -79,16 +100,7 @@ func (f *fakeShadeform) RoundTrip(r *http.Request) (*http.Response, error) {
 	path := strings.TrimPrefix(r.URL.Path, "/v1")
 	switch {
 	case r.Method == http.MethodGet && path == "/instances":
-		visible := f.instances
-		if f.hideCreated {
-			visible = nil
-			for _, inst := range f.instances {
-				if !f.createdIDs[inst.ID] {
-					visible = append(visible, inst)
-				}
-			}
-		}
-		return marshalResponse(map[string]any{"instances": visible})
+		return marshalResponse(map[string]any{"instances": f.listed()})
 	case r.Method == http.MethodGet && path == "/instances/types":
 		q := r.URL.Query()
 		var out []instanceType
@@ -125,6 +137,12 @@ func (f *fakeShadeform) RoundTrip(r *http.Request) (*http.Response, error) {
 				f.createdIDs = map[string]bool{}
 			}
 			f.createdIDs[id] = true
+			if f.listingLag > 0 {
+				if f.hiddenFor == nil {
+					f.hiddenFor = map[string]int{}
+				}
+				f.hiddenFor[id] = f.listingLag
+			}
 			f.instances = append(f.instances, instance{
 				ID:                id,
 				Cloud:             req.Cloud,
@@ -151,6 +169,25 @@ func (f *fakeShadeform) RoundTrip(r *http.Request) (*http.Response, error) {
 		return jsonResponse(404, `{"error":"not found"}`), nil
 	}
 	return jsonResponse(404, fmt.Sprintf(`{"error":"no route %s %s"}`, r.Method, path)), nil
+}
+
+// listed is what this account answers a listing with, and what it withholds. An
+// instance registered through the create endpoint is missing while its lag runs
+// down, which is one look at the account per listing: a create nobody can find
+// in the listing is exactly what the adapter reports as an outcome nobody knows.
+func (f *fakeShadeform) listed() []instance {
+	var visible []instance
+	for _, inst := range f.instances {
+		switch {
+		case f.hideCreated && f.createdIDs[inst.ID]:
+			continue
+		case f.hiddenFor[inst.ID] > 0:
+			f.hiddenFor[inst.ID]--
+			continue
+		}
+		visible = append(visible, inst)
+	}
+	return visible
 }
 
 func marshalResponse(v any) (*http.Response, error) {

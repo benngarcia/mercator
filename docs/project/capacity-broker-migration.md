@@ -6253,6 +6253,51 @@ both. When neither can name a machine, the lease says so loudly rather than
 recording a clean return, because nothing can destroy what nothing can address
 and an operator has to hear about it.
 
+Three things in that paragraph were wrong, and review caught all three. There
+are three legal sets rather than two, and the overlap is the one that matters: a
+provider declaring both an owned-capacity listing and operation-key idempotency
+is what `fake.World` declares, what Shadeform declares, and what the Lab's world
+keeps. Recovery was a `switch`, so such a provider was asked the listing, learned
+nothing, and never reached the repeat. It learned nothing because a listing that
+already named the machine would have made the answer slow rather than unknown:
+Shadeform returns `ErrCapacityIndeterminate` only after four listings fail to see
+the instance it just created, and the Lab writes the same fact as `Unlisted`.
+Recovery now asks every mechanism the provider negotiated, listing first because
+it allocates nothing, and the standing cases are one per mechanism: deleting
+either branch fails exactly one of them. The stub's lost answer is now missing
+from the owned listing too, so the case that proves the repeat is a world that
+can produce the error being recovered from.
+
+The second correction is the operation key on a terminate. `CapacityCommand`
+says a key performs its effect exactly once and answers a repeat with
+`Duplicate`, and both the suite's `giveBack` and the trial's own sweep were
+keying on the lease alone. A lease holding two machines, which is exactly what
+the idempotency promise reports, sent both terminates under one key: a provider
+honouring the contract destroys the first and reports the second as a repeat of
+it, leaving the machine the suite was complaining about billing. Both keys now
+name the machine as well as the lease.
+`TestTheSweepDestroysEveryMachineWearingOneLeasesTag` is the standing case for
+the sweep, an account holding two machines tagged for one Rental with a provider
+that honours the key, and it reports one machine still running against the old
+key.
+
+The third is one condition over from the leak this slice was about. A provision
+that named no machine now starts recovery whether it failed or not: a provider
+that answers with no error and no `NativeRef` has allocated a machine just the
+same, and reclamation keyed on `err != nil` recorded a clean return for it.
+An acceptance naming no machine is carried as an outcome nobody knows, because
+that is the position it leaves a caller in.
+
+The higher-fidelity half is `TestAnAccountWhoseListingLagsIsLeftHoldingNothing`,
+in the Shadeform package rather than beside the stub. Its account registers every
+create and withholds it from the listing for one look longer than the adapter's
+own visibility scan, so the adapter really returns `ErrCapacityIndeterminate`
+naming no machine, over HTTP, from the code that returns it in production. The
+suite has to ask the account what it holds for the lease and destroy what it
+names, and the case reads the account rather than the listing, because an
+instance the listing withholds is billing just the same. With the recovery by
+listing removed it reports five instances still running.
+
 One break was absorbed, and it is worth writing down. Removing Shadeform's
 pre-scan before create leaves the suite green, because `reconcileDuplicates`
 still keeps the oldest instance carrying the lease's tag and destroys the rest:

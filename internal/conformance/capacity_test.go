@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +74,33 @@ func TestACapacityTrialReportsTheProviderThatBreaksAPromise(t *testing.T) {
 	}
 	if _, found := broken["terminate_is_confirmed_and_stays_confirmed"]; !found {
 		t.Fatalf("broken promises = %v, want the terminate promise among them", broken)
+	}
+}
+
+// TestTheSweepDestroysEveryMachineWearingOneLeasesTag is the sweep's own reason
+// for existing, made to happen: an account holding two machines tagged for one
+// Rental, which is what a create whose answer was lost leaves on a provider
+// whose listing lags. Nothing in this trial rented them and no promise holds a
+// ref to either, so the sweep is the only thing that can end them.
+//
+// The provider honours the operation key on a terminate, which is what
+// CapacityCommand says a key does. A sweep keying its destructions on the lease
+// alone destroys the first machine and is answered "duplicate" for the second,
+// which goes on billing while the evidence reads clean.
+func TestTheSweepDestroysEveryMachineWearingOneLeasesTag(t *testing.T) {
+	provider := twoOrphansOfOneLease(sellingWorld(t))
+	runner := capacityRunner(t, provider)
+
+	evidence, err := runner.Verify(t.Context(), capacityTrial())
+
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if running := provider.stillRunning(); len(running) != 0 {
+		t.Errorf("machines wearing Rental %q's tag are still running: %v", orphanedRental, running)
+	}
+	if evidence.CleanupFailure != nil || evidence.Inventory.Owned != 0 {
+		t.Errorf("the trial ended owning %d machines: %+v", evidence.Inventory.Owned, evidence.CleanupFailure)
 	}
 }
 
@@ -262,6 +291,97 @@ func (provider *neverConfirmsATerminate) TerminateCapacity(
 	receipt, err := provider.World.TerminateCapacity(ctx, command)
 	receipt.Duplicate = false
 	return receipt, err
+}
+
+// holdsTwoMachinesUnderOneLease is an account already carrying a pair of
+// machines tagged for one Rental: what a provision whose answer was lost leaves
+// behind on a provider whose listing lags, reconciled by scanning for the
+// lease's tag, which is how both adapters in this tree find one. Nothing in this
+// trial rented them, and nothing but the sweep can find them.
+//
+// Its terminate honours the operation key, exactly as CapacityCommand defines
+// one: the same key performs the destruction once and answers a repeat with the
+// receipt it already gave.
+type holdsTwoMachinesUnderOneLease struct {
+	*fake.World
+	// orphans is each machine of the pair and whether it is still running, so a
+	// destruction is a fact about one machine rather than a count of calls.
+	orphans      map[string]bool
+	destructions map[string]capability.CapacityReceipt
+}
+
+func twoOrphansOfOneLease(world *fake.World) *holdsTwoMachinesUnderOneLease {
+	return &holdsTwoMachinesUnderOneLease{
+		World:        world,
+		orphans:      map[string]bool{"sim-machine-orphan-a": true, "sim-machine-orphan-b": true},
+		destructions: map[string]capability.CapacityReceipt{},
+	}
+}
+
+const orphanedRental = "rnt_an_earlier_trial"
+
+func (provider *holdsTwoMachinesUnderOneLease) ListOwnedCapacity(
+	ctx context.Context,
+	query capability.OwnershipQuery,
+) ([]capability.OwnedCapacity, error) {
+	owned, err := provider.World.ListOwnedCapacity(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	for _, nativeRef := range slices.Sorted(maps.Keys(provider.orphans)) {
+		if !provider.orphans[nativeRef] {
+			continue
+		}
+		owned = append(owned, capability.OwnedCapacity{
+			NativeRef:   nativeRef,
+			WorkspaceID: query.WorkspaceID,
+			RentalID:    orphanedRental,
+			State:       capability.CapacityStateActive,
+		})
+	}
+	return owned, nil
+}
+
+func (provider *holdsTwoMachinesUnderOneLease) TerminateCapacity(
+	ctx context.Context,
+	command capability.CapacityCommand,
+) (capability.CapacityReceipt, error) {
+	if performed, replayed := provider.destructions[command.OperationKey]; replayed {
+		performed.Duplicate = true
+		return performed, nil
+	}
+	receipt, err := provider.destroy(ctx, command)
+	if err == nil {
+		provider.destructions[command.OperationKey] = receipt
+	}
+	return receipt, err
+}
+
+func (provider *holdsTwoMachinesUnderOneLease) destroy(
+	ctx context.Context,
+	command capability.CapacityCommand,
+) (capability.CapacityReceipt, error) {
+	if _, orphan := provider.orphans[command.NativeRef]; !orphan {
+		return provider.World.TerminateCapacity(ctx, command)
+	}
+	provider.orphans[command.NativeRef] = false
+	return capability.CapacityReceipt{
+		NativeRef:  command.NativeRef,
+		State:      capability.CapacityStateTerminated,
+		AcceptedAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	}, nil
+}
+
+// stillRunning is every orphan this account is still billing for, whatever the
+// sweep believes it destroyed.
+func (provider *holdsTwoMachinesUnderOneLease) stillRunning() []string {
+	var live []string
+	for _, nativeRef := range slices.Sorted(maps.Keys(provider.orphans)) {
+		if provider.orphans[nativeRef] {
+			live = append(live, nativeRef)
+		}
+	}
+	return live
 }
 
 // sellingWorld is a marketplace selling one machine type. It sells a product

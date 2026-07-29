@@ -141,14 +141,26 @@ func TestTheSecondMachineOneCommandAllocatedIsGivenBack(t *testing.T) {
 // TestAProvisionNobodyGotAnAnswerToIsStillGivenBack is the machine that costs
 // money in silence: allocated, and named in no receipt. The suite cannot
 // terminate a ref nothing handed it, so it asks the mechanism the provider
-// negotiated for this case, and both of the legal answers are exercised here.
+// negotiated for this case, and each mechanism is exercised against the world it
+// is the answer to.
+//
+// The provider that deduplicates on the operation key declares an owned-capacity
+// listing as well, which is what every backend in this tree declares, and its
+// lost machine is missing from that listing: a provider that listed the machine
+// would have been slow rather than unknown. A suite that stopped at the listing
+// because the listing exists would ask the question that cannot answer and never
+// reach the one that can.
 func TestAProvisionNobodyGotAnAnswerToIsStillGivenBack(t *testing.T) {
 	tests := []struct {
 		reconciliation string
 		flaws          []flaw
 	}{
-		{"by what the connection owns", []flaw{flawLosesTheAnswerToTheFirstProvision}},
-		{"by repeating the operation key", []flaw{flawLosesTheAnswerToTheFirstProvision, listsNothingItOwns}},
+		{"by repeating the operation key", []flaw{flawLosesTheAnswerToTheFirstProvision}},
+		{"by what the connection owns", []flaw{
+			flawLosesTheAnswerToTheFirstProvision,
+			listsTheMachineWhoseAnswerWasLost,
+			deduplicatesNoProvision,
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.reconciliation, func(t *testing.T) {
@@ -164,6 +176,24 @@ func TestAProvisionNobodyGotAnAnswerToIsStillGivenBack(t *testing.T) {
 				t.Fatalf("the machine the lost answer allocated is still running: %v", running)
 			}
 		})
+	}
+}
+
+// TestAMachineAcceptedUnderNoNameIsStillGivenBack is the same leak one condition
+// over. A provider can answer a provision with no failure and no machine, and it
+// has allocated one just the same: a lease that asked what it holds only after a
+// provision that failed would record a clean return for a machine still billing.
+func TestAMachineAcceptedUnderNoNameIsStillGivenBack(t *testing.T) {
+	provider := newStub(flawAcceptsAMachineItDoesNotName)
+	subject := subjectFor(t, provider)
+
+	broken := everyPromiseAgainst(t, subject)
+
+	if len(broken) == 0 {
+		t.Fatal("a provision that named no machine broke no promise")
+	}
+	if running := provider.running(); len(running) != 0 {
+		t.Fatalf("the machines accepted under no name are still running: %v", running)
 	}
 }
 
@@ -234,7 +264,18 @@ const (
 	flawGoesOnOwningWhatItDestroyed       flaw = "goes on owning what it destroyed"
 	flawAcceptsAMachineAtNoMoment         flaw = "accepts a machine at no moment"
 	flawLosesTheAnswerToTheFirstProvision flaw = "allocates a machine and loses the answer"
+	flawAcceptsAMachineItDoesNotName      flaw = "accepts a machine and names none"
 	listsNothingItOwns                    flaw = "lists nothing it owns"
+	// listsTheMachineWhoseAnswerWasLost is the slow provider rather than the
+	// indeterminate one: the receipt was lost in transit and the account listing
+	// names the machine all the same, so reading what the connection owns resolves
+	// it without anything being asked twice.
+	listsTheMachineWhoseAnswerWasLost flaw = "lists the machine whose answer was lost"
+	// deduplicatesNoProvision is the other negotiated set Validate accepts: a
+	// provider that honours no operation key, which the contract then requires to
+	// enumerate what it owns, because that listing is the only thing a lost answer
+	// can be reconciled against.
+	deduplicatesNoProvision flaw = "deduplicates no provision"
 )
 
 // stub is a capacity provider in a slice: enough of the contract for the suite
@@ -248,7 +289,13 @@ type stub struct {
 	flaws    map[flaw]bool
 	machines []*stubMachine
 	lost     map[string]bool
-	next     int
+	// destroyed is every terminate this stub has already performed, by the key it
+	// was asked under. A command key is what makes a command replayable, so a
+	// repeat of one reports the destruction it already performed rather than
+	// performing another, which is what a caller reusing one key across two
+	// machines runs into.
+	destroyed map[string]capability.CapacityReceipt
+	next      int
 }
 
 type stubMachine struct {
@@ -258,6 +305,13 @@ type stubMachine struct {
 	ownershipToken string
 	generation     uint64
 	terminated     bool
+	// unlisted is a machine this stub allocated and has told the caller nothing
+	// about, by any route: the answer was lost and the owned-capacity listing does
+	// not name it either. Both halves are one fact, because a machine the listing
+	// named would leave the outcome slow rather than unknown, and every backend in
+	// the tree reports an outcome unknown for exactly the reason that it cannot
+	// find what it just created.
+	unlisted bool
 }
 
 func newStub(flaws ...flaw) *stub {
@@ -265,7 +319,7 @@ func newStub(flaws ...flaw) *stub {
 	for _, broken := range flaws {
 		held[broken] = true
 	}
-	return &stub{flaws: held, lost: map[string]bool{}}
+	return &stub{flaws: held, lost: map[string]bool{}, destroyed: map[string]capability.CapacityReceipt{}}
 }
 
 // running is every machine this provider is still billing for, whatever the
@@ -319,6 +373,9 @@ func (s *stub) CapacitySupport() capability.CapacitySupport {
 	if s.flaws[listsNothingItOwns] {
 		support.ListOwned = false
 	}
+	if s.flaws[deduplicatesNoProvision] {
+		support.IdempotentProvision = capability.IdempotentProvisionNone
+	}
 	return support
 }
 
@@ -348,6 +405,10 @@ func (s *stub) ListCapacity(context.Context, capability.CapacityQuery) ([]domain
 
 func (s *stub) ProvisionCapacity(_ context.Context, command capability.ProvisionCommand) (capability.CapacityReceipt, error) {
 	if held, exists := s.liveFor(command.RentalID); exists && !s.flaws[flawProvisionsAFreshMachineEveryTime] {
+		// Asking about this lease again is what surfaces the machine a lost answer
+		// left, which is the whole of what an identity assigned before the provider
+		// answered is for.
+		held.unlisted = false
 		return capability.CapacityReceipt{
 			NativeRef:  held.nativeRef,
 			State:      capability.CapacityStateActive,
@@ -367,8 +428,9 @@ func (s *stub) ProvisionCapacity(_ context.Context, command capability.Provision
 		held.ownershipToken = ""
 	}
 	s.machines = append(s.machines, held)
-	if s.flaws[flawLosesTheAnswerToTheFirstProvision] && !s.lost[command.RentalID] {
-		s.lost[command.RentalID] = true
+	goesMissing := s.answerGoesMissing(command.RentalID)
+	held.unlisted = goesMissing && !s.flaws[listsTheMachineWhoseAnswerWasLost]
+	if goesMissing && s.flaws[flawLosesTheAnswerToTheFirstProvision] {
 		return capability.CapacityReceipt{}, fmt.Errorf(
 			"%w: stub allocated %s for Rental %q and the answer never came back",
 			capability.ErrCapacityIndeterminate, held.nativeRef, command.RentalID,
@@ -382,7 +444,24 @@ func (s *stub) ProvisionCapacity(_ context.Context, command capability.Provision
 	if s.flaws[flawAcceptsAMachineAtNoMoment] {
 		receipt.AcceptedAt = time.Time{}
 	}
+	if goesMissing && s.flaws[flawAcceptsAMachineItDoesNotName] {
+		receipt.NativeRef = ""
+	}
 	return receipt, nil
+}
+
+// answerGoesMissing reports whether this is the provision whose machine the
+// caller is never told about, and records that this Rental has had its one.
+// Only the first, because a stub that named a machine for no provision would be
+// refusing to allocate rather than losing an answer, and nothing could then tell
+// a lease that recovered the machine from one that gave up looking.
+func (s *stub) answerGoesMissing(rentalID string) bool {
+	losesIt := s.flaws[flawLosesTheAnswerToTheFirstProvision] || s.flaws[flawAcceptsAMachineItDoesNotName]
+	if !losesIt || s.lost[rentalID] {
+		return false
+	}
+	s.lost[rentalID] = true
+	return true
 }
 
 func (s *stub) ObserveCapacity(_ context.Context, held capability.CapacityRef) (capability.CapacityObservation, error) {
@@ -420,19 +499,30 @@ func (s *stub) transition(
 	return capability.CapacityReceipt{NativeRef: machine.nativeRef, State: state, AcceptedAt: stubMoment}, nil
 }
 
+// TerminateCapacity destroys one machine and honours the key it was asked under,
+// which is what CapacityCommand says a key is for: the same key performs the
+// effect exactly once and a repeat reports the destruction already performed. A
+// caller that sends two machines under one key gets one destruction and a
+// duplicate receipt for the machine it never named.
 func (s *stub) TerminateCapacity(_ context.Context, command capability.CapacityCommand) (capability.CapacityReceipt, error) {
+	if performed, replayed := s.destroyed[command.OperationKey]; replayed {
+		performed.Duplicate = true
+		return performed, nil
+	}
 	machine, exists := s.at(command.NativeRef)
 	if !exists {
 		return capability.CapacityReceipt{}, fmt.Errorf("stub: nothing allocated as machine %q", command.NativeRef)
 	}
 	duplicate := machine.terminated
 	machine.terminated = true
-	return capability.CapacityReceipt{
+	receipt := capability.CapacityReceipt{
 		NativeRef:  machine.nativeRef,
 		State:      capability.CapacityStateTerminated,
 		AcceptedAt: stubMoment,
 		Duplicate:  duplicate,
-	}, nil
+	}
+	s.destroyed[command.OperationKey] = receipt
+	return receipt, nil
 }
 
 func (s *stub) ListOwnedCapacity(_ context.Context, query capability.OwnershipQuery) ([]capability.OwnedCapacity, error) {
@@ -441,7 +531,7 @@ func (s *stub) ListOwnedCapacity(_ context.Context, query capability.OwnershipQu
 	}
 	var owned []capability.OwnedCapacity
 	for _, machine := range s.machines {
-		if (machine.terminated && !s.flaws[flawGoesOnOwningWhatItDestroyed]) || machine.workspaceID != query.WorkspaceID {
+		if (machine.terminated && !s.flaws[flawGoesOnOwningWhatItDestroyed]) || machine.unlisted || machine.workspaceID != query.WorkspaceID {
 			continue
 		}
 		owned = append(owned, capability.OwnedCapacity{

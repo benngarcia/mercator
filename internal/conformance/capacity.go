@@ -102,6 +102,12 @@ func (runner *Runner) sweep(ctx context.Context, subject capacitytest.Subject, e
 
 // reclaim destroys everything this trial's workspace still owns and answers with
 // what survived the attempt.
+//
+// Each destruction is keyed by the machine as well as the lease it was taken out
+// under. What the sweep finds is exactly the capacity nothing else accounted for,
+// which is where two machines wearing one Rental's tag turn up, and a provider
+// honouring the key would answer the second one as a repeat of the first and
+// leave it billing.
 func reclaim(ctx context.Context, subject capacitytest.Subject) ([]capability.OwnedCapacity, error) {
 	var failures error
 	for attempt := range sweepAttempts {
@@ -124,7 +130,7 @@ func reclaim(ctx context.Context, subject capacitytest.Subject) ([]capability.Ow
 					NativeRef:      machine.NativeRef,
 					OwnershipToken: machine.OwnershipToken,
 				},
-				OperationKey: "terminate_" + machine.RentalID,
+				OperationKey: "terminate_" + machine.RentalID + "_" + machine.NativeRef,
 				Generation:   machine.Generation,
 			})
 			failures = errors.Join(failures, err)

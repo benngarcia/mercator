@@ -529,9 +529,11 @@ type lease struct {
 	subject  Subject
 	command  capability.ProvisionCommand
 	machines []string
-	// unanswered is the error from a provision that named no machine. The provider
-	// may be holding one it never told anybody about, so the lease asks what it
-	// holds before giving back rather than taking the answer's word for it.
+	// unanswered is what the provider said to a provision that named no machine,
+	// whether it said it as a failure or as an acceptance with the machine left
+	// out. The provider may be holding one it never told anybody about, so the
+	// lease asks what it holds before giving back rather than taking the answer's
+	// word for it.
 	unanswered error
 }
 
@@ -566,15 +568,29 @@ func (subject Subject) take(ctx context.Context, promise string) (*lease, capabi
 
 // provision sends this lease's provision command and holds on to whatever the
 // answer names, including an answer that arrived with an error: a machine named
-// beside a failure is running just the same, and a failure that names none may
+// beside a failure is running just the same, and an answer that names none may
 // be a machine nobody can address.
 func (rental *lease) provision(ctx context.Context) (capability.CapacityReceipt, error) {
 	receipt, err := rental.subject.Provider.ProvisionCapacity(ctx, rental.command)
 	rental.learn(receipt.NativeRef)
-	if err != nil && receipt.NativeRef == "" {
-		rental.unanswered = err
+	if receipt.NativeRef == "" {
+		rental.unanswered = namedNoMachine(err)
 	}
 	return receipt, err
+}
+
+// namedNoMachine is what a provision that named no machine leaves the lease to
+// go on with. A refusal is its own error, and the lease asks about it quietly
+// because a provider that allocated nothing is the ordinary case. An acceptance
+// that names nothing is the position a lost answer leaves a caller in: the
+// provider was asked for a machine, declined to refuse, and then declined to say
+// which machine, so it is carried as an outcome nobody knows rather than as a
+// receipt with a field missing.
+func namedNoMachine(err error) error {
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: the provision was accepted and named no machine", capability.ErrCapacityIndeterminate)
 }
 
 // giveBack destroys every machine this lease is known to hold. It runs even when
@@ -595,10 +611,16 @@ func (rental *lease) giveBack(ctx context.Context) error {
 
 // nameWhatWentUnanswered is reclamation for the machine nobody named. The ref is
 // not in the suite's hands, so what finds it is the mechanism this provider
-// negotiated for exactly this case: a connection that enumerates what it owns is
-// asked what it holds for this Rental, and one that deduplicates on the
-// operation key is sent the same command again, which answers with the machine
-// it already made.
+// negotiated for exactly this case, and every mechanism it negotiated is asked
+// rather than the first one it happens to have.
+//
+// Asking both is the whole point on a provider that has both, which is what the
+// Lab's world and every adapter in this tree declare. A listing that already
+// names the machine makes a lost answer merely slow, so a provision reported
+// indeterminate is by construction one the listing has not caught up with:
+// Shadeform emits that error only after four listings fail to see the instance
+// it created. Stopping at the listing on such a provider would ask the one
+// question that cannot answer and skip the one that can.
 //
 // A provider that says the outcome is unknown and can then name no machine is
 // reported rather than passed over. Nothing here can destroy what nothing can
@@ -609,18 +631,14 @@ func (rental *lease) nameWhatWentUnanswered(ctx context.Context) error {
 		return nil
 	}
 	support := rental.subject.Provider.CapacitySupport()
-	switch {
-	case support.ListOwned:
-		owned, err := rental.subject.owned(ctx)
-		if err != nil {
+	if support.ListOwned {
+		if err := rental.nameFromWhatTheConnectionOwns(ctx); err != nil {
 			return err
 		}
-		for _, machine := range heldFor(owned, rental.rentalID()) {
-			rental.learn(machine.NativeRef)
-		}
-	case len(rental.machines) == 0 && support.IdempotentProvision == capability.IdempotentProvisionOperationKey:
-		if _, err := rental.provision(ctx); err != nil {
-			return fmt.Errorf("ask the operation key of Rental %q for the machine its provision never named: %w", rental.rentalID(), err)
+	}
+	if len(rental.machines) == 0 && support.IdempotentProvision == capability.IdempotentProvisionOperationKey {
+		if err := rental.nameByRepeatingTheCommand(ctx); err != nil {
+			return err
 		}
 	}
 	if len(rental.machines) > 0 || !errors.Is(rental.unanswered, capability.ErrCapacityIndeterminate) {
@@ -630,6 +648,33 @@ func (rental *lease) nameWhatWentUnanswered(ctx context.Context) error {
 		"the provision of Rental %q answered %v, and nothing this provider can be asked names a machine for it, so whatever it allocated is still billing",
 		rental.rentalID(), rental.unanswered,
 	)
+}
+
+// nameFromWhatTheConnectionOwns adopts every machine the provider says this
+// Rental holds. It is the only mechanism a provider that deduplicates no
+// provision has, and on any provider it is the cheap question: it allocates
+// nothing and answers whenever the listing has caught up with the allocation.
+func (rental *lease) nameFromWhatTheConnectionOwns(ctx context.Context) error {
+	owned, err := rental.subject.owned(ctx)
+	if err != nil {
+		return err
+	}
+	for _, machine := range heldFor(owned, rental.rentalID()) {
+		rental.learn(machine.NativeRef)
+	}
+	return nil
+}
+
+// nameByRepeatingTheCommand sends the provision again, which a provider that
+// deduplicates on the operation key answers with the machine it already made.
+// It is asked only when nothing else named one, because it is the question that
+// allocates a machine on a provider whose idempotency turns out to be a claim
+// rather than a fact.
+func (rental *lease) nameByRepeatingTheCommand(ctx context.Context) error {
+	if _, err := rental.provision(ctx); err != nil {
+		return fmt.Errorf("ask the operation key of Rental %q for the machine its provision never named: %w", rental.rentalID(), err)
+	}
+	return nil
 }
 
 func (rental *lease) learn(nativeRef string) {
@@ -654,13 +699,19 @@ func (rental *lease) held(nativeRef string) capability.CapacityRef {
 	}
 }
 
-// act is one command against a machine of this lease, keyed by the act it
-// performs so a replay of a stop is a replay of that stop rather than of
-// whatever the caller last sent.
+// act is one command against one machine of this lease, keyed by the act and the
+// machine it acts on, so a replay of a stop is a replay of that machine's stop
+// rather than of whatever the caller last sent.
+//
+// The machine is in the key because a lease can hold more than one and the whole
+// contract of a key is that a repeat performs nothing. Two machines terminated
+// under one key would have a provider that honours the key destroy the first and
+// report the second as a repeat of it, and the machine left billing would be the
+// duplicate this suite exists to catch.
 func (rental *lease) act(nativeRef string, operation capability.CapacityOperation) capability.CapacityCommand {
 	return capability.CapacityCommand{
 		CapacityRef:  rental.held(nativeRef),
-		OperationKey: string(operation) + "_" + rental.command.RentalID,
+		OperationKey: string(operation) + "_" + rental.command.RentalID + "_" + nativeRef,
 		Generation:   rental.command.Generation,
 	}
 }
