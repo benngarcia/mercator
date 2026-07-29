@@ -46,6 +46,55 @@ func TestAnInvitationCannotBeRedeemedTwice(t *testing.T) {
 	}
 }
 
+// TestReinvitingAnIdentityNobodyRedeemedKeepsTheMachineHoldingItAlive is the
+// property provisioning rests on. A provider is asked for a machine on every
+// attempt and the material goes onto that machine before anything can know
+// whether an earlier attempt already landed one, so an identity asked for again
+// has to hand back what is already out there rather than invalidating it.
+//
+// The clock moves between the two, and it has to. A token is a signature over
+// the identity and the expiry, so at a frozen clock a fresh mint is byte
+// identical to the one it replaced and this case would pass against a registry
+// that supersedes every time.
+func TestReinvitingAnIdentityNobodyRedeemedKeepsTheMachineHoldingItAlive(t *testing.T) {
+	registry, clock := newRegistry(t)
+	onTheMachine := invite(t, registry)
+	clock.Advance(time.Minute)
+
+	reinvite(t, registry, onTheMachine)
+
+	if _, err := registry.Enroll(context.Background(), enrollmentRequest(onTheMachine)); err != nil {
+		t.Fatalf("the machine the first attempt bootstrapped enrolled with %v, and it holds the only material anything ever gave it", err)
+	}
+}
+
+func TestReinvitingAnIdentityNobodyRedeemedHandsBackTheSameInvitation(t *testing.T) {
+	registry, clock := newRegistry(t)
+	first := invite(t, registry)
+	clock.Advance(time.Minute)
+
+	second := reinvite(t, registry, first)
+
+	if second.EnrollmentToken != first.EnrollmentToken {
+		t.Fatal("an outstanding invitation is what a second attempt must be handed, or two machines hold material only one of them can redeem")
+	}
+}
+
+func TestAnInvitationWhoseWindowClosedIsReplacedRatherThanHandedBack(t *testing.T) {
+	registry, clock := newRegistry(t)
+	first := invite(t, registry)
+	clock.Advance(node.DefaultInvitation + time.Minute)
+
+	second := reinvite(t, registry, first)
+
+	if second.EnrollmentToken == first.EnrollmentToken {
+		t.Fatal("an invitation nothing can still redeem is worth nothing to hold on to")
+	}
+	if _, err := registry.Enroll(context.Background(), enrollmentRequest(second)); err != nil {
+		t.Fatalf("the replacement invitation must be redeemable, got %v", err)
+	}
+}
+
 func TestEnrollmentRefusesAMachineClaimingAnotherGeneration(t *testing.T) {
 	registry, _ := newRegistry(t)
 	bootstrap := invite(t, registry)

@@ -473,11 +473,23 @@ func (registry *Registry) record(ctx context.Context, ref capability.NodeRef) (R
 	return record, nil
 }
 
-// Reinvite mints a fresh invitation for an identity that already exists. An
-// agent whose machine came back without its session credential, or a Rental
+// Reinvite is the invitation an identity that already exists is redeemable on.
+// An agent whose machine came back without its session credential, or a Rental
 // generation that restarted, joins through this rather than replaying a spent
-// invitation. The existing enrollment stays valid until the new one is
-// redeemed, so a healthy node is never cut off by an invitation nobody uses.
+// invitation.
+//
+// An invitation still outstanding is handed back rather than replaced, and that
+// is the whole of what makes this safe to ask for again. Redeeming is an exact
+// match on the token the record names, so minting a fresh one invalidates the
+// one already out there and the machine holding it is a paid host that can no
+// longer enrol. Provisioning asks for this on every attempt, before it can know
+// whether a machine from an earlier attempt exists, so an identity's material
+// has to be stable across attempts for a machine adopted from one of them to be
+// able to join at all.
+//
+// A fresh one is minted only where nothing can still be holding the old one: an
+// invitation already redeemed, which the record clears, and one whose window has
+// closed, which no machine could enrol on anyway.
 func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID string) (capability.NodeBootstrap, error) {
 	record, err := registry.store.Get(ctx, workspaceID, nodeID)
 	if err != nil {
@@ -485,6 +497,9 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 	}
 	if record.Retired() {
 		return capability.NodeBootstrap{}, fmt.Errorf("node: %q is retired and cannot be invited again", nodeID)
+	}
+	if outstanding, held := registry.outstandingInvitation(record); held {
+		return outstanding, nil
 	}
 	expires := registry.signer.Expiry(registry.now().UTC().Add(registry.invitation))
 	token, err := registry.signer.Enrollment(record.ID, record.RentalID, record.Generation, expires)
@@ -494,6 +509,32 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 	if err := registry.store.Reinvite(ctx, workspaceID, nodeID, TokenID(token), expires); err != nil {
 		return capability.NodeBootstrap{}, err
 	}
+	return registry.bootstrapFor(record, token), nil
+}
+
+// outstandingInvitation is the invitation this record still names, rebuilt from
+// what the record holds. A token is a signature over the identity, the
+// generation and the expiry, so the one an earlier invitation handed out is
+// derivable rather than kept: what is stored is its digest, and a control plane
+// that stored the credential itself would be holding a bearer secret for the
+// life of the deployment.
+//
+// The digest is checked rather than assumed. A record whose expiry no longer
+// derives the token it names is one this registry cannot reproduce the material
+// for, and the way forward there is a fresh invitation rather than handing a
+// machine a credential the store will refuse.
+func (registry *Registry) outstandingInvitation(record Record) (capability.NodeBootstrap, bool) {
+	if record.EnrollmentTokenID == "" || !registry.now().UTC().Before(record.EnrollmentExpires) {
+		return capability.NodeBootstrap{}, false
+	}
+	token, err := registry.signer.Enrollment(record.ID, record.RentalID, record.Generation, record.EnrollmentExpires)
+	if err != nil || TokenID(token) != record.EnrollmentTokenID {
+		return capability.NodeBootstrap{}, false
+	}
+	return registry.bootstrapFor(record, token), true
+}
+
+func (registry *Registry) bootstrapFor(record Record, token string) capability.NodeBootstrap {
 	return capability.NodeBootstrap{
 		ControlPlaneURL: registry.controlPlaneURL,
 		NodeID:          record.ID,
@@ -501,7 +542,7 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 		Generation:      record.Generation,
 		EnrollmentToken: token,
 		AgentVersion:    registry.agentVersion,
-	}, nil
+	}
 }
 
 // Retire ends this node's working life because the Rental generation it was
