@@ -211,14 +211,18 @@ func (f *fleet) awaitRealOutcome(t *testing.T, runID, want string) {
 // here would charge the first Run nothing either, and would go green against a
 // control plane that never learned anything from the execution at all.
 //
-// Nothing here asks Docker Hub for anything. This case used to place a public tag
-// it pulled and deleted on every run, which spends a manifest resolution of an
-// anonymous quota per run and turns the only live statement Mercator has about
-// provider bootstrap into a skip the moment that quota is gone. It was skipping on
-// this workstation for exactly that reason, with the whole tree reporting green
-// and this case never having executed. The base tag below is one this host keeps
-// and this never deletes, and the layer that makes the image cold is four
-// megabytes of randomness generated for this run.
+// The content it places asks a public registry for nothing. This case used to
+// place a public tag it pulled and deleted on every run, which spends a manifest
+// resolution of an anonymous quota per run and turns the only live statement
+// Mercator has about provider bootstrap into a skip the moment that quota is gone.
+// It was skipping on this workstation for exactly that reason, with the whole tree
+// reporting green and this case never having executed. The base tag below is one
+// this host keeps and this never deletes, and the layer that makes the image cold
+// is four megabytes of randomness generated for this run.
+//
+// The two tags it builds that out of are the last thing here a public registry
+// serves, once per host, and holdImage below fails rather than skipping when a
+// host has neither them nor a way to fetch them.
 func coldImage(t *testing.T, docker string) string {
 	t.Helper()
 	registry := startLocalRegistry(t, docker)
@@ -236,7 +240,7 @@ func coldImage(t *testing.T, docker string) string {
 // the control plane prices a pull with.
 func startLocalRegistry(t *testing.T, docker string) string {
 	t.Helper()
-	requireHeldImage(t, docker, registryImage)
+	holdImage(t, docker, registryImage)
 	container := strings.TrimSpace(run(t, docker, "run", "--detach", "--publish", "127.0.0.1::5000", registryImage))
 	t.Cleanup(func() { _ = exec.Command(docker, "rm", "--force", container).Run() })
 	address, _, _ := strings.Cut(strings.TrimSpace(run(t, docker, "port", container, "5000/tcp")), "\n")
@@ -262,7 +266,7 @@ func awaitServing(t *testing.T, address string) {
 // real one and the estimate charged for it worth reading.
 func commitUnheldImage(t *testing.T, docker, tag string) {
 	t.Helper()
-	requireHeldImage(t, docker, coldImageBase)
+	holdImage(t, docker, coldImageBase)
 	container := strings.TrimSpace(run(t, docker, "run", "--detach", coldImageBase,
 		"sh", "-c", "head -c 4194304 /dev/urandom > /cold"))
 	defer func() { _ = exec.Command(docker, "rm", "--force", container).Run() }()
@@ -281,16 +285,27 @@ func takeOffTheDaemon(t *testing.T, docker, tag, reference string) {
 	}
 }
 
-// requireHeldImage skips when this host does not already hold an image this case
-// needs and cannot fetch one. Both of these are pulled once per machine and never
-// deleted, so a run of this case costs a registry nothing.
-func requireHeldImage(t *testing.T, docker, tag string) {
+// holdImage puts a utility image this case builds its content out of on this
+// host. A copy already here is the answer, so both tags are read from a public
+// registry at most once per machine and never deleted, and a run of this case
+// costs a registry nothing.
+//
+// A host that has neither the image nor a way to fetch it fails, where the rest of
+// this tree's live cases skip. The difference is what a skip costs here. Those
+// cases check the agent against what this daemon reports and have siblings that
+// check the same behaviour in process, so a host without content states less. This
+// case is the only live statement Mercator has about provider bootstrap, and it is
+// the evidence the plan cites for it, so a skip retires that claim with nothing
+// left watching it and the tree still green. It skipped on this workstation for
+// exactly that reason once already. A machine that lands here needs the two tags
+// above pulled once from somewhere that will serve them.
+func holdImage(t *testing.T, docker, tag string) {
 	t.Helper()
 	if err := exec.Command(docker, "image", "inspect", tag).Run(); err == nil {
 		return
 	}
 	if output, err := exec.Command(docker, "pull", "--quiet", tag).CombinedOutput(); err != nil {
-		t.Skipf("this host does not hold %s and could not fetch it: %v\n%s", tag, err, output)
+		t.Fatalf("this host holds neither %s nor a way to fetch it, and this case states nothing without it: %v\n%s", tag, err, output)
 	}
 }
 

@@ -6091,8 +6091,20 @@ second, and `go test ./...` reported the package green with the only live
 statement about provider bootstrap never having executed. The case now commits an
 image onto a base this host keeps, whose top layer is four megabytes of
 randomness made for the run, pushes it to a registry container, and takes it back
-off the daemon. The fetch is real, the content is cold because it did not exist
-until the run made it, and nothing asks Docker Hub for anything.
+off the daemon. The fetch is real, and the content is cold because it did not
+exist until the run made it. What still comes from a public registry is the two
+tags that scaffolding is built out of, `busybox:1.37` and `registry:2`, read at
+most once per machine and never deleted. A host holding neither and unable to
+fetch them now fails the case rather than skipping it, which is the rest of this
+tree's answer to the same question. The reason to differ is what a skip costs
+here: the live cases in `internal/nodeagent` and `internal/ociresolver` check a
+reader against what this daemon itself reports and have in-process siblings
+making the same claim, while this case is the only live statement Mercator has
+about provider bootstrap and is the evidence cited for it above, so a skip
+retires that claim with the tree still green. It did exactly that on this
+workstation once. Reviewers found the skip surviving in this case's own gate
+after the paragraph above was written, which is why it says this now instead of
+saying nothing asks Docker Hub for anything.
 
 The live cases hold this machine's Docker daemon while they use it, through
 `internal/dockertest.Exclusive`. Three packages drive the one daemon this host
