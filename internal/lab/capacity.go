@@ -95,16 +95,22 @@ func (lease capacityLease) arrivesAt(spend scenario.ProvisioningSpec) time.Time 
 }
 
 // ProvisionCapacity allocates the machine behind one listing and takes the
-// bootstrap it was handed, verbatim. The same operation key twice allocates one
-// machine and says so, which is what makes an allocation whose response was lost
-// cost one repeat rather than one extra machine.
+// bootstrap it was handed, verbatim. The same lease twice allocates one machine
+// and says so, which is what makes an allocation whose response was lost cost
+// one repeat rather than one extra machine.
+//
+// That is a backend resolving duplicates below this seam, which is where a real
+// adapter resolves them: a provider honouring no key of its own leaves the
+// adapter to create, scan by the lease's tag, and destroy the losers, and what
+// reaches this interface either way is one machine per lease. It is what
+// "operation_key" declares, and compile refuses any listing declaring otherwise
+// rather than letting a Blueprint state a contract this world does not keep.
 //
 // A world told to lose this answer allocates the machine all the same and tells
 // Mercator nothing about it, by any route, until something asks about the lease
-// again. That is the state a provider honouring no idempotency key really leaves
-// behind, and the whole of what the Rental identity travelling to the provider
-// exists to resolve: the repeat finds the machine already there and adopts it,
-// carrying the bootstrap the first attempt put on it.
+// again. That is the whole of what the Rental identity travelling to the
+// provider exists to resolve: the repeat finds the machine already there and
+// adopts it, carrying the bootstrap the first attempt put on it.
 func (world *simulatedWorld) ProvisionCapacity(_ context.Context, command capability.ProvisionCommand) (capability.CapacityReceipt, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()

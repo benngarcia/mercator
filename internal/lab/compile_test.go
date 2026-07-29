@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
@@ -102,6 +103,29 @@ func TestCompileRefusesPatienceThisHarnessWouldPunish(t *testing.T) {
 
 	if _, _, err := Compile(blueprint, CompileOptions{}); err == nil {
 		t.Fatal("compiled a world whose stated patience this harness would call a Mercator violation")
+	}
+}
+
+// TestCompileRefusesACapacityContractThisWorldDoesNotKeep is the third, and the
+// one that had already gone unnoticed: a listing declared that its provider
+// honours no idempotency key, and this world answered the repeat with the
+// machine the lease already had regardless. The declaration reached nothing, so
+// the fixture read as a case about Mercator resolving a duplicate while the
+// simulator was resolving it.
+//
+// A world where the repeat really rents a second machine is a different
+// simulator, because leases here are keyed by the Rental and a second machine
+// under one lease has nowhere to live. Until there is one, the declaration is
+// refused at compile rather than dropped.
+func TestCompileRefusesACapacityContractThisWorldDoesNotKeep(t *testing.T) {
+	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/conformance/provisioned-capacity-becomes-a-machine-mercator-holds.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+	blueprint.World.Marketplace[0].Capacity.IdempotentProvision = capability.IdempotentProvisionNone
+
+	if _, _, err := Compile(blueprint, CompileOptions{}); err == nil {
+		t.Fatal("compiled a world declaring a provider contract this simulator does not keep")
 	}
 }
 

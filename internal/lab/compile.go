@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
@@ -41,6 +42,9 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 		)
 	}
 	if err := patienceStaysInsideTheLabsOwnBound(blueprint); err != nil {
+		return WorldTape{}, nil, err
+	}
+	if err := everyStatedCapacitySupportIsPerformed(blueprint); err != nil {
 		return WorldTape{}, nil, err
 	}
 	seed := options.Seed
@@ -267,6 +271,37 @@ func maximumRuntime(arrival scenario.RunArrivalSpec) time.Duration {
 // plane doing exactly what the fixture told it to. Refusing here is the honest
 // answer: the Blueprint states a world the harness cannot judge, and it says so at
 // compile time rather than as a Mercator defect it is not.
+// everyStatedCapacitySupportIsPerformed refuses a listing whose declared
+// capacity contract this world does not actually keep.
+//
+// One clause today, and it is the one that was silently untrue.
+// idempotent_provision names what a repeated allocation under the same lease
+// does, and this world answers the repeat with the machine the first attempt
+// allocated whatever the listing declared. That is a backend which resolves
+// duplicates below the capacity seam, which is what the Shadeform adapter does
+// and what "operation_key" states. A listing declaring "none" is a world where
+// the repeat rents a second machine and something above has to reconcile it, and
+// this world cannot produce that: leases here are keyed by the Rental, so a
+// second machine under one lease has nowhere to live.
+//
+// Refusing is the honest answer. A Blueprint that declared it and compiled
+// anyway would be a fixture asserting a property the simulator was quietly
+// providing, and any rule written over it would be a rule about the simulator.
+func everyStatedCapacitySupportIsPerformed(blueprint scenario.Blueprint) error {
+	for _, offer := range blueprint.World.Marketplace {
+		if offer.Capacity == nil || offer.Capacity.IdempotentProvision == "" {
+			continue
+		}
+		if offer.Capacity.IdempotentProvision != capability.IdempotentProvisionOperationKey {
+			return fmt.Errorf(
+				"Blueprint %q says listing %q honours %q for a repeated provision, and this world answers every repeat under a lease with the machine that lease already has",
+				blueprint.Name, offer.ID, offer.Capacity.IdempotentProvision,
+			)
+		}
+	}
+	return nil
+}
+
 func patienceStaysInsideTheLabsOwnBound(blueprint scenario.Blueprint) error {
 	for _, offer := range blueprint.World.Marketplace {
 		if offer.Bootstrap == nil || offer.Bootstrap.Deadline == nil {
