@@ -341,8 +341,8 @@ func (registry *labRegistry) Invite(ctx context.Context, invitation node.Invitat
 	return bootstrap, nil
 }
 
-func (registry *labRegistry) Reinvite(ctx context.Context, workspaceID, nodeID string) (capability.NodeBootstrap, error) {
-	bootstrap, err := registry.Registry.Reinvite(ctx, workspaceID, nodeID)
+func (registry *labRegistry) Reinvite(ctx context.Context, workspaceID, nodeID string, redeemableThrough time.Time) (capability.NodeBootstrap, error) {
+	bootstrap, err := registry.Registry.Reinvite(ctx, workspaceID, nodeID, redeemableThrough)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
 	}

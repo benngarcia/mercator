@@ -406,7 +406,7 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 			observation.Effects = []EffectRecord{{
 				ID:        "effect-abandoned",
 				Operation: OperationCapacityProvision,
-				At:        now.Add(-time.Hour),
+				At:        now.Add(-2 * time.Hour),
 				Command:   EffectCommandAccepted,
 				Request:   []byte(`{"rental_id":"rnt_abandoned"}`),
 			}}

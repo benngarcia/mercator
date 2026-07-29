@@ -80,6 +80,85 @@ func TestReinvitingAnIdentityNobodyRedeemedHandsBackTheSameInvitation(t *testing
 	}
 }
 
+// TestAnInvitationLastsAsLongAsTheCallerWaits is the coupling between the two
+// halves of one question. A host is handed its material once, when it is
+// created, and nothing can tell it anything afterwards, so an invitation that
+// lapses before the caller stops waiting is a paid machine booting into a fleet
+// it can never join.
+//
+// Forty five minutes is longer than DefaultInvitation on purpose. A provider
+// whose machines take longer to boot than this registry's own default window is
+// exactly the deployment the default silently breaks.
+func TestAnInvitationLastsAsLongAsTheCallerWaits(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
+		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		ShadowPriceUSDPerHour: 1.5,
+		RedeemableThrough:     clock.Now().Add(45 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("invite node: %v", err)
+	}
+	clock.Advance(40 * time.Minute)
+
+	_, err = registry.Enroll(context.Background(), enrollmentRequest(bootstrap))
+
+	if err != nil {
+		t.Fatalf("a machine that arrived inside the wait it was provisioned under enrolled with %v", err)
+	}
+}
+
+// TestAnInvitationThatLapsesInsideTheWaitIsReplaced is the other side of the
+// same rule, and the reason handing back an outstanding invitation is not
+// unconditional. Material with minutes left is written onto a machine that does
+// not exist yet, and it will lapse while that machine is still booting.
+//
+// Replacing it costs the machine already out there nothing. An invitation that
+// closes before the caller gives up cannot end in an enrolment whoever is
+// holding it, so the choice is between one machine locked out and two.
+func TestAnInvitationThatLapsesInsideTheWaitIsReplaced(t *testing.T) {
+	registry, clock := newRegistry(t)
+	shortLived, err := registry.Invite(context.Background(), node.Invitation{
+		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		ShadowPriceUSDPerHour: 1.5,
+		RedeemableThrough:     clock.Now().Add(5 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("invite node: %v", err)
+	}
+
+	replacement, err := registry.Reinvite(context.Background(), testWorkspace, testNode, clock.Now().Add(45*time.Minute))
+	if err != nil {
+		t.Fatalf("reinvite node: %v", err)
+	}
+
+	if replacement.EnrollmentToken == shortLived.EnrollmentToken {
+		t.Fatal("an invitation that lapses inside the wait was handed to a machine that has not been built yet")
+	}
+	clock.Advance(40 * time.Minute)
+	if _, err := registry.Enroll(context.Background(), enrollmentRequest(replacement)); err != nil {
+		t.Fatalf("the replacement must outlast the wait it was minted for, got %v", err)
+	}
+}
+
+// TestAnInvitationNobodyCouldRedeemIsRefused keeps the registry from answering a
+// caller that has already given up. Material redeemable through a moment in the
+// past is not an invitation, and minting one would put a machine on a provider's
+// bill to boot into a refusal.
+func TestAnInvitationNobodyCouldRedeemIsRefused(t *testing.T) {
+	registry, clock := newRegistry(t)
+
+	_, err := registry.Invite(context.Background(), node.Invitation{
+		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		ShadowPriceUSDPerHour: 1.5,
+		RedeemableThrough:     clock.Now().Add(-time.Minute),
+	})
+
+	if err == nil {
+		t.Fatal("an invitation that was already spent when it was minted was handed out")
+	}
+}
+
 func TestAnInvitationWhoseWindowClosedIsReplacedRatherThanHandedBack(t *testing.T) {
 	registry, clock := newRegistry(t)
 	first := invite(t, registry)
@@ -902,11 +981,12 @@ func invite(t *testing.T, registry *node.Registry) capability.NodeBootstrap {
 	return bootstrap
 }
 
-// reinvite issues a fresh invitation for the same identity, which is what a
-// Rental generation restart does when its agent needs to join again.
+// reinvite asks for the invitation this identity is redeemable on, which is what
+// a repeated provision and a Rental generation restart both come back through.
+// It states no deadline, so the registry answers on its own policy.
 func reinvite(t *testing.T, registry *node.Registry, previous capability.NodeBootstrap) capability.NodeBootstrap {
 	t.Helper()
-	bootstrap, err := registry.Reinvite(context.Background(), testWorkspace, previous.NodeID)
+	bootstrap, err := registry.Reinvite(context.Background(), testWorkspace, previous.NodeID, time.Time{})
 	if err != nil {
 		t.Fatalf("reinvite node: %v", err)
 	}

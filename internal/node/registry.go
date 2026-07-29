@@ -139,6 +139,18 @@ type Invitation struct {
 	// a price to weigh a node against fresh capacity, and a node without one is
 	// refused rather than treated as free.
 	ShadowPriceUSDPerHour float64
+	// RedeemableThrough is the moment the caller stops waiting for this machine.
+	// The invitation lasts exactly that long, because the two are the same
+	// question asked from either end: a host is handed its material once, when it
+	// is created, and nothing can tell it anything afterwards, so material that
+	// lapses first is a paid machine booting into a fleet it can never join, and
+	// material that outlives the wait is a bearer credential still redeemable for
+	// a machine nobody is expecting any more.
+	//
+	// Stated by whoever knows the wait, which is provisioning. An operator
+	// inviting a machine by hand is waiting on a person rather than on a
+	// deadline, and gets DefaultInvitation.
+	RedeemableThrough time.Time
 	// Purchase is the rest of what this machine is bought on: the block of time it
 	// is billed in, the kinds of work its operator holds it for, and the moment it
 	// stops being Mercator's.
@@ -160,7 +172,10 @@ func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (ca
 	if rentalID == "" {
 		rentalID = "rnt_" + registry.identity()
 	}
-	expires := registry.signer.Expiry(registry.now().UTC().Add(registry.invitation))
+	expires, err := registry.window(invitation.RedeemableThrough)
+	if err != nil {
+		return capability.NodeBootstrap{}, err
+	}
 	token, err := registry.signer.Enrollment(nodeID, rentalID, generation, expires)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
@@ -187,6 +202,27 @@ func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (ca
 		EnrollmentToken: token,
 		AgentVersion:    registry.agentVersion,
 	}, nil
+}
+
+// window is how long this invitation stays redeemable: as long as the caller
+// says it is waiting, and DefaultInvitation for a caller that is waiting on
+// nobody in particular.
+//
+// A moment already past is refused rather than minted. Material nothing could
+// ever redeem is not an invitation, and handing one out would put a machine on a
+// provider's bill to boot into a refusal.
+func (registry *Registry) window(redeemableThrough time.Time) (time.Time, error) {
+	now := registry.now().UTC()
+	if redeemableThrough.IsZero() {
+		return registry.signer.Expiry(now.Add(registry.invitation)), nil
+	}
+	if !redeemableThrough.After(now) {
+		return time.Time{}, fmt.Errorf(
+			"node: an invitation redeemable through %s is already spent at %s",
+			redeemableThrough.UTC().Format(time.RFC3339), now.Format(time.RFC3339),
+		)
+	}
+	return registry.signer.Expiry(redeemableThrough.UTC()), nil
 }
 
 // EnrolledAt is when the machine invited under this identity opened its session,
@@ -492,10 +528,14 @@ func (registry *Registry) record(ctx context.Context, ref capability.NodeRef) (R
 // has to be stable across attempts for a machine adopted from one of them to be
 // able to join at all.
 //
-// A fresh one is minted only where nothing can still be holding the old one: an
-// invitation already redeemed, which the record clears, and one whose window has
-// closed, which no machine could enrol on anyway.
-func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID string) (capability.NodeBootstrap, error) {
+// A fresh one is minted only where nothing can still be holding a usable copy of
+// the old one: an invitation already redeemed, which the record clears, one whose
+// window has closed, and one that closes before the caller stops waiting. The
+// last is not a machine given up on: an invitation that lapses inside the wait
+// cannot end in an enrolment whoever is holding it, so replacing it costs the
+// machine already out there nothing and gives the one about to be built material
+// that will still be good when it boots.
+func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID string, redeemableThrough time.Time) (capability.NodeBootstrap, error) {
 	record, err := registry.store.Get(ctx, workspaceID, nodeID)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
@@ -503,10 +543,13 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 	if record.Retired() {
 		return capability.NodeBootstrap{}, fmt.Errorf("node: %q is retired and cannot be invited again", nodeID)
 	}
-	if outstanding, held := registry.outstandingInvitation(record); held {
+	if outstanding, held := registry.outstandingInvitation(record, redeemableThrough); held {
 		return outstanding, nil
 	}
-	expires := registry.signer.Expiry(registry.now().UTC().Add(registry.invitation))
+	expires, err := registry.window(redeemableThrough)
+	if err != nil {
+		return capability.NodeBootstrap{}, err
+	}
 	token, err := registry.signer.Enrollment(record.ID, record.RentalID, record.Generation, expires)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
@@ -528,8 +571,16 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 // derives the token it names is one this registry cannot reproduce the material
 // for, and the way forward there is a fresh invitation rather than handing a
 // machine a credential the store will refuse.
-func (registry *Registry) outstandingInvitation(record Record) (capability.NodeBootstrap, bool) {
+//
+// It has to outlast the caller's wait and not merely this moment. Provisioning
+// asks for material before the provider answers, and what it does with the answer
+// is write it onto a machine that has yet to be built, so an invitation with
+// seconds left is one that lapses while that machine is still booting.
+func (registry *Registry) outstandingInvitation(record Record, redeemableThrough time.Time) (capability.NodeBootstrap, bool) {
 	if record.EnrollmentTokenID == "" || !registry.now().UTC().Before(record.EnrollmentExpires) {
+		return capability.NodeBootstrap{}, false
+	}
+	if !redeemableThrough.IsZero() && record.EnrollmentExpires.Before(redeemableThrough.UTC()) {
 		return capability.NodeBootstrap{}, false
 	}
 	token, err := registry.signer.Enrollment(record.ID, record.RentalID, record.Generation, record.EnrollmentExpires)

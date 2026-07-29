@@ -18,7 +18,14 @@ import (
 // stating more patience than this, because a listing telling Mercator to wait
 // longer than the harness allows would make this rule accuse a control plane that
 // is obeying the fixture. See patienceStaysInsideTheLabsOwnBound.
-const provisionedCapacityBound = 30 * time.Minute
+//
+// It was thirty minutes, which is also how long node.DefaultInvitation keeps an
+// invitation redeemable, and the coincidence was load-bearing in the wrong
+// direction: no Blueprint could state a patience longer than the material a
+// machine is handed lasts, so the one failure that follows from those two being
+// unrelated numbers was unreachable here. An hour is a backstop again rather than
+// a second copy of a policy stated elsewhere.
+const provisionedCapacityBound = time.Hour
 
 // provisionedCapacityEnrolsOrIsReclaimed is the liveness rule on the capacity
 // lease: a provision that reached a provider ends as an enrolled node, as a

@@ -32,13 +32,18 @@ type Capacity interface {
 //
 // Invite and Reinvite are separate because they answer different questions
 // about one identity. The first reserves a node nothing has filled yet; the
-// second mints a fresh token for a node that already exists, which is what an
-// attempt Mercator lost the answer to comes back through. Nothing here ever
-// hands back a credential Mercator wrote down: the token is minted at the moment
-// it is given to a provider and is never in the Run's record.
+// second answers for a node that already exists, which is what an attempt
+// Mercator lost the answer to comes back through. Nothing here ever hands back a
+// credential Mercator wrote down: the token is minted at the moment it is given
+// to a provider and is never in the Run's record.
+//
+// Both are told the moment provisioning stops waiting for this machine, because
+// the material has to last exactly that long: a host is handed it once, when it
+// is created, and an invitation that lapses first is a paid machine that can
+// enrol nowhere while the Run waits out a patience that was never going to end.
 type Inviter interface {
 	Invite(ctx context.Context, invitation node.Invitation) (capability.NodeBootstrap, error)
-	Reinvite(ctx context.Context, workspaceID, nodeID string) (capability.NodeBootstrap, error)
+	Reinvite(ctx context.Context, workspaceID, nodeID string, redeemableThrough time.Time) (capability.NodeBootstrap, error)
 	// EnrolledAt is when the agent opened its session, and the zero time while
 	// none has. The moment is asked for rather than a yes because the registry is
 	// the only holder of it: the agent calls in, so the arrival is dated where it
@@ -317,6 +322,11 @@ func (o *Orchestrator) bootstrapFor(ctx context.Context, workspaceID string, req
 		// it is refused, because placement weighs an enrolled node against fresh
 		// capacity by its price and has no reading for silence.
 		ShadowPriceUSDPerHour: requested.RatePerHourUSD,
+		// The moment this Run stops expecting the agent, which is exactly how long
+		// the material has to stay redeemable. It is the listing's own patience
+		// where the operator stated one, so a provider whose machines take half an
+		// hour to boot hands out invitations that are still good when they do.
+		RedeemableThrough: requested.EnrolmentDeadlineAt,
 	})
 	if err == nil {
 		return bootstrap, nil
@@ -324,7 +334,7 @@ func (o *Orchestrator) bootstrapFor(ctx context.Context, workspaceID string, req
 	if !errors.Is(err, node.ErrIdentityExists) {
 		return capability.NodeBootstrap{}, fmt.Errorf("orchestrator: invite node %q: %w", requested.NodeID, err)
 	}
-	bootstrap, err = o.inviter.Reinvite(ctx, workspaceID, requested.NodeID)
+	bootstrap, err = o.inviter.Reinvite(ctx, workspaceID, requested.NodeID, requested.EnrolmentDeadlineAt)
 	if err != nil {
 		return capability.NodeBootstrap{}, fmt.Errorf("orchestrator: reinvite node %q: %w", requested.NodeID, err)
 	}

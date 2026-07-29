@@ -127,6 +127,53 @@ func TestALostProvisionAnswerCostsOneRepeatAndNotTheMachine(t *testing.T) {
 	}
 }
 
+// TestAnInvitationOutlivesTheWaitItWasMintedFor drives a listing whose machines
+// take a long time to arrive, and whose operator says so: this connection's
+// bootstrap deadline is forty minutes, because a host from this provider is
+// thirty six minutes from allocation to an agent opening a session.
+//
+// The patience is the operator's to state. How long the material Mercator wrote
+// onto the machine stays redeemable is Mercator's, and the two are the same
+// question from either end. The host is handed its invitation once, when it is
+// created, and nothing can tell it anything else, so an invitation that lapses
+// before Mercator stops waiting is a paid machine booting into a fleet it can
+// never join: it presents a credential the registry will not take, and the Run
+// waits out the whole of a patience that was never going to end in an enrolment.
+//
+// Nothing about that failure looks like a failure. The provider says the machine
+// is up, the ledger says the allocation was accepted, and the only symptom is
+// silence where the agent should be, on a bill, until the deadline the operator
+// stated runs out and the machine is handed back.
+func TestAnInvitationOutlivesTheWaitItWasMintedFor(t *testing.T) {
+	execution := openConformanceExecution(t, "an-invitation-outlives-the-wait-it-was-minted-for")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	driveFor(t, execution, 45*time.Minute)
+
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("the execution violates a standing rule: %v", err)
+	}
+	ledger := execution.runtime.world.effectRecords()
+	provisioned := firstAcceptedCapacityEntry(t, ledger, OperationCapacityProvision)
+	enrolled := firstAcceptedCapacityEntry(t, ledger, OperationNodeEnrolled)
+	if enrolled.lease != provisioned.lease {
+		t.Fatalf("the agent enrolled under Rental %q generation %d and the machine was allocated for Rental %q generation %d",
+			enrolled.lease.RentalID, enrolled.lease.Generation, provisioned.lease.RentalID, provisioned.lease.Generation)
+	}
+	if _, launched := firstLaunchSequence(ledger); !launched {
+		t.Fatal("nothing was ever launched on the machine that arrived, and a machine nothing can execute on is one nobody should be paying for")
+	}
+	for _, effect := range ledger {
+		if effect.Operation == OperationCapacityTerminate {
+			t.Fatalf("the machine was handed back by %s, and it arrived inside the patience its operator stated", effect.ID)
+		}
+	}
+}
+
 // TestEveryProvisioningStageIsRecordedAtWhatTheWorldSpent reads the other account
 // of the same machine: the three stage observations Mercator wrote as it watched.
 //

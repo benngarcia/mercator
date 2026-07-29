@@ -452,7 +452,7 @@ func (c *recordingCapacity) Invite(_ context.Context, invitation node.Invitation
 	return c.bootstrapFor(invitation.NodeID), nil
 }
 
-func (c *recordingCapacity) Reinvite(_ context.Context, _, nodeID string) (capability.NodeBootstrap, error) {
+func (c *recordingCapacity) Reinvite(_ context.Context, _, nodeID string, _ time.Time) (capability.NodeBootstrap, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, exists := c.nodes[nodeID]; !exists {

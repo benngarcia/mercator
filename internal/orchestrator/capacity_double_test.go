@@ -128,7 +128,7 @@ func (c *instantCapacity) Invite(_ context.Context, invitation node.Invitation) 
 	}, nil
 }
 
-func (c *instantCapacity) Reinvite(_ context.Context, _, nodeID string) (capability.NodeBootstrap, error) {
+func (c *instantCapacity) Reinvite(_ context.Context, _, nodeID string, _ time.Time) (capability.NodeBootstrap, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	invited, exists := c.nodes[nodeID]
