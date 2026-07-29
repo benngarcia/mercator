@@ -23,12 +23,7 @@ func runBackupCommand(ctx context.Context, args []string, env map[string]string,
 		_, _ = fmt.Fprintf(stderr, "backup: %v\n", err)
 		return 2
 	}
-	dsn, err := sqliteDSN(env)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "backup: resolve database path: %v\n", err)
-		return 1
-	}
-	source, err := requireDatabaseToCopy(dsn)
+	source, err := databaseToBackUp(env)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "backup: %v\n", err)
 		return 1
@@ -54,20 +49,32 @@ func backupDestination(args []string) (string, error) {
 	return args[2], nil
 }
 
-// requireDatabaseToCopy answers with the database file to copy, and refuses one
-// that is not there.
+// databaseToBackUp answers with the database file to copy. It requires
+// MERCATOR_SQLITE_DSN and refuses a database that is not there.
 //
-// sqliteDSN answers with a default path rather than failing when
-// MERCATOR_SQLITE_DSN is unset, and sql.Open creates whatever file it is
-// pointed at, so a backup run in a shell that does not carry the server's DSN
-// would otherwise create an empty database, copy the nothing in it, and exit 0.
-// The operator would hold a file that restores into a control plane with no
-// history and no way to tell from the exit code.
+// The variable is required here and optional for `serve` on purpose. `serve`
+// falls back to a per-user data directory because a server nobody can start
+// without first inventing a path is a server nobody tries, and it creates that
+// directory on the way past. A backup inherits none of that reasoning: the same
+// fallback, in the cron entry that does not carry the unit's environment,
+// resolves to whatever database a `mercator serve` on this host once left in
+// the invoking account's home directory. Measured on this host, that run copied
+// an empty 147456-byte database over a production one and exited 0, and the
+// only signal the operator got was a source path on standard output that cron
+// discards. Refusing to guess is the whole fix: a fallback path exists, so
+// asking whether a file is there cannot tell the server's database from a
+// stray one.
 //
 // The file rather than the DSN is what goes on to the copy, because the copy
 // opens it read-only and the server's DSN says nothing about how a reader of it
 // should connect.
-func requireDatabaseToCopy(dsn string) (string, error) {
+func databaseToBackUp(env map[string]string) (string, error) {
+	dsn := env["MERCATOR_SQLITE_DSN"]
+	if dsn == "" {
+		return "", fmt.Errorf(
+			"MERCATOR_SQLITE_DSN is required and must name the database the server serves; backup will " +
+				"not fall back to a default path, because a copy of the wrong database also exits 0")
+	}
 	path := databasePath(dsn)
 	if path == "" {
 		return "", fmt.Errorf(

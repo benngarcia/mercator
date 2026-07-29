@@ -154,6 +154,119 @@ func TestBackingUpACrashedDatabaseLeavesTheSourceExactlyAsItWas(t *testing.T) {
 	}
 }
 
+// TestABackupKilledPartWayLeavesNothingAtTheDestination is the other half of
+// "a backup is safe to run": what the operator's backup path holds when the
+// copy does not finish.
+//
+// Nothing lets a process finish this. A `timeout` in a cron entry, a systemd
+// TimeoutStopSec, an operator's Ctrl-C and an OOM kill all end it where it
+// stands, and the copy used to be written straight into the destination. That
+// left a large file at the backup path, unopenable because SQLite writes page 1
+// last, and every later backup at the same path was refused for good with
+// "file exists", which the recovery documentation teaches the operator to read
+// as an earlier backup already being there. A deployment writing to a fixed
+// path stopped backing up while looking, by file size, like it was backing up
+// correctly.
+//
+// The kill lands inside the copy rather than near it: the helper says nothing
+// until megabytes of the copy are on disk, and the database is large enough
+// that the rest of it takes far longer than the signal does.
+func TestABackupKilledPartWayLeavesNothingAtTheDestination(t *testing.T) {
+	// Arrange: a database big enough to be killed in the middle of copying, and
+	// a process killed in the middle of copying it.
+	directory := t.TempDir()
+	source := filepath.Join(directory, "mercator.db")
+	writeBallastDatabase(t, source, 256)
+	destination := backupBeside(source)
+	startCrashHelper(t, "TestCrashHelperIsKilledInsideABackup", "file:"+source).kill(t)
+
+	// Assert: the path the operator named holds nothing, so nothing there can be
+	// mistaken for a backup or refuse the next one.
+	if info, err := os.Stat(destination); err == nil {
+		t.Fatalf("the killed backup left %d bytes at %s, which no restore can open and which refuses every later backup at that path",
+			info.Size(), destination)
+	}
+
+	// Assert: the retry an operator or the next night's cron makes is taken, and
+	// what it writes opens.
+	copied, err := BackupDatabase(context.Background(), source, destination)
+	if err != nil {
+		t.Fatalf("the backup after the killed one: %v", err)
+	}
+	if pages := scalar(t, openRecovered(t, "file:"+copied), `SELECT COUNT(*) FROM ballast`); pages != "256" {
+		t.Fatalf("the copy holds %s ballast pages, want the 256 the source holds", pages)
+	}
+}
+
+// TestCrashHelperIsKilledInsideABackup takes a backup and stops once enough of
+// it is on disk for a kill to land in the middle of one.
+func TestCrashHelperIsKilledInsideABackup(t *testing.T) {
+	source := strings.TrimPrefix(crashHelperDSN(t), "file:")
+	go func() { _, _ = BackupDatabase(context.Background(), source, backupBeside(source)) }()
+	awaitCopyUnderway(t, backupBeside(source))
+	announceReady()
+	select {}
+}
+
+// backupBeside names the copy, so the case and the helper it kills agree on
+// where the backup is being written without a second variable between them.
+func backupBeside(source string) string {
+	return filepath.Join(filepath.Dir(source), "backup.db")
+}
+
+// awaitCopyUnderway returns once the copy is really being written, whichever
+// file the command is assembling it in. It measures the destination and
+// anything beside it carrying that name, so it says "a copy is in flight"
+// rather than "the copy is in the file I expect".
+func awaitCopyUnderway(t *testing.T, destination string) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		if bytesUnder(t, destination) > 2<<20 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("the backup never started writing, so there is no copy to kill in the middle of")
+}
+
+func bytesUnder(t *testing.T, destination string) int64 {
+	t.Helper()
+	written, err := filepath.Glob(destination + "*")
+	if err != nil {
+		t.Fatalf("look for the copy being written: %v", err)
+	}
+	var total int64
+	for _, path := range written {
+		if info, err := os.Stat(path); err == nil {
+			total += info.Size()
+		}
+	}
+	return total
+}
+
+// writeBallastDatabase writes a database of the given size in mebibytes. The
+// rows say nothing: this is the one case that needs a database whose copy takes
+// long enough to be interrupted, and an event log of that size takes minutes to
+// append.
+func writeBallastDatabase(t *testing.T, path string, mebibytes int) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.ExecContext(context.Background(), `CREATE TABLE ballast (page BLOB)`); err != nil {
+		t.Fatalf("create the ballast table: %v", err)
+	}
+	page := bytes.Repeat([]byte("m"), 1<<20)
+	for written := 0; written < mebibytes; written++ {
+		if _, err := db.ExecContext(context.Background(), `INSERT INTO ballast (page) VALUES (?)`, page); err != nil {
+			t.Fatalf("write ballast page %d: %v", written, err)
+		}
+	}
+}
+
 // databaseAndLog is the two files a restore is made of, as they are on disk
 // right now. A file that is not there reads as empty, which is what a copy that
 // deleted the log leaves behind.

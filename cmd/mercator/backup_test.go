@@ -271,10 +271,83 @@ func contentOf(t *testing.T, path string) []byte {
 	return content
 }
 
-// TestBackupRefusesADatabaseThatIsNotThere is the shell that does not carry the
-// server's DSN. Left alone, that backup would create an empty database, copy the
-// nothing in it and exit 0, and the operator would be holding a file that
-// restores into a control plane with no history.
+// TestBackupRefusesToGuessWhichDatabaseToCopy is the cron entry that does not
+// inherit the unit's environment, which is the ordinary way an operator gets
+// here rather than an exotic one.
+//
+// `serve` resolves an unset MERCATOR_SQLITE_DSN to a per-user data directory
+// and creates it, so a backup that reused that fallback copied whatever
+// database a `mercator serve` on this host had once left in the invoking
+// account's home directory. It exited 0, wrote a file the size of a real
+// backup, and said which database it had read on standard output, which is the
+// stream a cron job discards. Asking whether a file is there cannot tell that
+// database from the server's, so the variable is required for this command.
+func TestBackupRefusesToGuessWhichDatabaseToCopy(t *testing.T) {
+	// Arrange: a database sitting at the path an unset DSN resolves to, which is
+	// what one earlier `mercator serve` without the variable leaves behind.
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "mercator"), 0o700); err != nil {
+		t.Fatalf("make the per-user data directory: %v", err)
+	}
+	stray := filepath.Join(home, "mercator", "mercator.db")
+	serveDatabase(t, "file:"+stray, hex.EncodeToString(retiredMasterKey)).stop()
+	destination := filepath.Join(t.TempDir(), "nightly.db")
+
+	// Act: the backup a cron entry runs, carrying no MERCATOR_SQLITE_DSN.
+	stderr := &bytes.Buffer{}
+	exitCode := run(context.Background(), []string{"mercator", "backup", destination}, map[string]string{
+		"XDG_DATA_HOME": home,
+	}, io.Discard, stderr)
+
+	// Assert
+	if exitCode != 1 {
+		t.Fatalf("backup exited %d, want 1", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "MERCATOR_SQLITE_DSN is required") {
+		t.Fatalf("backup said %q, want the variable it will not guess named", stderr.String())
+	}
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("backup wrote %s from a database nobody named", destination)
+	}
+}
+
+// TestABackupIsTakenFromADatabaseNamedRelatively is the deployment whose DSN
+// names its database from the directory the server runs in, which serves
+// normally and used to be the one deployment that could not be backed up.
+//
+// The source is handed to SQLite as a URI, and a relative path rendered into
+// one carries its first segment as an authority: `MERCATOR_SQLITE_DSN=file:
+// mercator.db mercator backup latest.db` failed with "invalid uri authority:
+// mercator.db?mode=ro", naming a string the operator never typed.
+func TestABackupIsTakenFromADatabaseNamedRelatively(t *testing.T) {
+	// Arrange: a serving deployment whose database is named relatively.
+	directory := t.TempDir()
+	t.Chdir(directory)
+	live := serveDatabase(t, "file:mercator.db", hex.EncodeToString(retiredMasterKey))
+	requested := live.createRun(t, "relative-dsn-drill")
+	live.stop()
+
+	// Act
+	stderr := &bytes.Buffer{}
+	exitCode := run(context.Background(), []string{"mercator", "backup", "latest.db"}, map[string]string{
+		"MERCATOR_SQLITE_DSN": "file:mercator.db",
+	}, io.Discard, stderr)
+	if exitCode != 0 {
+		t.Fatalf("backup exited %d: %s", exitCode, stderr.String())
+	}
+
+	// Assert: what it wrote is a database a control plane serves the Run from,
+	// which is the only statement worth making about a copy.
+	restored := serveDatabase(t, "file:"+filepath.Join(directory, "latest.db"), hex.EncodeToString(retiredMasterKey))
+	if runs := restored.runIDs(t); len(runs) != 1 || runs[0] != requested {
+		t.Fatalf("the restored control plane lists Runs %v, want [%s]", runs, requested)
+	}
+}
+
+// TestBackupRefusesADatabaseThatIsNotThere is the shell that carries a DSN
+// naming a database that is not there. Left alone, that backup would create an
+// empty database, copy the nothing in it and exit 0, and the operator would be
+// holding a file that restores into a control plane with no history.
 func TestBackupRefusesADatabaseThatIsNotThere(t *testing.T) {
 	// Arrange
 	absent := filepath.Join(t.TempDir(), "not-the-servers.db")

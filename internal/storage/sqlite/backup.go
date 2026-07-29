@@ -30,39 +30,101 @@ import (
 // process taking a copy of a live server's database has no business writing to
 // it.
 //
-// It answers with the destination it wrote rather than the one it was handed,
-// because it resolves that to an absolute path first, and the operator has to
-// be told the file they can actually restore. Two things resolve this path:
-// this process, which takes the file with O_EXCL, and SQLite, which writes the
-// copy into it. They agree on an absolute path and disagree on others, because
-// SQLite reads a destination beginning with "file:" as a URI. `mercator backup
-// file:latest.db` used to claim a file literally named "file:latest.db" and
-// write the copy over "latest.db", destroying whatever was there and creating
-// the copy against the umask, with both of the claim's guarantees bypassed at
-// once and nothing said about either.
+// Both paths are resolved to absolute ones before anything opens them, because
+// this process and SQLite both read them and they agree only on that form.
+// SQLite takes a destination beginning with "file:" as a URI, so `mercator
+// backup file:latest.db` used to write the copy over "latest.db" while claiming
+// an empty file literally named "file:latest.db", destroying whatever the real
+// path held and reporting the wrong file as the backup. The source is read by
+// SQLite alone, through the URI below, which renders a relative path with an
+// authority: a deployment served with MERCATOR_SQLITE_DSN=file:mercator.db,
+// which starts and serves normally, was refused every backup with "invalid uri
+// authority: mercator.db".
 func BackupDatabase(ctx context.Context, source, destination string) (string, error) {
+	from, err := filepath.Abs(source)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", source, err)
+	}
 	path, err := filepath.Abs(destination)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s: %w", destination, err)
 	}
-	if err := claimDestination(path); err != nil {
+	if err := refuseWhatIsAlreadyThere(path); err != nil {
 		return "", err
 	}
-	if err := copyDatabaseInto(ctx, source, path); err != nil {
-		// The empty file the claim above took the destination with is not a
-		// backup, and leaving it there refuses every later attempt at this path
-		// with a message that reads as "an earlier backup is already there". It
-		// is safe to remove only because the claim proved the path was free:
-		// this can never be deleting a copy somebody else put there.
-		_ = os.Remove(path)
+	partial, err := takePartialFile(path)
+	if err != nil {
 		return "", err
+	}
+	defer func() { _ = os.Remove(partial) }()
+	if err := copyDatabaseInto(ctx, from, partial); err != nil {
+		return "", err
+	}
+	// The link is the guarantee at the destination. It creates the name in one
+	// step and refuses a name that is taken, so the path the operator gave holds
+	// a finished copy or holds nothing at all, and the copy carries the mode the
+	// partial file was created with.
+	if err := os.Link(partial, path); err != nil {
+		return "", fmt.Errorf("take %s for the backup: %w", path, err)
 	}
 	return path, nil
 }
 
-// copyDatabaseInto holds every step that can fail once the destination has been
-// claimed, so that the one removal above covers all of them rather than the
-// last of them.
+// takePartialFile creates the file the copy is written into: a sibling of the
+// destination, empty, mode 0600, with a name no other run of this command uses.
+//
+// The copy is assembled here rather than at the destination because a backup is
+// ended by things no process can catch. A `timeout` in a cron entry, a systemd
+// TimeoutStopSec, an operator's Ctrl-C or an OOM kill stops this one where it
+// stands, and the destination used to be a file this command had already
+// claimed and was writing into. What that left at the backup path was a large
+// partial file, unopenable because SQLite writes page 1 last, and every later
+// backup at the same path was then refused for good with "file exists".
+// Measured on this host: SIGTERM 0.35 seconds into copying a 2.3GB database
+// left 923160576 bytes at the destination. A deployment writing to a fixed path
+// stops backing up while looking, by file size, like it is backing up
+// correctly.
+//
+// The name is unique per run rather than a fixed "<destination>.partial",
+// because a fixed name has to be cleared before it can be taken and clearing it
+// would delete the file a concurrent backup to the same destination is writing
+// into. What a killed run leaves behind is one of these beside the destination,
+// with SQLite's own journal beside it: they hold nothing a restore can use, and
+// they block nothing.
+//
+// The mode is the other reason the file is created here. A backup holds every
+// event and the sealed bytes of every stored provider credential, and SQLite
+// would create it against the process umask.
+func takePartialFile(path string) (string, error) {
+	partial, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".partial-*")
+	if err != nil {
+		return "", fmt.Errorf("take a partial file beside %s: %w", path, err)
+	}
+	defer func() { _ = partial.Close() }()
+	return partial.Name(), nil
+}
+
+// refuseWhatIsAlreadyThere answers the destination question before the database
+// is read rather than after it. The link in BackupDatabase is what enforces the
+// refusal, and it enforces it on a copy that has already been written in full:
+// a nightly job pointed at yesterday's file would read and write the whole
+// database, which is as large as the deployment's history, before being told
+// the name was taken.
+//
+// SQLite's own guard is not something to lean on here. VACUUM INTO refuses a
+// destination it can read as a database, which covers overwriting yesterday's
+// backup, but one too short to be a database it overwrites without a word, and
+// a copy a full disk truncated is exactly the file an operator is most likely
+// to be retrying over.
+func refuseWhatIsAlreadyThere(path string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("take %s for the backup: file exists", path)
+	}
+	return nil
+}
+
+// copyDatabaseInto reads the source and writes the copy. Every step of it can
+// fail, and the partial file is removed whichever one does.
 func copyDatabaseInto(ctx context.Context, source, path string) error {
 	db, err := sql.Open("sqlite", readOnlyDSN(source))
 	if err != nil {
@@ -99,30 +161,9 @@ func copyDatabaseInto(ctx context.Context, source, path string) error {
 //
 // The path is escaped into the URI rather than concatenated onto "file:",
 // because a directory named with a question mark would otherwise be read as the
-// start of a query and the copy taken of a database nobody named.
+// start of a query and the copy taken of a database nobody named. It takes an
+// absolute path: this form renders a relative one as "file://mercator.db",
+// whose first segment SQLite reads as a URI authority and refuses.
 func readOnlyDSN(source string) string {
 	return (&url.URL{Scheme: "file", Path: source, RawQuery: "mode=ro"}).String()
-}
-
-// claimDestination creates the file the copy is about to be written into, and
-// fails if anything is already there.
-//
-// SQLite's own guard is not enough on its own. VACUUM INTO refuses a destination
-// that is a database, which covers overwriting yesterday's backup, but a
-// destination that exists and is shorter than a page header is silently
-// overwritten: a copy that was truncated by a full disk is exactly the file an
-// operator is most likely to be retrying over, and losing it without a word is
-// the one outcome a backup command must not have. O_EXCL states the intent for
-// every kind of file and closes the gap between asking whether the path is free
-// and taking it.
-//
-// The mode is the other reason to create the file here. A backup holds every
-// event and the sealed bytes of every stored provider credential, and SQLite
-// would create it against the process umask.
-func claimDestination(path string) error {
-	claimed, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("take %s for the backup: %w", path, err)
-	}
-	return claimed.Close()
 }

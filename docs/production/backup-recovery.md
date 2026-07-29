@@ -46,32 +46,50 @@ mercator backup "/var/backups/mercator/mercator-$(date -u +%Y%m%dT%H%M%SZ).db"
 This is SQLite's own `VACUUM INTO`, taken inside one read transaction, so the
 copy is the database as of a single instant even while the control plane is
 writing to it. The result is one self-contained file: no `-wal` or `-shm` file
-travels with it, and there is nothing to copy "together". Point the command at
-the DSN the server runs with, since it copies that database and no other. The
-copy is created mode `0600`, because it holds every event and the sealed bytes
-of every stored provider credential.
+travels with it, and there is nothing to copy "together". `MERCATOR_SQLITE_DSN`
+is required for this command, and it must name the database the server serves,
+since the command copies that database and no other. The copy is created mode
+`0600`, because it holds every event and the sealed bytes of every stored
+provider credential.
 
-Two ways it refuses rather than producing a copy you cannot use:
+Three ways it refuses rather than producing a copy you cannot use:
 
 ```text
+backup: MERCATOR_SQLITE_DSN is required and must name the database the server
+        serves; backup will not fall back to a default path, because a copy of
+        the wrong database also exits 0
+
 backup: /var/lib/mercator/mercator.db does not exist, and a backup of a database
         this command created would restore into a control plane with no history;
         export the MERCATOR_SQLITE_DSN the server runs with
 
-backup: take /var/backups/mercator/yesterday.db for the backup: open
-        /var/backups/mercator/yesterday.db: file exists
+backup: take /var/backups/mercator/yesterday.db for the backup: file exists
 ```
 
-The first is the shell that does not carry the server's DSN. Left to run, it
-would create an empty database, copy the nothing in it, and exit 0. The second
-is a destination that is already there. Mercator takes the destination itself
-rather than leaving that to SQLite, which refuses a file it can read as a
+The first is the cron entry that does not inherit the unit's environment. `serve`
+resolves an unset `MERCATOR_SQLITE_DSN` to a per-user data directory and creates
+it, so a backup that did the same would copy whatever database a `mercator serve`
+on this host once left in the invoking account's home directory, write a file the
+size of a real backup, and exit 0. Put the variable in the cron entry itself.
+
+The second is a DSN naming a database that is not there. Left to run, that backup
+would create an empty database, copy the nothing in it, and exit 0.
+
+The third is a destination that is already there. Mercator takes the destination
+itself rather than leaving that to SQLite, which refuses a file it can read as a
 database but silently overwrites one too short to be one: a copy a full disk
 truncated is exactly the path an operator retries over, and losing it without a
 word is the outcome a backup command must not have. Name a new path per backup,
-and prune old ones yourself. A backup that fails for any other reason leaves no
-file behind, so `file exists` always means what it says and a retry at the same
-path is taken.
+and prune old ones yourself.
+
+A backup that is interrupted leaves the destination free. The copy is assembled
+in a file named `<destination>.partial-NNNNNNNNNN` beside the destination and
+linked into place only once it is complete, so a `timeout` in the cron entry, a
+systemd stop, Ctrl-C or an OOM kill leaves that partial file, and SQLite's
+`-journal` beside it, with the destination path still free for the retry.
+Delete files matching `*.partial-*` in the backup directory; nothing prunes
+them, and none of them is a backup. `file exists` therefore always means a file
+is really there.
 
 The destination is a filesystem path, taken literally and resolved to an
 absolute one. It is not a SQLite URI: `mercator backup file:latest.db` writes a
