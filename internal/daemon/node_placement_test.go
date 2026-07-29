@@ -66,6 +66,39 @@ const (
 // provisioned, because the node held the host runtime open between them. On the
 // second Run, Placement records that it reused the Rental rather than creating
 // one.
+// TestInvitingAnIdentityTwiceNamesTheCollisionThroughTheProductionStack is the
+// question provisioning asks on every attempt, put to the deployment rather than
+// to a store double: real SQLite, the real registry, and the real HTTP API.
+//
+// Nothing could know the answer before. The durable store wrapped its driver's
+// constraint failure verbatim, so an identity that already exists came back as
+// an opaque failure and `bootstrapFor` never reached `Reinvite` in any
+// deployment that stores its fleet. A second attempt for a lease failed at the
+// invitation, no capacity was ever recorded as accepted, and the machine an
+// earlier attempt rented billed on with nothing that would come for it.
+//
+// The in-memory store answered correctly the whole time, which is why every test
+// above this one passed.
+func TestInvitingAnIdentityTwiceNamesTheCollisionThroughTheProductionStack(t *testing.T) {
+	fleet := startFleet(t)
+	taken := fleet.invite(t, 2.5)
+
+	var refusal struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	fleet.call(t, http.MethodPost, "/v1/nodes", map[string]any{
+		"workspace_id":              daemon.DefaultWorkspaceID,
+		"node_id":                   taken.NodeID,
+		"rental_id":                 taken.RentalID,
+		"shadow_price_usd_per_hour": 2.5,
+	}, &refusal, http.StatusConflict)
+
+	if refusal.Code != "NODE_EXISTS" {
+		t.Fatalf("inviting %q twice = %q, want the collision named", taken.NodeID, refusal.Code)
+	}
+}
+
 func TestOneEnrolledNodeRunsTwoWorkloadsInSequence(t *testing.T) {
 	fleet := startFleet(t)
 
