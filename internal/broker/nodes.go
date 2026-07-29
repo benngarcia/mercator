@@ -152,13 +152,18 @@ func (b *Broker) prepareOnNode(ctx context.Context, request adapter.PrepareReque
 	if err != nil {
 		return capability.OperationReceipt{}, err
 	}
-	operationID := "prepare:" + string(item.Kind) + ":" + item.OfferSnapshotID + ":" + item.Content()
+	operationID := item.Operation()
 	if item.Kind == adapter.PrepareArtifact {
 		command := capability.PrepareArtifactCommand{
 			ArtifactID:    item.ArtifactID,
 			ContentDigest: item.ContentDigest,
 			Source:        item.Source,
-			SizeBytes:     item.SizeBytes,
+			// The read the control plane minted of that location, carried through
+			// as minted. The Broker holds no account of its own and narrows
+			// nothing: what it does here is deliver material to the one machine it
+			// was minted for.
+			SourceCredential: item.SourceCredential,
+			SizeBytes:        item.SizeBytes,
 		}
 		command.NodeRef = ref
 		command.OperationID = operationID
@@ -170,7 +175,10 @@ func (b *Broker) prepareOnNode(ctx context.Context, request adapter.PrepareReque
 		ManifestDigest: domain.ReferenceDigest(item.Image),
 		Platform:       item.Platform,
 		Reference:      item.Image,
-		Unpack:         true,
+		// What this machine may present for this one pull, zero for an image
+		// anonymous readers can have.
+		RegistryCredential: item.RegistryCredential,
+		Unpack:             true,
 	}
 	command.NodeRef = ref
 	command.OperationID = operationID

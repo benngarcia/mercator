@@ -52,15 +52,25 @@ type PrepareItem struct {
 	// digest below is content Mercator can name rather than a hope.
 	Image    string
 	Platform domain.Platform
+	// RegistryCredential is the pull the control plane minted for this one
+	// machine and this one image. It is zero for content any anonymous reader
+	// can have, and it is the only reason a private image is fetchable at all:
+	// the account behind it never leaves Mercator.
+	RegistryCredential domain.RegistryPull
 	// ArtifactID and ContentDigest are the version to replicate and what its
 	// bytes must hash to. A copy that does not match the catalog digest is
 	// worth exactly what no copy is worth.
 	ArtifactID    string
 	ContentDigest string
-	// Source is where the durable copy is read from. The control plane mints
-	// it, so no object-store credential of Mercator's ever lands on a machine.
-	Source    string
-	SizeBytes int64
+	// Source is the durable location the catalog names this version by. It is
+	// provenance rather than access: it is what the ledger records, and nothing
+	// can be read with it.
+	Source string
+	// SourceCredential is the read the control plane minted of that location,
+	// for this machine and this fetch. It is a bearer credential written as a
+	// URL, so it expires and it is never written down.
+	SourceCredential domain.ArtifactRead
+	SizeBytes        int64
 }
 
 // Content is what this item names, in the vocabulary the holder reports. It is
@@ -76,6 +86,15 @@ func (item PrepareItem) Content() string {
 		return domain.ReferenceDigest(item.Image)
 	}
 	return item.ArtifactID
+}
+
+// Operation is the node command this item becomes, named once so that everything
+// that has to agree about it does. The control plane mints a credential for one
+// operation and the machine checks the material against the operation it was
+// sent, so two spellings of this string would make every minted credential
+// refused on arrival.
+func (item PrepareItem) Operation() string {
+	return "prepare:" + string(item.Kind) + ":" + item.OfferSnapshotID + ":" + item.Content()
 }
 
 // Identity is one item of a desired set: the machine and the content together.

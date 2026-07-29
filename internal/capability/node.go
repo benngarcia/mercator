@@ -301,7 +301,11 @@ type PrepareImageCommand struct {
 	Reference string
 	// RegistryCredential is short-lived material scoped to this pull. It is
 	// never logged, never persisted on the node, and never enters an event.
-	RegistryCredential string
+	//
+	// It is zero for an image any anonymous reader can have, which is a real
+	// answer rather than a missing one: Mercator holds no account at that
+	// registry and the node presents none.
+	RegistryCredential domain.RegistryPull
 	// Unpack requests the image be made ready to run, not merely fetched.
 	Unpack bool
 }
@@ -310,10 +314,15 @@ type PrepareArtifactCommand struct {
 	nodeCommand
 	ArtifactID    string
 	ContentDigest string
-	// Source is the durable object-store location to replicate from.
+	// Source is the durable object-store location this version lives at. It is
+	// the catalog's own name for the content, which is what makes it safe to
+	// write down: nothing can be read with it.
 	Source string
-	// SourceCredential is short-lived material scoped to this fetch.
-	SourceCredential string
+	// SourceCredential is the read the control plane minted for this one fetch,
+	// which is what the node actually streams from. A node with none has no way
+	// to reach the object store at all, which is deliberate: the durable
+	// authority's own credential is never on a machine an operator rents.
+	SourceCredential domain.ArtifactRead
 	SizeBytes        int64
 }
 

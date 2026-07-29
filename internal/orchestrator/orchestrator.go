@@ -131,6 +131,10 @@ type Orchestrator struct {
 	prewarmPolicy    PrewarmPolicy
 	prewarmed        prewarmMemory
 	preparationClock PreparationClock
+	// contentCredentials is what Mercator hands a machine so it can fetch one
+	// piece of content. Nil is a Mercator that mints nothing, and every fetch its
+	// nodes make is anonymous.
+	contentCredentials ContentCredentials
 	// capacity is the machine lease, and inviter the node registry a fresh
 	// machine is invited through. They are separate from adapter because a lease
 	// is not an execution: see Capacity.

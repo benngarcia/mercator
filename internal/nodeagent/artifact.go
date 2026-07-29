@@ -62,15 +62,24 @@ func (file artifactReplicaFile) replica() domain.ArtifactReplica {
 }
 
 // PrepareArtifact replicates one immutable version onto this machine. It reads
-// from the location the command names and nowhere else: the control plane owns
-// the object store and mints the read, so a node holds no credential for it and
-// a compromised machine can fetch exactly the content it was told to.
+// through the location the control plane minted for this one fetch and nowhere
+// else: the object store's own key stays in the control plane, so a node holds no
+// standing read of anything and a compromised machine can fetch exactly the
+// content it was told to, until the read expires.
+//
+// A command with no minted read is refused rather than attempted. The durable
+// location the catalog states is a name for content, and a node that went to the
+// network with it would fail in the object store's vocabulary instead of in
+// Mercator's, which is an operator reading a 404 for a missing configuration.
 func (docker *DockerRuntime) PrepareArtifact(ctx context.Context, command capability.PrepareArtifactCommand) error {
 	if docker.artifactRoot == "" {
 		return fmt.Errorf("%w: this node has nowhere to keep Artifact copies", capability.ErrCapabilityUnsupported)
 	}
-	if command.ArtifactID == "" || command.Source == "" || command.ContentDigest == "" {
+	if command.ArtifactID == "" || command.ContentDigest == "" {
 		return fmt.Errorf("prepare Artifact: a replica needs a version, a source, and the digest to check it against")
+	}
+	if err := docker.authorisedRead(command); err != nil {
+		return fmt.Errorf("read Artifact %s: %w", command.ArtifactID, err)
 	}
 	directory := docker.artifactDirectory(command.WorkspaceID)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -90,12 +99,27 @@ func (docker *DockerRuntime) PrepareArtifact(ctx context.Context, command capabi
 	})
 }
 
+// authorisedRead is the machine checking the read it was handed before it
+// spends it. The scope names the operation this fetch is, the workspace the
+// content belongs to, and the version itself, and a read that names any other is
+// material this command was not the one for.
+func (docker *DockerRuntime) authorisedRead(command capability.PrepareArtifactCommand) error {
+	read := command.SourceCredential
+	if read.Location == "" {
+		return fmt.Errorf(
+			"this node was handed no read of %q, and the durable location the catalog names is not one",
+			command.Source,
+		)
+	}
+	return read.Authorises(command.OperationID, command.WorkspaceID, command.ArtifactID, docker.now().UTC())
+}
+
 // fetchArtifact streams the content to a temporary file and hashes it as it
 // goes, then puts it in place. Hashing the stream is what makes one read do both
 // jobs; landing it under its final name only once complete is what stops an
 // interrupted fetch from being reported as a copy.
 func (docker *DockerRuntime) fetchArtifact(ctx context.Context, command capability.PrepareArtifactCommand, path string) (string, int64, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, command.Source, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, command.SourceCredential.Location, nil)
 	if err != nil {
 		return "", 0, fmt.Errorf("prepare Artifact %s: %w", command.ArtifactID, err)
 	}

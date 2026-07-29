@@ -1045,6 +1045,21 @@ func ReferenceDigest(reference string) string {
 	return digest
 }
 
+// ReferenceRegistry is the host an image reference is served from, by the rule
+// the container ecosystem uses: the first path component is a host when it looks
+// like one, and is a Docker Hub namespace otherwise. It is what says whether a
+// credential minted for one registry is being carried to another.
+func ReferenceRegistry(reference string) string {
+	head, _, found := strings.Cut(reference, "/")
+	if !found {
+		return "docker.io"
+	}
+	if head == "localhost" || strings.ContainsAny(head, ".:") {
+		return head
+	}
+	return "docker.io"
+}
+
 // pinnedImagePattern is a reference that names content instead of a moving
 // label: a repository, and a digest of the length a digest has.
 var pinnedImagePattern = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
