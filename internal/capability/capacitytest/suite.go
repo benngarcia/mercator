@@ -291,10 +291,13 @@ func aCredentialCheckAllocatesNothing(ctx context.Context, subject Subject) erro
 // the second answer says so.
 func oneProvisionCommandProducesOneMachine(ctx context.Context, subject Subject) (err error) {
 	command, first, err := subject.rent(ctx, "idempotent")
+	// The machine comes back before the promise is reported, and the defer is
+	// registered before the renting is judged: a receipt this suite refuses is
+	// still a machine somebody is billed for.
+	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, first.NativeRef)) }()
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, first.NativeRef)) }()
 
 	if first.Duplicate {
 		return fmt.Errorf("the first provision of Rental %q reported a duplicate of nothing", command.RentalID)
@@ -327,10 +330,13 @@ func oneProvisionCommandProducesOneMachine(ctx context.Context, subject Subject)
 // connection owns rather than sending the command again.
 func aLostAnswerCostsNoSecondMachine(ctx context.Context, subject Subject) (err error) {
 	command, receipt, err := subject.rent(ctx, "lost-answer")
+	// The machine comes back before the promise is reported, and the defer is
+	// registered before the renting is judged: a receipt this suite refuses is
+	// still a machine somebody is billed for.
+	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef)) }()
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef)) }()
 
 	support := subject.Provider.CapacitySupport()
 	if !support.ListOwned {
@@ -378,10 +384,13 @@ func aLostAnswerCostsNoSecondMachine(ctx context.Context, subject Subject) (err 
 // destroyed.
 func terminateIsConfirmedAndStaysConfirmed(ctx context.Context, subject Subject) (err error) {
 	command, receipt, err := subject.rent(ctx, "terminate")
+	// The machine comes back before the promise is reported, and the defer is
+	// registered before the renting is judged: a receipt this suite refuses is
+	// still a machine somebody is billed for.
+	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef)) }()
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef)) }()
 
 	destroy := mutate(command, receipt.NativeRef, capability.CapacityTerminate)
 	confirmed, err := subject.Provider.TerminateCapacity(ctx, destroy)
@@ -436,10 +445,13 @@ func observationAfterTerminate(ctx context.Context, subject Subject, command cap
 // went on billing while the control plane recorded it as stopped.
 func anOperationTheProviderNeverPromisedIsRefused(ctx context.Context, subject Subject) (err error) {
 	command, receipt, err := subject.rent(ctx, "negotiated")
+	// The machine comes back before the promise is reported, and the defer is
+	// registered before the renting is judged: a receipt this suite refuses is
+	// still a machine somebody is billed for.
+	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef)) }()
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef)) }()
 
 	support := subject.Provider.CapacitySupport()
 	for _, act := range []struct {
@@ -488,7 +500,7 @@ func aTrialLeavesNothingOwned(ctx context.Context, subject Subject) (err error) 
 	}
 	command, receipt, err := subject.rent(ctx, "sweep")
 	if err != nil {
-		return err
+		return errors.Join(err, subject.giveBack(ctx, command, receipt.NativeRef))
 	}
 	if err := subject.giveBack(ctx, command, receipt.NativeRef); err != nil {
 		return err

@@ -6212,6 +6212,15 @@ shadeform, the owned listing keeps instances that are deleting:
   a_trial_leaves_nothing_owned: still holds 5 machines
 ```
 
+A defect in the suite itself was found by writing that stub. Every promise gave
+its machine back in a `defer`, and the `defer` was registered after the receipt
+was judged, so a provider that allocated a machine and then answered about it in
+a way the contract refuses kept the machine and the bill. It is fixed by
+registering the return before the judgement, and
+`TestAReceiptTheSuiteRefusesStillCostsNoMachine` is the standing case: a stub
+that dates no allocation, every promise run, and nothing owned afterwards. With
+the old ordering it reports one machine left behind.
+
 One break was absorbed, and it is worth writing down. Removing Shadeform's
 pre-scan before create leaves the suite green, because `reconcileDuplicates`
 still keeps the oldest instance carrying the lease's tag and destroys the rest:

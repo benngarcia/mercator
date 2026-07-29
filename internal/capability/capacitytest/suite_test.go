@@ -100,6 +100,33 @@ func TestAPromiseOutOfReachOfTheNegotiatedSetIsNotReportedKept(t *testing.T) {
 	}
 }
 
+// TestAReceiptTheSuiteRefusesStillCostsNoMachine is the suite's own hygiene. A
+// provider can allocate a machine and then answer about it in a way the contract
+// refuses, and the machine exists either way: a suite that gave back only the
+// machines whose receipts it liked would bill for its own strictness.
+func TestAReceiptTheSuiteRefusesStillCostsNoMachine(t *testing.T) {
+	provider := newStub(flawAcceptsAMachineAtNoMoment)
+	subject := subjectFor(t, provider)
+
+	refused := 0
+	for _, promise := range capacitytest.Promises() {
+		if err := promise.Keep(t.Context(), subject); err != nil {
+			refused++
+		}
+	}
+
+	if refused == 0 {
+		t.Fatal("a provider that dates no allocation broke no promise, so nothing here was ever refused")
+	}
+	owned, err := provider.ListOwnedCapacity(t.Context(), capability.OwnershipQuery{WorkspaceID: subject.Lease.WorkspaceID})
+	if err != nil {
+		t.Fatalf("list what the provider still owns: %v", err)
+	}
+	if len(owned) != 0 {
+		t.Fatalf("the suite refused every receipt and left %d machines behind: %+v", len(owned), owned)
+	}
+}
+
 // TestASubjectMissingWhatEveryMachineIsRentedUnderIsRefused keeps the suite from
 // renting anything against half an identity. A trial that provisioned without a
 // workspace or a reclamation backstop would leave machines nothing could find.
@@ -152,6 +179,7 @@ const (
 	flawObservesADestroyedMachineAsActive flaw = "observes a destroyed machine as active"
 	flawStopsWithoutPromisingTo           flaw = "stops without promising to"
 	flawGoesOnOwningWhatItDestroyed       flaw = "goes on owning what it destroyed"
+	flawAcceptsAMachineAtNoMoment         flaw = "accepts a machine at no moment"
 	listsNothingItOwns                    flaw = "lists nothing it owns"
 )
 
@@ -247,11 +275,15 @@ func (s *stub) ProvisionCapacity(_ context.Context, command capability.Provision
 		held.ownershipToken = ""
 	}
 	s.machines[command.RentalID] = held
-	return capability.CapacityReceipt{
+	receipt := capability.CapacityReceipt{
 		NativeRef:  held.nativeRef,
 		State:      capability.CapacityStateStarting,
 		AcceptedAt: stubMoment,
-	}, nil
+	}
+	if s.flaws[flawAcceptsAMachineAtNoMoment] {
+		receipt.AcceptedAt = time.Time{}
+	}
+	return receipt, nil
 }
 
 func (s *stub) ObserveCapacity(_ context.Context, held capability.CapacityRef) (capability.CapacityObservation, error) {
