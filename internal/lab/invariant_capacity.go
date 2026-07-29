@@ -115,6 +115,40 @@ func settledCapacity(effects []EffectRecord) (map[string]bool, error) {
 	return settled, nil
 }
 
+// aMachineHoldsMaterialTheControlPlaneWillStillAccept is the rule that keeps a
+// machine Mercator paid for able to join the fleet it was rented for.
+//
+// A machine is handed its invitation once, in the bootstrap that goes onto it
+// when it is created, and it holds nothing else. So an invitation the control
+// plane replaces after it has reached a machine is that machine locked out: it
+// presents material the registry no longer names, it is refused, and there is no
+// second thing for it to try. Nothing about the machine looks wrong from the
+// provider's side, so the whole of the enrolment patience is spent before
+// anything notices, and the bill runs the entire time.
+//
+// Provisioning is what walks into it. The bootstrap is minted before the
+// provider answers, because nothing can know whether an earlier attempt already
+// landed a machine until it does, and an attempt that adopts or reconciles onto
+// an earlier machine then hands the Run a host carrying the earlier invitation.
+// So an identity asked for again has to answer with what is already out there.
+//
+// A credential nobody has redeemed is not the violation. That is every machine
+// still booting. The violation is one that reached a machine, was never
+// redeemed, and has been superseded, which is the state that can no longer end
+// in an enrolment.
+func aMachineHoldsMaterialTheControlPlaneWillStillAccept(observation InvariantObservation) error {
+	for _, credential := range observation.BootstrapCredentials {
+		if credential.Provisions == 0 || credential.Redemptions > 0 || !credential.Superseded {
+			continue
+		}
+		return fmt.Errorf(
+			"the invitation for %s generation %d went onto a machine and was then replaced before that machine redeemed it, so the host Mercator is paying for can enrol nowhere",
+			credential.NodeID, credential.Generation,
+		)
+	}
+	return nil
+}
+
 // enrolmentNamesTheGenerationItWasInvitedFor holds the one property that keeps a
 // Node bound to a single Rental generation: an agent that opened a session on a
 // machine a provider allocated enrolled under the generation that machine was

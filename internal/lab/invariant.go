@@ -147,6 +147,10 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.host_supports_the_image_it_was_given", check: hostSupportsTheImageItWasGiven},
 		invariantRule{id: "safety.a_rental_identity_is_capacity_mercator_holds", check: aRentalIdentityIsCapacityMercatorHolds},
 		invariantRule{id: "safety.enrolment_names_the_generation_it_was_invited_for", check: enrolmentNamesTheGenerationItWasInvitedFor},
+		invariantRule{
+			id:    "safety.a_machine_holds_material_the_control_plane_will_still_accept",
+			check: aMachineHoldsMaterialTheControlPlaneWillStillAccept,
+		},
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
 		invariantRule{id: "safety.transfer_rate_is_attributed", check: transferRateIsAttributed},
 		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},
@@ -2808,16 +2812,47 @@ func lostResponseReconciliation(observation InvariantObservation) error {
 	for _, execution := range observation.World.ActiveExecutions {
 		active[execution.RunID] = true
 	}
+	// A capacity effect is correlated by the lease rather than by the Run, because
+	// the lease is what outlives the decision that took it out. What reconciles a
+	// lost provision is therefore a later answer about that same lease: the
+	// duplicate the repeat got, or the terminate that gave the machine back.
+	settledLease, err := settledLeases(observation.Effects)
+	if err != nil {
+		return err
+	}
 	for _, effect := range observation.Effects {
 		if effect.Response != EffectResponseLost {
 			continue
 		}
 		run := runs[effect.CorrelationID]
-		if !active[effect.CorrelationID] && run.ID == "" {
-			return fmt.Errorf("lost response for %q has neither active consequence nor projected Run", effect.CorrelationID)
+		if active[effect.CorrelationID] || run.ID != "" || settledLease[effect.CorrelationID] {
+			continue
 		}
+		return fmt.Errorf("lost response for %q has neither active consequence nor projected Run", effect.CorrelationID)
 	}
 	return nil
+}
+
+// settledLeases is every lease the world has answered about since, whether by
+// naming the machine an earlier command allocated or by ending it.
+func settledLeases(effects []EffectRecord) (map[string]bool, error) {
+	settled := map[string]bool{}
+	for _, effect := range effects {
+		if effect.Response == EffectResponseLost || effect.Command == EffectCommandRejected {
+			continue
+		}
+		switch effect.Operation {
+		case OperationCapacityProvision, OperationCapacityTerminate:
+		default:
+			continue
+		}
+		lease, err := capacityLeaseOf(effect)
+		if err != nil {
+			return nil, err
+		}
+		settled[lease.RentalID] = true
+	}
+	return settled, nil
 }
 
 func staleLeaseExpiry(observation InvariantObservation) error {

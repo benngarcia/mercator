@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -65,6 +66,63 @@ func TestProvisionedCapacityBecomesAMachineMercatorHolds(t *testing.T) {
 	for _, effect := range ledger {
 		if effect.Operation == OperationCapacityTerminate {
 			t.Fatalf("the machine was destroyed by %s, and its agent arrived", effect.ID)
+		}
+	}
+}
+
+// TestALostProvisionAnswerCostsOneRepeatAndNotTheMachine drives the state a
+// provider honouring no idempotency key really leaves behind: the create landed,
+// the answer never came back, and nothing Mercator can ask names the machine
+// that is already billing.
+//
+// Two things have to follow and the second is the one nothing used to hold. One
+// machine, because asking again under the lease finds what is there rather than
+// renting a second host beside it. And that machine has to be able to enrol.
+//
+// It holds one invitation, written into the bootstrap when it was created, and
+// there is no way to tell it anything else: Mercator opens no connection to a
+// rented machine. Provisioning asks for that material before the provider
+// answers, because until it answers nothing knows whether an earlier attempt
+// landed a host, so the repeat asks the registry for the identity again. If the
+// registry mints a fresh invitation there, the adopted machine is holding one the
+// registry no longer names, is refused when it presents it, and has nothing else
+// to try. Everything else looks healthy: the provider says the machine is up, the
+// ledger says the allocation was accepted, and the only symptom is silence where
+// the agent should be, for the whole of the enrolment patience, on a bill.
+func TestALostProvisionAnswerCostsOneRepeatAndNotTheMachine(t *testing.T) {
+	execution := openConformanceExecution(t, "a-lost-provision-answer-costs-one-repeat-and-not-the-machine")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	driveFor(t, execution, 12*time.Minute)
+
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("the execution violates a standing rule: %v", err)
+	}
+	ledger := execution.runtime.world.effectRecords()
+	if machines := len(execution.runtime.world.leases); machines != 1 {
+		t.Fatalf("the world rented %d machines, and one lost answer must cost one repeat rather than one extra host", machines)
+	}
+	if !slices.ContainsFunc(ledger, func(effect EffectRecord) bool {
+		return effect.Operation == OperationCapacityProvision && effect.Response == EffectResponseLost
+	}) {
+		t.Fatal("the ledger holds no lost provision, so this case is not exercising the world it is about")
+	}
+	provisioned := firstAcceptedCapacityEntry(t, ledger, OperationCapacityProvision)
+	enrolled := firstAcceptedCapacityEntry(t, ledger, OperationNodeEnrolled)
+	if enrolled.lease != provisioned.lease {
+		t.Fatalf("the agent enrolled under Rental %q generation %d and the machine was allocated for Rental %q generation %d",
+			enrolled.lease.RentalID, enrolled.lease.Generation, provisioned.lease.RentalID, provisioned.lease.Generation)
+	}
+	if _, launched := firstLaunchSequence(ledger); !launched {
+		t.Fatal("nothing was ever launched on the adopted machine, and a machine nothing can execute on is one nobody should be paying for")
+	}
+	for _, effect := range ledger {
+		if effect.Operation == OperationCapacityTerminate {
+			t.Fatalf("the machine was handed back by %s, and its agent arrived", effect.ID)
 		}
 	}
 }

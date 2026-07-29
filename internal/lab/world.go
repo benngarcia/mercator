@@ -571,8 +571,12 @@ type simulatedWorld struct {
 
 	operations  map[string]worldOperation
 	launchCount map[string]int
-	faults      []scenario.FaultSpec
-	usedFaults  map[string]bool
+	// provisionCount is how many times this world has been asked for a machine for
+	// each lease, which is what a fault targeting one attempt of a provision is
+	// numbered against.
+	provisionCount map[string]int
+	faults         []scenario.FaultSpec
+	usedFaults     map[string]bool
 
 	// handedOver is every credential this world watched Mercator give a machine
 	// so it could fetch one piece of content, in the order they arrived. It is
@@ -610,6 +614,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		seededOrphans:      map[string]bool{},
 		operations:         map[string]worldOperation{},
 		launchCount:        map[string]int{},
+		provisionCount:     map[string]int{},
 		faults:             slices.Clone(tape.Faults),
 		usedFaults:         map[string]bool{},
 		leases:             map[string]*capacityLease{},

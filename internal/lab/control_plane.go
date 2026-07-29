@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
@@ -363,7 +364,7 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 		return fmt.Errorf("create Lab Run %q: %w", arrival.Name, err)
 	}
 	if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil {
-		if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		if !indeterminate(err) {
 			return fmt.Errorf("advance Lab Run %q: %w", arrival.Name, err)
 		}
 		if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil {
@@ -371,6 +372,14 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 		}
 	}
 	return nil
+}
+
+// indeterminate is an external command whose outcome nobody knows: the launch or
+// the provision reached the world and the answer did not come back. It is the one
+// error a control plane answers by asking again, because what it asks the second
+// time is what it is holding rather than for the thing again.
+func indeterminate(err error) bool {
+	return errors.Is(err, adapter.ErrLaunchIndeterminate) || errors.Is(err, capability.ErrCapacityIndeterminate)
 }
 
 func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
@@ -430,12 +439,13 @@ func (runtime *controlPlane) deliverReadiness(ctx context.Context) error {
 	return nil
 }
 
-// advanceWorkspace drives one tenant's open Runs. An ambiguous launch is
-// reconciled by advancing again, which is what a control plane does with a
-// response it never got.
+// advanceWorkspace drives one tenant's open Runs. An ambiguous launch and an
+// ambiguous provision are both reconciled by advancing again, which is what a
+// control plane does with a response it never got: it asks what it is holding
+// rather than asking for the thing again.
 func (runtime *controlPlane) advanceWorkspace(ctx context.Context, workspace string) error {
 	_, err := runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
-	if errors.Is(err, adapter.ErrLaunchIndeterminate) {
+	if indeterminate(err) {
 		_, err = runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
 	}
 	if err != nil {

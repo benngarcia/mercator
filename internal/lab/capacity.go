@@ -42,7 +42,14 @@ type capacityLease struct {
 	AcceptedAt     time.Time
 	Terminated     bool
 	TerminatedAt   time.Time
-	Enrolled       bool
+	// Unlisted is a machine this world allocated and has told Mercator nothing
+	// about: the receipt was lost and the account listing does not name it either.
+	// Both halves are one fact rather than two, because the fact is that Mercator
+	// cannot get the answer by any route. A world that lost the receipt and listed
+	// the machine would be a slow provider, and reconciling against the listing
+	// would resolve it on the next look without anything ever being asked twice.
+	Unlisted bool
+	Enrolled bool
 	// SessionExpires is when the credential the agent on this machine currently
 	// holds stops authenticating anything. It is held per machine rather than per
 	// invitation because it outlives the invitation: the token that opened the
@@ -86,13 +93,23 @@ func (lease capacityLease) arrivesAt(spend scenario.ProvisioningSpec) time.Time 
 // bootstrap it was handed, verbatim. The same operation key twice allocates one
 // machine and says so, which is what makes an allocation whose response was lost
 // cost one repeat rather than one extra machine.
+//
+// A world told to lose this answer allocates the machine all the same and tells
+// Mercator nothing about it, by any route, until something asks about the lease
+// again. That is the state a provider honouring no idempotency key really leaves
+// behind, and the whole of what the Rental identity travelling to the provider
+// exists to resolve: the repeat finds the machine already there and adopts it,
+// carrying the bootstrap the first attempt put on it.
 func (world *simulatedWorld) ProvisionCapacity(_ context.Context, command capability.ProvisionCommand) (capability.CapacityReceipt, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	if command.OperationKey == "" || command.RequestHash == "" {
 		return capability.CapacityReceipt{}, fmt.Errorf("Lab provider provision needs operation key and request hash")
 	}
+	world.provisionCount[command.RentalID]++
 	if lease, exists := world.leases[command.RentalID]; exists && !lease.Terminated {
+		// Asking about this lease is what surfaces the machine a lost answer left.
+		lease.Unlisted = false
 		receipt := capability.CapacityReceipt{
 			NativeRef:  lease.NativeRef,
 			State:      world.capacityProgressOf(lease).state,
@@ -134,6 +151,16 @@ func (world *simulatedWorld) ProvisionCapacity(_ context.Context, command capabi
 		State:      capability.CapacityStateRequested,
 		AcceptedAt: world.now,
 		Pricing:    state.offer.Pricing,
+	}
+	fault := world.matchOperationFault(OperationCapacityProvision, "", world.provisionCount[command.RentalID])
+	if fault != nil && fault.Action == scenario.FaultLoseResponse {
+		lease.Unlisted = true
+		world.recordCapacityEffectAs(OperationCapacityProvision, command.OperationKey, command.RequestHash,
+			command.RentalID, EffectCommandAccepted, EffectResponseLost, provisionRequestFacts(command), receipt, fault.ID)
+		return capability.CapacityReceipt{}, fmt.Errorf(
+			"%w: the Lab allocated a machine for Rental %q and the answer never came back",
+			capability.ErrCapacityIndeterminate, command.RentalID,
+		)
 	}
 	world.recordCapacityEffect(OperationCapacityProvision, command.OperationKey, command.RequestHash,
 		command.RentalID, EffectCommandAccepted, provisionRequestFacts(command), receipt)
@@ -204,7 +231,7 @@ func (world *simulatedWorld) ListOwnedCapacity(_ context.Context, query capabili
 	var owned []capability.OwnedCapacity
 	for _, rentalID := range slices.Sorted(maps.Keys(world.leases)) {
 		lease := world.leases[rentalID]
-		if lease.Terminated || (query.WorkspaceID != "" && query.WorkspaceID != lease.WorkspaceID) {
+		if lease.Terminated || lease.Unlisted || (query.WorkspaceID != "" && query.WorkspaceID != lease.WorkspaceID) {
 			continue
 		}
 		owned = append(owned, capability.OwnedCapacity{
@@ -273,13 +300,22 @@ func (world *simulatedWorld) Invite(_ context.Context, invitation node.Invitatio
 	return world.bootstrapFor(invitation.NodeID), nil
 }
 
-// Reinvite mints a fresh token for an identity that already exists, which is
-// what an allocation whose answer Mercator lost comes back through.
+// Reinvite is the invitation an identity that already exists is redeemable on,
+// which is what an allocation whose answer Mercator lost comes back through.
+//
+// An invitation nobody has redeemed is handed back rather than replaced, which
+// is the rule node.Registry holds and the reason it holds it: provisioning asks
+// for this before it can know whether an earlier attempt landed a machine, and a
+// fresh token would leave that machine holding material nothing will accept.
 func (world *simulatedWorld) Reinvite(_ context.Context, _, nodeID string) (capability.NodeBootstrap, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
-	if _, exists := world.invitations[nodeID]; !exists {
+	invitation, exists := world.invitations[nodeID]
+	if !exists {
 		return capability.NodeBootstrap{}, fmt.Errorf("%w: %s", node.ErrNotFound, nodeID)
+	}
+	if !invitation.Enrolled && invitation.Token != "" {
+		return world.bootstrap(invitation, invitation.Token), nil
 	}
 	return world.bootstrapFor(nodeID), nil
 }
@@ -345,22 +381,35 @@ type bootstrapCredential struct {
 	Token       string
 	Provisions  int
 	Redemptions int
+	// Superseded is a credential a later invitation for the same identity took
+	// the place of. It is what tells a credential nobody has got round to
+	// redeeming from one nobody ever can, and those are two different worlds: the
+	// first is a machine still booting, and the second is a paid machine the
+	// control plane locked out of its own fleet.
+	Superseded bool
 }
 
 func (world *simulatedWorld) bootstrapFor(nodeID string) capability.NodeBootstrap {
 	invitation := world.invitations[nodeID]
+	if previous, minted := world.credentials[invitation.Token]; minted {
+		previous.Superseded = true
+	}
 	invitation.Token = DeterministicID(world.seed, "enrollment", fmt.Sprintf("%s/%d/%d", nodeID, invitation.Generation, len(world.effects)))
 	world.credentials[invitation.Token] = &bootstrapCredential{
 		NodeID:     nodeID,
 		Generation: invitation.Generation,
 		Token:      invitation.Token,
 	}
+	return world.bootstrap(invitation, invitation.Token)
+}
+
+func (world *simulatedWorld) bootstrap(invitation *labInvitation, token string) capability.NodeBootstrap {
 	return capability.NodeBootstrap{
 		ControlPlaneURL: "https://lab.mercator.test",
-		NodeID:          nodeID,
+		NodeID:          invitation.NodeID,
 		RentalID:        invitation.RentalID,
 		Generation:      invitation.Generation,
-		EnrollmentToken: invitation.Token,
+		EnrollmentToken: token,
 		AgentVersion:    "lab",
 	}
 }
@@ -489,6 +538,18 @@ func (world *simulatedWorld) recordCapacityEffect(
 	request any,
 	consequence any,
 ) {
+	world.recordCapacityEffectAs(operation, operationKey, requestHash, correlationID,
+		command, EffectResponseDelivered, request, consequence, "")
+}
+
+func (world *simulatedWorld) recordCapacityEffectAs(
+	operation, operationKey, requestHash, correlationID string,
+	command EffectCommand,
+	response EffectResponse,
+	request any,
+	consequence any,
+	faultID string,
+) {
 	if operationKey == "" {
 		operationKey = operation + "/" + correlationID
 	}
@@ -496,13 +557,13 @@ func (world *simulatedWorld) recordCapacityEffect(
 		operation,
 		operationKey,
 		command,
-		EffectResponseDelivered,
+		response,
 		correlationID,
 		"capacity-lease",
 		requestHash,
 		request,
 		consequence,
-		"",
+		faultID,
 	)
 }
 

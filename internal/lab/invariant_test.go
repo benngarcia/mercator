@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 52 {
-		t.Fatalf("latest invariant results = %d, want 52", len(latest))
+	if len(latest) != 53 {
+		t.Fatalf("latest invariant results = %d, want 53", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -352,6 +352,12 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		// fencing token included, would go to the wrong one.
 		"safety.enrolment_names_the_generation_it_was_invited_for": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{provisionEffect(1), leasedEnrolmentEffect(8)}
+		},
+		// An invitation that went onto a machine and was then replaced before that
+		// machine redeemed it. The host is up, it is billing, and the only material
+		// it will ever present is one the registry no longer names.
+		"safety.a_machine_holds_material_the_control_plane_will_still_accept": func(observation *InvariantObservation) {
+			observation.BootstrapCredentials = []bootstrapCredential{supersededOnTheMachine()}
 		},
 		"safety.locality_provenance": func(observation *InvariantObservation) {
 			observation.World.Offers = []domain.OfferSnapshot{{

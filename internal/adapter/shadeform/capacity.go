@@ -188,8 +188,8 @@ func (a *Adapter) reconcileDuplicates(
 		}
 	}
 	return capability.CapacityReceipt{}, fmt.Errorf(
-		"shadeform: created instance %s is not yet visible in the instance list, so this provision is indeterminate; the next owned-capacity sweep resolves it",
-		createdID,
+		"%w: shadeform created instance %s and it is not yet visible in the instance list; the next owned-capacity sweep resolves it",
+		capability.ErrCapacityIndeterminate, createdID,
 	)
 }
 

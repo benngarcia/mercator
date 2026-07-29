@@ -47,6 +47,17 @@ type CapacityProvider interface {
 // silently succeeding.
 var ErrCapabilityUnsupported = fmt.Errorf("capability: operation unsupported by this backend")
 
+// ErrCapacityIndeterminate is a provision whose outcome nobody knows: the
+// command reached the provider and the answer did not come back, so a machine
+// may be billing for this lease right now and may not.
+//
+// It is a different answer from a failure and callers act on the difference. A
+// failure allocated nothing and can be asked again; this cannot, because asking
+// again is how one lost answer becomes two machines. What resolves it is reading
+// what the connection owns, which is why ListOwned is what CapacitySupport
+// refuses a provider without server-side idempotency for lacking.
+var ErrCapacityIndeterminate = fmt.Errorf("capability: the outcome of this provision is unknown")
+
 // CapacityOperation is one act a caller can ask of a CapacityProvider. It is
 // named for the act rather than for the method that performs it, because a
 // capability set negotiates a stop and a resume and a caller refused one is

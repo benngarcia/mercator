@@ -229,6 +229,15 @@ func TestEveryClauseOfTheSecretsRuleCanFail(t *testing.T) {
 	}
 }
 
+// supersededOnTheMachine is the credential a machine is holding that nothing
+// will accept: it reached a host, that host never redeemed it, and a later
+// invitation for the same identity took its place.
+func supersededOnTheMachine() bootstrapCredential {
+	credential := mintedFor(1, 0)
+	credential.Superseded = true
+	return credential
+}
+
 func mintedFor(provisions, redemptions int) bootstrapCredential {
 	return bootstrapCredential{
 		NodeID:      renewingNode,

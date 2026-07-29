@@ -442,7 +442,11 @@ func TestAProvisionWhoseMachineNeverSurfacesIsIndeterminate(t *testing.T) {
 
 	_, err := adapter.ProvisionCapacity(context.Background(), provisionCommand())
 
-	if err == nil || !strings.Contains(err.Error(), "indeterminate") {
+	// The typed answer rather than the wording. A caller acts on the difference
+	// between a provision that failed and one nobody knows the outcome of: the
+	// first can be asked again, and asking the second again is how one lost answer
+	// becomes two machines.
+	if !errors.Is(err, capability.ErrCapacityIndeterminate) {
 		t.Fatalf("a machine that never appears in the listing must be indeterminate rather than a receipt the next observation reads as destroyed, got %v", err)
 	}
 }
