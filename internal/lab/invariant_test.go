@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 50 {
-		t.Fatalf("latest invariant results = %d, want 50", len(latest))
+	if len(latest) != 51 {
+		t.Fatalf("latest invariant results = %d, want 51", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -267,6 +267,13 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		// thing that was supposed to be spent by being used never is.
 		"safety.bootstrap_credential_is_short_lived_and_single_use": func(observation *InvariantObservation) {
 			observation.BootstrapCredentials = []bootstrapCredential{mintedFor(1, 2)}
+		},
+		// A registry credential handed to a machine with nothing to expire it. It
+		// names the pull it was minted for and reads only that image, and it goes on
+		// reading it for as long as the host exists, which is the whole of what
+		// separates one fetch's material from the account behind it.
+		"safety.content_credentials_are_scoped_and_expiring": func(observation *InvariantObservation) {
+			observation.ContentCredentials = []contentCredential{credentialWithNoExpiry(now)}
 		},
 		"safety.ephemeral_capacity_not_reused": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{queuedBehindOneShotCapacity()}

@@ -564,6 +564,13 @@ type simulatedWorld struct {
 	faults      []scenario.FaultSpec
 	usedFaults  map[string]bool
 
+	// handedOver is every credential this world watched Mercator give a machine
+	// so it could fetch one piece of content, in the order they arrived. It is
+	// World Truth rather than anything Mercator wrote about itself, which is the
+	// only place a rule about what a machine was handed can read: the material is
+	// in it, and the material may appear in no record anywhere.
+	handedOver []contentCredential
+
 	effectSequence uint64
 	effects        []EffectRecord
 }
@@ -599,7 +606,11 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		credentials:    map[string]*bootstrapCredential{},
 	}
 	for reference, image := range tape.InitialWorld.Images {
-		world.images[reference] = scenario.ImageSpec{Layers: slices.Clone(image.Layers), Registry: image.Registry}
+		world.images[reference] = scenario.ImageSpec{
+			Layers:   slices.Clone(image.Layers),
+			Registry: image.Registry,
+			Private:  image.Private,
+		}
 	}
 	for _, artifact := range tape.InitialWorld.Artifacts {
 		world.replicas[artifact.ID] = map[string]domain.ArtifactReplica{}
@@ -1353,6 +1364,11 @@ type worldFacts struct {
 	// Mercator's own record for it, and it is read in memory and exported by
 	// nothing. A Run Bundle that carried this would be the leak the rule is about.
 	BootstrapCredentials []bootstrapCredential
+	// ContentCredentials is every credential Mercator handed a machine so it
+	// could fetch one image or one Artifact, beside what the command it arrived on
+	// was really for. It carries material for the reason the bootstraps do, and is
+	// exported by nothing for the same reason.
+	ContentCredentials []contentCredential
 }
 
 func (world *simulatedWorld) invariantFacts() worldFacts {
@@ -1375,6 +1391,7 @@ func (world *simulatedWorld) invariantFacts() worldFacts {
 	for _, token := range slices.Sorted(maps.Keys(world.credentials)) {
 		facts.BootstrapCredentials = append(facts.BootstrapCredentials, *world.credentials[token])
 	}
+	facts.ContentCredentials = slices.Clone(world.handedOver)
 	return facts
 }
 

@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/janitor"
@@ -37,7 +39,12 @@ type controlPlane struct {
 	// prewarm is what this world's Blueprint allows the control plane to have in
 	// flight for work it has not admitted. A Blueprint that states none turns
 	// preparation off, which is every fixture written before it existed.
-	prewarm       orchestrator.PrewarmPolicy
+	prewarm orchestrator.PrewarmPolicy
+	// credentials is the accounts this Mercator holds and never hands out: the
+	// registries its private images live at, and the object store its Artifacts
+	// are durable in. It survives a restart because it is the deployment's
+	// configuration rather than anything this execution produced.
+	credentials   *credential.Mint
 	restarts      uint64
 	faultPosition eventlog.GlobalPosition
 }
@@ -91,6 +98,7 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		Prewarm:                     facts.Prewarm,
 		SeededOrphans:               facts.SeededOrphans,
 		BootstrapCredentials:        facts.BootstrapCredentials,
+		ContentCredentials:          facts.ContentCredentials,
 		ProjectionRebuildEquivalent: reflect.DeepEqual(runs, rebuiltRuns),
 	}, nil
 }
@@ -197,12 +205,17 @@ func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error)
 	if err != nil {
 		return closeWith(err)
 	}
+	mint, err := labMint(tape, world.nowTime)
+	if err != nil {
+		return closeWith(err)
+	}
 	runtime := &controlPlane{
-		storage:    storage,
-		world:      world,
-		workspaces: workspaces,
-		prewarm:    prewarmPolicy(tape.InitialWorld.Prewarm),
-		janitor:    janitor.New(world, janitor.WithEventLog(storage.EventLog())),
+		storage:     storage,
+		world:       world,
+		workspaces:  workspaces,
+		prewarm:     prewarmPolicy(tape.InitialWorld.Prewarm),
+		credentials: mint,
+		janitor:     janitor.New(world, janitor.WithEventLog(storage.EventLog())),
 	}
 	runtime.restartOrchestrator()
 	return runtime, nil
@@ -241,6 +254,42 @@ func (runtime *controlPlane) handleRunArrival(ctx context.Context, event WorldEv
 	}
 	_, err := runtime.orchestrator.Prewarm(ctx)
 	return err
+}
+
+// labMint is the accounts this Mercator holds so a machine never has to. It is
+// derived from the Blueprint because the Blueprint is the deployment: a world
+// with a private image is a world whose operator gave Mercator an account at
+// that registry, and a world with Artifacts is one with somewhere durable to
+// keep them.
+//
+// An account is held for every registry a private image is served from and for
+// no other. A Mercator that held one everywhere could never be caught minting
+// material for content that needed none, which is its own way of putting an
+// account on a machine.
+func labMint(tape WorldTape, now func() time.Time) (*credential.Mint, error) {
+	registries := map[string]credential.RegistryAccount{}
+	for reference, image := range tape.InitialWorld.Images {
+		if !image.Private {
+			continue
+		}
+		host := domain.ReferenceRegistry(reference)
+		registries[host] = credential.RegistryAccount{
+			Registry: host,
+			Username: "mercator-lab",
+			Secret:   DeterministicID(tape.Seed, "registry-account", host),
+		}
+	}
+	return credential.NewMint(credential.MintConfig{
+		Registries: slices.Collect(maps.Values(registries)),
+		ObjectStore: &credential.ObjectStoreAccount{
+			Endpoint:  "https://objects.lab.mercator.test",
+			Bucket:    "mercator-lab",
+			Region:    "lab",
+			AccessKey: "lab-object-store",
+			Secret:    DeterministicID(tape.Seed, "object-store-account", "mercator-lab"),
+		},
+		Now: now,
+	})
 }
 
 // prewarmPolicy is the Blueprint's bounds as the control plane's own restraint.
@@ -418,6 +467,10 @@ func (runtime *controlPlane) restartOrchestrator() {
 		orchestrator.WithImageManifests(runtime.world),
 		orchestrator.WithArtifactCatalog(runtime.world),
 		orchestrator.WithPrewarm(runtime.world, runtime.prewarm, runtime.storage.Preparation()),
+		// The accounts a machine must never hold. Without this every fetch a node
+		// in this world made would be anonymous, and a rule about what a machine is
+		// handed would have nothing to read.
+		orchestrator.WithContentCredentials(runtime.credentials),
 		orchestrator.WithRentalSchedules(runtime.storage.RentalSchedules()),
 		orchestrator.WithRunProjection(runtime.storage.Runs()),
 		// Placement choosing to provision is an act, and these are the seams it

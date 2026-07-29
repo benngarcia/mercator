@@ -79,7 +79,13 @@ type InvariantObservation struct {
 	// bootstrap are asked in its terms: how many machines held it, how many times
 	// it was redeemed, and whether it turns up anywhere in Mercator's own record.
 	// It is built in memory for one evaluation and exported nowhere.
-	BootstrapCredentials        []bootstrapCredential
+	BootstrapCredentials []bootstrapCredential
+	// ContentCredentials is every credential this world watched Mercator hand a
+	// machine so it could fetch one image or one Artifact, beside what the command
+	// it arrived on was really for. It carries live material for the reason the
+	// bootstraps do: the rule about it asks whether one fetch's material was ever
+	// presented for another, and only the material itself can answer that.
+	ContentCredentials          []contentCredential
 	ProjectionRebuildEquivalent bool
 }
 
@@ -131,6 +137,10 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{
 			id:    "safety.bootstrap_credential_is_short_lived_and_single_use",
 			check: bootstrapCredentialIsShortLivedAndSingleUse,
+		},
+		invariantRule{
+			id:    "safety.content_credentials_are_scoped_and_expiring",
+			check: contentCredentialsAreScopedAndExpiring,
 		},
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
 		invariantRule{id: "safety.reusable_capacity_has_an_enrolled_runtime", check: reusableCapacityHasAnEnrolledRuntime},
@@ -2669,6 +2679,22 @@ func secretsAbsent(observation InvariantObservation) error {
 				return fmt.Errorf(
 					"recorded data contains the enrollment token %s was bootstrapped with, whatever field it is filed under",
 					credential.NodeID,
+				)
+			}
+		}
+		// The material a machine was handed for one fetch is read the same way and
+		// for the same reason. It is caught by the markers above only when it is a
+		// signed URL and the marker happens to be one of the five named there; a
+		// registry secret in a field called anything at all is a string this world
+		// knows it minted and the record has no business carrying.
+		for _, credential := range observation.ContentCredentials {
+			if credential.Material == "" {
+				continue
+			}
+			if bytes.Contains(encoded, []byte(credential.Material)) {
+				return fmt.Errorf(
+					"recorded data contains the material a machine was handed to fetch %s, whatever field it is filed under",
+					credential.Content,
 				)
 			}
 		}

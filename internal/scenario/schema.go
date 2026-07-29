@@ -461,6 +461,17 @@ type ImageSpec struct {
 	// ways a real registry says no, which a scenario needs to be able to tell
 	// apart because an operator acts on them differently.
 	Registry RegistryAnswer `json:"registry,omitempty"`
+	// Private is a registry that serves this image's bytes only to a reader
+	// presenting material for them. It is separate from Registry above because
+	// the two answer different questions: that one is what a resolution says
+	// about the manifest, and this is whether a machine can fetch the content at
+	// all without being handed something first.
+	//
+	// It is stated in the Blueprint because it is a fact about the world rather
+	// than about Mercator. A world where every image is anonymous can never catch
+	// a control plane that mints nothing, because nothing on any machine would
+	// ever notice.
+	Private bool `json:"private,omitempty"`
 }
 
 // diffIDCount is how many of this image's layers state the name a container
