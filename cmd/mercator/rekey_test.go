@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -70,6 +71,59 @@ func TestRekeyRefusesWithoutTheRetiredKey(t *testing.T) {
 	if !strings.Contains(stderr.String(), previousMasterKeyVar) {
 		t.Fatalf("stderr = %q, want %s named", stderr.String(), previousMasterKeyVar)
 	}
+}
+
+// TestRekeyRefusesWhileAServerIsUsingTheDatabase drives both real commands
+// against one real database file. A rotation that ran here would re-seal the
+// rows it can see while the running server kept sealing new credentials under
+// the key it loaded at boot, and the restart the command tells the operator to
+// perform would then refuse to open one of those rows.
+func TestRekeyRefusesWhileAServerIsUsingTheDatabase(t *testing.T) {
+	// Arrange: a server started the way an operator starts it, on a real file.
+	dsn := "file:" + filepath.Join(t.TempDir(), "mercator.db")
+	serveUntilCleanup(t, dsn)
+
+	// Act: rotate the master key without stopping it first.
+	var stdout, stderr bytes.Buffer
+	exitCode := run(context.Background(), []string{"mercator", "rekey"}, map[string]string{
+		"MERCATOR_SQLITE_DSN": dsn,
+		"MERCATOR_SECRET_KEY": hex.EncodeToString(newMasterKey),
+		previousMasterKeyVar:  hex.EncodeToString(retiredMasterKey),
+	}, &stdout, &stderr)
+
+	// Assert
+	if exitCode != 1 {
+		t.Fatalf("run() = %d, want 1; stdout = %q", exitCode, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "another mercator process") ||
+		!strings.Contains(stderr.String(), "stop the server") {
+		t.Fatalf("stderr = %q, want the running server named", stderr.String())
+	}
+}
+
+// serveUntilCleanup starts the real serve command on dsn and returns once it is
+// listening, so a case can state what happens to a command that arrives while a
+// server is up. The server is stopped when the case ends.
+func serveUntilCleanup(t *testing.T, dsn string) {
+	t.Helper()
+	startupLog := captureStartupLog(t)
+	serveCtx, stopServing := context.WithCancel(context.Background())
+	served := make(chan int, 1)
+	go func() {
+		served <- run(serveCtx, []string{"mercator", "serve"}, map[string]string{
+			"MERCATOR_ADDR":       "127.0.0.1:0",
+			"MERCATOR_API_TOKEN":  "operator-token",
+			"MERCATOR_SECRET_KEY": hex.EncodeToString(retiredMasterKey),
+			"MERCATOR_SQLITE_DSN": dsn,
+		}, io.Discard, io.Discard)
+	}()
+	t.Cleanup(func() {
+		stopServing()
+		if exitCode := <-served; exitCode != 0 {
+			t.Errorf("serve exited %d", exitCode)
+		}
+	})
+	startupLog.waitFor(t, "mercator listening on")
 }
 
 func seal(t *testing.T, dsn string, masterKey []byte, workspaceID, connectionID, secret string) {

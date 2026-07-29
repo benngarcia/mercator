@@ -19,9 +19,14 @@ const previousMasterKeyVar = "MERCATOR_SECRET_KEY_PREVIOUS"
 //
 // It is a separate command rather than a step in `serve` on purpose: a boot
 // that rotated would need the retired key present at every boot, so the key
-// would never actually be retired. Run it with the server stopped; one Mercator
-// process owns one SQLite database, and this command is that process for as
-// long as it runs.
+// would never actually be retired.
+//
+// It runs with the server stopped, and it enforces that rather than asking for
+// it. A rotation that ran beside a live server would re-seal the rows it could
+// see while the server kept sealing new credentials under the key it loaded at
+// boot, and the restart this command tells the operator to perform would then
+// refuse to open one of those rows, under a retired key the operator has just
+// been told to delete.
 func runRekeyCommand(ctx context.Context, env map[string]string, stdout, stderr io.Writer) int {
 	newKey, err := masterKeyFromEnv(env)
 	if err != nil {
@@ -38,6 +43,12 @@ func runRekeyCommand(ctx context.Context, env map[string]string, stdout, stderr 
 		_, _ = fmt.Fprintf(stderr, "rekey: resolve database path: %v\n", err)
 		return 1
 	}
+	claim, err := claimDatabase(dsn)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "rekey: %v; stop the server before rotating its master key\n", err)
+		return 1
+	}
+	defer claim.release()
 	storage, err := sqlitestore.Open(ctx, dsn)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "rekey: open %s: %v\n", dsn, err)

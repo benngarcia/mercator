@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/tlsmaterial"
 )
@@ -116,13 +118,48 @@ func TestServeRequiresAMasterKey(t *testing.T) {
 }
 
 // captureStartupLog redirects the standard logger, which is where startup
-// refusals are written, and restores it when the case ends.
-func captureStartupLog(t *testing.T) *bytes.Buffer {
+// refusals and the listening announcement are written, and restores it when the
+// case ends.
+func captureStartupLog(t *testing.T) *startupLog {
 	t.Helper()
-	var captured bytes.Buffer
-	stdlog.SetOutput(&captured)
+	captured := &startupLog{}
+	stdlog.SetOutput(captured)
 	t.Cleanup(func() { stdlog.SetOutput(os.Stderr) })
-	return &captured
+	return captured
+}
+
+// startupLog is what a starting server says. It is read while that server is
+// still running, so it holds its own lock rather than leaving the case to race
+// the goroutine writing to it.
+type startupLog struct {
+	mu      sync.Mutex
+	written strings.Builder
+}
+
+func (l *startupLog) Write(said []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.written.Write(said)
+}
+
+func (l *startupLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.written.String()
+}
+
+// waitFor blocks until the server has said phrase, or fails the case saying
+// everything it did say.
+func (l *startupLog) waitFor(t *testing.T, phrase string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(l.String(), phrase) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("startup log = %q, want %q said within 30s", l.String(), phrase)
 }
 
 func TestServeOptionsEnableLocalAuthentication(t *testing.T) {

@@ -114,6 +114,16 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("resolve database path: %v", err)
 		return 1
 	}
+	// One process owns one database. Holding the claim for as long as this
+	// server serves is what makes `mercator rekey` refuse to rotate the master
+	// key underneath it.
+	claim, err := claimDatabase(dsn)
+	if err != nil {
+		_ = listener.Close()
+		stdlog.Printf("claim database: %v", err)
+		return 1
+	}
+	defer claim.release()
 	runtime, err := daemon.New(ctx, daemon.Config{
 		SQLiteDSN:      dsn,
 		OperatorToken:  apiToken,
@@ -150,6 +160,12 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		}
 	case sig := <-stop:
 		stdlog.Printf("received %s; shutting down", sig)
+	case <-ctx.Done():
+		// The runtime's background work is built on this context, so a
+		// cancelled one has already stopped reconciling. Serving on past that
+		// point would be serving from a control plane that had stopped
+		// controlling anything.
+		stdlog.Printf("context cancelled; shutting down")
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
