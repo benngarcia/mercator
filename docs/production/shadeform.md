@@ -55,7 +55,17 @@ Mercator refuses a stop or a resume at the seam, before any API call, with
    ```
    The URL you configure must contain `{version}`, which Mercator replaces with
    the agent build the bootstrap pinned.
-3. Add the connection (UI **Connections → Add connection**, adapter type
+3. Tell the control plane which build that URL serves, and restart it:
+   ```sh
+   export MERCATOR_AGENT_VERSION="$VERSION"   # the same $VERSION you built and uploaded
+   ```
+   There is no default. Mercator cannot know which build you published, and a
+   value invented for you would be substituted into your URL as though you had
+   chosen it: two machines rented a week apart would install different binaries
+   and the control plane would record both as the same build. Left unset, every
+   invitation names no build and a Shadeform provision refuses before a machine
+   is paid for.
+4. Add the connection (UI **Connections → Add connection**, adapter type
    `shadeform`), or via the API:
    ```sh
    curl -X POST "$MERCATOR/v1/connections" \
@@ -67,7 +77,7 @@ Mercator refuses a stop or a resume at the seam, before any API call, with
           "config":{"agent_download_url":"https://downloads.example.com/mercator-node/{version}/linux-amd64"},
           "credential":{"source":"env","ref":"SHADEFORM_API_KEY"}}'
    ```
-4. Authorize it (runs a cheap `GET /instances` to validate the key):
+5. Authorize it (runs a cheap `GET /instances` to validate the key):
    ```sh
    curl -X POST "$MERCATOR/v1/connections/conn_shadeform_main/authorize?workspace_id=ws_1" \
      -H "Authorization: Bearer $MERCATOR_API_TOKEN"
@@ -77,7 +87,7 @@ Mercator refuses a stop or a resume at the seam, before any API call, with
 
 | Key | Required | Default | Meaning |
 |-----|----------|---------|---------|
-| `agent_download_url` | yes | *(none)* | Where a rented machine fetches the node agent. Must be https and must contain `{version}`, replaced with the build the bootstrap pinned. There is no default: Mercator publishes no agent binary, so a guessed URL would be a paid machine fetching a 404 and never enrolling. A connection without it still verifies and still lists capacity; it refuses to provision. |
+| `agent_download_url` | yes | *(none)* | Where a rented machine fetches the node agent. Must be https, must contain `{version}`, and must carry no single quote (it is interpolated into a quoted shell word in the bootstrap). `{version}` is replaced with `MERCATOR_AGENT_VERSION`, so both halves of the pin are yours: a connection with this key and a control plane that states no version refuses to provision rather than installing a build nobody named. There is no default URL either: Mercator publishes no agent binary, so a guessed one would be a paid machine fetching a 404 and never enrolling. A connection without it still verifies and still lists capacity. |
 | `shade_cloud` | no | `true` | `true` rents in Shadeform's managed account (one invoice); `false` uses your linked bring-your-own-cloud accounts. |
 | `allowed_clouds` | no | *(all)* | Comma-separated allow-list of provider cloud slugs (e.g. `lambdalabs,nebius`). When set, listings are filtered to it and a provision outside it is rejected. This is the only "secure cloud" control: the API exposes no per-provider trust attributes, so vetting a provider means putting it on this list. |
 | `max_lifetime_hours` | no | `24` | Reclamation backstop, **not** the lease. Every instance gets Shadeform `auto_delete` thresholds: a date threshold and a spend cap of the catalog hourly price over that window. When the provision command carries a lifetime bound, the horizon is that bound plus one hour of slack. Zero-priced catalog entries (bring-your-own-cloud inventory bills through your provider, not Shadeform) get the date threshold only — Shadeform leaves `"0.00"` spend-threshold semantics undefined. If the whole broker dies, Shadeform reclaims the instance on its own. |
@@ -103,9 +113,13 @@ written to it. It listens on nothing, publishes no Docker socket, and every
 exchange with the control plane is one the agent opens outbound. See
 `node-agent.md` for what happens to the session after that.
 
-Values that no unattended script can carry (empty, or containing whitespace or
-non-printable characters) are refused before an instance is created, and the
-refusal never quotes the value, because one of them is a credential.
+Values that no unattended script can carry (empty, or containing whitespace, a
+single quote, or non-printable characters) are refused before an instance is
+created, and the refusal never quotes the value, because one of them is a
+credential. The quote matters for `agent_download_url` in particular: it is the
+one value here you write rather than Mercator, it lands inside a single-quoted
+word in the `curl` line, and a quote in it would close that word and run the rest
+as root on the machine you just paid for.
 
 ## How listings work
 

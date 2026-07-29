@@ -77,7 +77,13 @@ func WithSession(session time.Duration) Option {
 	return func(registry *Registry) { registry.session = session }
 }
 
-// WithAgentVersion pins the node agent build a bootstrap asks for.
+// WithAgentVersion pins the node agent build a bootstrap asks for. There is no
+// default and there deliberately cannot be one: the version is what a capacity
+// provider substitutes into the operator's download URL, so a value invented
+// here would be a pin nobody chose, and every machine ever rented by every
+// deployment would install whatever is behind that same name on the day it
+// booted. Left unstated, a bootstrap names no build and a provider that needs
+// one refuses before a machine is paid for.
 func WithAgentVersion(version string) Option {
 	return func(registry *Registry) { registry.agentVersion = version }
 }
@@ -88,7 +94,6 @@ func NewRegistry(store Store, signer *Signer, controlPlaneURL string, opts ...Op
 		signer:          signer,
 		now:             time.Now,
 		controlPlaneURL: controlPlaneURL,
-		agentVersion:    "dev",
 		lease:           DefaultLease,
 		session:         DefaultSession,
 		invitation:      DefaultInvitation,

@@ -95,6 +95,21 @@ func TestAnInvitationWhoseWindowClosedIsReplacedRatherThanHandedBack(t *testing.
 	}
 }
 
+// TestARegistryThatWasToldNoAgentBuildPinsNone is what makes the pin a pin. The
+// version is substituted into the download URL an operator hosts the binary at,
+// so a value invented here would have every deployment install whatever is
+// behind one invented name on the day its machine booted, and a provider would
+// accept that as a pinned build.
+func TestARegistryThatWasToldNoAgentBuildPinsNone(t *testing.T) {
+	registry, _ := newRegistry(t)
+
+	bootstrap := invite(t, registry)
+
+	if bootstrap.AgentVersion != "" {
+		t.Fatalf("a deployment that stated no agent build pins %q, and nothing chose it", bootstrap.AgentVersion)
+	}
+}
+
 func TestEnrollmentRefusesAMachineClaimingAnotherGeneration(t *testing.T) {
 	registry, _ := newRegistry(t)
 	bootstrap := invite(t, registry)

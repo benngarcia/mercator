@@ -50,7 +50,10 @@ type Config struct {
 	LocalAuthEmail string
 	// AgentVersion is the node agent build a bootstrapped machine is asked to
 	// run. It is recorded on every invitation, so an operator can see which
-	// build a node was told to be and which one it turned out to be.
+	// build a node was told to be and which one it turned out to be, and a
+	// capacity provider substitutes it into the download URL the machine fetches
+	// from. Empty is a deployment that has stated no build, which provisions no
+	// machine: the refusal is at the provider, before anything is paid for.
 	AgentVersion string
 	// NodeLease is how long the control plane believes a node absent a
 	// heartbeat. Zero takes the registry's default. Tests shorten it so lease
@@ -150,10 +153,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if factory == nil {
 		factory = providers.Factory()
 	}
-	nodeOptions := []node.Option{}
-	if cfg.AgentVersion != "" {
-		nodeOptions = append(nodeOptions, node.WithAgentVersion(cfg.AgentVersion))
-	}
+	nodeOptions := []node.Option{node.WithAgentVersion(cfg.AgentVersion)}
 	if cfg.NodeLease > 0 {
 		nodeOptions = append(nodeOptions, node.WithLease(cfg.NodeLease))
 	}

@@ -70,6 +70,7 @@ server path.
 | `MERCATOR_OIDC_ALLOWED_DOMAIN` | none | Comma-separated email domains admitted at login (and/or `MERCATOR_OIDC_ALLOWED_EMAILS`). |
 | `MERCATOR_OIDC_ALLOWED_EMAILS` | none | Comma-separated email addresses admitted at login. |
 | `MERCATOR_SESSION_KEY` | none | Session-cookie signing key (32+ bytes, hex or base64). Required with OIDC. |
+| `MERCATOR_AGENT_VERSION` | none | The `mercator-node` build every node invitation asks for. A capacity provider substitutes it into the download URL you host the binary at, so it is your statement of which build that URL serves and Mercator cannot guess it. Unset, a bootstrap names no build and a provider that needs one refuses before a machine is paid for. |
 
 ## Health And Discovery
 

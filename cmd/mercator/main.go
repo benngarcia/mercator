@@ -108,6 +108,11 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		Getenv:         func(name string) string { return env[name] },
 		WebAuth:        webauthCfg,
 		LocalAuthEmail: options.localAuthEmail,
+		// The node agent build every invitation asks for. A capacity provider
+		// substitutes it into the download URL an operator hosts the binary at, so
+		// it is the operator's statement of which build that URL serves and nothing
+		// here can guess it. A deployment that states none provisions no machine.
+		AgentVersion: env["MERCATOR_AGENT_VERSION"],
 	})
 	if err != nil {
 		_ = listener.Close()
