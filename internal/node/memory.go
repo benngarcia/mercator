@@ -37,14 +37,19 @@ func workloadKey(workspaceID, nodeID, runID, attemptID string) string {
 	return workspaceID + "/" + nodeID + "/" + runID + "/" + attemptID
 }
 
+// Invite reserves one identity across the whole fleet and not one per
+// workspace. An enrolling machine names only the node it is, so Find resolves an
+// identity without a workspace, and an identity handed out twice would be two
+// machines answering to one name with the second one's tenant deciding which.
 func (store *memoryStore) Invite(_ context.Context, record Record) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := nodeKey(record.WorkspaceID, record.ID)
-	if _, exists := store.records[key]; exists {
-		return fmt.Errorf("%w: %s", ErrIdentityExists, record.ID)
+	for _, held := range store.records {
+		if held.ID == record.ID {
+			return fmt.Errorf("%w: %s", ErrIdentityExists, record.ID)
+		}
 	}
-	store.records[key] = record
+	store.records[nodeKey(record.WorkspaceID, record.ID)] = record
 	return nil
 }
 

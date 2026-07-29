@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	modernsqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/node"
 )
@@ -114,9 +117,27 @@ func (store *NodeStore) Invite(ctx context.Context, record node.Record) error {
 		record.AgentVersion, facts, record.ShadowPriceUSDPerHour, purchase,
 	)
 	if err != nil {
+		if isConstraintViolation(err) {
+			return fmt.Errorf("%w: %s", node.ErrIdentityExists, record.ID)
+		}
 		return fmt.Errorf("invite node %q: %w", record.ID, err)
 	}
 	return nil
+}
+
+// isConstraintViolation reports whether the driver refused a write because the
+// schema did, matched on the code rather than on the message. Both keys over
+// this table name the same fact: the primary key holds one record per identity
+// in a workspace, and the identity index holds one across all of them.
+//
+// It is what makes ErrIdentityExists an answer this store can give. Provisioning
+// asks for an identity again on every attempt, precisely because it cannot know
+// whether an earlier attempt landed a machine, and a store that reported the
+// collision as an opaque failure would leave a Rental with a machine already
+// rented and no route back to the invitation that machine is holding.
+func isConstraintViolation(err error) bool {
+	var sqliteError *modernsqlite.Error
+	return errors.As(err, &sqliteError) && sqliteError.Code()&0xff == sqlite3.SQLITE_CONSTRAINT
 }
 
 func (store *NodeStore) Get(ctx context.Context, workspaceID, nodeID string) (node.Record, error) {

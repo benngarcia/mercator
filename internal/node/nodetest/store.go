@@ -47,6 +47,33 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		}
 	})
 
+	// Provisioning asks for an identity again on every attempt, because nothing
+	// can know whether an earlier attempt landed a machine until the provider
+	// answers. So the second invitation of one identity is a routine question
+	// with one right answer, and a store that reported it as an opaque failure
+	// would strand every Rental whose first attempt was ambiguous.
+	t.Run("inviting an identity that already exists names the collision", func(t *testing.T) {
+		store := invited(t, newStore)
+
+		err := store.Invite(context.Background(), inviteRecord())
+
+		if !errors.Is(err, node.ErrIdentityExists) {
+			t.Fatalf("inviting %q twice = %v, want ErrIdentityExists", nodeID, err)
+		}
+	})
+
+	t.Run("an identity taken in one workspace is not free in another", func(t *testing.T) {
+		store := invited(t, newStore)
+		elsewhere := inviteRecord()
+		elsewhere.WorkspaceID = "ws_other"
+
+		err := store.Invite(context.Background(), elsewhere)
+
+		if !errors.Is(err, node.ErrIdentityExists) {
+			t.Fatalf("inviting %q into a second workspace = %v, want ErrIdentityExists", nodeID, err)
+		}
+	})
+
 	t.Run("an identity resolves without knowing its workspace", func(t *testing.T) {
 		store := invited(t, newStore)
 
@@ -395,7 +422,14 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 func invited(t *testing.T, newStore NewStore) node.Store {
 	t.Helper()
 	store := newStore(t)
-	if err := store.Invite(context.Background(), node.Record{
+	if err := store.Invite(context.Background(), inviteRecord()); err != nil {
+		t.Fatalf("invite node: %v", err)
+	}
+	return store
+}
+
+func inviteRecord() node.Record {
+	return node.Record{
 		ID:                nodeID,
 		WorkspaceID:       workspaceID,
 		RentalID:          rentalID,
@@ -403,10 +437,7 @@ func invited(t *testing.T, newStore NewStore) node.Store {
 		State:             node.StateEnrolling,
 		EnrollmentTokenID: "token-1",
 		EnrollmentExpires: start.Add(time.Hour),
-	}); err != nil {
-		t.Fatalf("invite node: %v", err)
 	}
-	return store
 }
 
 func mustEnroll(t *testing.T, store node.Store, tokenID string) node.Record {
