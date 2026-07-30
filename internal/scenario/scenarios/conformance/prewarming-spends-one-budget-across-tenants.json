@@ -1,0 +1,148 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The depth bound alone, across two tenants. This world states how much may be arriving speculatively at once and states nothing about how often preparation may begin, so what holds the second tenant back is the fleet's one slot and nothing else. Two machines are occupied for the whole window and each already holds what its own tenant runs, so each queued Run wants exactly twenty gigabytes on its own host. Both Runs arrive at the same minute, the tenant whose Run starts soonest is prepared for, and the other waits until that transfer has landed. A control plane spending one budget per workspace has two transfers in flight on two machines at once, which is twice what the operator allowed, and this fixture fails it through safety.prewarm_yields_to_real_work.",
+  "seed": "mercator-lab-prewarm-fleet-budget-v1",
+  "world": {
+    "prewarm": {
+      "max_concurrent": 1
+    },
+    "images": {
+      "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c": {
+        "layers": [
+          {
+            "digest": "sha256:aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66",
+            "size": "20GB"
+          }
+        ]
+      },
+      "surveyor@sha256:2e4f6a8c0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a": {
+        "layers": [
+          {
+            "digest": "sha256:bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77",
+            "size": "20GB"
+          }
+        ]
+      },
+      "auditor@sha256:5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e": {
+        "layers": [
+          {
+            "digest": "sha256:bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77",
+            "size": "20GB"
+          },
+          {
+            "digest": "sha256:cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77bb88",
+            "size": "20GB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:corpus-alpha:v1",
+        "content_digest": "sha256:dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77bb88cc99",
+        "size": "20GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "alpha-builder",
+        "rate_per_hour_usd": 3.0,
+        "cached_images": [
+          "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
+        ],
+        "resources": {
+          "cpu_millis": 16000,
+          "memory": "128GB",
+          "disk": "2TB"
+        }
+      },
+      {
+        "id": "beta-builder",
+        "rate_per_hour_usd": 3.0,
+        "cached_images": [
+          "surveyor@sha256:2e4f6a8c0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a"
+        ],
+        "cached_layers": [
+          "sha256:bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77"
+        ],
+        "resources": {
+          "cpu_millis": 16000,
+          "memory": "128GB",
+          "disk": "2TB"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "alpha-occupant",
+        "candidate": "alpha-builder",
+        "minimum": "40m",
+        "maximum": "40m"
+      },
+      {
+        "run": "beta-occupant",
+        "candidate": "beta-builder",
+        "minimum": "50m",
+        "maximum": "50m"
+      },
+      {
+        "run": "alpha-patient",
+        "candidate": "alpha-builder",
+        "minimum": "10m",
+        "maximum": "10m"
+      },
+      {
+        "run": "beta-patient",
+        "candidate": "beta-builder",
+        "minimum": "10m",
+        "maximum": "10m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "alpha-occupant",
+        "at": "0s",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "expected_runtime": "40m",
+          "max_runtime": "2h"
+        }
+      },
+      {
+        "name": "beta-occupant",
+        "workspace": "beta",
+        "at": "0s",
+        "request": {
+          "image": "surveyor@sha256:2e4f6a8c0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a",
+          "expected_runtime": "50m",
+          "max_runtime": "2h"
+        }
+      },
+      {
+        "name": "alpha-patient",
+        "at": "5m",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "consumes_artifacts": ["artifact:corpus-alpha:v1"],
+          "expected_runtime": "10m",
+          "max_runtime": "1h"
+        }
+      },
+      {
+        "name": "beta-patient",
+        "workspace": "beta",
+        "at": "5m",
+        "request": {
+          "image": "auditor@sha256:5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e",
+          "expected_runtime": "10m",
+          "max_runtime": "1h"
+        }
+      }
+    ]
+  }
+}

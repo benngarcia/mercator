@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -115,6 +116,18 @@ func New(options ...Option) *Adapter {
 		option(a)
 	}
 	return a
+}
+
+// Withdraw takes one machine out of the catalog, which is what a provider does
+// when its capacity goes away and what the node registry does when it stops
+// hearing from a node. An offer is the only thing Mercator learns capacity from,
+// so this is how a case states a machine it can no longer see.
+func (a *Adapter) Withdraw(offerID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.offers = slices.DeleteFunc(a.offers, func(offer domain.OfferSnapshot) bool {
+		return offer.ID == offerID
+	})
 }
 
 func (a *Adapter) ListOffers(_ context.Context, _ adapter.OfferRequest) ([]domain.OfferSnapshot, error) {

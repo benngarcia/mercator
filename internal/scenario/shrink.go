@@ -242,7 +242,7 @@ func shrinkArtifacts(blueprint Blueprint) []shrinkCandidate {
 		for rentalIndex := range candidate.World.Rentals {
 			candidate.World.Rentals[rentalIndex].ArtifactReplicas = slices.DeleteFunc(
 				candidate.World.Rentals[rentalIndex].ArtifactReplicas,
-				func(id string) bool { return id == artifact.ID },
+				func(replica ArtifactReplicaSpec) bool { return replica.Artifact == artifact.ID },
 			)
 		}
 		rewriteRequests(&candidate, func(request *RequestSpec) {

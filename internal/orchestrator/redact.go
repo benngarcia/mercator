@@ -32,8 +32,12 @@ type publicWorkloadSpec struct {
 	Network    domain.NetworkRequirements  `json:"network"`
 	Placement  domain.PlacementPolicy      `json:"placement"`
 	Execution  domain.ExecutionPolicy      `json:"execution"`
-	Metadata   map[string]string           `json:"metadata,omitempty"`
-	Raw        map[string]json.RawMessage  `json:"raw,omitempty"`
+	// Artifacts names immutable content by version. Version identities carry no
+	// secret material, and what a Run reads and publishes is exactly what a
+	// reader of the public log needs to reconstruct the dependency graph.
+	Artifacts domain.ArtifactRequirements `json:"artifacts"`
+	Metadata  map[string]string           `json:"metadata,omitempty"`
+	Raw       map[string]json.RawMessage  `json:"raw,omitempty"`
 }
 
 type publicContainerSpec struct {
@@ -61,6 +65,7 @@ func publicWorkload(rev domain.WorkloadRevision) publicWorkloadRevision {
 			Network:   rev.Spec.Network,
 			Placement: rev.Spec.Placement,
 			Execution: rev.Spec.Execution,
+			Artifacts: rev.Spec.Artifacts,
 			Metadata:  rev.Spec.Metadata,
 			Raw:       rev.Spec.Raw,
 		},

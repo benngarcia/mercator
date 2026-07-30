@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "classification": "green",
   "kind": "demo",
-  "summary": "A producer publishes an immutable Artifact on a partly warm Rental; its dependent consumer then prefers the same warm capacity, survives ambiguous provider delivery and a deterministic control-plane restart, and reaches the same replayable terminal result.",
+  "summary": "A producer publishes an immutable Artifact on a partly warm Rental; its dependent consumer then reuses the same warm capacity, survives ambiguous provider delivery and a deterministic control-plane restart, and reaches the same replayable terminal result. The consumer reads two inputs and the Rental holds a checked copy of one of them, so the decision shows both halves of Artifact locality at once: no read where something verified the copy, the whole read on the checkpoint its own producer wrote, because a workload's own output is not a copy anybody may be placed on.",
   "seed": "mercator-lab-vertical-v1",
   "world": {
     "images": {
@@ -34,16 +34,35 @@
     "artifacts": [
       {
         "id": "artifact:model-checkpoint:v1",
-        "size": "40GB"
+        "content_digest": "sha256:c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+        "size": "40GB",
+        "produced_by": "producer"
+      },
+      {
+        "id": "artifact:tokenizer:v1",
+        "content_digest": "sha256:70707070707070707070707070707070707070707070707070707070707070ab",
+        "size": "4GB"
       }
     ],
     "rentals": [
       {
         "id": "rental-warm",
+        "artifact_replicas": [
+          {
+            "artifact": "artifact:tokenizer:v1",
+            "state": "verified"
+          }
+        ],
         "cached_layers": [
           "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         ],
-        "cache_mounts": ["compiler-cache"],
+        "cache_mounts": [
+          {
+            "name": "compiler-cache",
+            "compatibility_key": "cuda-12.4",
+            "size": "8GB"
+          }
+        ],
         "rate_per_hour_usd": 2.5
       }
     ],
@@ -70,7 +89,13 @@
           "expected_runtime": "8m",
           "max_runtime": "20m",
           "produces_artifacts": ["artifact:model-checkpoint:v1"],
-          "cache_mounts": [{"name": "compiler-cache"}]
+          "cache_mounts": [
+            {
+              "name": "compiler-cache",
+              "compatibility_key": "cuda-12.4",
+              "size": "8GB"
+            }
+          ]
         }
       },
       {
@@ -80,7 +105,10 @@
           "image": "consumer@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           "expected_runtime": "6m",
           "max_runtime": "20m",
-          "consumes_artifacts": ["artifact:model-checkpoint:v1"]
+          "consumes_artifacts": [
+            "artifact:model-checkpoint:v1",
+            "artifact:tokenizer:v1"
+          ]
         }
       }
     ]

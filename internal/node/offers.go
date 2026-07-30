@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,6 +71,7 @@ func (registry *Registry) Ref(ctx context.Context, workspaceID, nodeID string) (
 func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapshot {
 	host := record.Facts.Host
 	support := registry.NodeSupport()
+	platform := domain.Platform{OS: hostOS(host.OS), Architecture: host.Architecture}
 	return domain.OfferSnapshot{
 		ID:           record.ID,
 		RentalID:     record.RentalID,
@@ -83,11 +85,16 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 		// on their age is what stops Placement from choosing a machine whose
 		// last word is minutes old.
 		ExpiresAt: record.Facts.ObservedAt.Add(registry.offerFreshness()),
-		Platform:  domain.Platform{OS: hostOS(host.OS), Architecture: host.Architecture},
+		Platform:  platform,
 		Resources: domain.ResourceInventory{
-			CPUMillis:          host.CPUMillis,
-			MemoryBytes:        host.MemoryBytes,
-			EphemeralDiskBytes: host.DiskFreeBytes,
+			CPUMillis:   host.CPUMillis,
+			MemoryBytes: host.MemoryBytes,
+			// An offer states the room this node established it has left. A node
+			// that could not measure its disk offers none, which strikes it out
+			// of every placement on the disk floor a workload declares, out loud
+			// and in the record. It stays enrolled while it says so, because its
+			// containers and their exits are facts the fleet still needs.
+			EphemeralDiskBytes: host.Disk.FreeBytes,
 			Accelerators:       host.Accelerators,
 		},
 		Capabilities: domain.CapabilityProfile{
@@ -110,10 +117,20 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 			Pricing:       domain.PricingCapabilities{Known: record.ShadowPriceUSDPerHour > 0},
 			Observability: domain.ObservabilityCapabilities{Logs: "container"},
 		},
-		Network:  domain.NetworkFacts{Download: host.Network},
-		Pricing:  shadowPrice(record),
-		Queue:    &domain.QueueSnapshot{},
-		Images:   imageInventory(record.Facts),
+		Network: domain.NetworkFacts{Download: host.Network},
+		Pricing: shadowPrice(record),
+		Queue:   &domain.QueueSnapshot{},
+		Images:  imageInventory(record.Facts, platform),
+		// What copies this node holds is the node's own answer, carried through
+		// unchanged. The control plane has no second source for it and must not
+		// manufacture one: an inventory this projection marked enumerated from
+		// the heartbeat's timestamp would state "I hold no copy" as a fact for
+		// every runtime that has no replica store to look in.
+		Artifacts: record.Facts.Artifacts,
+		// The caches this node holds travel the same way, and for the same
+		// reason: each entry names the workspace that owns it, and only the node
+		// can say what is on its disk.
+		Caches:   record.Facts.Caches,
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }
@@ -133,11 +150,27 @@ func shadowPrice(record Record) domain.PriceModel {
 	}
 }
 
-// imageInventory projects what the node reported holding. It states digests
-// rather than a missing-byte count, because the node cannot know the size of an
-// image it never pulled, and answering that question with a zero is what made
-// every node look fully warm.
-func imageInventory(facts capability.NodeFacts) domain.ImageInventory {
+// imageInventory projects what the node reported holding, in whichever digest
+// space its runtime can enumerate. It states what is here rather than what is
+// missing, because the node cannot know the size of an image it never pulled,
+// and answering that question with a zero is what made every node look fully
+// warm. What a Run still owes is the scheduler's subtraction against the
+// image's manifest, and only the scheduler holds both halves.
+//
+// An image counts as held whole only when the build this machine holds is the
+// build this machine runs, and only when the machine has unpacked it. A
+// multi-platform image is listed under one index digest whichever platform was
+// fetched, so a host that pulled the arm64 build reports the same name an amd64
+// Run is pinned to, and reading that name alone would price a full 18GB fetch
+// as nothing to do. Layers need no such test: they are content-addressed, so
+// another platform's layers simply do not match.
+//
+// An image whose content is here and which cannot start is projected as pulled
+// rather than held. Counting only hot images and dropping the rest made partial
+// reuse invisible: a host halfway through assembling an image looked exactly
+// like one that had never heard of it, and the decision sent an operator after
+// a network problem for local work.
+func imageInventory(facts capability.NodeFacts, host domain.Platform) domain.ImageInventory {
 	inventory := domain.ImageInventory{
 		// An enrolled node always enumerates. An empty inventory from a node is
 		// the truthful claim that it holds nothing, which is a different fact
@@ -146,16 +179,56 @@ func imageInventory(facts capability.NodeFacts) domain.ImageInventory {
 		ObservedAt: facts.ObservedAt,
 	}
 	for _, image := range facts.Images {
-		if image.State == capability.LocalityHot && image.ManifestDigest != "" {
-			inventory.ImageDigests = append(inventory.ImageDigests, image.ManifestDigest)
-		}
-		for _, layer := range image.LayerDigests {
-			if !inventory.HoldsLayer(layer) {
-				inventory.LayerDigests = append(inventory.LayerDigests, layer)
-			}
-		}
+		inventory = recordImage(inventory, image, host)
+		inventory.LayerDigests = addNew(inventory.LayerDigests, image.LayerDigests)
+		inventory.LayerDiffIDs = addNew(inventory.LayerDiffIDs, image.LayerDiffIDs)
 	}
 	return inventory
+}
+
+// recordImage files one image under what the node established about it: ready
+// to run, here and not assembled, looked at and not accounted for, or absent.
+// Only a node that says the bytes are here files an image as pulled, because
+// that list is what makes the scheduler charge local assembly instead of a
+// transfer, and a machine that cannot account for content it does not hold
+// would be billed for work it cannot do.
+//
+// An image the runtime could not describe is filed as the silence it was.
+// Filing it nowhere read as absence, because everything around it in this
+// inventory is Known: the decision then stated at full confidence that a host
+// holds none of an image that may well be assembled on it, which is the guess
+// the unknown state exists to keep a node from making. That answer is filed
+// before the platform test, because an image whose build nothing could read is
+// not an image known to be another platform's.
+func recordImage(inventory domain.ImageInventory, image capability.ImageLocality, host domain.Platform) domain.ImageInventory {
+	if image.ManifestDigest == "" {
+		return inventory
+	}
+	switch {
+	case image.State == domain.LocalityUnknown:
+		inventory.UnknownImageDigests = append(inventory.UnknownImageDigests, image.ManifestDigest)
+	case image.Platform != host:
+		// Another platform's build under the same name. This host holds none of
+		// the content a Run pinned here would start, and its layers are
+		// content-addressed, so nothing about it is worth recording.
+	case image.State == domain.LocalityHot:
+		inventory.ImageDigests = append(inventory.ImageDigests, image.ManifestDigest)
+	case image.ContentPresent:
+		inventory.PulledImageDigests = append(inventory.PulledImageDigests, image.ManifestDigest)
+	}
+	return inventory
+}
+
+// addNew appends the digests this node reported that are not already listed.
+// Layers are shared between images, so the same one arrives once per image
+// holding it.
+func addNew(known, reported []string) []string {
+	for _, digest := range reported {
+		if digest != "" && !slices.Contains(known, digest) {
+			known = append(known, digest)
+		}
+	}
+	return known
 }
 
 // hostOS normalizes what a container runtime reports about its host ("Docker

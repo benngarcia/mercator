@@ -302,7 +302,7 @@ func TestAHeartbeatRenewsTheLeaseAndReplacesTheNodesFacts(t *testing.T) {
 		ObservedAt: clock.Now(),
 		Facts: &capability.NodeFacts{
 			ObservedAt: clock.Now(),
-			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker", DiskFreeBytes: 500 << 30},
+			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker", Disk: capability.DiskFacts{Known: true, FreeBytes: 500 << 30}},
 		},
 	})
 	clock.Advance(node.DefaultLease/2 + time.Second)
@@ -318,8 +318,82 @@ func TestAHeartbeatRenewsTheLeaseAndReplacesTheNodesFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("facts: %v", err)
 	}
-	if facts.Host.DiskFreeBytes != 500<<30 {
+	if facts.Host.Disk.FreeBytes != 500<<30 {
 		t.Fatalf("facts were not replaced by the heartbeat: %+v", facts.Host)
+	}
+}
+
+// TestARoomNobodyMeasuredIsNeverOfferedAsRoom is the coupling between the two
+// halves of one report. A node states the room it has left and separately
+// whether it established the number, and nothing in the wire contract stops a
+// report from carrying both a measurement and a denial that it made one: an
+// agent that keeps a previous answer while marking it unestablished, an older
+// build, or another implementation of the NodeRuntime protocol. Read as two
+// independent fields it advertises 400GiB nobody measured, a Run with a floor
+// is admitted onto it, and the fleet listing states the contradiction back to
+// the operator. What the control plane keeps is the half the machine stands
+// behind, once, where the report comes in.
+func TestARoomNobodyMeasuredIsNeverOfferedAsRoom(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+
+	report(t, registry, bootstrap.NodeID, enrollment.SessionToken, node.Event{
+		ID:         "evt-heartbeat-unestablished-disk",
+		Kind:       node.EventHeartbeat,
+		ObservedAt: clock.Now(),
+		Facts: &capability.NodeFacts{
+			ObservedAt: clock.Now(),
+			Host: capability.HostFacts{
+				OS:               "linux",
+				ContainerRuntime: "docker",
+				Disk:             capability.DiskFacts{Known: false, TotalBytes: 500 << 30, FreeBytes: 400 << 30},
+			},
+		},
+	})
+
+	offers, err := registry.Offers(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("list node offers: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("offers = %d, want the one enrolled node", len(offers))
+	}
+	if offers[0].Resources.EphemeralDiskBytes != 0 {
+		t.Fatalf("the offer advertises %d bytes of room from a measurement the node says it did not make",
+			offers[0].Resources.EphemeralDiskBytes)
+	}
+	records, err := registry.List(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("list nodes: %v", err)
+	}
+	if got := records[0].Facts.Host.Disk.FreeBytes; got != 0 {
+		t.Fatalf("the record kept %d bytes nobody established", got)
+	}
+	if got := records[0].Disk(); got != node.DiskUnmeasurable {
+		t.Fatalf("the node's disk reads %q, and the machine said it could not measure it", got)
+	}
+}
+
+// TestAnInvitedNodeHasReportedNothingRatherThanFailedToMeasure separates the
+// two answers a zero disk could mean. An identity exists before the machine
+// does, and until its agent speaks nobody has attempted a measurement, so
+// "this daemon cannot be measured" is a claim about a host Mercator has never
+// heard from.
+func TestAnInvitedNodeHasReportedNothingRatherThanFailedToMeasure(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+
+	records, err := registry.List(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("list nodes: %v", err)
+	}
+
+	if len(records) != 1 || records[0].ID != bootstrap.NodeID {
+		t.Fatalf("records = %+v, want the invited identity", records)
+	}
+	if got := records[0].Disk(); got != node.DiskNeverReported {
+		t.Fatalf("an invited node's disk reads %q before its agent has said anything", got)
 	}
 }
 
@@ -470,3 +544,31 @@ func report(t *testing.T, registry *node.Registry, nodeID, sessionToken string, 
 }
 
 func exitCode(code int) *int { return &code }
+
+// TestANodeDeclaresOnlyWhatItsRuntimePerforms is ADR 0005 one layer down. A
+// negotiated capability set is a promise Placement will route work against, so
+// a declaration the runtime cannot honour is capacity Mercator believes in and
+// does not have. This node declared Artifact replicas, Cache Mounts, prewarming,
+// and garbage collection while the Docker runtime implemented none of them; each
+// becomes true again in the slice that earns it, and only garbage collection is
+// still owed.
+func TestANodeDeclaresOnlyWhatItsRuntimePerforms(t *testing.T) {
+	registry, _ := newRegistry(t)
+
+	support := registry.NodeSupport()
+
+	earned := map[string]bool{
+		"exact_image_inventory": support.ExactImageInventory,
+		"cache_mounts":          support.CacheMounts,
+		"prewarm":               support.Prewarm,
+		"artifact_replicas":     support.ArtifactReplicas,
+	}
+	for name, declared := range earned {
+		if !declared {
+			t.Errorf("the agent performs %s, so the node has to declare it or Placement routes no work against it", name)
+		}
+	}
+	if support.GarbageCollection {
+		t.Error("the node declares garbage_collection, and nothing on the machine reclaims a byte")
+	}
+}

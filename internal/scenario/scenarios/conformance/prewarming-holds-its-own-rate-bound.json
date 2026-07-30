@@ -1,0 +1,113 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One machine already holding the image, and three Runs that want two versions of one corpus. The first occupies the machine for forty minutes, so the other two queue and Mercator knows where they are going. The second wants artifact:corpus:v70 and Mercator asks for it. The third arrives ninety seconds later wanting artifact:corpus:v7, whose name is a prefix of the name already asked for, and the rate bound holds that second speculative fetch until five minutes after the first one started. The control plane restarts the moment that third Run is recorded, and the bound still holds: when Mercator last began preparing is a moment that happened, so it is kept where a restart cannot lose it. Every part of this fixture exists to be failable. A control plane that compared the new desire against the joined text of the last one would read v7 as content it had already asked for, decide the desire added nothing, skip the bound it only applies to additions, and start a second transfer inside the operator's minimum gap. A control plane with no rate bound at all would do the same, and so would one whose clock lived only in the process that restarts here. The gap here is longer than the cadence Mercator reconciles at and the third Run arrives between two ticks, so nothing about the harness can produce the gap on the control plane's behalf.",
+  "seed": "mercator-lab-prewarm-rate-bound-v1",
+  "world": {
+    "prewarm": {
+      "max_concurrent": 2,
+      "min_interval": "5m"
+    },
+    "images": {
+      "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c": {
+        "layers": [
+          {
+            "digest": "sha256:aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66",
+            "size": "20GB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:corpus:v70",
+        "content_digest": "sha256:cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77bb88",
+        "size": "20GB"
+      },
+      {
+        "id": "artifact:corpus:v7",
+        "content_digest": "sha256:dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77bb88cc99",
+        "size": "20GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "builder",
+        "rate_per_hour_usd": 3.0,
+        "cached_images": [
+          "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
+        ],
+        "resources": {
+          "cpu_millis": 16000,
+          "memory": "128GB",
+          "disk": "2TB"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "occupant",
+        "candidate": "builder",
+        "minimum": "40m",
+        "maximum": "40m"
+      },
+      {
+        "run": "patient",
+        "candidate": "builder",
+        "minimum": "10m",
+        "maximum": "10m"
+      },
+      {
+        "run": "auditor",
+        "candidate": "builder",
+        "minimum": "10m",
+        "maximum": "10m"
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "restart-when-the-third-run-is-recorded",
+      "trigger": {
+        "event": "compute.run.requested.v1",
+        "run": "auditor"
+      },
+      "action": "restart_control_plane"
+    }
+  ],
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "occupant",
+        "at": "0s",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "expected_runtime": "40m",
+          "max_runtime": "2h"
+        }
+      },
+      {
+        "name": "patient",
+        "at": "1m",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "consumes_artifacts": ["artifact:corpus:v70"],
+          "expected_runtime": "10m",
+          "max_runtime": "1h"
+        }
+      },
+      {
+        "name": "auditor",
+        "at": "2m30s",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "consumes_artifacts": ["artifact:corpus:v7"],
+          "expected_runtime": "10m",
+          "max_runtime": "1h"
+        }
+      }
+    ]
+  }
+}

@@ -283,20 +283,77 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 	checkBound("queue_seconds", expect.QueueSeconds, candidate.Estimates.QueueSeconds.Expected)
 	checkBound("provision_seconds", expect.ProvisionSeconds, candidate.Estimates.ProvisionSeconds.Expected)
 	checkBound("pull_seconds", expect.PullSeconds, candidate.Estimates.PullSeconds.Expected)
+	if expect.PullSource != "" && candidate.Estimates.PullSeconds.Source != expect.PullSource {
+		fail("pull_source: want %q, got %q", expect.PullSource, candidate.Estimates.PullSeconds.Source)
+	}
+	if expect.PullConfidence != nil && candidate.Estimates.PullSeconds.Confidence != *expect.PullConfidence {
+		fail("pull_confidence: want %v, got %v", *expect.PullConfidence, candidate.Estimates.PullSeconds.Confidence)
+	}
+	if expect.ImageLocality != "" && candidate.ImageLocality != expect.ImageLocality {
+		fail("image_locality: want %q, got %q", expect.ImageLocality, candidate.ImageLocality)
+	}
 	if expect.Schedule != nil {
 		failures = append(failures, assertScheduleEvidence(rec, name, id, *expect.Schedule)...)
 	}
+	checkBound("artifact_seconds", expect.ArtifactSeconds, candidate.Estimates.ArtifactSeconds.Expected)
 	for _, artifactID := range sortedKeys(expect.Artifacts) {
-		present, ok := candidateArtifactEvidence(rec, id, artifactID)
+		found, ok := artifactEvidence(candidate, artifactID)
 		if !ok {
 			fail("records no Artifact evidence for %q", artifactID)
 			continue
 		}
-		if want := expect.Artifacts[artifactID] == "hit"; present != want {
-			fail("Artifact %q: expected %s, recorded %s", artifactID, expect.Artifacts[artifactID], hitOrMiss(present))
+		if want := ArtifactExpectations[expect.Artifacts[artifactID]]; found.Locality != want {
+			fail("Artifact %q: expected %q, recorded %q", artifactID, want, found.Locality)
+		}
+	}
+	for _, cache := range sortedKeys(expect.Caches) {
+		found, ok := cacheEvidence(candidate, cache)
+		if !ok {
+			fail("records no cache evidence for %q", cache)
+			continue
+		}
+		if want := CacheExpectations[expect.Caches[cache]]; found.Locality != want {
+			fail("cache %q: expected %q, recorded %q", cache, want, found.Locality)
 		}
 	}
 	return failures
+}
+
+// CacheExpectations is what a fixture's word for cache warmth means. A Cache
+// Mount is the application's own state under a name, so there is no partial
+// answer: this host holds the generation the workload asked for, it does not, or
+// nobody could ask it.
+var CacheExpectations = map[string]domain.LocalityState{
+	"hit":     domain.LocalityHot,
+	"miss":    domain.LocalityCold,
+	"unknown": domain.LocalityUnknown,
+}
+
+func cacheEvidence(candidate domain.CandidateDecision, name string) (domain.CacheEvidence, bool) {
+	for _, found := range candidate.CacheEvidence {
+		if found.Name == name {
+			return found, true
+		}
+	}
+	return domain.CacheEvidence{}, false
+}
+
+// ArtifactExpectations is what a fixture's word for Artifact locality means. A
+// fixture asks the question an operator asks, "was it here", and the third
+// answer is the one this architecture insists on: nobody could say.
+var ArtifactExpectations = map[string]domain.LocalityState{
+	"hit":     domain.LocalityHot,
+	"miss":    domain.LocalityCold,
+	"unknown": domain.LocalityUnknown,
+}
+
+func artifactEvidence(candidate domain.CandidateDecision, artifactID string) (domain.ArtifactEvidence, bool) {
+	for _, found := range candidate.ArtifactEvidence {
+		if found.ArtifactID == artifactID {
+			return found, true
+		}
+	}
+	return domain.ArtifactEvidence{}, false
 }
 
 type scheduleEvidenceRecord struct {
@@ -370,36 +427,6 @@ func candidateScheduleEvidence(rec recordedDecision, id string) (scheduleEvidenc
 	return scheduleEvidenceRecord{}, false
 }
 
-// candidateArtifactEvidence reads the target contract for Artifact evidence
-// from the decision's raw JSON: each candidate carries
-// {"artifact_evidence": [{"artifact_id", "present"}]} once Artifact scoring
-// exists.
-func candidateArtifactEvidence(rec recordedDecision, id, artifactID string) (bool, bool) {
-	var candidates []map[string]json.RawMessage
-	if err := json.Unmarshal(rec.raw["candidates"], &candidates); err != nil {
-		return false, false
-	}
-	for _, candidate := range candidates {
-		var candidateID string
-		if err := json.Unmarshal(candidate["offer_snapshot_id"], &candidateID); err != nil || candidateID != id {
-			continue
-		}
-		var evidence []struct {
-			ArtifactID string `json:"artifact_id"`
-			Present    bool   `json:"present"`
-		}
-		if err := json.Unmarshal(candidate["artifact_evidence"], &evidence); err != nil {
-			return false, false
-		}
-		for _, entry := range evidence {
-			if entry.ArtifactID == artifactID {
-				return entry.Present, true
-			}
-		}
-	}
-	return false, false
-}
-
 func findCandidate(decision domain.BookingDecision, id string) (domain.CandidateDecision, bool) {
 	for _, candidate := range decision.Candidates {
 		if candidate.OfferSnapshotID == id {
@@ -427,13 +454,6 @@ func describeRejections(rejections []domain.Violation) string {
 		parts = append(parts, rejection.Code+"@"+rejection.Path)
 	}
 	return fmt.Sprintf("%v", parts)
-}
-
-func hitOrMiss(hit bool) string {
-	if hit {
-		return "hit"
-	}
-	return "miss"
 }
 
 func sortedKeys[V any](m map[string]V) []string {

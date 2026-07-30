@@ -78,6 +78,11 @@ type LaunchRequest struct {
 	Environment        []EnvironmentBinding        `json:"environment,omitempty"`
 	Ports              []domain.PortSpec           `json:"ports,omitempty"`
 	Resources          domain.ResourceRequirements `json:"resources"`
+	// CacheMounts is the mutable state this launch asks its host to attach, as
+	// the workload declared it. It is recorded on the launch intent rather than
+	// re-read from the workload later, for the same reason the selected offer's
+	// lane is: what a Run was launched with is a fact about that launch.
+	CacheMounts []domain.CacheMountRequirement `json:"cache_mounts,omitempty"`
 	// MaxRuntimeSeconds is the run's execution bound from the workload's
 	// ExecutionPolicy. Adapters that support provider-side reclamation (e.g.
 	// Shadeform auto_delete) derive their TTL backstop from it.

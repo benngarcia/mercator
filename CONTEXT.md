@@ -65,20 +65,52 @@ Its audited outcome is a Booking Decision. "Scheduling" refers only to queue
 positions within a Rental Schedule, never to this choosing.
 _Avoid_: Scheduling (for the choosing), the Scheduler
 
+**Artifact**:
+Immutable, versioned content one Run publishes and other Runs read. The
+version ID is its identity and never changes what it names; the catalog entry
+carries the content digest, the object-store location, the size, the producing
+Run, and the workspace it is scoped to. A Run that declares an Artifact input is
+accepted at once and held unplaced until that version is durable, so it waits
+for a publication and never for a machine.
+_Avoid_: Dataset, output, blob, file
+
+**Object Store**:
+Where an Artifact's durable copy lives, and the only authority on whether it
+exists. Mercator implements no distributed filesystem: content is in the object
+store or it is not available, whatever any host is holding.
+_Avoid_: Storage (alone), bucket, backend
+
+**Artifact Replica**:
+One host's local copy of an Artifact version, carrying the digest it claims and
+when that claim was last checked. A verified replica is what a Run may read
+instead of the object store, which makes it a speedup; an unverified one is
+bytes nobody vouched for. Losing every replica of an Artifact costs time and
+never availability.
+_Avoid_: Cache (for Artifacts), local dataset, mirror
+
 **Cache Mount**:
 A workload-declared named mount whose content persists on a Rental across
 Runs. Its identity is the workspace-scoped cache name; two Runs share data
-exactly when they declare the same name. Mercator manages the cache's
-presence on a Rental; its contents and any sync-from-remote logic belong to
-the application. Declaring a shared name is a Warmth signal for Placement,
+exactly when they declare the same name in the same workspace, and two
+workspaces that declare one name have two caches that never meet. It is mutable
+and application-owned: Mercator manages its presence on a Rental and knows
+nothing about its contents, so it can never carry immutable identity the way an
+Artifact does. Beside the name, a Run states a compatibility key naming which
+generation of content it can use; Mercator compares that key and never
+interprets it, so content declared under another generation is worth what no
+content is worth and gets storage of its own. Its contents and any
+sync-from-remote logic belong to the application, and declaring a shared name is
 never an exclusivity or single-writer guarantee.
 _Avoid_: Volume (alone), dataset, shared storage
 
 **Warmth**:
 How much of a Run's needs are already present on a Rental. Its components are
-Image Warmth (Docker layers already on the Rental) and Data Warmth (the
-Run's Cache Mounts already populated there). Placement scores Warmth; a warm
-Rental is one with nonzero Warmth for a given Run.
+Image Warmth (the layers of the Run's image already unpacked there) and Data
+Warmth (verified local copies of the Artifacts the Run reads). Placement scores
+Warmth; a warm Rental is one with nonzero Warmth for a given Run. A populated
+Cache Mount is not Warmth: its content has no identity Mercator can compare a
+Run's needs against, so it is best-effort speed rather than something scoring
+can be founded on.
 _Avoid_: Code plane, data plane, cache affinity, locality (alone)
 
 **Booking Decision**:

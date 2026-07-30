@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -40,13 +41,23 @@ type WorkloadRevision struct {
 }
 
 type WorkloadSpec struct {
-	Containers []ContainerSpec            `json:"containers"`
-	Resources  ResourceRequirements       `json:"resources"`
-	Network    NetworkRequirements        `json:"network"`
-	Placement  PlacementPolicy            `json:"placement"`
-	Execution  ExecutionPolicy            `json:"execution"`
-	Metadata   map[string]string          `json:"metadata,omitempty"`
-	Raw        map[string]json.RawMessage `json:"raw,omitempty"`
+	Containers []ContainerSpec      `json:"containers"`
+	Resources  ResourceRequirements `json:"resources"`
+	Network    NetworkRequirements  `json:"network"`
+	Placement  PlacementPolicy      `json:"placement"`
+	Execution  ExecutionPolicy      `json:"execution"`
+	// Artifacts is the immutable content this workload reads and publishes. A
+	// declared input is a dependency on a durable Artifact rather than on any
+	// particular host, which is what keeps replicas an optimisation.
+	Artifacts ArtifactRequirements `json:"artifacts"`
+	// Caches is the mutable state this workload wants mounted across Runs. It is
+	// best-effort by construction: a cache that is not here costs the
+	// application the work of rebuilding what was in it and never keeps the Run
+	// from running. Every name is scoped to the Run's own workspace, which is
+	// what makes two tenants naming one cache two caches.
+	Caches   []CacheMountRequirement    `json:"caches,omitempty"`
+	Metadata map[string]string          `json:"metadata,omitempty"`
+	Raw      map[string]json.RawMessage `json:"raw,omitempty"`
 }
 
 type ContainerSpec struct {
@@ -203,20 +214,135 @@ type OfferSnapshot struct {
 	// Lane is the offer's reuse semantics, stamped by the Broker from the
 	// backend's negotiated capability Declaration rather than claimed by the
 	// adapter itself. An adapter cannot advertise reuse it cannot perform.
-	Lane         ExecutionLane       `json:"lane"`
-	NativeRef    string              `json:"native_ref"`
-	ObservedAt   time.Time           `json:"observed_at"`
-	ExpiresAt    time.Time           `json:"expires_at"`
-	Platform     Platform            `json:"platform"`
-	Resources    ResourceInventory   `json:"resources"`
-	Capabilities CapabilityProfile   `json:"capabilities"`
-	Network      NetworkFacts        `json:"network"`
-	Pricing      PriceModel          `json:"pricing"`
-	Queue        *QueueSnapshot      `json:"queue,omitempty"`
-	Provisioning *Estimate           `json:"provisioning,omitempty"`
-	Images       ImageInventory      `json:"images"`
-	Capacity     CapacityEvidence    `json:"capacity"`
-	Reliability  ReliabilityEvidence `json:"reliability,omitempty"`
+	Lane         ExecutionLane     `json:"lane"`
+	NativeRef    string            `json:"native_ref"`
+	ObservedAt   time.Time         `json:"observed_at"`
+	ExpiresAt    time.Time         `json:"expires_at"`
+	Platform     Platform          `json:"platform"`
+	Resources    ResourceInventory `json:"resources"`
+	Capabilities CapabilityProfile `json:"capabilities"`
+	Network      NetworkFacts      `json:"network"`
+	Pricing      PriceModel        `json:"pricing"`
+	Queue        *QueueSnapshot    `json:"queue,omitempty"`
+	Provisioning *Estimate         `json:"provisioning,omitempty"`
+	Images       ImageInventory    `json:"images"`
+	// Artifacts is the immutable content this host says it holds a local copy
+	// of. It is placement evidence and never a dependency's authority: a Run's
+	// inputs are durable in the object store or the Run does not go anywhere.
+	Artifacts ArtifactInventory `json:"artifacts"`
+	// Caches is the mutable, application-owned state this host says it holds.
+	// Every entry names the workspace that owns it, because a cache's identity
+	// is workspace-scoped and an offer is read by every workspace's Runs.
+	Caches      CacheInventory      `json:"caches,omitzero"`
+	Capacity    CapacityEvidence    `json:"capacity"`
+	Reliability ReliabilityEvidence `json:"reliability,omitempty"`
+}
+
+// KeepsWhatItRuns answers whether content a workload fetches here is still here
+// when the next Run asks. The two halves are separate reasons for the same
+// answer: a provisionable offer names a machine that does not exist yet, so it
+// is a template rather than a host, and an ephemeral-lane offer is a one-shot
+// product that holds nothing once its workload exits however it was allocated.
+// A standing reusable offer is the only capacity Mercator keeps, which makes it
+// the only place Warmth can accumulate.
+func (offer OfferSnapshot) KeepsWhatItRuns() bool {
+	return offer.Kind == OfferKindStanding && offer.Lane.Reusable()
+}
+
+// DefaultRegistryDownloadMbps is what a host is assumed to pull image content
+// at when nothing has measured its link to a registry. It is an assumption, so
+// it is stated once: a predictor and a reference model that disagree about the
+// unmeasured case would disagree about every cold candidate for a reason that
+// has nothing to do with either model.
+const DefaultRegistryDownloadMbps = 500.0
+
+// AssumedLinkConfidence is how much a transfer duration is worth when the bytes
+// that have to move are measured and the link they cross is not. It is
+// deliberately short of certainty: nothing measures a host's registry
+// throughput today, so a full-confidence duration would be an assumption
+// wearing a measurement's clothes. What is certain in that case is the byte
+// count, which is what tells a warm candidate from a cold one; the seconds it
+// takes are the guess.
+const AssumedLinkConfidence = 0.5
+
+// LaunchSeconds is what starting a container costs on a machine already holding
+// everything it needs. It is an assumption like the rates beside it, stated once
+// for the same reason: a predictor and a reference model that disagreed about it
+// would disagree about every warm candidate.
+const LaunchSeconds = 1.0
+
+// AssumedUnpackMBps is how fast a host is assumed to decompress content it
+// already holds into a runnable layer chain, when nothing has measured its
+// storage. It stands beside DefaultRegistryDownloadMbps for the same reason and
+// with the same standing: a stated assumption rather than a measurement, so a
+// duration derived from it is worth AssumedLinkConfidence, which is what any
+// duration over an unmeasured rate is worth.
+const AssumedUnpackMBps = 250.0
+
+// LinkSpeed is how fast content moves onto a host and how much a duration
+// derived from that number is worth. The two travel together because they are
+// one answer: a speed nothing stands behind cannot produce a confident
+// duration, however precise the arithmetic on it looks.
+type LinkSpeed struct {
+	Mbps       float64
+	Confidence float64
+}
+
+// RegistryDownload is this host's pessimistic (p10) registry throughput. A
+// published fact is only worth what its publisher said it was worth, and only
+// while it is still valid as of the moment this offer was observed: a fact
+// carries its own confidence and its own expiry, and reading the mere existence
+// of one as a measurement is how an unmeasured constant becomes a certainty.
+// Absent a valid fact the answer is the standing assumption, saying so.
+func (offer OfferSnapshot) RegistryDownload() LinkSpeed {
+	for _, fact := range offer.Network.Download {
+		if fact.Scope != NetworkScopeRegistry || fact.Statistic != "p10" || fact.ValueMbps <= 0 {
+			continue
+		}
+		if !fact.ValidUntil.IsZero() && !fact.ValidUntil.After(offer.ObservedAt) {
+			continue
+		}
+		return LinkSpeed{Mbps: fact.ValueMbps, Confidence: fact.Confidence}
+	}
+	return LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence}
+}
+
+// RegistryDownloadMbps is the speed alone, for the simulators that have to move
+// bytes rather than predict how long moving them takes.
+func (offer OfferSnapshot) RegistryDownloadMbps() float64 {
+	return offer.RegistryDownload().Mbps
+}
+
+// UncertaintyPenalty is how much of this offer nobody stands behind, in
+// comparable units: for a fact published with a confidence, the part of it that
+// is missing, and for a fact nobody published at all, the whole of it. It lives
+// here because it is a property of the offer, and because the predictor and the
+// Lab's reference model both need it: they were computing it separately, they
+// disagreed about two of the four terms, and they agreed on the answer only
+// because ScoreWeights.UncertaintyPenaltyUSD multiplies it by zero in every
+// deployment. Two readings of one quantity is how they drift, and this one had
+// already drifted.
+//
+// It counts what those two implementations were already stated against and
+// nothing more. Whether an offer that could not enumerate its Artifact copies
+// belongs here too is a question for the calibration that will finally read this
+// number: a penalty term nothing multiplies is a claim no test can falsify, so
+// this grows when something measures what it is worth.
+func (offer OfferSnapshot) UncertaintyPenalty() float64 {
+	penalty := 0.0
+	if offer.Capacity.Confidence > 0 && offer.Capacity.Confidence < 1 {
+		penalty += 1 - offer.Capacity.Confidence
+	}
+	if offer.Reliability.Confidence > 0 && offer.Reliability.Confidence < 1 {
+		penalty += 1 - offer.Reliability.Confidence
+	}
+	if !offer.Images.Known {
+		penalty++
+	}
+	if !offer.Pricing.Known {
+		penalty++
+	}
+	return penalty
 }
 
 type ResourceInventory struct {
@@ -340,24 +466,81 @@ type ImageInventory struct {
 	Known bool `json:"known"`
 	// ObservedAt is when the holder last looked. Locality decays: content can
 	// be reclaimed between one heartbeat and the next, so the age of this
-	// answer is material to how much it is worth.
+	// answer is material to how much it is worth. How long anyone stands behind
+	// it is the offer's own expiry: the enumeration and the capacity claim come
+	// from one observation, and Placement refuses an expired offer outright
+	// rather than reading half of it.
 	ObservedAt time.Time `json:"observed_at,omitzero"`
-	// ImageDigests is every image manifest the host holds whole.
+	// ImageDigests is every image manifest the host holds whole AND has
+	// unpacked, so it can start a container on it now.
 	ImageDigests []string `json:"image_digests,omitempty"`
-	// LayerDigests is every layer blob the host holds. A host can hold layers
-	// of an image it has never held whole, which is the entire reason a second
-	// version of the same image starts faster than a first.
+	// PulledImageDigests is every image whose content arrived here and which is
+	// not assembled into a runnable layer chain. Fetching and unpacking are
+	// separate acts, and a host that has done the first and not the second is
+	// neither warm nor cold: what is left is local work rather than a pull, and
+	// an operator told "cold" about a machine sitting on the image would go
+	// looking for a network problem that is not there.
+	PulledImageDigests []string `json:"pulled_image_digests,omitempty"`
+	// UnknownImageDigests is every image this host looked at and could not
+	// account for. A host that enumerates itself can still fail on one image: a
+	// runtime that will not describe it, or a store reporting some of its
+	// content present and unable to name which. Listing it here is the host
+	// saying "I looked at this one and cannot answer", which is priced as the
+	// silence it is. Without it an image absent from the other lists reads as
+	// the confident claim that none of it is here, which is exactly the guess
+	// this contract exists to keep a node from making.
+	UnknownImageDigests []string `json:"unknown_image_digests,omitempty"`
+	// LayerDigests is every compressed layer blob the host holds, named the way
+	// a registry manifest names it. A host can hold layers of an image it has
+	// never held whole, which is the entire reason a second version of the same
+	// image starts faster than a first.
 	LayerDigests []string `json:"layer_digests,omitempty"`
+	// LayerDiffIDs is the same content named the way a container daemon names
+	// it: the digest of the uncompressed layer. A Docker daemon can enumerate
+	// only these, so a host that reports them and a manifest that lists blob
+	// digests are talking about the same bytes in two vocabularies that never
+	// meet. The manifest carries both, which is what lets them be compared.
+	LayerDiffIDs []string `json:"layer_diff_ids,omitempty"`
 }
 
-// Holds reports whether this host holds one image whole.
+// Holds reports whether this host holds one image whole and ready to run.
 func (inventory ImageInventory) Holds(imageDigest string) bool {
 	return imageDigest != "" && slices.Contains(inventory.ImageDigests, imageDigest)
 }
 
-// HoldsLayer reports whether this host holds one layer blob.
-func (inventory ImageInventory) HoldsLayer(layerDigest string) bool {
-	return layerDigest != "" && slices.Contains(inventory.LayerDigests, layerDigest)
+// Pulled reports whether this host fetched one image and has not finished
+// assembling it.
+func (inventory ImageInventory) Pulled(imageDigest string) bool {
+	return imageDigest != "" && slices.Contains(inventory.PulledImageDigests, imageDigest)
+}
+
+// Undescribed reports whether this host looked at one image and could not say
+// what it holds of it. It is silence about one image on a host that answered
+// about the rest, which is a weaker claim than the whole enumeration failing
+// and a much weaker one than "none of it is here".
+func (inventory ImageInventory) Undescribed(imageDigest string) bool {
+	return imageDigest != "" && slices.Contains(inventory.UnknownImageDigests, imageDigest)
+}
+
+// LocalityState is how much of some content a host has, as an answer rather
+// than a number. Unknown is first-class: it says nobody could look, which is
+// uncertainty to price and never infeasibility.
+type LocalityState string
+
+const (
+	LocalityHot     LocalityState = "hot"
+	LocalityPartial LocalityState = "partial"
+	LocalityCold    LocalityState = "cold"
+	LocalityUnknown LocalityState = "unknown"
+)
+
+// HoldsLayer reports whether this host holds one layer, in either digest space.
+// Which space a host answers in is a property of its runtime and not of the
+// content, so a layer it reports as a diff ID is as present as one it reports
+// as a blob digest.
+func (inventory ImageInventory) HoldsLayer(layer ImageLayer) bool {
+	return layer.Digest != "" && slices.Contains(inventory.LayerDigests, layer.Digest) ||
+		layer.DiffID != "" && slices.Contains(inventory.LayerDiffIDs, layer.DiffID)
 }
 
 // ImageManifest is one image's exact content. It is a property of the image, so
@@ -369,41 +552,151 @@ type ImageManifest struct {
 	// be told apart on image locality, so the term is zero for all of them and
 	// the comparison is unaffected. The only cost is understating absolute
 	// start latency, which is recorded rather than hidden.
-	Known  bool         `json:"known"`
+	Known bool `json:"known"`
+	// Unreadable is why nothing could state this image's content, when Known is
+	// false. An image nobody pushed, a platform nothing was built for,
+	// credentials a registry refused, and a registry that could not be reached
+	// at all are four different things for an operator to fix, and the Booking
+	// Decision is where they look for the reason a placement stopped telling
+	// warm hosts from cold ones.
+	Unreadable string `json:"unreadable,omitempty"`
+	// Digest is the identity the Run is pinned by, which is the same digest a
+	// host reports having pulled. For a multi-platform image that is the index
+	// digest and not the platform manifest underneath it: the layers below
+	// describe one platform's build, but the name both sides can agree on is
+	// the one the reference carries.
 	Digest string       `json:"digest,omitempty"`
 	Layers []ImageLayer `json:"layers,omitempty"`
 }
 
-// TransferBytes is what a host holding inventory would still have to fetch to
-// run this image. An unknown manifest transfers an unknown amount, which is not
-// the same as nothing.
-func (manifest ImageManifest) TransferBytes(inventory ImageInventory) (bytes int64, known bool) {
-	if !manifest.Known || !inventory.Known {
-		return 0, false
+// ImageWork is what one host still owes before this image can run: bytes to
+// fetch from a registry, and bytes already on the machine that are not yet
+// unpacked into a layer chain a container can be started on. The two are
+// separate because they are different work over different resources, and
+// because a host that already paid the network is not cold however much local
+// assembly is left.
+type ImageWork struct {
+	TransferBytes int64
+	UnpackBytes   int64
+}
+
+// None reports that this image can start here with nothing fetched and nothing
+// assembled first.
+func (work ImageWork) None() bool { return work.TransferBytes == 0 && work.UnpackBytes == 0 }
+
+// StartWork is what this host still owes before the image can start, and what
+// that amounts to as an answer. LocalityUnknown means nobody could say what is
+// here, which is not the same as nobody owing anything: an image has to arrive
+// from somewhere, so a host that will not enumerate itself owes the whole image
+// until something says otherwise. Pricing that silence at zero seconds scored a
+// machine nobody can describe exactly like one that is provably ready, which is
+// the "silence is warmth" error in the one place it costs a placement.
+func (manifest ImageManifest) StartWork(inventory ImageInventory) (ImageWork, LocalityState) {
+	if !manifest.Known {
+		// Nothing resolved the image, so no candidate can be told from another
+		// on locality: the term is the same silence for every one of them and
+		// the comparison is unaffected.
+		return ImageWork{}, LocalityUnknown
 	}
-	if inventory.Holds(manifest.Digest) {
-		return 0, true
+	if inventory.Known && inventory.Holds(manifest.Digest) {
+		return ImageWork{}, LocalityHot
 	}
 	// A manifest that names no layers can confirm a hit and cannot price a
 	// miss. Subtracting an empty layer set would charge a host that holds
 	// nothing the same zero as one holding the whole image, which is the error
 	// this type replaced.
 	if len(manifest.Layers) == 0 {
-		return 0, false
+		return ImageWork{}, LocalityUnknown
 	}
+	if !inventory.Known {
+		return ImageWork{TransferBytes: manifest.compressedBytes()}, LocalityUnknown
+	}
+	// A host that says it pulled this image and cannot run it holds the bytes
+	// of every layer it did not enumerate as unpacked: what it owes on those is
+	// assembly, not a transfer. Charging it the network again would price a
+	// machine sitting on 18GB exactly like one that has never seen the image.
+	pulled := inventory.Pulled(manifest.Digest)
+	work, here := ImageWork{}, 0
 	for _, layer := range manifest.Layers {
-		if !inventory.HoldsLayer(layer.Digest) {
-			bytes += layer.CompressedBytes
+		switch {
+		case inventory.HoldsLayer(layer):
+			here++
+		case pulled:
+			work.UnpackBytes += layer.CompressedBytes
+			here++
+		default:
+			work.TransferBytes += layer.CompressedBytes
 		}
 	}
-	return bytes, true
+	switch {
+	case inventory.Undescribed(manifest.Digest):
+		// Layers this host enumerated are here whatever it could not say about
+		// the image as a whole, so the bytes still come from its evidence. The
+		// answer is unknown all the same: what it could not describe is exactly
+		// the part that decides whether those bytes are enough to start on.
+		return work, LocalityUnknown
+	case work.None():
+		return work, LocalityHot
+	case here == 0:
+		return work, LocalityCold
+	default:
+		return work, LocalityPartial
+	}
 }
 
-// ImageLayer is one layer blob. CompressedBytes is the only size that predicts
-// transfer; what it costs on disk once unpacked answers a different question.
+// ResidentBytes is how much of this image is already on a host that still owes
+// this much work for it: everything the manifest names, less what would have to
+// be fetched. Bytes here and not yet unpacked count, because they are taking up
+// the disk either way, and content nobody could enumerate does not, because
+// nothing said it is here.
+func (manifest ImageManifest) ResidentBytes(work ImageWork) int64 {
+	return manifest.compressedBytes() - work.TransferBytes
+}
+
+// compressedBytes is everything this image would cost to fetch from a registry.
+func (manifest ImageManifest) compressedBytes() int64 {
+	total := int64(0)
+	for _, layer := range manifest.Layers {
+		total += layer.CompressedBytes
+	}
+	return total
+}
+
+// ImageLayer is one layer named in both digest spaces at once. Digest is the
+// compressed blob a registry serves and the only identity a pull can be issued
+// against; DiffID is the uncompressed content a container daemon enumerates.
+// Carrying both is what makes a host that answers in either vocabulary
+// comparable against the same manifest. CompressedBytes is the only size that
+// predicts transfer; what it costs on disk once unpacked answers a different
+// question.
 type ImageLayer struct {
 	Digest          string `json:"digest"`
+	DiffID          string `json:"diff_id,omitempty"`
 	CompressedBytes int64  `json:"compressed_bytes"`
+}
+
+// ReferenceDigest is the digest an image reference is pinned to, and empty for
+// a reference that names a tag instead. It is the only part of a reference two
+// machines can compare: a registry host and a repository path are how content
+// is reached, and the digest is what the content is.
+func ReferenceDigest(reference string) string {
+	_, digest, found := strings.Cut(reference, "@")
+	if !found {
+		return ""
+	}
+	return digest
+}
+
+// pinnedImagePattern is a reference that names content instead of a moving
+// label: a repository, and a digest of the length a digest has.
+var pinnedImagePattern = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
+
+// PinnedImage reports whether a reference identifies the bytes it names. It is
+// what a Run's image has to be: Mercator asks machines to hold content by
+// digest, compares what two of them hold by digest, and treats one digest on two
+// hosts as one piece of content, none of which a tag can answer.
+func PinnedImage(reference string) bool {
+	return pinnedImagePattern.MatchString(reference)
 }
 
 type CapacityEvidence struct {
@@ -463,8 +756,37 @@ type CandidateDecision struct {
 	Disposition     CandidateDisposition `json:"disposition"`
 	Feasible        bool                 `json:"feasible"`
 	Rejections      []Violation          `json:"rejections,omitempty"`
-	Estimates       CandidateEstimates   `json:"estimates"`
-	ScoreUSD        float64              `json:"score_usd,omitempty"`
+	// ImageLocality is how much of the Run's image this candidate was found to
+	// have. It is the qualitative half of the pull estimate, and only the
+	// control plane can state it: the host says what it holds, the manifest
+	// says what the image is, and the answer is the subtraction. A reader of
+	// the decision needs it to tell a machine that has to pull from one that
+	// only has to finish unpacking, which are the same seconds and different
+	// problems.
+	ImageLocality LocalityState `json:"image_locality,omitempty"`
+	// ArtifactEvidence is what this candidate was found holding of the
+	// immutable content the Run reads, one entry per declared input. It stands
+	// beside ImageLocality rather than folded into it, because they are answers
+	// about different content: an image is what the runtime fetches to start a
+	// container, an Artifact is what the workload reads once it is running, and
+	// one host is routinely warm for one and cold for the other.
+	ArtifactEvidence []ArtifactEvidence `json:"artifact_evidence,omitempty"`
+	// CacheEvidence is what this candidate was found holding of the mutable
+	// caches the Run declared, one entry per name. It is recorded and never
+	// priced: what a warm cache saves is work inside the application, and no
+	// term of this model has measured that. It is here so the record says what
+	// each candidate held, and so a reader can tell a machine that never did
+	// this work from one holding the generation before the one now asked for.
+	CacheEvidence []CacheEvidence `json:"cache_evidence,omitempty"`
+	// Disk is what this Run asked of this candidate's room and what the machine
+	// had left. It is the one answer in the record that can refuse a candidate
+	// outright, so it is stated rather than left to be inferred from a violation:
+	// a Run that landed nowhere has to be explainable, and a reader who could see
+	// only the seconds could not tell a machine that was passed over from one
+	// with nowhere to put the work.
+	Disk      DiskDemand         `json:"disk,omitzero"`
+	Estimates CandidateEstimates `json:"estimates"`
+	ScoreUSD  float64            `json:"score_usd,omitempty"`
 }
 
 type CandidateDisposition string
@@ -484,8 +806,37 @@ type CandidateEstimates struct {
 	QueueSeconds     Estimate `json:"queue_seconds"`
 	ProvisionSeconds Estimate `json:"provision_seconds"`
 	PullSeconds      Estimate `json:"pull_seconds"`
-	StartSeconds     Estimate `json:"start_seconds"`
-	CostUSD          Estimate `json:"cost_usd"`
+	// ArtifactSeconds is what this candidate would still spend reading the
+	// Run's declared inputs out of the object store. It is separate from
+	// PullSeconds because it is a different transfer over different content
+	// from a different authority, and folding the two together would leave a
+	// reader unable to tell a machine that has to fetch an image from one that
+	// has to fetch a dataset forty times its size.
+	ArtifactSeconds Estimate `json:"artifact_seconds"`
+	StartSeconds    Estimate `json:"start_seconds"`
+	// EstablishedStartSeconds is the part of that prediction somebody
+	// established: provisioning as the provider published it, the wait Mercator
+	// projects from Bookings it holds, and the content an inventory actually
+	// answered about. What it leaves out is what content nobody could describe
+	// would cost from nowhere, which is a price and never a measurement.
+	//
+	// Established is a claim about the bytes and the queue rather than about the
+	// rates. A host that enumerated and holds no copy has established that the
+	// content is not here; how long moving it takes is still Mercator's stated
+	// assumption about a link nothing has measured, applied identically to every
+	// candidate and carried on the estimate as its confidence. A caller that set
+	// a start bound asked to be refused rather than kept waiting, so a
+	// prediction over that assumption is what the bound is enforced against.
+	//
+	// It exists because those are the only seconds a hard start bound may
+	// strike a candidate out on. Refusing a machine over content it merely
+	// failed to enumerate refuses it for a guess; waiving the bound wholesale
+	// whenever anything was unreadable lets a machine with fifteen minutes of
+	// stated queue escape a three-minute bound because one input could not be
+	// enumerated. Splitting the prediction is what lets each second be judged
+	// by what it rests on.
+	EstablishedStartSeconds Estimate `json:"established_start_seconds"`
+	CostUSD                 Estimate `json:"cost_usd"`
 }
 
 type RunOutcome string

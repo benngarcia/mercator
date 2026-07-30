@@ -730,12 +730,129 @@ export interface components {
             max_runtime_seconds: number;
             max_pre_start_attempts: number;
         };
+        /** @description The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine. */
+        ArtifactRequirements: {
+            /** @description Artifact version identities this workload reads. The Run is accepted at once and is not placed until every one of them is durable in the object store, so it waits for a publication and never for a particular machine. A Mercator with no object store configured cannot establish that any of them exists, and refuses the request with ARTIFACT_CATALOG_UNAVAILABLE rather than accepting a Run it could never place. */
+            consumes?: string[];
+            /** @description Artifact version identities this workload publishes. A version is immutable, so a workload may not also consume one it produces. */
+            produces?: string[];
+        };
+        /** @description One host's local copy of an Artifact version. It is an optimisation over the object store and never the authority: a copy is worth what its verification against the catalog entry's content digest says it is worth. */
+        ArtifactReplica: {
+            artifact_id: string;
+            /** @description What this copy claims its bytes hash to. */
+            content_digest: string;
+            /** Format: int64 */
+            size_bytes: number;
+            /**
+             * @description Verified means these bytes were hashed and matched the catalog entry. Unverified means a copy is present and nobody checked it, which is not evidence that the right bytes are here.
+             * @enum {string}
+             */
+            state: "verified" | "unverified";
+            /**
+             * Format: date-time
+             * @description When this copy was last checked against the catalog entry's content digest.
+             */
+            verified_at?: string;
+        };
+        /** @description One mutable, application-owned cache a workload wants mounted across Runs. Its identity is the name, scoped to the workspace the Run belongs to: two tenants that both declare compiler-cache declare two caches, and neither is ever handed the other's bytes. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running. */
+        CacheMountRequirement: {
+            /** @description This cache's identity within its workspace. It also names durable storage on whatever host holds the cache, so it must be a lowercase label. */
+            name: string;
+            /** @description The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own. It is recorded beside the storage it names on whatever host holds the cache, so it must be a printable label. */
+            compatibility_key?: string;
+            /**
+             * Format: int64
+             * @description How much room the application expects this cache to take. It is a declaration rather than a measurement.
+             */
+            size_bytes?: number;
+        };
+        /** @description One mutable cache on one host, as the holder reports it. It carries no digest and no verification state, because there is nothing to check it against: the contents are whatever the application last wrote. It carries no size either, because nothing on a real node measures one without walking every volume on the machine. */
+        CacheMount: {
+            /** @description The workspace that owns this cache. It is part of the identity rather than a label on it. */
+            workspace_id: string;
+            name: string;
+            /** @description The generation of content under this name, as the application stated it when the cache was written. */
+            compatibility_key?: string;
+            /**
+             * Format: date-time
+             * @description When this generation of the cache started existing here. It is the freshness a container runtime can state: a holder that makes new storage per compatibility key can say when this one began, and cannot say when anything last read it.
+             */
+            created_at?: string;
+        };
+        /** @description The mutable caches this host says it holds. Like the image and Artifact inventories it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence. */
+        CacheInventory: {
+            /** @description Whether the holder enumerated its caches at all. */
+            known: boolean;
+            /** Format: date-time */
+            observed_at?: string;
+            mounts?: components["schemas"]["CacheMount"][];
+        };
+        /** @description What one candidate was found holding of one cache the Run declared. It is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured, so turning it into seconds would be an exchange rate nobody established. */
+        CacheEvidence: {
+            name: string;
+            /**
+             * @description Hot is this workspace's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all.
+             * @enum {string}
+             */
+            locality: "hot" | "cold" | "unknown";
+            /** @description The generation this host actually holds under the name, when it holds one. It separates the two ways a cache is cold: a machine that has never done this work, and one holding the generation before the one now asked for. */
+            held_compatibility_key?: string;
+        };
+        /** @description What one Run asked of one candidate's disk: the room the machine said it had left, the room the Run reserved for its own working state, and the content that still had to land there. It is one question over every kind of content at once because the disk is one resource, and a candidate short of room is refused rather than priced: nothing this Run could give up frees a byte it does not need straight back, and the only content that would make room belongs to somebody else. */
+        DiskDemand: {
+            /**
+             * Format: int64
+             * @description The room the offer said this machine had left. A machine that could not measure its disk offers none.
+             */
+            free_bytes: number;
+            /**
+             * Format: int64
+             * @description The ephemeral disk the workload declared it needs. It is asked for beside the content rather than out of it, because a Run admitted on a fifty gigabyte floor whose fifty gigabytes turn out to be its own dataset was promised nothing.
+             */
+            reserved_bytes?: number;
+            /**
+             * Format: int64
+             * @description Everything this Run's content still had to put on this disk: the image bytes it must transfer, the Artifact versions it must read out of the object store, and the caches it declared that this host does not hold.
+             */
+            land_bytes?: number;
+            /**
+             * Format: int64
+             * @description The part of that somebody enumerated. Content nobody could describe is priced in seconds and never refuses a machine, because those bytes may already be on its disk.
+             */
+            established_land_bytes?: number;
+        };
+        /** @description What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object. */
+        ArtifactEvidence: {
+            artifact_id: string;
+            /**
+             * @description Hot is a checked copy of exactly this version on this host. Cold is no such copy, which includes a copy nobody verified. Unknown is a host that could not enumerate its copies at all, which is uncertainty to price and never infeasibility.
+             * @enum {string}
+             */
+            locality: "hot" | "cold" | "unknown";
+            /**
+             * Format: int64
+             * @description What this host still has to read out of the object store for this version.
+             */
+            fetch_bytes?: number;
+        };
+        /** @description The Artifact content this host says it holds. Like the image inventory it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence. */
+        ArtifactInventory: {
+            /** @description Whether the holder enumerated its Artifact replicas at all. */
+            known: boolean;
+            /** Format: date-time */
+            observed_at?: string;
+            replicas?: components["schemas"]["ArtifactReplica"][];
+        };
         WorkloadSpec: {
             containers: components["schemas"]["ContainerSpec"][];
             resources: components["schemas"]["ResourceRequirements"];
             network: components["schemas"]["NetworkRequirements"];
             placement: components["schemas"]["PlacementPolicy"];
             execution: components["schemas"]["ExecutionPolicy"];
+            artifacts: components["schemas"]["ArtifactRequirements"];
+            /** @description The mutable, application-owned state this workload wants mounted across Runs. Every name is scoped to the Run's own workspace, which is what makes two tenants naming one cache two caches. */
+            caches?: components["schemas"]["CacheMountRequirement"][];
             metadata?: {
                 [key: string]: string;
             };
@@ -866,13 +983,19 @@ export interface components {
             known: boolean;
             /**
              * Format: date-time
-             * @description When the holder last looked. Locality decays, so the age of this answer is material.
+             * @description When the holder last looked. Locality decays, so the age of this answer is material. How long anyone stands behind it is the offer's own expiry: the enumeration and the capacity claim come out of one observation, and an expired offer is refused whole.
              */
             observed_at?: string;
-            /** @description Image manifests this host holds whole. */
+            /** @description Image manifests this host holds whole and has unpacked, so it can start a container on one now. */
             image_digests?: string[];
-            /** @description Layer blobs this host holds. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first. */
+            /** @description Image manifests whose content arrived here and which are not assembled into a runnable layer chain. Fetching and unpacking are separate acts, and a host that has done the first and not the second is neither warm nor cold: what is left is local work rather than a pull. */
+            pulled_image_digests?: string[];
+            /** @description Image manifests this host looked at and could not account for: a runtime that would not describe one, or a store reporting part of its content present and unable to name which part. A host that enumerates itself can still fail on one image, and an image absent from every other list would otherwise read as the confident claim that none of it is here. */
+            unknown_image_digests?: string[];
+            /** @description Compressed layer blobs this host holds unpacked, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first. */
             layer_digests?: string[];
+            /** @description The same unpacked content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in. */
+            layer_diff_ids?: string[];
         };
         CapacityEvidence: {
             available: boolean;
@@ -915,6 +1038,8 @@ export interface components {
             queue?: components["schemas"]["QueueSnapshot"];
             provisioning?: components["schemas"]["Estimate"];
             images: components["schemas"]["ImageInventory"];
+            artifacts: components["schemas"]["ArtifactInventory"];
+            caches?: components["schemas"]["CacheInventory"];
             capacity: components["schemas"]["CapacityEvidence"];
             reliability: components["schemas"]["ReliabilityEvidence"];
         };
@@ -927,7 +1052,11 @@ export interface components {
             queue_seconds: components["schemas"]["Estimate"];
             provision_seconds: components["schemas"]["Estimate"];
             pull_seconds: components["schemas"]["Estimate"];
+            /** @description What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from pull_seconds because it is a different transfer over different content from a different authority. */
+            artifact_seconds: components["schemas"]["Estimate"];
             start_seconds: components["schemas"]["Estimate"];
+            /** @description The part of the start prediction somebody established: queue and provisioning, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess. */
+            established_start_seconds: components["schemas"]["Estimate"];
             cost_usd: components["schemas"]["Estimate"];
         };
         CandidateDecision: {
@@ -939,6 +1068,16 @@ export interface components {
             disposition: "run_now_existing_rental" | "queue_existing_rental" | "provision_fresh_rental";
             feasible: boolean;
             rejections?: components["schemas"]["Violation"][];
+            /**
+             * @description How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility.
+             * @enum {string}
+             */
+            image_locality?: "hot" | "partial" | "cold" | "unknown";
+            /** @description What this candidate was found holding of the immutable content the Run reads, one entry per declared input. It stands beside image_locality rather than folded into it: an image is what the runtime fetches to start a container, an Artifact is what the workload reads once it is running, and one host is routinely warm for one and cold for the other. */
+            artifact_evidence?: components["schemas"]["ArtifactEvidence"][];
+            /** @description What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name. */
+            cache_evidence?: components["schemas"]["CacheEvidence"][];
+            disk?: components["schemas"]["DiskDemand"];
             estimates: components["schemas"]["CandidateEstimates"];
             /** Format: double */
             score_usd?: number;
@@ -1045,6 +1184,16 @@ export interface components {
             shadow_price_usd_per_hour: number;
             container_runtime?: string;
             accelerators?: number;
+            /**
+             * @description What is known about the room on the filesystem this node's daemon keeps content on, which is three answers and not two. never_reported is an identity nobody has heard from yet, so nothing has been measured because nothing has been asked. unmeasurable is a node that answered and could not measure: its daemon keeps content somewhere its agent cannot see, which costs it every placement that declares a disk floor and never its membership of the fleet. measured is a number this node established, and zero of it is a full machine.
+             * @enum {string}
+             */
+            disk_report: "never_reported" | "unmeasurable" | "measured";
+            /**
+             * Format: int64
+             * @description The room this node last measured, always stated. It is zero unless disk_report is measured, because bytes nobody established are not room: it is what the node's offer advertises, so a node with none wins no placement that declares a disk floor. Zero with disk_report measured is a machine that is full.
+             */
+            disk_free_bytes: number;
         };
         NodeListResponse: {
             nodes: components["schemas"]["NodeSummary"][];

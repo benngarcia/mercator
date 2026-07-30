@@ -3374,6 +3374,238 @@
           }
         }
       },
+      "ArtifactRequirements": {
+        "type": "object",
+        "description": "The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine.",
+        "properties": {
+          "consumes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Artifact version identities this workload reads. The Run is accepted at once and is not placed until every one of them is durable in the object store, so it waits for a publication and never for a particular machine. A Mercator with no object store configured cannot establish that any of them exists, and refuses the request with ARTIFACT_CATALOG_UNAVAILABLE rather than accepting a Run it could never place."
+          },
+          "produces": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Artifact version identities this workload publishes. A version is immutable, so a workload may not also consume one it produces."
+          }
+        }
+      },
+      "ArtifactReplica": {
+        "type": "object",
+        "description": "One host's local copy of an Artifact version. It is an optimisation over the object store and never the authority: a copy is worth what its verification against the catalog entry's content digest says it is worth.",
+        "required": [
+          "artifact_id",
+          "content_digest",
+          "size_bytes",
+          "state"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string",
+            "description": "What this copy claims its bytes hash to."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "unverified"
+            ],
+            "description": "Verified means these bytes were hashed and matched the catalog entry. Unverified means a copy is present and nobody checked it, which is not evidence that the right bytes are here."
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this copy was last checked against the catalog entry's content digest."
+          }
+        }
+      },
+      "CacheMountRequirement": {
+        "type": "object",
+        "description": "One mutable, application-owned cache a workload wants mounted across Runs. Its identity is the name, scoped to the workspace the Run belongs to: two tenants that both declare compiler-cache declare two caches, and neither is ever handed the other's bytes. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "This cache's identity within its workspace. It also names durable storage on whatever host holds the cache, so it must be a lowercase label."
+          },
+          "compatibility_key": {
+            "type": "string",
+            "description": "The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own. It is recorded beside the storage it names on whatever host holds the cache, so it must be a printable label."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How much room the application expects this cache to take. It is a declaration rather than a measurement."
+          }
+        }
+      },
+      "CacheMount": {
+        "type": "object",
+        "description": "One mutable cache on one host, as the holder reports it. It carries no digest and no verification state, because there is nothing to check it against: the contents are whatever the application last wrote. It carries no size either, because nothing on a real node measures one without walking every volume on the machine.",
+        "required": [
+          "workspace_id",
+          "name"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "description": "The workspace that owns this cache. It is part of the identity rather than a label on it."
+          },
+          "name": {
+            "type": "string"
+          },
+          "compatibility_key": {
+            "type": "string",
+            "description": "The generation of content under this name, as the application stated it when the cache was written."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this generation of the cache started existing here. It is the freshness a container runtime can state: a holder that makes new storage per compatibility key can say when this one began, and cannot say when anything last read it."
+          }
+        }
+      },
+      "CacheInventory": {
+        "type": "object",
+        "description": "The mutable caches this host says it holds. Like the image and Artifact inventories it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence.",
+        "required": [
+          "known"
+        ],
+        "properties": {
+          "known": {
+            "type": "boolean",
+            "description": "Whether the holder enumerated its caches at all."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "mounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CacheMount"
+            }
+          }
+        }
+      },
+      "CacheEvidence": {
+        "type": "object",
+        "description": "What one candidate was found holding of one cache the Run declared. It is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured, so turning it into seconds would be an exchange rate nobody established.",
+        "required": [
+          "name",
+          "locality"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "locality": {
+            "type": "string",
+            "enum": [
+              "hot",
+              "cold",
+              "unknown"
+            ],
+            "description": "Hot is this workspace's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all."
+          },
+          "held_compatibility_key": {
+            "type": "string",
+            "description": "The generation this host actually holds under the name, when it holds one. It separates the two ways a cache is cold: a machine that has never done this work, and one holding the generation before the one now asked for."
+          }
+        }
+      },
+      "DiskDemand": {
+        "type": "object",
+        "description": "What one Run asked of one candidate's disk: the room the machine said it had left, the room the Run reserved for its own working state, and the content that still had to land there. It is one question over every kind of content at once because the disk is one resource, and a candidate short of room is refused rather than priced: nothing this Run could give up frees a byte it does not need straight back, and the only content that would make room belongs to somebody else.",
+        "required": [
+          "free_bytes"
+        ],
+        "properties": {
+          "free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The room the offer said this machine had left. A machine that could not measure its disk offers none."
+          },
+          "reserved_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The ephemeral disk the workload declared it needs. It is asked for beside the content rather than out of it, because a Run admitted on a fifty gigabyte floor whose fifty gigabytes turn out to be its own dataset was promised nothing."
+          },
+          "land_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Everything this Run's content still had to put on this disk: the image bytes it must transfer, the Artifact versions it must read out of the object store, and the caches it declared that this host does not hold."
+          },
+          "established_land_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The part of that somebody enumerated. Content nobody could describe is priced in seconds and never refuses a machine, because those bytes may already be on its disk."
+          }
+        }
+      },
+      "ArtifactEvidence": {
+        "type": "object",
+        "description": "What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object.",
+        "required": [
+          "artifact_id",
+          "locality"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "locality": {
+            "type": "string",
+            "enum": [
+              "hot",
+              "cold",
+              "unknown"
+            ],
+            "description": "Hot is a checked copy of exactly this version on this host. Cold is no such copy, which includes a copy nobody verified. Unknown is a host that could not enumerate its copies at all, which is uncertainty to price and never infeasibility."
+          },
+          "fetch_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What this host still has to read out of the object store for this version."
+          }
+        }
+      },
+      "ArtifactInventory": {
+        "type": "object",
+        "description": "The Artifact content this host says it holds. Like the image inventory it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence.",
+        "required": [
+          "known"
+        ],
+        "properties": {
+          "known": {
+            "type": "boolean",
+            "description": "Whether the holder enumerated its Artifact replicas at all."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "replicas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactReplica"
+            }
+          }
+        }
+      },
       "WorkloadSpec": {
         "type": "object",
         "required": [
@@ -3381,7 +3613,8 @@
           "resources",
           "network",
           "placement",
-          "execution"
+          "execution",
+          "artifacts"
         ],
         "properties": {
           "containers": {
@@ -3401,6 +3634,16 @@
           },
           "execution": {
             "$ref": "#/components/schemas/ExecutionPolicy"
+          },
+          "artifacts": {
+            "$ref": "#/components/schemas/ArtifactRequirements"
+          },
+          "caches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CacheMountRequirement"
+            },
+            "description": "The mutable, application-owned state this workload wants mounted across Runs. Every name is scoped to the Run's own workspace, which is what makes two tenants naming one cache two caches."
           },
           "metadata": {
             "type": "object",
@@ -3833,17 +4076,32 @@
           "observed_at": {
             "type": "string",
             "format": "date-time",
-            "description": "When the holder last looked. Locality decays, so the age of this answer is material."
+            "description": "When the holder last looked. Locality decays, so the age of this answer is material. How long anyone stands behind it is the offer's own expiry: the enumeration and the capacity claim come out of one observation, and an expired offer is refused whole."
           },
           "image_digests": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Image manifests this host holds whole."
+            "description": "Image manifests this host holds whole and has unpacked, so it can start a container on one now."
+          },
+          "pulled_image_digests": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Image manifests whose content arrived here and which are not assembled into a runnable layer chain. Fetching and unpacking are separate acts, and a host that has done the first and not the second is neither warm nor cold: what is left is local work rather than a pull."
+          },
+          "unknown_image_digests": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Image manifests this host looked at and could not account for: a runtime that would not describe one, or a store reporting part of its content present and unable to name which part. A host that enumerates itself can still fail on one image, and an image absent from every other list would otherwise read as the confident claim that none of it is here."
           },
           "layer_digests": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Layer blobs this host holds. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first."
+            "description": "Compressed layer blobs this host holds unpacked, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first."
+          },
+          "layer_diff_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The same unpacked content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in."
           }
         }
       },
@@ -3897,6 +4155,7 @@
           "network",
           "pricing",
           "images",
+          "artifacts",
           "capacity",
           "reliability"
         ],
@@ -3964,6 +4223,12 @@
           "images": {
             "$ref": "#/components/schemas/ImageInventory"
           },
+          "artifacts": {
+            "$ref": "#/components/schemas/ArtifactInventory"
+          },
+          "caches": {
+            "$ref": "#/components/schemas/CacheInventory"
+          },
           "capacity": {
             "$ref": "#/components/schemas/CapacityEvidence"
           },
@@ -4006,7 +4271,9 @@
           "queue_seconds",
           "provision_seconds",
           "pull_seconds",
+          "artifact_seconds",
           "start_seconds",
+          "established_start_seconds",
           "cost_usd"
         ],
         "properties": {
@@ -4019,8 +4286,16 @@
           "pull_seconds": {
             "$ref": "#/components/schemas/Estimate"
           },
+          "artifact_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from pull_seconds because it is a different transfer over different content from a different authority."
+          },
           "start_seconds": {
             "$ref": "#/components/schemas/Estimate"
+          },
+          "established_start_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "The part of the start prediction somebody established: queue and provisioning, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess."
           },
           "cost_usd": {
             "$ref": "#/components/schemas/Estimate"
@@ -4064,6 +4339,33 @@
             "items": {
               "$ref": "#/components/schemas/Violation"
             }
+          },
+          "image_locality": {
+            "type": "string",
+            "enum": [
+              "hot",
+              "partial",
+              "cold",
+              "unknown"
+            ],
+            "description": "How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility."
+          },
+          "artifact_evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactEvidence"
+            },
+            "description": "What this candidate was found holding of the immutable content the Run reads, one entry per declared input. It stands beside image_locality rather than folded into it: an image is what the runtime fetches to start a container, an Artifact is what the workload reads once it is running, and one host is routinely warm for one and cold for the other."
+          },
+          "cache_evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CacheEvidence"
+            },
+            "description": "What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name."
+          },
+          "disk": {
+            "$ref": "#/components/schemas/DiskDemand"
           },
           "estimates": {
             "$ref": "#/components/schemas/CandidateEstimates"
@@ -4337,7 +4639,7 @@
       },
       "NodeSummary": {
         "type": "object",
-        "required": ["id", "rental_id", "generation", "state", "shadow_price_usd_per_hour"],
+        "required": ["id", "rental_id", "generation", "state", "shadow_price_usd_per_hour", "disk_report", "disk_free_bytes"],
         "properties": {
           "id": { "type": "string" },
           "rental_id": { "type": "string" },
@@ -4352,7 +4654,17 @@
           "last_heartbeat_at": { "type": "string", "format": "date-time" },
           "shadow_price_usd_per_hour": { "type": "number" },
           "container_runtime": { "type": "string" },
-          "accelerators": { "type": "integer" }
+          "accelerators": { "type": "integer" },
+          "disk_report": {
+            "type": "string",
+            "enum": ["never_reported", "unmeasurable", "measured"],
+            "description": "What is known about the room on the filesystem this node's daemon keeps content on, which is three answers and not two. never_reported is an identity nobody has heard from yet, so nothing has been measured because nothing has been asked. unmeasurable is a node that answered and could not measure: its daemon keeps content somewhere its agent cannot see, which costs it every placement that declares a disk floor and never its membership of the fleet. measured is a number this node established, and zero of it is a full machine."
+          },
+          "disk_free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The room this node last measured, always stated. It is zero unless disk_report is measured, because bytes nobody established are not room: it is what the node's offer advertises, so a node with none wins no placement that declares a disk floor. Zero with disk_report measured is a machine that is full."
+          }
         }
       },
       "NodeListResponse": {

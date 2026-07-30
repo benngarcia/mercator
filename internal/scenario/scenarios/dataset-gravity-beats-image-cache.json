@@ -1,8 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "The run declares the 40GB dataset it trains on as a cache mount. The rental holding that dataset wins over a rental with a better image-layer cache, because avoiding a 40GB transfer dwarfs a 40MB layer pull.",
-  "classification": "target",
-  "missing_capabilities": ["artifacts", "artifact_evidence"],
+  "summary": "One Run reads a 40GB dataset and four machines are offered at one price, so nothing but what each of them holds can decide the placement. The Rental holding a checked copy of the dataset owes 40MB of image and wins, because reading 40GB out of the object store dwarfs pulling a 40MB layer. The Rental holding the whole image and no copy owes the whole read. The third Rental reports a checked copy filed under the version's name whose bytes are the previous version's, which is the machine an operator restored an older snapshot onto: a copy of other content is worth exactly what no copy is worth, so it owes the whole read too. The fourth is a machine Mercator has not enrolled, and World Truth says it is sitting on both the image and a checked copy of the dataset. Nothing there can be asked, so it is recorded unknown and priced the whole read rather than the zero its silence used to buy, and never the zero its copy would have bought if an offer could carry it. Every rate is equal on purpose: a fixture whose price gap decides the winner proves nothing about locality.",
+  "classification": "green",
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
@@ -13,18 +12,42 @@
       }
     },
     "artifacts": [
-      {"id": "artifact:imagenet:v2.41", "size": "40GB"}
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
     ],
     "rentals": [
       {
         "id": "rental-dataset",
         "cached_layers": ["sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de"],
-        "artifact_replicas": ["artifact:imagenet:v2.41"],
+        "artifact_replicas": [{"artifact": "artifact:imagenet:v2.41", "state": "verified"}],
         "rate_per_hour_usd": 2.5
       },
       {
         "id": "rental-imagecache",
         "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-restored-snapshot",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "artifact_replicas": [
+          {
+            "artifact": "artifact:imagenet:v2.41",
+            "state": "verified",
+            "content_digest": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b"
+          }
+        ],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "hosts": [
+      {
+        "id": "borrowed-host",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "artifact_replicas": [{"artifact": "artifact:imagenet:v2.41", "state": "verified"}],
         "rate_per_hour_usd": 2.5
       }
     ]
@@ -38,15 +61,35 @@
   "expect": {
     "outcome": "place",
     "offer": "rental-dataset",
+    "reasons": ["FEASIBLE", "LOWEST_SCORE"],
     "candidates": {
       "rental-dataset": {
         "feasible": true,
+        "image_locality": "partial",
+        "pull_seconds": {"at_least": 1, "at_most": 2},
+        "artifact_seconds": 0,
         "artifact_evidence": {"artifact:imagenet:v2.41": "hit"}
       },
       "rental-imagecache": {
         "feasible": true,
+        "image_locality": "hot",
         "pull_seconds": 0,
+        "artifact_seconds": {"at_least": 639, "at_most": 641},
         "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+      },
+      "rental-restored-snapshot": {
+        "feasible": true,
+        "image_locality": "hot",
+        "pull_seconds": 0,
+        "artifact_seconds": {"at_least": 639, "at_most": 641},
+        "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+      },
+      "borrowed-host": {
+        "feasible": true,
+        "image_locality": "unknown",
+        "pull_seconds": {"at_least": 285, "at_most": 292},
+        "artifact_seconds": {"at_least": 639, "at_most": 641},
+        "artifact_evidence": {"artifact:imagenet:v2.41": "unknown"}
       }
     }
   }

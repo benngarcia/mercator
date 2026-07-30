@@ -212,15 +212,12 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 			Network:   domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone},
 			Pricing:   domain.PricingCapabilities{Known: true},
 		},
-		Network: domain.NetworkFacts{Download: []domain.NetworkFact{{
-			Scope:      domain.NetworkScopeRegistry,
-			Statistic:  "p10",
-			ValueMbps:  100,
-			Source:     "local",
-			ObservedAt: now,
-			ValidUntil: now.Add(time.Hour),
-			Confidence: 1,
-		}}},
+		// No Network facts: nothing has measured this host's link to a registry.
+		// The literal 100 Mbps that stood here stamped full confidence on every
+		// transfer duration predicted for this endpoint, beside enrolled nodes
+		// honestly recording an assumption. A workload requiring a minimum
+		// registry bandwidth is now infeasible here unless it allows the
+		// unknown, which is the loud version of the same truth.
 		Pricing: domain.PriceModel{
 			Currency:             "USD",
 			RatePerSecondUSD:     0,

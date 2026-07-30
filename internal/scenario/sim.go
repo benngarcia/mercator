@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,42 +28,48 @@ const simWorkspace = "ws_scenario"
 
 // SimBackend executes scenarios against simulated capacity: the fake
 // adapter's World under the real orchestrator, scheduler, and a real SQLite
-// event log. Decision correctness only; no network, no daemons.
+// event log. Decision correctness only; no network, no machines.
 type SimBackend struct{}
 
 func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	clock := fake.NewClock(spec.Start())
 	world := fake.NewWorld(clock)
 	session := &simSession{
-		world:     world,
-		runs:      map[string]string{},
-		images:    map[string]string{},
-		hasImages: len(spec.Images) > 0,
+		world: world,
+		runs:  map[string]string{},
 	}
 	for ref, image := range spec.Images {
 		layers := make([]fake.Layer, 0, len(image.Layers))
 		for _, layer := range image.Layers {
-			layers = append(layers, fake.Layer{Digest: layer.Digest, Bytes: int64(layer.Size)})
+			layers = append(layers, fake.Layer{Digest: layer.Digest, DiffID: layer.DiffID, Bytes: int64(layer.Size)})
 		}
-		world.DefineImage(ref, layers)
+		world.DefineImage(ref, fake.Image{Layers: layers, Registry: fake.RegistryAnswer(image.Registry)})
+	}
+	for _, artifact := range spec.Artifacts {
+		version := artifact.Version(simWorkspace)
+		if artifact.Prepublished() {
+			version.PublishedAt = spec.Start()
+		} else {
+			session.note("Artifact %q waits on Run %q to publish it, and a placement world has no publication moment", artifact.ID, artifact.ProducedBy)
+		}
+		world.DefineArtifact(version)
 	}
 	for _, rental := range spec.Rentals {
 		schedule := spec.rentalSchedule(rental.ID)
-		if err := world.AddDaemon(simDaemon(spec, rental, schedule, clock)); err != nil {
+		if err := world.AddMachine(simMachine(spec, rental, schedule, clock)); err != nil {
 			return nil, err
 		}
 		if len(schedule.Queued) > 0 {
 			session.note("rental %q starts with QueuedBookings, but the scenario backend cannot seed Broker RentalSchedule state yet", rental.ID)
 		}
-		if len(rental.ArtifactReplicas) > 0 {
-			session.note("rental %q holds Artifact replicas, but no offer field can advertise them yet", rental.ID)
-		}
-		if len(rental.CacheMounts) > 0 {
-			session.note("rental %q holds Cache Mounts, but no offer field can advertise them yet", rental.ID)
+	}
+	for _, host := range spec.Hosts {
+		if err := world.AddMachine(simHost(spec, host, clock.Now())); err != nil {
+			return nil, err
 		}
 	}
 	for _, offer := range spec.Marketplace {
-		if err := world.AddMarketplaceOffer(simMarketplaceOffer(offer)); err != nil {
+		if err := world.AddMachine(&fake.Machine{Offer: simMarketplaceOffer(offer)}); err != nil {
 			return nil, err
 		}
 		if len(offer.Facts) > 0 {
@@ -80,48 +87,150 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		world,
 		orchestrator.WithClock(clock.Now),
 		orchestrator.WithImageManifests(world),
+		orchestrator.WithArtifactCatalog(world),
 	)
 	return session, nil
 }
 
-func simDaemon(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Daemon {
+func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Machine {
 	start := clock.Now()
-	daemon := &fake.Daemon{
-		Offer:      simRentalOffer(rental),
-		HeldLayers: map[string]int64{},
-		HeldCaches: map[string]int64{},
+	machine := &fake.Machine{
+		Offer:            simRentalOffer(rental),
+		HeldLayers:       map[string]int64{},
+		HeldDiffIDs:      map[string]bool{},
+		ReportsDiffIDs:   rental.ReportsDiffIDs,
+		HeldImages:       map[string]bool{},
+		ArtifactReplicas: simArtifactReplicas(spec, rental.ArtifactReplicas, start),
+		HeldCaches:       simHeldCaches(rental.CacheMounts, start),
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
-			daemon.HeldLayers[layer.Digest] = int64(layer.Size)
+			machine.Hold(fake.Layer{Digest: layer.Digest, DiffID: layer.DiffID, Bytes: int64(layer.Size)})
+			if !rental.IsUnpacked() {
+				machine.Pack(layer.Digest, layer.DiffID)
+			}
+		}
+		machine.HeldImages[domain.ReferenceDigest(ref)] = true
+		if !rental.IsUnpacked() {
+			machine.Pack(domain.ReferenceDigest(ref))
 		}
 	}
-	for _, name := range rental.CachedLayers {
-		daemon.HeldLayers[name] = int64(layerSize(spec, name))
+	for _, digest := range rental.CachedLayers {
+		layer := findLayer(spec, digest)
+		machine.Hold(layer)
+		if !rental.IsUnpacked() {
+			machine.Pack(layer.Digest, layer.DiffID)
+		}
 	}
 	if running := schedule.Running; running != nil {
-		daemon.BusyUntil = start.Add(running.RemainingMaxRuntime.Duration())
-		daemon.ExpectedBusyUntil = start.Add(running.expectedRemaining().Duration())
+		machine.BusyUntil = start.Add(running.RemainingMaxRuntime.Duration())
+		machine.ExpectedBusyUntil = start.Add(running.expectedRemaining().Duration())
 		if running.CompletesAfter != nil {
-			daemon.FreesAt = start.Add(running.CompletesAfter.Duration())
+			machine.FreesAt = start.Add(running.CompletesAfter.Duration())
 		}
 	}
 	if rental.IdleLeaseExpiresIn != nil {
-		daemon.LeaseExpiresAt = start.Add(rental.IdleLeaseExpiresIn.Duration())
+		machine.LeaseExpiresAt = start.Add(rental.IdleLeaseExpiresIn.Duration())
 	}
-	return daemon
+	return machine
 }
 
-// simRentalOffer builds the offer for a Rental. A Rental is machine capacity
-// Mercator holds across Runs, so it is reusable by definition.
+// simArtifactReplicas is the local copy of each Artifact this machine was found
+// holding: the digest the copy claims and what the fixture says checking it was
+// worth. Both are the machine's own bookkeeping rather than the catalog's, which
+// is what lets a fixture state a copy nobody checked and a copy that was checked
+// against content this version does not have.
+func simArtifactReplicas(spec WorldSpec, declared []ArtifactReplicaSpec, at time.Time) map[string]domain.ArtifactReplica {
+	catalog := spec.artifactsByID()
+	replicas := make(map[string]domain.ArtifactReplica, len(declared))
+	for _, held := range declared {
+		artifact := catalog[held.Artifact]
+		replica := domain.ArtifactReplica{
+			ArtifactID:    artifact.ID,
+			ContentDigest: held.Digest(artifact),
+			SizeBytes:     int64(artifact.Size),
+			State:         held.State,
+		}
+		if replica.State.Usable() {
+			replica.VerifiedAt = at
+		}
+		replicas[artifact.ID] = replica
+	}
+	return replicas
+}
+
+// simHeldCaches is the mutable state one machine was already holding, keyed by
+// the identity that carries its workspace. A placement world has one workspace,
+// so a fixture that labels a cache with another one is stating a neighbour's
+// cache: content on this host that this backend's Runs must never be told about.
+func simHeldCaches(held []HeldCacheSpec, at time.Time) map[string]domain.CacheMount {
+	caches := make(map[string]domain.CacheMount, len(held))
+	for _, declared := range held {
+		workspaceID := simWorkspace
+		if declared.Workspace != "" {
+			workspaceID = simWorkspace + "_" + declared.Workspace
+		}
+		mount := domain.CacheMount{
+			WorkspaceID:      workspaceID,
+			Name:             declared.Name,
+			CompatibilityKey: declared.CompatibilityKey,
+			CreatedAt:        at,
+		}
+		caches[mount.Identity()] = mount
+	}
+	return caches
+}
+
+// simRentalOffer builds the offer for a Rental: standing capacity Mercator holds
+// across Runs, which is what makes it reusable and the only thing warmth can
+// accumulate on.
 func simRentalOffer(rental RentalSpec) domain.OfferSnapshot {
 	offer := simOffer(rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources)
+	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneReusable
 	return offer
 }
 
+// simHost is a machine Mercator has not enrolled. It may hold content, and
+// nothing on it can be asked about it, so what it holds is world truth that no
+// offer carries.
+func simHost(spec WorldSpec, host HostSpec, at time.Time) *fake.Machine {
+	machine := &fake.Machine{
+		Offer:            simHostOffer(host),
+		HeldLayers:       map[string]int64{},
+		HeldDiffIDs:      map[string]bool{},
+		HeldImages:       map[string]bool{},
+		ArtifactReplicas: simArtifactReplicas(spec, host.ArtifactReplicas, at),
+	}
+	for _, ref := range host.CachedImages {
+		for _, layer := range spec.Images[ref].Layers {
+			machine.Hold(fake.Layer{Digest: layer.Digest, DiffID: layer.DiffID, Bytes: int64(layer.Size)})
+		}
+		machine.HeldImages[domain.ReferenceDigest(ref)] = true
+	}
+	return machine
+}
+
+// simHostOffer builds the offer for a host Mercator has not enrolled. The
+// machine exists, so the offer is standing and owes no provisioning; nothing on
+// it can hold content or run a second workload for Mercator, so it is in the
+// ephemeral lane and reports an inventory it cannot enumerate.
+func simHostOffer(host HostSpec) domain.OfferSnapshot {
+	offer := simOffer(host.ID, "conn_hosts", host.RatePerHourUSD, host.Resources)
+	offer.Kind = domain.OfferKindStanding
+	offer.Lane = domain.LaneEphemeral
+	offer.Pricing.SetupFeeUSD = host.Billing.SetupFeeUSD
+	if host.Billing.MinimumCharge != nil {
+		offer.Pricing.MinimumChargeSeconds = int64(host.Billing.MinimumCharge.Duration().Seconds())
+	}
+	return offer
+}
+
+// simMarketplaceOffer builds the offer for a machine that does not exist yet, so
+// nothing an execution fetches there is anywhere a later Run can see it.
 func simMarketplaceOffer(spec MarketplaceOfferSpec) domain.OfferSnapshot {
 	offer := simOffer(spec.ID, "conn_marketplace", spec.RatePerHourUSD, spec.Resources)
+	offer.Kind = domain.OfferKindProvisionable
 	provisioning := &domain.Estimate{
 		Expected: spec.Provisioning.Expected.Duration().Seconds(),
 		Source:   "scenario",
@@ -134,36 +243,50 @@ func simMarketplaceOffer(spec MarketplaceOfferSpec) domain.OfferSnapshot {
 	return offer
 }
 
-func simOffer(id, connectionID string, ratePerHourUSD float64, resources *ResourcesSpec) domain.OfferSnapshot {
+// HostInventory is the machine a fixture described, defaulting to a generous
+// GPU box wherever it described nothing. Both simulated worlds read it: a
+// Blueprint that meant one machine in the placement corpus and another in the
+// Lab would be two fixtures wearing one name, and the corpus statement about
+// either would say nothing about the other.
+func HostInventory(resources *ResourcesSpec) domain.ResourceInventory {
 	inventory := domain.ResourceInventory{
 		CPUMillis:          defaultHostCPUMillis,
 		MemoryBytes:        defaultHostMemoryBytes,
 		EphemeralDiskBytes: defaultHostDiskBytes,
 	}
-	if resources != nil {
-		if resources.CPUMillis > 0 {
-			inventory.CPUMillis = resources.CPUMillis
-		}
-		if resources.Memory > 0 {
-			inventory.MemoryBytes = int64(resources.Memory)
-		}
-		if resources.Disk > 0 {
-			inventory.EphemeralDiskBytes = int64(resources.Disk)
-		}
-		if gpu := resources.GPU; gpu != nil {
-			count := gpu.Count
-			if count == 0 {
-				count = 1
-			}
-			inventory.Accelerators = []domain.AcceleratorInventory{{
-				Vendor:         "NVIDIA",
-				Model:          gpu.Model,
-				CanonicalModel: gpunorm.Canonical("NVIDIA", gpu.Model),
-				Count:          count,
-				MemoryBytes:    int64(gpu.Memory),
-			}}
-		}
+	if resources == nil {
+		return inventory
 	}
+	if resources.CPUMillis > 0 {
+		inventory.CPUMillis = resources.CPUMillis
+	}
+	if resources.Memory > 0 {
+		inventory.MemoryBytes = int64(resources.Memory)
+	}
+	// Stated is stated, including zero: a machine with no room is a machine an
+	// offer can carry, and it is what an enrolled node that could not measure
+	// its disk advertises.
+	if resources.Disk != nil {
+		inventory.EphemeralDiskBytes = resources.Disk.Bytes()
+	}
+	if gpu := resources.GPU; gpu != nil {
+		count := gpu.Count
+		if count == 0 {
+			count = 1
+		}
+		inventory.Accelerators = []domain.AcceleratorInventory{{
+			Vendor:         "NVIDIA",
+			Model:          gpu.Model,
+			CanonicalModel: gpunorm.Canonical("NVIDIA", gpu.Model),
+			Count:          count,
+			MemoryBytes:    int64(gpu.Memory),
+		}}
+	}
+	return inventory
+}
+
+func simOffer(id, connectionID string, ratePerHourUSD float64, resources *ResourcesSpec) domain.OfferSnapshot {
+	inventory := HostInventory(resources)
 	return domain.OfferSnapshot{
 		ID:           id,
 		ConnectionID: connectionID,
@@ -190,15 +313,18 @@ func simOffer(id, connectionID string, ratePerHourUSD float64, resources *Resour
 	}
 }
 
-func layerSize(spec WorldSpec, name string) ByteSize {
+// findLayer resolves a digest a fixture seeds directly onto a Rental back to
+// the layer the image catalog defines, so the machine holds it under every name
+// that content answers to.
+func findLayer(spec WorldSpec, digest string) fake.Layer {
 	for _, image := range spec.Images {
 		for _, layer := range image.Layers {
-			if layer.Digest == name {
-				return layer.Size
+			if layer.Digest == digest {
+				return fake.Layer{Digest: layer.Digest, DiffID: layer.DiffID, Bytes: int64(layer.Size)}
 			}
 		}
 	}
-	return 0
+	return fake.Layer{Digest: digest}
 }
 
 type simSession struct {
@@ -206,11 +332,7 @@ type simSession struct {
 	log   *eventlog.SQLiteEventLog
 	orch  *orchestrator.Orchestrator
 	runs  map[string]string
-	// images remembers each run's image so reevaluation lists offers with the
-	// same honest layer evidence.
-	images    map[string]string
-	hasImages bool
-	notes     []string
+	notes []string
 }
 
 func (s *simSession) note(format string, args ...any) {
@@ -218,18 +340,11 @@ func (s *simSession) note(format string, args ...any) {
 }
 
 func (s *simSession) Submit(name string, req RequestSpec) error {
-	if err := s.preparePlacement(req.Image); err != nil {
-		return err
-	}
-	if len(req.CacheMounts) > 0 {
-		s.note("run %q declares cache mounts, but the container spec cannot carry them yet", name)
-	}
-	if len(req.ConsumesArtifacts) > 0 || len(req.ProducesArtifacts) > 0 {
-		s.note("run %q declares Artifact inputs or outputs, but the control plane cannot carry them yet", name)
+	if req.Image == "" {
+		return fmt.Errorf("requests need an image")
 	}
 	runID := "run-" + name
 	s.runs[name] = runID
-	s.images[name] = req.Image
 	_, err := s.orch.CreateRun(context.Background(), orchestrator.CreateRunRequest{
 		WorkspaceID:    simWorkspace,
 		RunID:          runID,
@@ -247,23 +362,7 @@ func (s *simSession) Reconcile(name string) error {
 	if !ok {
 		return fmt.Errorf("run %q was never submitted", name)
 	}
-	if err := s.preparePlacement(s.images[name]); err != nil {
-		return err
-	}
 	return s.orch.AdvanceRun(context.Background(), simWorkspace, runID)
-}
-
-// preparePlacement declares which image the coming evaluation is for, so the
-// world's offers carry honest layer evidence. A world with no image catalog
-// places layerless images and needs no declaration.
-func (s *simSession) preparePlacement(image string) error {
-	if image == "" {
-		return fmt.Errorf("requests need an image")
-	}
-	if !s.hasImages {
-		return nil
-	}
-	return s.world.SetPlacementImage(image)
 }
 
 func (s *simSession) AdvanceClock(d time.Duration) {
@@ -298,7 +397,7 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 		spec.Resources = domain.ResourceRequirements{
 			CPU:           domain.CPURequirement{MinMillis: resources.CPUMillis},
 			Memory:        domain.MemoryRequirement{MinBytes: int64(resources.Memory)},
-			EphemeralDisk: domain.DiskRequirement{MinBytes: int64(resources.Disk)},
+			EphemeralDisk: domain.DiskRequirement{MinBytes: resources.Disk.Bytes()},
 		}
 		if gpu := resources.GPU; gpu != nil {
 			count := gpu.Count
@@ -322,6 +421,14 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 	if req.MaxRuntime != nil {
 		spec.Execution.MaxRuntimeSeconds = int64(req.MaxRuntime.Duration().Seconds())
 	}
+	if req.MaxStartLatency != nil {
+		spec.Placement.MaxP90StartSeconds = req.MaxStartLatency.Duration().Seconds()
+	}
+	spec.Artifacts = domain.ArtifactRequirements{
+		Consumes: slices.Clone(req.ConsumesArtifacts),
+		Produces: slices.Clone(req.ProducesArtifacts),
+	}
+	spec.Caches = req.CacheRequirements()
 	return domain.WorkloadRevision{
 		ID:          "wrev_" + runID,
 		WorkspaceID: workspaceID,

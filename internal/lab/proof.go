@@ -43,9 +43,9 @@ func VerifyVerticalProof(ctx context.Context, bundle RunBundle) (ProofReport, er
 		facts.result(2, scenario.EvidenceExistingVsFreshCompared, facts.comparesExistingAndFresh("run-producer"), "producer decision compared standing and provisionable capacity"),
 		facts.result(3, scenario.EvidencePartialImageReuse, facts.partialImageReuse("run-producer"), "standing capacity reused only part of the producer image"),
 		facts.result(4, scenario.EvidenceCapacityPrepared, facts.hasAcceptedEffect(OperationProviderLaunch, "run-producer"), "the provider accepted the producer launch"),
-		facts.result(5, scenario.EvidenceArtifactPublished, facts.hasAcceptedEffect(OperationArtifactPut, "run-producer"), "the producer published an immutable Artifact replica"),
-		facts.result(6, scenario.EvidenceConsumerUnblocked, facts.consumerFollowedArtifact(), "the consumer entered Mercator only after Artifact publication"),
-		facts.result(7, scenario.EvidenceWarmthObserved, facts.consumerUsesArtifactReplica(), "the consumer selected the Rental holding its Artifact"),
+		facts.result(5, scenario.EvidenceArtifactPublished, facts.hasAcceptedEffect(OperationArtifactPublished, "run-producer"), "the producer published an immutable Artifact to the object store"),
+		facts.result(6, scenario.EvidenceConsumerUnblocked, facts.consumerFollowedArtifact(), "Mercator placed the consumer only after Artifact publication"),
+		facts.result(7, scenario.EvidenceWarmthObserved, facts.consumerUsesArtifactReplica(), "the consumer selected a Rental holding a checked copy of one input and was priced the read it owed on the other"),
 		facts.result(8, scenario.EvidenceQueueVsFreshCompared, facts.comparesQueueAndFresh("run-consumer"), "consumer scheduling compared standing queue delay with fresh provisioning"),
 		facts.result(9, scenario.EvidenceAmbiguousDelivery, facts.hasLostAcceptedLaunch(), "the provider accepted a launch whose response was lost"),
 		facts.result(10, scenario.EvidenceReconciledWithoutDuplicate, facts.oneAcceptedLaunchPerRun(), "reconciliation produced one accepted external launch per Run"),
@@ -163,13 +163,23 @@ func (facts proofFacts) partialImageReuse(runID string) bool {
 		existing.Estimates.PullSeconds.Expected < fresh.Estimates.PullSeconds.Expected
 }
 
+// comparesQueueAndFresh is the decision weighing capacity Mercator already holds
+// against capacity it would have to create. Either standing disposition is that
+// comparison: a machine free now carries no queue delay to weigh, and a machine
+// with a Run on it carries the delay this checkpoint is named after, so naming
+// only run_now accepted the case with nothing to compare and refused the case
+// with something. What has to be on the record is a standing candidate whose
+// queue delay was established and a fresh candidate priced to provision.
 func (facts proofFacts) comparesQueueAndFresh(runID string) bool {
 	decision := facts.decisions[runID]
-	existing := candidateWithDisposition(decision, domain.CandidateDispositionRunNow)
+	standing := candidateWithDisposition(decision, domain.CandidateDispositionRunNow)
+	if standing == nil {
+		standing = candidateWithDisposition(decision, domain.CandidateDispositionQueue)
+	}
 	fresh := candidateWithDisposition(decision, domain.CandidateDispositionProvision)
-	return existing != nil &&
+	return standing != nil &&
 		fresh != nil &&
-		existing.Estimates.QueueSeconds.Source != "" &&
+		standing.Estimates.QueueSeconds.Source != "" &&
 		fresh.Estimates.ProvisionSeconds.Expected > 0
 }
 
@@ -182,10 +192,15 @@ func candidateWithDisposition(decision domain.BookingDecision, disposition domai
 	return nil
 }
 
+// consumerFollowedArtifact is the durability gate read out of Mercator's own
+// record. A Run enters the control plane when it arrives, whatever its inputs
+// are worth; what waits for a publication is the placement, which is the
+// decision admission governs. Reading the request time instead would pass on any
+// Blueprint whose consumer simply arrives late.
 func (facts proofFacts) consumerFollowedArtifact() bool {
 	var publishedAt time.Time
 	for _, effect := range facts.effects {
-		if effect.Operation == OperationArtifactPut &&
+		if effect.Operation == OperationArtifactPublished &&
 			effect.CorrelationID == "run-producer" &&
 			effect.Command == EffectCommandAccepted {
 			publishedAt = effect.At
@@ -196,33 +211,53 @@ func (facts proofFacts) consumerFollowedArtifact() bool {
 		return false
 	}
 	for _, event := range facts.events {
-		if event.Type != "compute.run.requested.v1" || event.Subject != "runs/run-consumer" {
+		if event.Type != "compute.run.booking_decided.v1" || event.Subject != "runs/run-consumer" {
 			continue
 		}
-		requestedAt, err := time.Parse(time.RFC3339Nano, event.Time)
-		return err == nil && !requestedAt.Before(publishedAt)
+		decidedAt, err := time.Parse(time.RFC3339Nano, event.Time)
+		return err == nil && !decidedAt.Before(publishedAt)
 	}
 	return false
 }
 
+// consumerUsesArtifactReplica is Placement having chosen the host holding the
+// content the Run reads, on the strength of holding it. It reads the decision
+// Mercator recorded: the selected candidate cites a copy something checked of an
+// Artifact this Run reads and owes no read for it, and owes the whole read of
+// every input nothing verified there.
+//
+// Both halves are the claim. The consumer reads its producer's checkpoint and a
+// dataset a fetch put on this machine before the world started, and only the
+// second is warmth: a workload writes its output inside its own container and no
+// runtime enumerates, hashes, or files that content, so the machine that computed
+// the checkpoint owes the same read for it as any other. A rule that asked only
+// for warmth would pass on a decision that had invented some.
+//
+// The rule this replaced asked only whether the producer's output landed on the
+// offer the consumer was selected on. That passed on a Blueprint with one
+// standing Rental whatever Placement weighed, which was every execution of this
+// demo before Artifact locality was scored anywhere: two facts about the same
+// machine agreeing is not evidence that either caused the other.
 func (facts proofFacts) consumerUsesArtifactReplica() bool {
 	decision, exists := facts.decisions["run-consumer"]
-	if !exists || decision.SelectedOfferSnapshotID == "" {
+	if !exists {
 		return false
 	}
-	for _, effect := range facts.effects {
-		if effect.Operation != OperationArtifactPut || effect.Command != EffectCommandAccepted {
+	selected := selectedCandidate(decision)
+	if selected == nil || len(selected.ArtifactEvidence) < 2 {
+		return false
+	}
+	checked := 0
+	for _, found := range selected.ArtifactEvidence {
+		if found.Locality == domain.LocalityHot && found.FetchBytes == 0 {
+			checked++
 			continue
 		}
-		var request struct {
-			OfferID string `json:"offer_id"`
-		}
-		if json.Unmarshal(effect.Request, &request) == nil &&
-			request.OfferID == decision.SelectedOfferSnapshotID {
-			return true
+		if found.FetchBytes == 0 {
+			return false
 		}
 	}
-	return false
+	return checked > 0
 }
 
 func (facts proofFacts) hasLostAcceptedLaunch() bool {

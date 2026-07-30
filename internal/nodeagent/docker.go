@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"slices"
@@ -13,6 +16,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 // DockerRuntime executes workloads through the local Docker daemon. It is the
@@ -28,13 +32,34 @@ type DockerRuntime struct {
 	// labelPrefix namespaces the labels the agent stamps on its containers, so
 	// Observe reports Mercator's workloads and nothing else running on the box.
 	labelPrefix string
+	// artifactRoot is where this node keeps immutable Artifact copies. A daemon
+	// has no concept of one, so it is the agent's own durable storage rather
+	// than anything Docker manages. A runtime given none replicates nothing and
+	// reports no Artifact inventory, which is silence rather than an empty disk.
+	artifactRoot string
 }
 
-func NewDockerRuntime(binary string) *DockerRuntime {
+// RuntimeOption configures the Docker runtime.
+type RuntimeOption func(*DockerRuntime)
+
+// WithArtifactRoot gives this node somewhere to keep immutable Artifact copies.
+// It is the agent's own directory, stated by whoever started the agent, because
+// only they know which filesystem has the room: a default under the daemon's
+// storage would be a directory this process usually cannot write to, and one
+// under a temporary directory would lose every copy on reboot.
+func WithArtifactRoot(root string) RuntimeOption {
+	return func(docker *DockerRuntime) { docker.artifactRoot = root }
+}
+
+func NewDockerRuntime(binary string, options ...RuntimeOption) *DockerRuntime {
 	if binary == "" {
 		binary = "docker"
 	}
-	return &DockerRuntime{binary: binary, now: time.Now, labelPrefix: "mercator."}
+	runtime := &DockerRuntime{binary: binary, now: time.Now, labelPrefix: "mercator."}
+	for _, option := range options {
+		option(runtime)
+	}
+	return runtime
 }
 
 func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, error) {
@@ -51,15 +76,26 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 		RuntimeVersion:   info.ServerVersion,
 		CPUMillis:        int64(info.NCPU) * 1000,
 		MemoryBytes:      info.MemTotal,
+		Disk:             docker.diskFacts(info.DockerRootDir),
 	}
 	if slices.Contains(info.runtimeNames(), "nvidia") {
 		facts.Host.AcceleratorToolkit = "nvidia-container-toolkit"
 	}
-	images, err := docker.images(ctx)
+	store, err := docker.openImageStore(ctx, info)
+	if err != nil {
+		return capability.NodeFacts{}, err
+	}
+	images, err := docker.images(ctx, store)
 	if err != nil {
 		return capability.NodeFacts{}, err
 	}
 	facts.Images = images
+	caches, err := docker.caches(ctx)
+	if err != nil {
+		return capability.NodeFacts{}, err
+	}
+	facts.Caches = caches
+	facts.Artifacts = docker.artifacts()
 	return facts, nil
 }
 
@@ -74,13 +110,6 @@ func (docker *DockerRuntime) PrepareImage(ctx context.Context, command capabilit
 		return fmt.Errorf("pull %s: %w", reference, err)
 	}
 	return nil
-}
-
-// PrepareArtifact is not implemented by the Docker runtime. Artifact
-// replication is phase 3 of the migration, and claiming it here would let
-// Placement believe in locality nothing produces.
-func (docker *DockerRuntime) PrepareArtifact(context.Context, capability.PrepareArtifactCommand) error {
-	return fmt.Errorf("%w: this node does not replicate Artifacts yet", capability.ErrCapabilityUnsupported)
 }
 
 // LaunchWorkload starts one container and returns once it is running. The
@@ -110,6 +139,13 @@ func (docker *DockerRuntime) LaunchWorkload(ctx context.Context, command capabil
 			continue
 		}
 		args = append(args, "--env", binding.Name+"="+*binding.Value)
+	}
+	for _, mount := range command.CacheMounts {
+		attachment, err := docker.cacheMount(command.WorkspaceID, mount)
+		if err != nil {
+			return err
+		}
+		args = append(args, "--mount", attachment)
 	}
 	if command.MaxRuntimeSeconds > 0 {
 		args = append(args, "--stop-timeout", strconv.FormatInt(command.MaxRuntimeSeconds, 10))
@@ -173,6 +209,203 @@ func (docker *DockerRuntime) Observe(ctx context.Context) ([]capability.Workload
 	return observations, nil
 }
 
+// cacheLabel names one part of a cache's identity in the daemon's own label
+// space. Each part is stamped separately rather than packed into the volume
+// name, because the volume name has to survive a compatibility key that is an
+// application's arbitrary string and these have to be readable back out.
+func (docker *DockerRuntime) cacheLabel(part string) string {
+	return docker.labelPrefix + "cache." + part
+}
+
+// cacheMount is the volume flag one Cache Mount contributes to `docker run`.
+// The volume's name is derived from the workspace, the cache's name, and the
+// compatibility key together, so a second workspace asking for "compiler-cache"
+// gets its own storage by construction rather than by a comparison this function
+// could forget to make, and a new compatibility key gets an empty cache rather
+// than the generation the application has just said it cannot use.
+//
+// Creating the container is what creates the cache. The daemon makes a volume
+// the container asks for and does not have, stamped with the labels named here,
+// so a launch that never reaches container creation leaves nothing behind: an
+// image this machine cannot resolve, a full disk, a refused command. The agent
+// used to open the volume itself before dispatching the run, which made every
+// failed launch a machine reporting a cache no workload of that tenant and
+// generation had ever been attached to, and the next Run's decision recorded it
+// as warmth.
+//
+// What is left behind is the previous generation's volume, which nothing
+// reclaims: garbage collection is its own capability and this runtime still
+// declares it unsupported.
+func (docker *DockerRuntime) cacheMount(workspaceID string, mount domain.CacheMountRequirement) (string, error) {
+	if workspaceID == "" {
+		return "", fmt.Errorf("cache mount %q has no workspace, and a cache's identity is workspace-scoped", mount.Name)
+	}
+	if !domain.ValidCacheName(mount.Name) {
+		return "", fmt.Errorf("cache mount %q is not a name a volume can be derived from", mount.Name)
+	}
+	// The key is an application's own string and this stamps it into an option
+	// list the daemon parses on commas. A key that cannot be written down here
+	// is a generation this machine could never report holding, so it is refused
+	// rather than escaped into something else.
+	if !domain.ValidCacheCompatibilityKey(mount.CompatibilityKey) {
+		return "", fmt.Errorf("cache mount %q names generation %q, which no volume label can carry", mount.Name, mount.CompatibilityKey)
+	}
+	return strings.Join([]string{
+		"type=volume",
+		"source=" + domain.CacheVolumeName(workspaceID, mount),
+		"target=" + domain.CacheMountPath(mount.Name),
+		"volume-label=" + docker.cacheLabel("workspace") + "=" + workspaceID,
+		"volume-label=" + docker.cacheLabel("name") + "=" + mount.Name,
+		"volume-label=" + docker.cacheLabel("key") + "=" + mount.CompatibilityKey,
+	}, ","), nil
+}
+
+// caches is the mutable, application-owned state this machine holds, read back
+// out of the labels the daemon stamped when a workload's container first asked
+// for each volume. Only volumes made for a Mercator cache are reported: another
+// tool's volume on the same daemon is not one, whatever it is called.
+//
+// A volume is a cache once a workload of this node's has run against it, and the
+// daemon makes the volume one step earlier than that. `docker run` resolves the
+// image, creates the container and the mount points it names, and only then asks
+// the runtime for a process. An entrypoint this image does not carry, a device
+// this host lacks, or a memory limit the kernel refuses therefore exits non-zero
+// with the labelled volume already on the disk and nothing ever run against it.
+// Reporting that empty directory is the machine claiming warmth it has not
+// earned, which is the distinction CacheEvidence exists to make.
+//
+// So the report is the intersection of two facts the daemon holds: the volumes
+// stamped as caches, and the volumes some container of this node's was attached
+// to while running. Nothing is reclaimed here. Removing a volume because a
+// launch failed would delete a tenant's warm cache whenever the failing launch
+// was the second one, and reclaiming storage is garbage collection, which this
+// runtime still declares unsupported. A cache nothing can be shown to have run
+// against is left on the disk and left out of the report.
+//
+// A cache read never fails the node's report. A cache is best-effort by
+// construction and silence about one is already expressible, while failing here
+// would end the agent's session and, on an agent with no session yet, block its
+// enrollment: an operator pruning volumes on a working machine would take it out
+// of the fleet. So a volume that vanished between the listing and the read is
+// one cache left out, and a daemon that will not answer at all leaves this node
+// saying nothing rather than claiming it enumerated and found none.
+//
+// No size is reported. moby prices a volume only through GET /system/df, which
+// walks every volume on the host and took 4.8 seconds for 342 of them on the
+// machine this was written on, so it is not a read a heartbeat may make; and a
+// zero reported here would be this node claiming an empty cache it may be
+// holding gigabytes in. What the daemon can state is when each cache generation
+// began, which it does state, because each generation gets its own volume.
+func (docker *DockerRuntime) caches(ctx context.Context) (domain.CacheInventory, error) {
+	inventory := domain.CacheInventory{Known: true, ObservedAt: docker.now().UTC()}
+	names, err := docker.run(ctx, "volume", "ls",
+		"--filter", "label="+docker.cacheLabel("name"), "--format", "{{.Name}}")
+	if err != nil {
+		return docker.unreadableCaches(ctx, err)
+	}
+	volumes := strings.Fields(names)
+	if len(volumes) == 0 {
+		return inventory, nil
+	}
+	attached, err := docker.attachedVolumes(ctx)
+	if err != nil {
+		return docker.unreadableCaches(ctx, err)
+	}
+	volumes = slices.DeleteFunc(volumes, func(volume string) bool { return !attached[volume] })
+	if len(volumes) == 0 {
+		return inventory, nil
+	}
+	// The daemon prints the volumes it could describe and exits non-zero for
+	// the ones it could not, so what came back is read either way.
+	described, err := docker.run(ctx, append(append([]string{"volume", "inspect"}, volumes...),
+		"--format", `{"name":"{{.Name}}","created_at":"{{.CreatedAt}}","labels":{{json .Labels}}}`)...)
+	if err != nil && strings.TrimSpace(described) == "" {
+		return docker.unreadableCaches(ctx, err)
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(described), "\n") {
+		if line == "" {
+			continue
+		}
+		var volume describedVolume
+		if err := json.Unmarshal([]byte(line), &volume); err != nil {
+			return docker.unreadableCaches(ctx, fmt.Errorf("decode cache volume: %w", err))
+		}
+		mount, ok := volume.cache(docker.cacheLabel)
+		if !ok {
+			continue
+		}
+		inventory.Mounts = append(inventory.Mounts, mount)
+	}
+	return inventory, nil
+}
+
+// attachedVolumes is the storage a workload of this node's was actually run
+// against, taken from the containers the daemon still accounts for. A container
+// the daemon created and could not start is exactly the case this answers: it
+// holds the mount and never held a process, so its volumes are not caches.
+//
+// The evidence is as durable as the container record, so a machine whose
+// containers an operator removed reports fewer caches than it holds. That is the
+// safe direction of the same trade the whole slice is about: a cache left out is
+// work an application repeats, and a cache claimed without evidence is a Run
+// placed on a machine that never did the work.
+func (docker *DockerRuntime) attachedVolumes(ctx context.Context) (map[string]bool, error) {
+	containers, err := docker.containers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	attached := map[string]bool{}
+	for _, container := range containers {
+		if !container.ran() {
+			continue
+		}
+		for volume := range strings.SplitSeq(container.Mounts, ",") {
+			attached[volume] = true
+		}
+	}
+	return attached, nil
+}
+
+// unreadableCaches is a node that cannot say what mutable state it holds. It is
+// silence rather than an empty disk, which is the difference between "I looked
+// and there is nothing" and "nobody could ask me". A read that ended because
+// this agent is shutting down says nothing about the machine at all, so that one
+// fails the report.
+func (docker *DockerRuntime) unreadableCaches(ctx context.Context, err error) (domain.CacheInventory, error) {
+	if ctx.Err() != nil {
+		return domain.CacheInventory{}, fmt.Errorf("read this machine's caches: %w", err)
+	}
+	return domain.CacheInventory{}, nil
+}
+
+// describedVolume is one volume as the daemon accounts for it. The labels are
+// the identity: a cache is a workspace, a name, and the generation of content
+// the application declared, and none of that can be read off a volume's bytes.
+type describedVolume struct {
+	Name      string            `json:"name"`
+	CreatedAt string            `json:"created_at"`
+	Labels    map[string]string `json:"labels"`
+}
+
+// cache is the Cache Mount this volume holds, or nothing when its labels do not
+// name one. A volume missing a workspace or a name is not a cache this control
+// plane can address, and reporting it under a guessed identity is how one
+// workspace ends up reading another's bytes.
+func (volume describedVolume) cache(label func(string) string) (domain.CacheMount, bool) {
+	mount := domain.CacheMount{
+		WorkspaceID:      volume.Labels[label("workspace")],
+		Name:             volume.Labels[label("name")],
+		CompatibilityKey: volume.Labels[label("key")],
+	}
+	if mount.WorkspaceID == "" || mount.Name == "" {
+		return domain.CacheMount{}, false
+	}
+	if created, err := time.Parse(time.RFC3339, volume.CreatedAt); err == nil {
+		mount.CreatedAt = created.UTC()
+	}
+	return mount, true
+}
+
 func (docker *DockerRuntime) containerName(runID, attemptID string) string {
 	name := "mercator-" + runID
 	if attemptID != "" {
@@ -188,9 +421,35 @@ type dockerInfo struct {
 	ServerVersion   string `json:"ServerVersion"`
 	NCPU            int    `json:"NCPU"`
 	MemTotal        int64  `json:"MemTotal"`
-	Runtimes        map[string]struct {
+	// DockerRootDir is where this daemon keeps everything it stores: image
+	// layers, volumes, and container writable layers. It is the daemon's own
+	// name for the filesystem a workload's content lands on, which is what makes
+	// the disk this node reports the disk its workloads get.
+	DockerRootDir string `json:"DockerRootDir"`
+	Runtimes      map[string]struct {
 		Path string `json:"path"`
 	} `json:"Runtimes"`
+	// DriverStatus is the image store's own account of itself. It is the only
+	// thing in `docker info` that tells the two Docker image stores apart: both
+	// report a driver name, and the snapshotter's "overlayfs" and the graph
+	// driver's "overlay2" are different machinery answering different questions
+	// about the same image.
+	DriverStatus [][2]string `json:"DriverStatus"`
+}
+
+// snapshotterDriverType is what a daemon keeping images in the containerd
+// content store reports its storage backend to be (moby, LayerStoreStatus in
+// daemon/containerd/service.go). That store is the default for Docker Engine 29
+// on Linux, so this is the ordinary case rather than the exotic one.
+const snapshotterDriverType = "io.containerd.snapshotter.v1"
+
+func (info dockerInfo) keepsContentStore() bool {
+	for _, status := range info.DriverStatus {
+		if status[0] == "driver-type" && status[1] == snapshotterDriverType {
+			return true
+		}
+	}
+	return false
 }
 
 func (info dockerInfo) runtimeNames() []string {
@@ -214,36 +473,388 @@ func (docker *DockerRuntime) info(ctx context.Context) (dockerInfo, error) {
 	return info, nil
 }
 
-// images reports the exact manifest digests this machine holds, which is what
-// image locality has to be measured in. A tag would say nothing about content.
-func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLocality, error) {
+// images reports the exact content this machine holds, which is what image
+// locality has to be measured in. A tag would say nothing about it.
+//
+// The daemon answers in two vocabularies at once and only one of them is the
+// registry's: the manifest digest an image was pulled by, and the diff IDs of
+// its unpacked layers. It has no way to name the compressed blobs the registry
+// served, because it discarded them, so the layers are reported as what the
+// daemon can actually see and matched against a resolved manifest that carries
+// both names.
+//
+// Being listed is not being runnable. An image whose content is here and whose
+// layer chain is not assembled cannot start a container, and this node used to
+// call every image it could list hot and unpacked, which is a claim about
+// readiness made from a listing that says nothing about it. Each image now
+// states what its image store established, and the two Docker image stores
+// establish it in different ways.
+//
+// One image the daemon will not describe is one image reported unknown. It is
+// not the whole report: a host with forty images, one of which was pruned
+// between the listing and the read, holds thirty-nine images that nothing has
+// stopped it from stating. Failing the report would have cost this node its
+// session, and a node with no session yet its enrollment, over a fact about one
+// image.
+func (docker *DockerRuntime) images(ctx context.Context, store imageStore) ([]capability.ImageLocality, error) {
+	listed, err := docker.listImages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var locality []capability.ImageLocality
+	for _, image := range listed {
+		pinned := store.pinnedDigest(image)
+		if pinned == "" {
+			continue
+		}
+		described, err := docker.describe(ctx, image.ID)
+		if err != nil {
+			// A read that ended because this agent is shutting down says
+			// nothing about the machine, so it is the report that failed.
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			locality = append(locality, capability.ImageLocality{
+				ManifestDigest: pinned,
+				State:          domain.LocalityUnknown,
+				LastVerifiedAt: docker.now().UTC(),
+			})
+			continue
+		}
+		locality = append(locality, described.locality(pinned, store.assembly(image, described), docker.now().UTC()))
+	}
+	return locality, nil
+}
+
+// listedImage is one line of the daemon's own image list. ID is what every
+// other read of this image is addressed by. Digest is the reference digest the
+// CLI prints, which is the name a Run is pinned by on a graph-driver daemon and
+// is not on a content-store one, so which of them means anything is the image
+// store's answer rather than this function's.
+type listedImage struct {
+	ID     string `json:"ID"`
+	Digest string `json:"Digest"`
+}
+
+func (docker *DockerRuntime) listImages(ctx context.Context) ([]listedImage, error) {
 	out, err := docker.run(ctx, "images", "--digests", "--no-trunc", "--format", "{{json .}}")
 	if err != nil {
 		return nil, fmt.Errorf("docker images: %w", err)
 	}
-	var locality []capability.ImageLocality
+	var listed []listedImage
 	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if line == "" {
 			continue
 		}
-		var image struct {
-			Digest string `json:"Digest"`
-			Size   string `json:"Size"`
-		}
+		var image listedImage
 		if err := json.Unmarshal([]byte(line), &image); err != nil {
 			return nil, fmt.Errorf("decode docker image: %w", err)
 		}
-		if image.Digest == "" || image.Digest == "<none>" {
+		if image.Digest == "<none>" {
+			image.Digest = ""
+		}
+		listed = append(listed, image)
+	}
+	return listed, nil
+}
+
+// describedImage is what the daemon can say about one image it holds: which
+// build it is, and the uncompressed layer identities its config declares. The
+// build matters because a multi-platform image is listed under one index digest
+// whichever platform was pulled, so a host that fetched the arm64 build and a
+// host that fetched the amd64 build report the same name for different content.
+type describedImage struct {
+	OS           string   `json:"os"`
+	Architecture string   `json:"architecture"`
+	DiffIDs      []string `json:"diff_ids"`
+}
+
+func (described describedImage) platform() domain.Platform {
+	return domain.Platform{OS: described.OS, Architecture: described.Architecture}
+}
+
+// locality is what this daemon established about one image, and nothing beyond
+// it. Layers are reported held only for an image a container can be started on:
+// a chain the daemon has not assembled is content nothing can be mounted from,
+// and reporting it would tell Placement this machine is ready when it is
+// minutes of local work away.
+func (described describedImage) locality(manifestDigest string, assembly imageAssembly, at time.Time) capability.ImageLocality {
+	reported := capability.ImageLocality{
+		ManifestDigest: manifestDigest,
+		Platform:       described.platform(),
+		ContentPresent: assembly.ContentPresent,
+		State:          assembly.State,
+		LastVerifiedAt: at,
+	}
+	if assembly.State == domain.LocalityHot {
+		reported.LayerDiffIDs = described.DiffIDs
+	}
+	return reported
+}
+
+// describe reads what one image is and what it is made of. An image reported
+// with no layers is indistinguishable downstream from a host holding no part of
+// it, and an image reported without its platform is one nothing can tell from
+// another platform's build under the same digest, so a daemon that will not
+// answer either yields an unknown image rather than a confident wrong one.
+func (docker *DockerRuntime) describe(ctx context.Context, imageID string) (describedImage, error) {
+	if imageID == "" {
+		return describedImage{}, fmt.Errorf("the daemon listed an image with no ID, so nothing can read it")
+	}
+	out, err := docker.run(ctx, "image", "inspect", imageID, "--format",
+		`{"os":"{{.Os}}","architecture":"{{.Architecture}}","diff_ids":{{json .RootFS.Layers}}}`)
+	if err != nil {
+		return describedImage{}, fmt.Errorf("read image %s: %w", imageID, err)
+	}
+	var described describedImage
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &described); err != nil {
+		return describedImage{}, fmt.Errorf("decode image %s: %w", imageID, err)
+	}
+	if len(described.DiffIDs) == 0 {
+		return describedImage{}, fmt.Errorf("the daemon described image %s without naming any of its content", imageID)
+	}
+	return described, nil
+}
+
+// imageAssembly is what an image store established about one image: whether a
+// container can be started on it now, and whether its bytes are on this machine
+// at all. The two are separate answers because fetching and unpacking are
+// separate acts, and a host that has done the first and not the second owes
+// local work rather than a pull.
+type imageAssembly struct {
+	State          domain.LocalityState
+	ContentPresent bool
+}
+
+// imageStore is the daemon's own account of its images: the name a Run pinned
+// to one of them carries, and what a container can be started on. Docker has
+// two image stores and they establish both differently, so which one is
+// answering decides what counts as evidence. Reading one store's evidence on
+// the other is how a node ends up stating a measurement it never made, or
+// filing a true measurement under a name nothing can match.
+type imageStore interface {
+	pinnedDigest(listed listedImage) string
+	assembly(listed listedImage, described describedImage) imageAssembly
+}
+
+// openImageStore picks the evidence this daemon actually offers.
+func (docker *DockerRuntime) openImageStore(ctx context.Context, info dockerInfo) (imageStore, error) {
+	if !info.keepsContentStore() {
+		return graphDriverStore{}, nil
+	}
+	return docker.readContentStore(ctx)
+}
+
+// graphDriverStore is a daemon whose images live in a graph driver. Its layer
+// store holds applied layers only and an image is registered once the last of
+// its layers is unpacked, so an image this daemon lists and describes is one a
+// container can start on, and the bytes are here by the same construction.
+//
+// The chain a driver names for an image is not evidence of anything further and
+// most drivers name none: btrfs returns no metadata at all, vfs and zfs return
+// one directory rather than a chain, and only overlay2 names one entry per
+// layer. Reading it told working hosts on three of the four drivers that they
+// held nothing.
+type graphDriverStore struct{}
+
+// pinnedDigest is the reference digest the daemon prints. This store records an
+// image under the digest it was pulled by, which for a multi-platform image is
+// the index above the platform manifest, and that is the name the control plane
+// pins a Run to.
+func (graphDriverStore) pinnedDigest(listed listedImage) string { return listed.Digest }
+
+func (graphDriverStore) assembly(listedImage, describedImage) imageAssembly {
+	return imageAssembly{State: domain.LocalityHot, ContentPresent: true}
+}
+
+// contentStore is a daemon whose images live in the containerd content store,
+// which is the default for Docker Engine 29 on Linux. Content and snapshots are
+// separate there: an image can be listed with its content missing, and it can
+// hold every byte with no snapshot chain to start from. Its CLI reports neither
+// (moby returns GraphDriver.Data as null for this store, unconditionally, in
+// daemon/containerd/image_inspect.go), so the agent asks the daemon's API for
+// the only account of it that exists.
+type contentStore struct {
+	images map[string]storedImage
+}
+
+// storedImage is one image as this store accounts for it: the descriptor the
+// daemon resolved the pull to, and one summary per build underneath it.
+type storedImage struct {
+	Descriptor struct {
+		Digest string `json:"digest"`
+	} `json:"Descriptor"`
+	Manifests []manifestSummary `json:"Manifests"`
+}
+
+// pinnedDigest is the digest the daemon's own image record targets, which for a
+// multi-platform image is the index and is the name the control plane pins a
+// Run to.
+//
+// Neither name the CLI prints for such an image is that one. This store lists
+// an image under the platform manifest it selected and builds RepoDigests from
+// the same value (moby, singlePlatformImage: `target := rawImg.Target.Digest`
+// over an ImageManifest whose Target NewImageManifest replaced with the
+// platform descriptor), so both `.ID` and `.Digest` name a manifest no Run is
+// ever pinned to. Reading either would file every locality answer this store
+// produces under a name the scheduler's subtraction can never match, and a host
+// holding the image whole would be priced a full fetch.
+func (store contentStore) pinnedDigest(listed listedImage) string {
+	return store.images[listed.ID].Descriptor.Digest
+}
+
+func (store contentStore) assembly(listed listedImage, described describedImage) imageAssembly {
+	for _, summary := range store.images[listed.ID].Manifests {
+		if !summary.describes(described.platform()) {
 			continue
 		}
-		locality = append(locality, capability.ImageLocality{
-			ManifestDigest: image.Digest,
-			Unpacked:       true,
-			State:          capability.LocalityHot,
-			LastVerifiedAt: docker.now().UTC(),
-		})
+		return summary.assembly()
 	}
-	return locality, nil
+	return imageAssembly{State: domain.LocalityUnknown}
+}
+
+// manifestSummary is one platform's build inside one listed image, as the
+// daemon accounts for it. Available is whether every blob it references is
+// here. Content is how many of those bytes are, which is the only thing that
+// separates a machine holding none of an image from one holding all but the
+// last layer of it. Unpacked is the usage of the snapshot named by the image's
+// full chain ID, which the daemon reports as zero when that snapshot does not
+// exist (moby, ImageManifest.SnapshotUsage), so anything above zero is the
+// whole chain and exactly the question "can a container start on this".
+type manifestSummary struct {
+	Available bool   `json:"Available"`
+	Kind      string `json:"Kind"`
+	Size      struct {
+		Content int64 `json:"Content"`
+	} `json:"Size"`
+	ImageData *struct {
+		Platform struct {
+			OS           string `json:"os"`
+			Architecture string `json:"architecture"`
+		} `json:"Platform"`
+		Size struct {
+			Unpacked int64 `json:"Unpacked"`
+		} `json:"Size"`
+	} `json:"ImageData"`
+}
+
+// assembly is what this summary establishes about starting a container here.
+//
+// An interrupted pull is the case the fourth answer exists for. moby's
+// Available is all-or-nothing over every blob the manifest references, so a
+// machine that fetched seventeen of eighteen layers reports it false while
+// holding almost every byte. Calling that cold would be this node asserting
+// "none of it is here" about a disk that is nearly full of it, and steering the
+// retry at a machine holding none. What it holds cannot be named either: the
+// daemon reports the bytes and never which layers they belong to. So the node
+// says it looked and cannot account for this one, which is the only claim the
+// evidence supports.
+func (summary manifestSummary) assembly() imageAssembly {
+	switch {
+	case summary.ImageData.Size.Unpacked > 0:
+		return imageAssembly{State: domain.LocalityHot, ContentPresent: summary.Available}
+	case summary.Available:
+		return imageAssembly{State: domain.LocalityPartial, ContentPresent: true}
+	case summary.Size.Content > 0:
+		return imageAssembly{State: domain.LocalityUnknown}
+	default:
+		return imageAssembly{State: domain.LocalityCold}
+	}
+}
+
+// describes reports whether this entry is the build the daemon would run here.
+// An index lists one manifest per platform and its attestations besides, and
+// another platform's entry says nothing about the content this host would use.
+func (summary manifestSummary) describes(platform domain.Platform) bool {
+	return summary.Kind == "image" && summary.ImageData != nil &&
+		domain.Platform{OS: summary.ImageData.Platform.OS, Architecture: summary.ImageData.Platform.Architecture} == platform
+}
+
+// contentStoreAPIVersion is the first Engine API version that reports per
+// manifest content availability and unpacked size. A daemon on the content
+// store below it cannot say which of its images are runnable, and a node that
+// cannot say that must not be guessing about it.
+const contentStoreAPIVersion = "v1.48"
+
+// readContentStore asks the daemon what it holds and what it has unpacked. It
+// fails rather than degrading: an image store this agent cannot read is a node
+// whose warmth is unknowable, and reporting that machine cold would send its own
+// work elsewhere while reporting it hot would promise starts it cannot make.
+func (docker *DockerRuntime) readContentStore(ctx context.Context) (contentStore, error) {
+	endpoint, err := docker.endpoint(ctx)
+	if err != nil {
+		return contentStore{}, err
+	}
+	client, base, err := daemonClient(endpoint)
+	if err != nil {
+		return contentStore{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		base+"/"+contentStoreAPIVersion+"/images/json?manifests=1", nil)
+	if err != nil {
+		return contentStore{}, err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return contentStore{}, fmt.Errorf("read the daemon's image store at %s: %w", endpoint, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return contentStore{}, fmt.Errorf(
+			"the daemon at %s answered %s for its image store, so this node cannot say which of its images are runnable",
+			endpoint, response.Status)
+	}
+	var listed []struct {
+		ID string `json:"Id"`
+		storedImage
+	}
+	if err := json.NewDecoder(response.Body).Decode(&listed); err != nil {
+		return contentStore{}, fmt.Errorf("decode the daemon's image store: %w", err)
+	}
+	store := contentStore{images: make(map[string]storedImage, len(listed))}
+	for _, image := range listed {
+		store.images[image.ID] = image.storedImage
+	}
+	return store, nil
+}
+
+// endpoint is where the daemon this agent drives listens, taken from the same
+// place the CLI takes it so that the two are describing one machine.
+func (docker *DockerRuntime) endpoint(ctx context.Context) (string, error) {
+	if host := os.Getenv("DOCKER_HOST"); host != "" {
+		return host, nil
+	}
+	out, err := docker.run(ctx, "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
+	if err != nil {
+		return "", fmt.Errorf("find the daemon this agent drives: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// daemonClient dials one daemon endpoint. A local socket and a TCP port are the
+// two a node agent meets, because the agent runs on the machine it reports. An
+// endpoint reached over SSH or TLS is a daemon this code cannot open, and it
+// says so rather than reporting a machine that holds everything as holding
+// nothing.
+func daemonClient(endpoint string) (*http.Client, string, error) {
+	transport, address, found := strings.Cut(endpoint, "://")
+	if !found {
+		return nil, "", fmt.Errorf("the daemon endpoint %q names no transport", endpoint)
+	}
+	switch transport {
+	case "unix":
+		return &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", address)
+			},
+		}}, "http://docker", nil
+	case "tcp", "http":
+		return &http.Client{}, "http://" + address, nil
+	default:
+		return nil, "", fmt.Errorf(
+			"this agent cannot read the image store of a daemon reached over %q, so it cannot say what %s holds",
+			transport, endpoint)
+	}
 }
 
 type dockerContainer struct {
@@ -251,6 +862,18 @@ type dockerContainer struct {
 	State  string `json:"State"`
 	Status string `json:"Status"`
 	Labels string `json:"Labels"`
+	// Mounts names the volumes this container is attached to, which is the only
+	// place the daemon says which storage a workload was actually run against.
+	Mounts string `json:"Mounts"`
+}
+
+// ran reports whether a process ever started in this container. The daemon
+// creates a container, its mount points, and the volumes those mount points
+// name before it asks the runtime for a process, so a container that never left
+// "created" is one whose storage nothing has written to.
+func (container dockerContainer) ran() bool {
+	phase := dockerPhase(container.State)
+	return phase == capability.WorkloadPhaseRunning || phase.Exited()
 }
 
 func (container dockerContainer) label(name string) string {
@@ -330,13 +953,18 @@ func dockerArchitecture(reported string) string {
 	}
 }
 
+// run is one CLI call to the daemon. It answers with what the command printed
+// as well as with what went wrong, because the two are not exclusive: a read
+// over several objects prints the ones it could describe and exits non-zero for
+// the rest, and throwing that away is how one missing object becomes a machine
+// that reported nothing.
 func (docker *DockerRuntime) run(ctx context.Context, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, docker.binary, args...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
-		return "", fmt.Errorf("%s %s: %w: %s", docker.binary, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		return stdout.String(), fmt.Errorf("%s %s: %w: %s", docker.binary, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
 }

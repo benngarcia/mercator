@@ -78,6 +78,8 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 			Message: "Expected runtime cannot exceed the enforced maximum runtime.",
 		})
 	}
+	violations = append(violations, validateArtifactRequirements(rev.Spec.Artifacts)...)
+	violations = append(violations, validateCacheRequirements(rev.Spec.Caches)...)
 	for i, port := range container.Ports {
 		if port.ContainerPort <= 0 || port.ContainerPort > 65535 {
 			violations = append(violations, Violation{
@@ -99,6 +101,89 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 		}
 	}
 	return violations
+}
+
+// validateCacheRequirements refuses a cache declaration that cannot name one
+// cache. The name is the whole identity, so it is checked where it enters rather
+// than escaped wherever a volume gets built from it, and one name twice is two
+// mounts of one cache into one container.
+func validateCacheRequirements(required []CacheMountRequirement) []Violation {
+	var violations []Violation
+	named := map[string]bool{}
+	for index, requirement := range required {
+		path := fmt.Sprintf("spec.caches[%d].name", index)
+		switch {
+		case !ValidCacheName(requirement.Name):
+			violations = append(violations, Violation{
+				Code: "CACHE_NAME_INVALID", Path: path, Required: cacheNamePattern.String(), Offered: requirement.Name,
+				Message: "A Cache Mount name is its identity and names a volume on the host, so it must be a lowercase label.",
+			})
+		case named[requirement.Name]:
+			violations = append(violations, Violation{
+				Code: "CACHE_NAME_REPEATED", Path: path, Offered: requirement.Name,
+				Message: "A Cache Mount name identifies one cache, so it can be declared once.",
+			})
+		}
+		named[requirement.Name] = true
+		if !ValidCacheCompatibilityKey(requirement.CompatibilityKey) {
+			violations = append(violations, Violation{
+				Code:     "CACHE_KEY_INVALID",
+				Path:     fmt.Sprintf("spec.caches[%d].compatibility_key", index),
+				Required: cacheKeyPattern.String(), Offered: requirement.CompatibilityKey,
+				Message: "A compatibility key is recorded beside the storage it names, so it must be a printable label.",
+			})
+		}
+		if requirement.SizeBytes < 0 {
+			violations = append(violations, Violation{
+				Code: "CACHE_SIZE_INVALID", Path: fmt.Sprintf("spec.caches[%d].size_bytes", index), Required: ">= 0",
+				Offered: requirement.SizeBytes, Message: "A Cache Mount cannot expect negative room.",
+			})
+		}
+	}
+	return violations
+}
+
+// validateArtifactRequirements refuses the two declarations that cannot mean
+// anything. A version named twice on one side says nothing the first mention
+// did not, and a version a workload both reads and publishes claims to be its
+// own input: an Artifact version is immutable, so one Run cannot depend on
+// content it is about to create.
+func validateArtifactRequirements(requirements ArtifactRequirements) []Violation {
+	var violations []Violation
+	consumed := map[string]bool{}
+	for index, id := range requirements.Consumes {
+		violations = append(violations, artifactDeclarationViolations(id, index, "consumes", consumed)...)
+		consumed[id] = true
+	}
+	produced := map[string]bool{}
+	for index, id := range requirements.Produces {
+		violations = append(violations, artifactDeclarationViolations(id, index, "produces", produced)...)
+		produced[id] = true
+		if consumed[id] {
+			violations = append(violations, Violation{
+				Code: "ARTIFACT_CONSUMED_AND_PRODUCED", Path: fmt.Sprintf("spec.artifacts.produces[%d]", index), Offered: id,
+				Message: "An Artifact version is immutable, so one workload cannot both read and publish it.",
+			})
+		}
+	}
+	return violations
+}
+
+func artifactDeclarationViolations(id string, index int, field string, seen map[string]bool) []Violation {
+	path := fmt.Sprintf("spec.artifacts.%s[%d]", field, index)
+	if id == "" {
+		return []Violation{{
+			Code: "ARTIFACT_ID_REQUIRED", Path: path, Required: "Artifact version identity",
+			Message: "Artifact declarations must name a version.",
+		}}
+	}
+	if seen[id] {
+		return []Violation{{
+			Code: "ARTIFACT_DECLARED_TWICE", Path: path, Offered: id,
+			Message: "An Artifact version may appear once in a declaration.",
+		}}
+	}
+	return nil
 }
 
 func supportedLinuxArch(arch string) bool {

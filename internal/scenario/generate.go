@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"time"
+
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 type GeneratorConfig struct {
@@ -35,7 +37,7 @@ func GenerateBlueprint(config GeneratorConfig) (Blueprint, []GenerationSample, e
 	}
 	generator := &blueprintGenerator{seed: config.Seed}
 	images, imageRefs := generator.images(config.ImageCount)
-	artifacts := generator.artifacts(config.ArtifactCount)
+	artifacts := generator.artifacts(config.ArtifactCount, generatedArtifactProducer(config))
 	rentals := generator.rentals(config.RentalCount, imageRefs, images, artifacts)
 	marketplace := generator.marketplace(config.MarketplaceCount)
 	candidateIDs := generatedCandidateIDs(rentals, marketplace)
@@ -134,15 +136,34 @@ func (generator *blueprintGenerator) images(count int) (map[string]ImageSpec, []
 	return images, refs
 }
 
-func (generator *blueprintGenerator) artifacts(count int) []ArtifactSpec {
+// artifacts builds the catalog. The first version is what the generated DAG's
+// producer publishes, so it is durable only once that Run runs; every other
+// version was published before this world started, which is what lets a machine
+// be seeded holding a copy of it.
+func (generator *blueprintGenerator) artifacts(count int, producer string) []ArtifactSpec {
 	artifacts := make([]ArtifactSpec, count)
 	for index := range count {
 		artifacts[index] = ArtifactSpec{
-			ID:   fmt.Sprintf("artifact:generated:%03d:v1", index+1),
-			Size: ByteSize(generator.megabytes(fmt.Sprintf("artifact/%d/size", index), 32, 1024)),
+			ID:            fmt.Sprintf("artifact:generated:%03d:v1", index+1),
+			ContentDigest: "sha256:" + generatedDigest(generator.seed, fmt.Sprintf("artifact/%d/content", index)),
+			Size:          ByteSize(generator.megabytes(fmt.Sprintf("artifact/%d/size", index), 32, 1024)),
 		}
 	}
+	if producer != "" {
+		artifacts[0].ProducedBy = producer
+	}
 	return artifacts
+}
+
+// generatedArtifactProducer names the Run that publishes the first Artifact.
+// Only the fixed arrival plan builds a producer/consumer DAG; a periodic or
+// burst family is the same request repeated, and an Artifact every arrival
+// claimed to publish would have as many producers as it has arrivals.
+func generatedArtifactProducer(config GeneratorConfig) string {
+	if config.ArrivalType != ArrivalFixed {
+		return ""
+	}
+	return "generated-001"
 }
 
 func (generator *blueprintGenerator) rentals(count int, imageRefs []string, images map[string]ImageSpec, artifacts []ArtifactSpec) []RentalSpec {
@@ -160,17 +181,38 @@ func (generator *blueprintGenerator) rentals(count int, imageRefs []string, imag
 				MinimumCharge: &minimum,
 			},
 			Resources:   generatedResources(index),
-			CacheMounts: []string{"build-cache"},
+			CacheMounts: []HeldCacheSpec{{Name: "build-cache", CompatibilityKey: "generated-v1", Size: ByteSize(2e9)}},
 		}
 		if index == 0 {
 			rental.CachedLayers = []string{images[imageRefs[0]].Layers[0].Digest}
 		}
-		if index > 0 && len(artifacts) > 0 {
-			rental.ArtifactReplicas = []string{artifacts[index%len(artifacts)].ID}
+		// A machine can only be found holding content the object store already
+		// published, so a seeded replica names a version this world's own DAG
+		// does not produce.
+		if seeded := seededArtifact(artifacts, index); seeded != "" {
+			rental.ArtifactReplicas = []ArtifactReplicaSpec{{
+				Artifact: seeded,
+				State:    domain.ArtifactReplicaVerified,
+			}}
 		}
 		rentals[index] = rental
 	}
 	return rentals
+}
+
+// seededArtifact picks the prepublished version this machine holds a copy of,
+// and answers empty when the catalog has none to give it.
+func seededArtifact(artifacts []ArtifactSpec, index int) string {
+	if index == 0 {
+		return ""
+	}
+	for offset := range artifacts {
+		artifact := artifacts[(index+offset)%len(artifacts)]
+		if artifact.Prepublished() {
+			return artifact.ID
+		}
+	}
+	return ""
 }
 
 func (generator *blueprintGenerator) marketplace(count int) []MarketplaceOfferSpec {
@@ -252,11 +294,11 @@ func (generator *blueprintGenerator) request(image string) RequestSpec {
 	maximum := Duration(10 * time.Minute)
 	return RequestSpec{
 		Image:           image,
-		Resources:       generatedResources(0),
+		Resources:       generatedRunResources(),
 		ExpectedRuntime: &expected,
 		MaxRuntime:      &maximum,
 		Objective:       "balanced",
-		CacheMounts:     []CacheMountSpec{{Name: "build-cache"}},
+		CacheMounts:     []CacheMountSpec{{Name: "build-cache", CompatibilityKey: "generated-v1", Size: ByteSize(2e9)}},
 		Phases: []WorkloadPhaseSpec{
 			{Name: "prepare", Duration: Duration(2 * time.Minute)},
 			{Name: "execute", Duration: Duration(3 * time.Minute)},
@@ -316,13 +358,24 @@ func generatedResources(ordinal int) *ResourcesSpec {
 	return &ResourcesSpec{
 		CPUMillis: 4000,
 		Memory:    ByteSize(16_000_000_000),
-		Disk:      ByteSize(100_000_000_000),
+		Disk:      StatedBytes(100_000_000_000),
 		GPU: &GPUSpec{
 			Model:  "RTX 4090",
 			Count:  1,
 			Memory: ByteSize(24_000_000_000 + int64(ordinal%2)*8_000_000_000),
 		},
 	}
+}
+
+// generatedRunResources is what a generated Run asks for. Its disk floor is a
+// share of the machine rather than all of it, because a Run reserving every byte
+// a candidate has leaves nowhere for its own image, its inputs, and the caches it
+// declared, and a generator that produced only such Runs would generate worlds in
+// which nothing can be placed anywhere.
+func generatedRunResources() *ResourcesSpec {
+	resources := generatedResources(0)
+	resources.Disk = StatedBytes(50_000_000_000)
+	return resources
 }
 
 func generatedCandidateIDs(rentals []RentalSpec, marketplace []MarketplaceOfferSpec) []string {

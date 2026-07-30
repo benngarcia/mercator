@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 func adaptLegacyBlueprint(data []byte) ([]byte, error) {
@@ -94,7 +96,11 @@ func (a *legacyArtifacts) add(rawID, size any) error {
 		return nil
 	}
 	a.order = append(a.order, id)
-	a.byID[id] = map[string]any{"id": id, "size": size}
+	// A legacy named cache was identified by its content key, which is the
+	// conflation ADR 0004 migrates away from. Deriving the version's content
+	// digest from that key is the faithful translation: it is exactly what that
+	// identity claimed the content was.
+	a.byID[id] = map[string]any{"id": id, "size": size, "content_digest": legacyLayerDigest(id)}
 	return nil
 }
 
@@ -191,7 +197,19 @@ func adaptLegacyRentals(
 				return err
 			}
 		}
-		rental["artifact_replicas"] = stringsToAny(ids)
+		// A legacy fixture stated presence and nothing else, so the copy becomes
+		// one nobody checked. Translating it as verified would make the migration
+		// assert that those bytes were hashed against a catalog the old model had
+		// no concept of, and price at zero a copy the honest reading makes a
+		// consumer fetch. A fixture that means the stronger thing says so in v1.
+		replicas := make([]any, 0, len(ids))
+		for _, id := range ids {
+			replicas = append(replicas, map[string]any{
+				"artifact": id,
+				"state":    string(domain.ArtifactReplicaUnverified),
+			})
+		}
+		rental["artifact_replicas"] = replicas
 		delete(rental, "named_caches")
 	}
 	return nil
@@ -247,12 +265,4 @@ func object(value any) map[string]any {
 func array(value any) []any {
 	values, _ := value.([]any)
 	return values
-}
-
-func stringsToAny(values []string) []any {
-	result := make([]any, len(values))
-	for i, value := range values {
-		result[i] = value
-	}
-	return result
 }

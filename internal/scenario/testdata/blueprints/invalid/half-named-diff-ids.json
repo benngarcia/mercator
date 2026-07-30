@@ -1,0 +1,35 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "green",
+  "summary": "A config blob names one diff ID for every layer or none, so a manifest naming some of them is a manifest no registry can serve.",
+  "world": {
+    "images": {
+      "app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+        "layers": [
+          {
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "diff_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "size": "1GB"
+          },
+          {
+            "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "size": "1GB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-a",
+        "rate_per_hour_usd": 1.0
+      }
+    ]
+  },
+  "request": {
+    "image": "app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-a"
+  }
+}

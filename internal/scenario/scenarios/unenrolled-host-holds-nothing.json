@@ -1,0 +1,114 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "A Docker host Mercator has not enrolled, beside a Rental it holds. The host exists and is cheap, so the second and third Runs both go there, and both pay the whole 18GB pull: Mercator borrows a slot on that machine and has nothing enrolled on it to hold content for the next Run. The Rental that ran the image once is warm. This is the quadrant only the lane can draw. The machine is standing capacity, so cleanup releases the slot and never destroys a host Mercator does not own, and it is in the ephemeral lane, so nothing survives the container that fetched it.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "held-4090",
+        "rate_per_hour_usd": 4.0
+      }
+    ],
+    "hosts": [
+      {
+        "id": "local-docker",
+        "rate_per_hour_usd": 1.0,
+        "resources": {"memory": "16GB"}
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "wide-memory",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "resources": {"memory": "24GB"},
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "held-4090",
+        "disposition": "release",
+        "candidates": {
+          "held-4090": {
+            "feasible": true,
+            "pull_seconds": {"at_least": 200}
+          },
+          "local-docker": {
+            "feasible": false
+          }
+        }
+      }
+    },
+    {
+      "advance": "15m"
+    },
+    {
+      "submit": "borrowed-first",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "local-docker",
+        "disposition": "release",
+        "reasons": ["LAUNCH_EPHEMERAL"],
+        "candidates": {
+          "local-docker": {
+            "feasible": true,
+            "disposition": "launch_ephemeral",
+            "pull_seconds": {"at_least": 200}
+          },
+          "held-4090": {
+            "feasible": true,
+            "pull_seconds": 0
+          }
+        }
+      }
+    },
+    {
+      "advance": "15m"
+    },
+    {
+      "submit": "borrowed-second",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "local-docker",
+        "disposition": "release",
+        "candidates": {
+          "local-docker": {
+            "feasible": true,
+            "disposition": "launch_ephemeral",
+            "pull_seconds": {"at_least": 200}
+          },
+          "held-4090": {
+            "feasible": true,
+            "pull_seconds": 0
+          }
+        }
+      }
+    }
+  ]
+}

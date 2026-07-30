@@ -275,25 +275,54 @@ func driveRecord(command DriveCommand, checkpoint Checkpoint) DriveRecord {
 	return record
 }
 
+// DriveToCompletion advances until the world owes nothing it has started: a
+// running execution its completion, or a producer's output its durability. The
+// horizon is the world's own deadline for the work in flight rather than the sum
+// of sampled runtimes, and each round settles what was owed at that moment,
+// which is what admits whatever was waiting on it.
+//
+// The bound is one round per arrival plus one per Artifact, because those are
+// the two things a round can settle: a Run finishing, and a publication landing.
+// What the world owes is not all there is: a Run Mercator accepted and never
+// placed is owed by Mercator, so the execution ends at the liveness bound
+// instead of at the last transfer.
 func (execution *Execution) DriveToCompletion(ctx context.Context) (Checkpoint, error) {
 	checkpoint, err := execution.Drive(ctx, Quiesce())
 	if err != nil {
 		return checkpoint, err
 	}
-	for _, event := range execution.config.Tape.Events {
-		if event.Kind != EventRunArrived {
-			continue
+	rounds := len(execution.config.Tape.Events) + len(execution.config.Tape.InitialWorld.Artifacts)
+	for range rounds {
+		horizon := execution.runtime.world.executionHorizon()
+		if horizon.IsZero() {
+			break
 		}
-		var arrival RunArrival
-		if err := json.Unmarshal(event.Data, &arrival); err != nil {
-			return execution.checkpoint(), fmt.Errorf("decode Run completion horizon: %w", err)
-		}
-		checkpoint, err = execution.Drive(ctx, Advance(arrival.ActualRuntime.Duration()+time.Nanosecond))
+		checkpoint, err = execution.Drive(ctx, Advance(horizon.Sub(execution.runtime.world.nowTime())+time.Nanosecond))
 		if err != nil {
 			return checkpoint, err
 		}
 	}
-	return checkpoint, nil
+	return execution.settleHeldRuns(ctx, checkpoint)
+}
+
+// settleHeldRuns drives past the longest bound any standing rule is stated
+// against while Mercator is still holding a Run open. A Run waiting on a
+// publication that never lands leaves the world with nothing in flight, so the
+// horizon rounds settle instantly and stopping there would export a green
+// execution in which a declared arrival never ran. Virtual time reaching the
+// bound is what lets the liveness rules adjudicate it, which is the only place
+// that answer belongs: the driver ends the execution and the registry decides
+// whether ending it there was a violation.
+func (execution *Execution) settleHeldRuns(ctx context.Context, checkpoint Checkpoint) (Checkpoint, error) {
+	holding, err := execution.runtime.holdsOpenRun(ctx)
+	if err != nil || !holding {
+		return checkpoint, err
+	}
+	bound := execution.config.Tape.Start.Add(execution.config.Invariants.longestBound() + time.Nanosecond)
+	if !bound.After(execution.now) {
+		return checkpoint, nil
+	}
+	return execution.Drive(ctx, Advance(bound.Sub(execution.now)))
 }
 
 func (execution *Execution) transition(ctx context.Context) error {

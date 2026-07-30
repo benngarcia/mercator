@@ -74,6 +74,10 @@ const (
 	// nothing can execute on, so only a node an operator enrolled by hand is
 	// reusable.
 	CapabilityNodeBootstrap Capability = "node_bootstrap"
+	// CapabilityExecutionWarmsCapacity is a host keeping what its workload
+	// fetched. Running an image is how a machine becomes warm, so capacity that
+	// cannot retain content past one execution is cold on every Run.
+	CapabilityExecutionWarmsCapacity Capability = "execution_warms_capacity"
 	// CapabilityHostFacts is providers advertising SSH and NVIDIA-driver
 	// facts on offers, rejected loudly when absent or false.
 	CapabilityHostFacts Capability = "host_facts"
@@ -82,6 +86,14 @@ const (
 	CapabilityArtifacts Capability = "artifacts"
 	// CapabilityArtifactEvidence is per-candidate Artifact locality evidence.
 	CapabilityArtifactEvidence Capability = "artifact_evidence"
+	// CapabilityCacheMounts is mutable, application-owned caches carried across
+	// Runs: attached by identity, compared against the generation the
+	// application declared, and never shared between workspaces.
+	CapabilityCacheMounts Capability = "cache_mounts"
+	// CapabilityPrewarm is Mercator preparing a host for work it has queued but
+	// not yet admitted: pulling an image, fetching an Artifact, and stopping
+	// when the Run that wanted it goes away.
+	CapabilityPrewarm Capability = "prewarm"
 	// CapabilityLabExecution is deterministic execution beyond one Placement
 	// decision.
 	CapabilityLabExecution Capability = "lab_execution"
@@ -101,19 +113,22 @@ const (
 )
 
 var knownCapabilities = map[Capability]bool{
-	CapabilityNodeRuntime:         true,
-	CapabilityNodeBootstrap:       true,
-	CapabilityRentalSchedule:      true,
-	CapabilityScheduleAdvancement: true,
-	CapabilityHostFacts:           true,
-	CapabilityArtifacts:           true,
-	CapabilityArtifactEvidence:    true,
-	CapabilityLabExecution:        true,
-	CapabilityEffectLedger:        true,
-	CapabilityControlPlaneRestart: true,
-	CapabilityRunBundle:           true,
-	CapabilityInvariants:          true,
-	CapabilityLabUI:               true,
+	CapabilityNodeRuntime:            true,
+	CapabilityNodeBootstrap:          true,
+	CapabilityRentalSchedule:         true,
+	CapabilityScheduleAdvancement:    true,
+	CapabilityExecutionWarmsCapacity: true,
+	CapabilityHostFacts:              true,
+	CapabilityArtifacts:              true,
+	CapabilityArtifactEvidence:       true,
+	CapabilityCacheMounts:            true,
+	CapabilityPrewarm:                true,
+	CapabilityLabExecution:           true,
+	CapabilityEffectLedger:           true,
+	CapabilityControlPlaneRestart:    true,
+	CapabilityRunBundle:              true,
+	CapabilityInvariants:             true,
+	CapabilityLabUI:                  true,
 }
 
 // MaxQueuedBookings bounds every RentalSchedule: at most this many queued
@@ -146,9 +161,67 @@ type WorldSpec struct {
 	Artifacts       []ArtifactSpec         `json:"artifacts,omitempty"`
 	Rentals         []RentalSpec           `json:"rentals,omitempty"`
 	RentalSchedules []RentalScheduleSpec   `json:"rental_schedules,omitempty"`
+	Hosts           []HostSpec             `json:"hosts,omitempty"`
 	Marketplace     []MarketplaceOfferSpec `json:"marketplace,omitempty"`
 	Paths           []PathSpec             `json:"paths,omitempty"`
 	RuntimeModels   []RuntimeModelSpec     `json:"runtime_models,omitempty"`
+	// Prewarm is what this world's control plane is allowed to have in flight
+	// for work it has not admitted. It is stated in the Blueprint because it is
+	// the whole difference between preparation that shortens a queued Run's
+	// start and preparation that starves the Run already running.
+	Prewarm *PrewarmSpec `json:"prewarm,omitempty"`
+}
+
+// PrewarmSpec bounds speculative preparation. Both bounds are the control
+// plane's own restraint rather than anything a machine enforces: a host asked
+// for six transfers at once performs six, and the one that suffers is whatever
+// was already fetching there.
+type PrewarmSpec struct {
+	// MaxConcurrent is how many pieces of content may be arriving speculatively
+	// across the fleet at one moment. One is the honest default for a world of
+	// one machine, because a node runs its commands in order and a second
+	// prefetch would queue behind the first anyway.
+	MaxConcurrent int `json:"max_concurrent"`
+	// MinInterval is the shortest gap between two speculative fetches starting.
+	// It bounds the rate rather than the depth: a control plane that issued a
+	// prepare on every reconcile tick would keep a machine permanently busy with
+	// content nobody has asked to run.
+	MinInterval Duration `json:"min_interval,omitzero"`
+}
+
+func (spec PrewarmSpec) validate() error {
+	if spec.MaxConcurrent < 1 {
+		return fmt.Errorf("prewarm needs a positive max_concurrent, because zero is prewarming turned off rather than bounded")
+	}
+	if spec.MinInterval.Duration() < 0 {
+		return fmt.Errorf("prewarm min_interval cannot run backwards")
+	}
+	return nil
+}
+
+// HostSpec is standing capacity Mercator does not control: a machine that
+// already exists and will run a container now, with nothing enrolled on it to
+// execute a second workload or to say what it holds. Mercator borrows a slot and
+// keeps no machine, so it is standing capacity in the ephemeral lane, which is
+// the local Docker daemon in production. It is the only world entry that
+// separates the lane's half of OfferSnapshot.KeepsWhatItRuns from the kind's.
+type HostSpec struct {
+	ID string `json:"id"`
+	// CachedImages is what this machine happens to hold. Nothing of Mercator's
+	// runs on it, so nothing can ask it and no offer reports it: the content is
+	// world truth that Placement cannot see, which is the position an operator's
+	// own Docker host is in.
+	CachedImages []string `json:"cached_images,omitempty"`
+	// ArtifactReplicas is the immutable content this machine happens to be
+	// sitting on, and it is invisible for the same reason its images are.
+	// Without it a fixture could only put a copy where Mercator can already see
+	// one, so the rule that borrowed capacity publishes no Artifact inventory
+	// was a rule about a case no fixture could construct: silence and absence
+	// were the same world every time, and deleting the rule changed nothing.
+	ArtifactReplicas []ArtifactReplicaSpec `json:"artifact_replicas,omitempty"`
+	RatePerHourUSD   float64               `json:"rate_per_hour_usd"`
+	Billing          BillingSpec           `json:"billing,omitempty"`
+	Resources        *ResourcesSpec        `json:"resources,omitempty"`
 }
 
 // ExecutionLane reports what this offer becomes once allocated, defaulting to
@@ -160,10 +233,71 @@ func (spec MarketplaceOfferSpec) ExecutionLane() domain.ExecutionLane {
 	return spec.Lane
 }
 
-// ArtifactSpec declares immutable, versioned content available to Runs.
+// ArtifactSpec declares one immutable version of content this world knows
+// about. The version ID is its identity, the content digest is what its bytes
+// hash to, and the object store is where the durable copy lives: a host holding
+// a copy is an optimisation over that and never what makes the content exist.
 type ArtifactSpec struct {
-	ID   string   `json:"id"`
-	Size ByteSize `json:"size"`
+	ID string `json:"id"`
+	// ContentDigest is what these bytes hash to. It is stated rather than
+	// derived from the version ID, because checking a local copy against it is
+	// what makes the copy worth reading, and a digest a name implied could
+	// never disagree with the name.
+	ContentDigest string   `json:"content_digest"`
+	Size          ByteSize `json:"size"`
+	// ProducedBy names the Run in this Blueprint that publishes this version.
+	// An Artifact with a producer is not durable at virtual time zero: it
+	// exists when that Run's publication reaches the object store, and no
+	// machine may be seeded holding a copy of content nothing has produced.
+	ProducedBy string `json:"produced_by,omitempty"`
+}
+
+// Prepublished reports whether the object store already held this version when
+// the world started, which is true of every Artifact no Run in this Blueprint
+// produces.
+func (spec ArtifactSpec) Prepublished() bool { return spec.ProducedBy == "" }
+
+// Version is the catalog entry this declaration names, scoped to one workspace.
+// It states what the version is and never whether its bytes are here: a
+// publication is a moment, and only a world that has one may stamp it. The
+// object-store address is derived rather than authored, because a version is
+// immutable and there is exactly one place its bytes can be.
+func (spec ArtifactSpec) Version(workspaceID string) domain.ArtifactVersion {
+	return domain.ArtifactVersion{
+		ID:            spec.ID,
+		WorkspaceID:   workspaceID,
+		ContentDigest: spec.ContentDigest,
+		SizeBytes:     int64(spec.Size),
+		Location:      domain.ArtifactLocation(workspaceID, spec.ID),
+	}
+}
+
+// ArtifactReplicaSpec is a host-local copy one machine was found holding, and
+// what that copy is worth. The state is stated rather than defaulted: a copy
+// nobody checked and a copy that matches the catalog are different facts, and a
+// fixture that could not tell them apart would be asserting the conflation this
+// model exists to prevent.
+type ArtifactReplicaSpec struct {
+	Artifact string                      `json:"artifact"`
+	State    domain.ArtifactReplicaState `json:"state"`
+	// ContentDigest is what this copy claims its bytes hash to, when that is not
+	// what the catalog says the version is. It is how a fixture states the
+	// machine an operator restored an older snapshot of a volume onto: the host
+	// reports a checked copy filed under the version's name and the bytes under
+	// it belong to the version before. Omitted means the copy claims what the
+	// catalog claims, which is every ordinary case.
+	ContentDigest string `json:"content_digest,omitempty"`
+}
+
+// Digest is what this copy claims. Only the control plane can say what the
+// claim is worth: the host reports what it checked against, the catalog says
+// what the version is, and a copy naming content this version does not have is
+// worth exactly what no copy is worth.
+func (spec ArtifactReplicaSpec) Digest(artifact ArtifactSpec) string {
+	if spec.ContentDigest != "" {
+		return spec.ContentDigest
+	}
+	return artifact.ContentDigest
 }
 
 // Start is the scripted clock's origin for this world.
@@ -175,12 +309,65 @@ func (w WorldSpec) Start() time.Time {
 }
 
 type ImageSpec struct {
-	Layers []LayerSpec `json:"layers"`
+	// Layers is what this image is made of, which is world truth and stands
+	// however the registry answers. A host can hold an image nothing can look
+	// up, which is what makes a refused manifest uncertainty rather than
+	// absence.
+	Layers []LayerSpec `json:"layers,omitempty"`
+	// Registry is what the simulated registry answers when asked to resolve
+	// this image. The default is a manifest. The alternatives are the other
+	// ways a real registry says no, which a scenario needs to be able to tell
+	// apart because an operator acts on them differently.
+	Registry RegistryAnswer `json:"registry,omitempty"`
 }
 
-// LayerSpec identifies one image layer by its exact OCI content digest.
+// diffIDCount is how many of this image's layers state the name a container
+// daemon knows them by.
+func (image ImageSpec) diffIDCount() int {
+	named := 0
+	for _, layer := range image.Layers {
+		if layer.DiffID != "" {
+			named++
+		}
+	}
+	return named
+}
+
+// RegistryAnswer is how the simulated registry responds to a resolution. An
+// image can exist in the world and still be unresolvable: the world is what is
+// running, the registry is what can be read about it.
+type RegistryAnswer string
+
+const (
+	RegistryResolves     RegistryAnswer = ""
+	RegistryUnresolvable RegistryAnswer = "unresolvable"
+	RegistryUnauthorized RegistryAnswer = "unauthorized"
+	// RegistryThrottled is a registry refusing reads for now, and
+	// RegistryUnreachable one that answered nothing at all. They are separate
+	// answers because an operator waits the first one out and repairs the
+	// second, and a fixture that could not tell them apart would be asserting
+	// the collapse this vocabulary exists to prevent.
+	RegistryThrottled   RegistryAnswer = "throttled"
+	RegistryUnreachable RegistryAnswer = "unreachable"
+)
+
+func (answer RegistryAnswer) valid() bool {
+	switch answer {
+	case RegistryResolves, RegistryUnresolvable, RegistryUnauthorized, RegistryThrottled, RegistryUnreachable:
+		return true
+	default:
+		return false
+	}
+}
+
+// LayerSpec identifies one image layer in both digest spaces at once: Digest is
+// the compressed blob a registry serves, DiffID the uncompressed content a
+// container daemon enumerates. A host reports whichever its runtime can see, so
+// a fixture that states only one of them cannot express a Docker host being
+// recognised as warm against a registry manifest.
 type LayerSpec struct {
 	Digest string   `json:"digest"`
+	DiffID string   `json:"diff_id,omitempty"`
 	Size   ByteSize `json:"size"`
 }
 
@@ -196,14 +383,62 @@ type RentalSpec struct {
 	IdleLeaseExpiresIn *Duration `json:"idle_lease_expires_in,omitempty"`
 	// CachedImages holds every layer of the named images; CachedLayers adds
 	// individual layers (for a rental warm from a previous image version).
-	CachedImages     []string       `json:"cached_images,omitempty"`
-	CachedLayers     []string       `json:"cached_layers,omitempty"`
-	ArtifactReplicas []string       `json:"artifact_replicas,omitempty"`
-	CacheMounts      []string       `json:"cache_mounts,omitempty"`
-	RatePerHourUSD   float64        `json:"rate_per_hour_usd"`
-	Billing          BillingSpec    `json:"billing,omitempty"`
-	Resources        *ResourcesSpec `json:"resources,omitempty"`
+	CachedImages []string `json:"cached_images,omitempty"`
+	CachedLayers []string `json:"cached_layers,omitempty"`
+	// ReportsDiffIDs makes this host enumerate its layers the way a Docker
+	// daemon does, in uncompressed diff IDs and never in the compressed blob
+	// digests a registry manifest lists. It changes nothing about what the host
+	// holds, only which name it has for it.
+	ReportsDiffIDs bool `json:"reports_diff_ids,omitempty"`
+	// Unpacked states whether the cached content above is assembled into a
+	// layer chain a container can start on. Fetching and unpacking are separate
+	// acts: a host can hold every byte of an image and still be minutes of local
+	// work from running it, and a fixture that could not say so could not tell a
+	// machine that is ready from one that is only close. Omitted means unpacked,
+	// which is what a completed pull leaves behind.
+	Unpacked         *bool                 `json:"unpacked,omitempty"`
+	ArtifactReplicas []ArtifactReplicaSpec `json:"artifact_replicas,omitempty"`
+	// CacheMounts is the mutable, application-owned state this machine was
+	// already holding when the world began, each entry under the workspace that
+	// owns it.
+	CacheMounts    []HeldCacheSpec `json:"cache_mounts,omitempty"`
+	RatePerHourUSD float64         `json:"rate_per_hour_usd"`
+	Billing        BillingSpec     `json:"billing,omitempty"`
+	Resources      *ResourcesSpec  `json:"resources,omitempty"`
 }
+
+// HeldCacheSpec is one mutable cache a machine was found holding. The workspace
+// is part of it because a cache's identity is workspace-scoped: a fixture that
+// could only say "this machine holds compiler-cache" could not state the world
+// this whole model exists for, two tenants with one cache name on one host.
+type HeldCacheSpec struct {
+	// Workspace is the label of the workspace that owns this cache. Empty means
+	// the Blueprint's default workspace, which is where a fixture with one tenant
+	// puts everything.
+	Workspace string `json:"workspace,omitempty"`
+	Name      string `json:"name"`
+	// CompatibilityKey is the generation of content the application last wrote
+	// under this name.
+	CompatibilityKey string `json:"compatibility_key,omitempty"`
+	// Size is how much room this cache takes on the machine. It is world truth a
+	// fixture states, because nothing on a real node measures it.
+	Size ByteSize `json:"size,omitempty"`
+}
+
+// Requirement is the cache identity this declaration names, in the vocabulary
+// the control plane compares.
+func (spec HeldCacheSpec) Requirement() domain.CacheMountRequirement {
+	return domain.CacheMountRequirement{
+		Name:             spec.Name,
+		CompatibilityKey: spec.CompatibilityKey,
+		SizeBytes:        int64(spec.Size),
+	}
+}
+
+// IsUnpacked reports whether this host assembled the content it was seeded
+// with. A fixture that says nothing is describing the ordinary case: a machine
+// whose pulls completed.
+func (spec RentalSpec) IsUnpacked() bool { return spec.Unpacked == nil || *spec.Unpacked }
 
 // RentalScheduleSpec is Mercator's ordered sequence of nonterminal Bookings
 // assigned to one Rental. At most one Booking runs; any number may wait.
@@ -308,8 +543,15 @@ type ProvisioningSpec struct {
 type ResourcesSpec struct {
 	CPUMillis int64    `json:"cpu_millis,omitempty"`
 	Memory    ByteSize `json:"memory,omitempty"`
-	Disk      ByteSize `json:"disk,omitempty"`
-	GPU       *GPUSpec `json:"gpu,omitempty"`
+	// Disk separates a machine with no room from a machine whose fixture did
+	// not mention its disk, because zero is a state real capacity is in: an
+	// enrolled node that could not measure its disk offers exactly none, and it
+	// is the case an operator most needs the corpus to hold. Read as one value,
+	// a fixture that writes "0GB" to model that machine gets the 200GB default
+	// and states the opposite of what it meant. Zero CPU and zero memory
+	// describe no machine any offer can carry, so they stay a single number.
+	Disk *ByteSize `json:"disk,omitempty"`
+	GPU  *GPUSpec  `json:"gpu,omitempty"`
 }
 
 type GPUSpec struct {
@@ -324,6 +566,11 @@ type RequestSpec struct {
 	MaxRuntime      *Duration      `json:"max_runtime,omitempty"`
 	ExpectedRuntime *Duration      `json:"expected_runtime,omitempty"`
 	Objective       string         `json:"objective,omitempty"`
+	// MaxStartLatency is the p90 start latency this Run refuses to exceed. It
+	// is the only hard bound in the request that image locality feeds, which is
+	// what makes it the one place a candidate can be struck out for what it was
+	// found to hold.
+	MaxStartLatency *Duration `json:"max_start_latency,omitempty"`
 	// CacheMounts declare mutable, application-owned caches by their
 	// workspace-scoped names.
 	CacheMounts []CacheMountSpec `json:"cache_mounts,omitempty"`
@@ -334,8 +581,40 @@ type RequestSpec struct {
 	Phases            []WorkloadPhaseSpec `json:"phases,omitempty"`
 }
 
+// CacheMountSpec is one mutable cache a Run declares. Its identity is the name,
+// scoped to the workspace the Run belongs to; the compatibility key is the
+// application's own statement of which generation of content it can use, which
+// Mercator compares and never interprets.
 type CacheMountSpec struct {
 	Name string `json:"name"`
+	// CompatibilityKey separates generations of content under one name. A Run
+	// declaring a new key is a Run that has said the previous content is no
+	// longer usable, so a host holding it is not warm for this Run.
+	CompatibilityKey string `json:"compatibility_key,omitempty"`
+	// Size is how much room the application expects this cache to take. It is a
+	// declaration rather than a measurement, which is what disk reservation will
+	// read when prewarming exists.
+	Size ByteSize `json:"size,omitempty"`
+}
+
+// Requirement is what the control plane compares this declaration against a
+// host's caches with.
+func (spec CacheMountSpec) Requirement() domain.CacheMountRequirement {
+	return domain.CacheMountRequirement{
+		Name:             spec.Name,
+		CompatibilityKey: spec.CompatibilityKey,
+		SizeBytes:        int64(spec.Size),
+	}
+}
+
+// CacheRequirements is what a request declares, in the control plane's
+// vocabulary.
+func (req RequestSpec) CacheRequirements() []domain.CacheMountRequirement {
+	required := make([]domain.CacheMountRequirement, 0, len(req.CacheMounts))
+	for _, mount := range req.CacheMounts {
+		required = append(required, mount.Requirement())
+	}
+	return required
 }
 
 type WorkloadPhaseSpec struct {
@@ -379,11 +658,36 @@ type CandidateExpectation struct {
 	QueueSeconds     *Bound                      `json:"queue_seconds,omitempty"`
 	ProvisionSeconds *Bound                      `json:"provision_seconds,omitempty"`
 	PullSeconds      *Bound                      `json:"pull_seconds,omitempty"`
+	// PullSource and PullConfidence assert how much the transfer answer is
+	// worth. Zero seconds means "nothing to fetch" when the source is
+	// image_inventory and "nobody could say" when it is unknown, and only
+	// these two fields tell them apart.
+	PullSource     string   `json:"pull_source,omitempty"`
+	PullConfidence *float64 `json:"pull_confidence,omitempty"`
+	// ImageLocality asserts how much of the Run's image this candidate was
+	// found to have: hot, partial, cold, or unknown. It is the qualitative half
+	// of the pull answer, and the only one that separates a machine that has to
+	// fetch from one that only has to finish unpacking.
+	ImageLocality domain.LocalityState `json:"image_locality,omitempty"`
+	// ArtifactSeconds asserts what this candidate would still spend reading the
+	// Run's declared inputs out of the object store. It is the quantitative half
+	// of Artifact locality, and the only field that separates a host holding a
+	// checked copy from one that has to read the whole thing.
+	ArtifactSeconds *Bound `json:"artifact_seconds,omitempty"`
 	// Schedule asserts the ordered broker-owned schedule evidence weighed for
 	// this Rental candidate.
 	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`
-	// Artifacts asserts recorded immutable-Artifact locality evidence.
+	// Artifacts asserts what this candidate was recorded as holding of each
+	// Artifact the Run reads: "hit", "miss", or "unknown" for a machine that
+	// could not enumerate its copies at all.
 	Artifacts map[string]string `json:"artifact_evidence,omitempty"`
+	// Caches asserts what this candidate was recorded as holding of each Cache
+	// Mount the Run declares, by name: "hit" for the generation the workload
+	// asked for, "miss" for a machine holding none it can use, and "unknown" for
+	// one that could not say. There are no seconds to assert beside it, because
+	// what a warm cache saves is work inside the application and nothing here
+	// has measured that.
+	Caches map[string]string `json:"cache_evidence,omitempty"`
 }
 
 type ScheduleEvidenceExpectation struct {
@@ -464,6 +768,23 @@ func (d Duration) Duration() time.Duration { return time.Duration(d) }
 // ByteSize is a JSON string with a decimal unit ("40GB", "512MB", "1.5TB")
 // or a bare number of bytes.
 type ByteSize int64
+
+// Bytes is a size a fixture stated, and zero where it stated none. It reads
+// through a nil pointer on purpose: the caller that wants the difference asks
+// for the pointer, and everything else wants the number.
+func (b *ByteSize) Bytes() int64 {
+	if b == nil {
+		return 0
+	}
+	return int64(*b)
+}
+
+// StatedBytes builds a size a fixture stated, which is how Go code writes what
+// a Blueprint writes as a string.
+func StatedBytes(size int64) *ByteSize {
+	stated := ByteSize(size)
+	return &stated
+}
 
 var byteSizePattern = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB)$`)
 var ociDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -936,6 +1257,14 @@ func (w WorldSpec) validate() error {
 		if !ociImageRefPattern.MatchString(ref) {
 			return fmt.Errorf("image %q must be digest-pinned", ref)
 		}
+		if !image.Registry.valid() {
+			return fmt.Errorf("image %q: unknown registry answer %q", ref, image.Registry)
+		}
+		// An image states its content whatever the registry will say about it.
+		// What is running and what can be read about it are two different facts,
+		// and the commonest real failure is exactly their disagreement: a
+		// control plane that cannot resolve a manifest against a node that can
+		// still pull the image.
 		if len(image.Layers) == 0 {
 			return fmt.Errorf("image %q needs at least one layer", ref)
 		}
@@ -943,17 +1272,41 @@ func (w WorldSpec) validate() error {
 			if !ociDigestPattern.MatchString(layer.Digest) || layer.Size <= 0 {
 				return fmt.Errorf("image %q: layers need an exact sha256 digest and a positive size", ref)
 			}
+			if layer.DiffID != "" && !ociDigestPattern.MatchString(layer.DiffID) {
+				return fmt.Errorf("image %q: layer %s states an inexact diff ID %q", ref, layer.Digest, layer.DiffID)
+			}
+		}
+		// A real resolver reads diff IDs from one config blob that names one for
+		// every layer, so an image names them all or names none. Half would let
+		// a fixture encode a manifest production cannot produce, and silently
+		// double-charge exactly the layers that omitted one.
+		if named := image.diffIDCount(); named != 0 && named != len(image.Layers) {
+			return fmt.Errorf(
+				"image %q names %d diff IDs for %d layers: a config blob names one for every layer or none",
+				ref, named, len(image.Layers),
+			)
 		}
 	}
-	artifactIDs := map[string]bool{}
+	if err := w.validateDiffIDReporting(); err != nil {
+		return err
+	}
+	if w.Prewarm != nil {
+		if err := w.Prewarm.validate(); err != nil {
+			return err
+		}
+	}
+	artifacts := map[string]ArtifactSpec{}
 	for _, artifact := range w.Artifacts {
 		if artifact.ID == "" || artifact.Size <= 0 {
 			return fmt.Errorf("Artifacts need an id and a positive size")
 		}
-		if artifactIDs[artifact.ID] {
+		if !ociDigestPattern.MatchString(artifact.ContentDigest) {
+			return fmt.Errorf("Artifact %q needs an exact sha256 content digest", artifact.ID)
+		}
+		if _, exists := artifacts[artifact.ID]; exists {
 			return fmt.Errorf("duplicate Artifact %q", artifact.ID)
 		}
-		artifactIDs[artifact.ID] = true
+		artifacts[artifact.ID] = artifact
 	}
 	layerDigests := w.layerDigests()
 	ids := map[string]bool{}
@@ -975,20 +1328,23 @@ func (w WorldSpec) validate() error {
 				return fmt.Errorf("rental %q caches undefined layer %q", rental.ID, digest)
 			}
 		}
-		for _, artifactID := range rental.ArtifactReplicas {
-			if !artifactIDs[artifactID] {
-				return fmt.Errorf("rental %q holds undefined Artifact %q", rental.ID, artifactID)
-			}
+		if err := validateArtifactReplicas("rental "+rental.ID, rental.ArtifactReplicas, artifacts); err != nil {
+			return err
 		}
 		cacheMounts := map[string]bool{}
-		for _, name := range rental.CacheMounts {
-			if name == "" {
-				return fmt.Errorf("rental %q has a Cache Mount without a name", rental.ID)
+		for _, held := range rental.CacheMounts {
+			if !domain.ValidCacheName(held.Name) {
+				return fmt.Errorf("rental %q holds a Cache Mount named %q, which is not a cache name", rental.ID, held.Name)
 			}
-			if cacheMounts[name] {
-				return fmt.Errorf("rental %q has duplicate Cache Mount %q", rental.ID, name)
+			// One machine holds one cache per identity, and the identity carries
+			// the workspace. Two workspaces holding "compiler-cache" here is the
+			// world this whole model exists to keep apart, so it is not a
+			// duplicate.
+			identity := domain.CacheIdentity(held.Workspace, held.Requirement())
+			if cacheMounts[identity] {
+				return fmt.Errorf("rental %q holds Cache Mount %q twice", rental.ID, identity)
 			}
-			cacheMounts[name] = true
+			cacheMounts[identity] = true
 		}
 		if rental.RatePerHourUSD <= 0 {
 			return fmt.Errorf("rental %q needs a positive rate_per_hour_usd", rental.ID)
@@ -1016,6 +1372,24 @@ func (w WorldSpec) validate() error {
 		}
 		if schedule.Running != nil && w.rental(schedule.RentalID).IdleLeaseExpiresIn != nil {
 			return fmt.Errorf("rental %q: only an empty RentalSchedule may carry an idle lease", schedule.RentalID)
+		}
+	}
+	for _, host := range w.Hosts {
+		if host.ID == "" {
+			return fmt.Errorf("hosts need an id")
+		}
+		if ids[host.ID] {
+			return fmt.Errorf("duplicate id %q", host.ID)
+		}
+		ids[host.ID] = true
+		if err := validateArtifactReplicas("host "+host.ID, host.ArtifactReplicas, artifacts); err != nil {
+			return err
+		}
+		if host.RatePerHourUSD <= 0 {
+			return fmt.Errorf("host %q needs a positive rate_per_hour_usd", host.ID)
+		}
+		if err := host.Billing.validate("host " + host.ID); err != nil {
+			return err
 		}
 	}
 	for _, offer := range w.Marketplace {
@@ -1061,12 +1435,73 @@ func (w WorldSpec) validate() error {
 	return nil
 }
 
+// validateDiffIDReporting refuses a world where a host speaks a vocabulary the
+// catalog never writes. A Rental that reports diff IDs enumerates nothing at all
+// for a layer that names none, so it would offer an inventory that is Known and
+// empty: a machine holding every byte, priced a full cold pull at full
+// confidence, with the fixture green either way. That is a world the Lab must
+// not be able to state.
+func (w WorldSpec) validateDiffIDReporting() error {
+	reporter := ""
+	for _, rental := range w.Rentals {
+		if rental.ReportsDiffIDs {
+			reporter = rental.ID
+			break
+		}
+	}
+	if reporter == "" {
+		return nil
+	}
+	for ref, image := range w.Images {
+		if image.diffIDCount() == 0 {
+			return fmt.Errorf(
+				"rental %q reports diff IDs and image %q names none, so that host would report holding nothing it holds",
+				reporter, ref,
+			)
+		}
+	}
+	return nil
+}
+
 func (billing BillingSpec) validate(owner string) error {
 	if billing.SetupFeeUSD < 0 {
 		return fmt.Errorf("%s setup fee cannot be negative", owner)
 	}
 	if billing.MinimumCharge != nil && billing.MinimumCharge.Duration() <= 0 {
 		return fmt.Errorf("%s minimum charge must be positive", owner)
+	}
+	return nil
+}
+
+// validateArtifactReplicas is what any machine in this world may be declared
+// holding, whether Mercator controls it or borrows a slot on it. Both are
+// places a copy can genuinely be, and they differ in what an offer can say
+// about the copy rather than in whether it may exist.
+func validateArtifactReplicas(machine string, replicas []ArtifactReplicaSpec, artifacts map[string]ArtifactSpec) error {
+	for _, replica := range replicas {
+		artifact, defined := artifacts[replica.Artifact]
+		if !defined {
+			return fmt.Errorf("%s holds undefined Artifact %q", machine, replica.Artifact)
+		}
+		if !replica.State.Valid() {
+			return fmt.Errorf(
+				"%s holds Artifact %q in state %q, which is neither verified nor unverified",
+				machine, replica.Artifact, replica.State,
+			)
+		}
+		if replica.ContentDigest != "" && !ociDigestPattern.MatchString(replica.ContentDigest) {
+			return fmt.Errorf("%s holds Artifact %q under a claim that is not an exact sha256 digest", machine, replica.Artifact)
+		}
+		// A copy of content nothing has produced is a copy of nothing. The
+		// object store is what makes an Artifact exist, so a machine can only
+		// be found holding a version that was published before this world
+		// started.
+		if !artifact.Prepublished() {
+			return fmt.Errorf(
+				"%s holds Artifact %q, which Run %q has not produced yet",
+				machine, replica.Artifact, artifact.ProducedBy,
+			)
+		}
 	}
 	return nil
 }
@@ -1194,6 +1629,9 @@ func (w WorldSpec) candidateIDs() map[string]bool {
 	for _, rental := range w.Rentals {
 		ids[rental.ID] = true
 	}
+	for _, host := range w.Hosts {
+		ids[host.ID] = true
+	}
 	for _, offer := range w.Marketplace {
 		ids[offer.ID] = true
 	}
@@ -1209,16 +1647,24 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 			return fmt.Errorf("request image %q is not defined in the world", req.Image)
 		}
 	}
-	artifactIDs := w.artifactIDs()
+	artifacts := w.artifactsByID()
 	for _, artifactID := range append(slices.Clone(req.ConsumesArtifacts), req.ProducesArtifacts...) {
-		if !artifactIDs[artifactID] {
+		if _, defined := artifacts[artifactID]; !defined {
 			return fmt.Errorf("request references undefined Artifact %q", artifactID)
+		}
+	}
+	for _, artifactID := range req.ProducesArtifacts {
+		// An Artifact states which Run publishes it, so a request that
+		// publishes one the catalog says nobody produces is two documents
+		// disagreeing about where content comes from.
+		if artifacts[artifactID].Prepublished() {
+			return fmt.Errorf("request produces Artifact %q, which the world says was published before it started", artifactID)
 		}
 	}
 	cacheMounts := map[string]bool{}
 	for _, mount := range req.CacheMounts {
-		if mount.Name == "" {
-			return fmt.Errorf("Cache Mounts need a name")
+		if !domain.ValidCacheName(mount.Name) {
+			return fmt.Errorf("Cache Mount %q is not a cache name", mount.Name)
 		}
 		if cacheMounts[mount.Name] {
 			return fmt.Errorf("request has duplicate Cache Mount %q", mount.Name)
@@ -1286,11 +1732,16 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 			return fmt.Errorf("candidate %q is not in the world", id)
 		}
 		for artifactID, want := range candidate.Artifacts {
-			if !w.artifactIDs()[artifactID] {
+			if _, defined := w.artifactsByID()[artifactID]; !defined {
 				return fmt.Errorf("candidate %q references undefined Artifact %q", id, artifactID)
 			}
-			if want != "hit" && want != "miss" {
-				return fmt.Errorf("candidate %q Artifact %q expects \"hit\" or \"miss\", got %q", id, artifactID, want)
+			if _, stated := ArtifactExpectations[want]; !stated {
+				return fmt.Errorf("candidate %q Artifact %q expects \"hit\", \"miss\", or \"unknown\", got %q", id, artifactID, want)
+			}
+		}
+		for name, want := range candidate.Caches {
+			if _, stated := CacheExpectations[want]; !stated {
+				return fmt.Errorf("candidate %q cache %q expects \"hit\", \"miss\", or \"unknown\", got %q", id, name, want)
 			}
 		}
 		if candidate.Schedule != nil {
@@ -1305,10 +1756,17 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 	return nil
 }
 
-func (w WorldSpec) artifactIDs() map[string]bool {
-	ids := make(map[string]bool, len(w.Artifacts))
+// Artifact is what this world says one version is. The Lab builds its object
+// store from the same declarations the placement simulator does, so a copy's
+// claim reads the same in both worlds or the two disagree about a fixture.
+func (w WorldSpec) Artifact(id string) ArtifactSpec {
+	return w.artifactsByID()[id]
+}
+
+func (w WorldSpec) artifactsByID() map[string]ArtifactSpec {
+	artifacts := make(map[string]ArtifactSpec, len(w.Artifacts))
 	for _, artifact := range w.Artifacts {
-		ids[artifact.ID] = true
+		artifacts[artifact.ID] = artifact
 	}
-	return ids
+	return artifacts
 }

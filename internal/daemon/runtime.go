@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
+	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/httpapi"
 	"github.com/benngarcia/mercator/internal/janitor"
 	"github.com/benngarcia/mercator/internal/node"
@@ -54,10 +56,26 @@ type Config struct {
 	// heartbeat. Zero takes the registry's default. Tests shorten it so lease
 	// expiry is stated rather than waited for.
 	NodeLease time.Duration
+	// Prewarm bounds the preparation this Mercator may have in flight for work
+	// it has not admitted. Nil takes DefaultPrewarmPolicy.
+	Prewarm *orchestrator.PrewarmPolicy
 
 	// ProviderFactory replaces the production catalog in lifecycle tests.
 	// Production callers leave it nil.
 	ProviderFactory *broker.Factory
+}
+
+// DefaultPrewarmPolicy is deliberately the most restrained bound that does
+// anything at all: one piece of content arriving speculatively at a time, and no
+// sooner than half a minute after the last. One is what an enrolled node can do
+// anyway, because its command worker performs one command at a time; the
+// interval bounds how often a reconcile sweep may start a fetch on a machine
+// whose real work has to come first. Both err on the side of preparing too
+// little, because too little costs a queued Run some of its start latency and
+// too much costs an admitted Run its start.
+var DefaultPrewarmPolicy = orchestrator.PrewarmPolicy{
+	MaxConcurrent: 1,
+	MinInterval:   30 * time.Second,
 }
 
 // Runtime owns the production HTTP server, broker graph, reconciliation loop,
@@ -71,6 +89,7 @@ type Runtime struct {
 
 	stopReconcile context.CancelFunc
 	reconcileDone chan struct{}
+	prepareDone   chan struct{}
 	nodes         *node.Registry
 
 	shutdownOnce sync.Once
@@ -148,12 +167,27 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		broker.WithNodes(nodes),
 	)
 
+	manifests, err := registryManifests(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	signer := reporting.NewSigner(reporting.DeriveKey(cfg.MasterKey))
 	sched := scheduler.New()
 	orchestratorOptions := []orchestrator.Option{
 		orchestrator.WithRunProjection(storage.Runs()),
+		// Without a manifest source no candidate can be told apart on image
+		// locality, so every placement in the real product scores identically
+		// on warmth however warm a host actually is.
+		orchestrator.WithImageManifests(manifests),
 	}
-	orchestratorOptions = append(orchestratorOptions, orchestrator.WithRentalSchedules(providerBroker))
+	orchestratorOptions = append(orchestratorOptions,
+		orchestrator.WithRentalSchedules(providerBroker),
+		// Preparation reaches enrolled nodes through the same Broker a launch
+		// does, which is what makes the prepare half of capability.NodeRuntime
+		// reachable from the control plane at all.
+		orchestrator.WithPrewarm(providerBroker, prewarmPolicy(cfg.Prewarm), storage.Preparation()),
+	)
 	if signer.Enabled() && cfg.PublicURL != "" {
 		orchestratorOptions = append(orchestratorOptions, orchestrator.WithReporting(cfg.PublicURL, signer))
 	}
@@ -236,9 +270,11 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		janitor:       workspaceJanitor,
 		stopReconcile: stopReconcile,
 		reconcileDone: make(chan struct{}),
+		prepareDone:   make(chan struct{}),
 		nodes:         nodes,
 	}
 	go runtime.reconcile(reconcileCtx)
+	go runtime.prepareWhenDesireChanges(reconcileCtx)
 	return runtime, nil
 }
 
@@ -342,6 +378,27 @@ func inspectLocalImage(ctx context.Context, ref string) (ociresolver.InspectedIm
 	}, nil
 }
 
+// registryManifests builds the manifest source Placement subtracts a host's
+// inventory from. It reads the registry credentials the operator already has,
+// because the alternative is a second place to configure the same thing; a
+// machine that never ran `docker login` resolves anonymously, which is the
+// right answer for every public image.
+func registryManifests(cfg Config) (*ociresolver.RegistryResolver, error) {
+	getenv := cfg.Getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	path := ociresolver.DefaultDockerConfigPath(getenv)
+	if path == "" {
+		return ociresolver.NewRegistryResolver(), nil
+	}
+	credentials, err := ociresolver.DockerConfigCredentials(path)
+	if err != nil {
+		return nil, fmt.Errorf("daemon: read registry credentials: %w", err)
+	}
+	return ociresolver.NewRegistryResolver(ociresolver.WithCredentials(credentials)), nil
+}
+
 // Serve runs the production HTTP server on a listener allocated by the caller.
 func (r *Runtime) Serve(listener net.Listener) error {
 	if listener == nil {
@@ -350,13 +407,20 @@ func (r *Runtime) Serve(listener net.Listener) error {
 	return r.server.Serve(listener)
 }
 
-// Shutdown drains HTTP requests, stops and joins background reconciliation,
-// then closes SQLite. Repeated calls return the first shutdown result.
+// Shutdown stops and joins background reconciliation, drains HTTP requests, then
+// closes SQLite. Repeated calls return the first shutdown result.
 func (r *Runtime) Shutdown(ctx context.Context) error {
 	r.shutdownOnce.Do(func() {
-		httpErr := r.server.Shutdown(ctx)
+		// Background work is told to stop before requests are drained, and joined
+		// after. Reconciliation and preparation both send commands to machines, and
+		// an enrolled node receives one by holding a request open on this same
+		// server, so draining while they are still starting work is waiting for
+		// requests this process is still creating. Joining them first would spend
+		// the caller's drain budget on a sweep that answers to nobody.
 		r.stopReconcile()
+		httpErr := r.server.Shutdown(ctx)
 		<-r.reconcileDone
+		<-r.prepareDone
 		storageErr := r.storage.Close()
 		r.shutdownErr = errors.Join(httpErr, storageErr)
 	})
@@ -379,9 +443,18 @@ type ReconcileResult struct {
 // returns the provider inventory observed after both paths run.
 func (r *Runtime) ReconcileWorkspace(ctx context.Context, workspaceID string) (ReconcileResult, error) {
 	advanced, advanceErr := r.orch.AdvanceOpenRuns(ctx, workspaceID)
+	_, prewarmErr := r.orch.Prewarm(ctx)
 	swept, sweepErr := r.janitor.Sweep(ctx, workspaceID)
 	owned, inventoryErr := r.ListOwned(ctx, workspaceID)
-	return ReconcileResult{Advanced: advanced, Reclaimed: swept.Released, Owned: owned}, errors.Join(advanceErr, sweepErr, inventoryErr)
+	return ReconcileResult{Advanced: advanced, Reclaimed: swept.Released, Owned: owned},
+		errors.Join(advanceErr, prewarmErr, sweepErr, inventoryErr)
+}
+
+func prewarmPolicy(configured *orchestrator.PrewarmPolicy) orchestrator.PrewarmPolicy {
+	if configured == nil {
+		return DefaultPrewarmPolicy
+	}
+	return *configured
 }
 
 func (r *Runtime) reconcile(ctx context.Context) {
@@ -410,6 +483,64 @@ func (r *Runtime) reconcile(ctx context.Context) {
 	}
 }
 
+// prepareWhenDesireChanges reconciles preparation as soon as something happened
+// that could change what Mercator wants prepared, which is what makes preparation
+// worth having: a Run submitted half a second after a sweep would otherwise wait
+// out the rest of a minute before anything was fetched for the machine it is
+// queued on, and the bound on how often preparation may begin would never be the
+// thing that held it back.
+//
+// It subscribes from the log's head, so a restart wakes on what happens next
+// rather than replaying every Booking this deployment ever made. Everything
+// already delivered is answered by one pass, because the desired set is derived
+// from all of it at once and reconciling per event would ask the same question
+// several times over.
+func (r *Runtime) prepareWhenDesireChanges(ctx context.Context) {
+	defer close(r.prepareDone)
+	events := r.storage.EventLog()
+	filter := eventlog.EventFilter{EventTypes: orchestrator.PreparationTriggers()}
+	head, err := events.LatestPosition(ctx, filter)
+	if err != nil {
+		log.Printf("read the log position to prepare from: %v", err)
+		return
+	}
+	deliveries, err := events.Subscribe(ctx, eventlog.SubscriptionRequest{
+		SubscriptionID: "daemon-preparation",
+		After:          head,
+		Filter:         filter,
+	})
+	if err != nil {
+		log.Printf("subscribe to the events that change what is prepared: %v", err)
+		return
+	}
+	for range deliveries {
+		drain(deliveries)
+		if ctx.Err() != nil {
+			return
+		}
+		if prepared, err := r.orch.Prewarm(ctx); err != nil {
+			log.Printf("prepare capacity for queued work: %v", err)
+		} else if prepared.Stated > 0 {
+			log.Printf("prepare capacity: asked %d workspaces for %d pieces of content", prepared.Stated, prepared.Wanted)
+		}
+	}
+}
+
+// drain takes everything already delivered off the channel. One reconciliation
+// answers all of it.
+func drain[T any](deliveries <-chan T) {
+	for {
+		select {
+		case _, open := <-deliveries:
+			if !open {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
 func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor) {
 	workspaces, err := orch.ListRunWorkspaces(ctx)
 	if err != nil {
@@ -432,6 +563,16 @@ func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, j
 		if result.Released > 0 {
 			log.Printf("janitor sweep %s: reclaimed %d of %d owned objects", workspaceID, result.Released, result.Found)
 		}
+	}
+	// Preparation is reconciled after every tenant's Runs have moved, because
+	// what Mercator wants prepared is derived from where they ended up, and in
+	// one pass over the fleet, because the bounds it stays inside are the
+	// fleet's. A machine that refuses it costs start latency and never
+	// correctness, so a failure here is logged rather than ending the sweep.
+	if prepared, err := orch.Prewarm(ctx); err != nil {
+		log.Printf("prepare capacity sweep: %v", err)
+	} else if prepared.Stated > 0 {
+		log.Printf("prepare capacity sweep: asked %d workspaces for %d pieces of content", prepared.Stated, prepared.Wanted)
 	}
 }
 

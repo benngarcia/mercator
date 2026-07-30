@@ -26,30 +26,25 @@ func SolveSmallWorld(input scheduler.SchedulingInput) (ReferenceDecision, error)
 	if err := validateSmallWorld(input); err != nil {
 		return ReferenceDecision{}, err
 	}
-	type scoredOffer struct {
-		id    string
-		score float64
-	}
-	var feasible []scoredOffer
+	var feasible []domain.CandidateDecision
 	for _, offer := range input.Offers {
 		if !referenceFeasible(input, offer) {
 			continue
 		}
-		feasible = append(feasible, scoredOffer{id: offer.ID, score: referenceScore(input, offer)})
+		feasible = append(feasible, referenceCandidate(input, offer))
 	}
-	sort.Slice(feasible, func(i, j int) bool {
-		if feasible[i].score == feasible[j].score {
-			return feasible[i].id < feasible[j].id
-		}
-		return feasible[i].score < feasible[j].score
-	})
+	// The Run's objective orders the candidates here exactly as it does in
+	// production, because which quantity a Run asked for the least of is a
+	// statement about the placement and not about either model's arithmetic.
+	policy := input.Workload.Spec.Placement
+	sort.Slice(feasible, func(i, j int) bool { return policy.Prefers(feasible[i], feasible[j]) })
 	decision := ReferenceDecision{FeasibleOfferIDs: make([]string, len(feasible))}
 	for index, candidate := range feasible {
-		decision.FeasibleOfferIDs[index] = candidate.id
+		decision.FeasibleOfferIDs[index] = candidate.OfferSnapshotID
 	}
 	sort.Strings(decision.FeasibleOfferIDs)
 	if len(feasible) > 0 {
-		decision.SelectedOfferID = feasible[0].id
+		decision.SelectedOfferID = feasible[0].OfferSnapshotID
 	}
 	return decision, nil
 }
@@ -83,15 +78,28 @@ func referenceFeasible(input scheduler.SchedulingInput, offer domain.OfferSnapsh
 	}
 	required := input.Workload.Spec.Resources
 	if offer.Resources.CPUMillis < required.CPU.MinMillis ||
-		offer.Resources.MemoryBytes < required.Memory.MinBytes ||
-		offer.Resources.EphemeralDiskBytes < required.EphemeralDisk.MinBytes {
+		offer.Resources.MemoryBytes < required.Memory.MinBytes {
+		return false
+	}
+	// The room a Run reserved and the room its content takes are one question
+	// about one resource. The reference model asks it because production does: a
+	// model blind to the disk would call a machine with nowhere to put the
+	// dataset the warmest candidate in the world and disagree about the winner
+	// for a reason belonging to neither model.
+	if !referenceDisk(input, offer).Fits() {
 		return false
 	}
 	estimates := referenceEstimates(input, offer)
 	if maximum := input.Workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil && estimates.CostUSD.Expected > *maximum {
 		return false
 	}
-	if maximum := input.Workload.Spec.Placement.MaxP90StartSeconds; maximum > 0 && estimates.StartSeconds.P90 > maximum {
+	// Only a candidate KNOWN to start late fails the latency SLO, so the bound
+	// is asked of the established part of the prediction. Seconds priced out of
+	// a silence are a guess, and the goal is explicit that silence is
+	// uncertainty to price and never a hard constraint; seconds of queue and
+	// provisioning are facts the offer stated, and those still bind.
+	if maximum := input.Workload.Spec.Placement.MaxP90StartSeconds; maximum > 0 &&
+		estimates.EstablishedStartSeconds.P90 > maximum {
 		return false
 	}
 	return true
@@ -113,35 +121,56 @@ func referenceCapacityAvailable(input scheduler.SchedulingInput, offer domain.Of
 		len(schedule.Bookings) < domain.RentalScheduleQueueCapacity+1
 }
 
+// referenceCandidate is the reference model's own candidate record: enough of
+// one for the Run's objective to rank it, and nothing else. Ranking is stated
+// against the same fields the production decision carries, so the two models
+// compare the same quantities or disagree visibly.
+func referenceCandidate(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
+	return domain.CandidateDecision{
+		OfferSnapshotID: offer.ID,
+		Estimates:       referenceEstimates(input, offer),
+		ScoreUSD:        referenceScore(input, offer),
+	}
+}
+
 func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot) float64 {
 	estimates := referenceEstimates(input, offer)
 	weights := input.Weights
 	if weights.StartLatencyUSDPerSecond == 0 && input.Workload.Spec.Placement.Objective == domain.ObjectiveBalanced {
-		weights.StartLatencyUSDPerSecond = 0.0005
+		weights.StartLatencyUSDPerSecond = domain.BalancedWaitingUSDPerSecond
 	}
 	score := estimates.CostUSD.Expected +
 		weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
 		weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds) +
 		weights.StartFailurePenaltyUSD*offer.Reliability.StartFailureRate +
 		weights.InterruptionPenaltyUSD*offer.Reliability.InterruptionRate +
-		weights.UncertaintyPenaltyUSD*referenceUncertainty(offer)
+		weights.UncertaintyPenaltyUSD*offer.UncertaintyPenalty()
 	return math.Round(score*1_000_000) / 1_000_000
 }
 
+// referenceEstimates is the reference model's own account of a candidate,
+// including how much of its start prediction anybody established. It derives
+// that the same way the scheduler does and from the same two published facts,
+// which is what makes disagreeing about it a disagreement about the models
+// rather than about which silences each one happened to notice.
 func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.CandidateEstimates {
-	queue := 0.0
-	if schedule, exists := input.Schedules[offer.RentalID]; exists {
-		queue = schedule.ExpectedWaitSeconds()
-	} else if offer.Queue != nil {
-		queue = offer.Queue.QueuedWorkSeconds
+	queue := referenceQueue(input, offer)
+	provision := referenceProvision(offer)
+	work, locality := input.Image.StartWork(offer.Images)
+	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
+	pull := referenceContent(referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()))
+	fetch := referenceContent(referenceObjectStoreSeconds(fetchBytes))
+	establishedPull := domain.Estimate{}
+	if locality != domain.LocalityUnknown {
+		establishedPull = pull
 	}
-	provision := 0.0
-	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
-		provision = offer.Provisioning.Expected
+	establishedBytes := int64(0)
+	for _, found := range evidence {
+		if found.Locality != domain.LocalityUnknown {
+			establishedBytes += found.FetchBytes
+		}
 	}
-	missing, _ := input.Image.TransferBytes(offer.Images)
-	pull := referenceTransferSeconds(missing, registryBandwidth(offer))
-	start := queue + provision + pull + 1
+	establishedFetch := referenceContent(referenceObjectStoreSeconds(establishedBytes))
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
 		runtime = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
@@ -151,45 +180,121 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	}
 	billed := math.Max(runtime, float64(offer.Pricing.MinimumChargeSeconds))
 	return domain.CandidateEstimates{
-		QueueSeconds:     domain.Estimate{Expected: queue},
-		ProvisionSeconds: domain.Estimate{Expected: provision},
-		PullSeconds:      domain.Estimate{Expected: pull},
-		StartSeconds:     domain.Estimate{Expected: start, P90: start * 1.25},
-		CostUSD:          domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
+		QueueSeconds:            queue,
+		ProvisionSeconds:        provision,
+		PullSeconds:             pull,
+		ArtifactSeconds:         fetch,
+		StartSeconds:            referenceStart(queue, provision, pull, fetch),
+		EstablishedStartSeconds: referenceStart(queue, provision, establishedPull, establishedFetch),
+		CostUSD:                 domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
 	}
 }
 
-func registryBandwidth(offer domain.OfferSnapshot) float64 {
-	for _, fact := range offer.Network.Download {
-		if fact.Scope == domain.NetworkScopeRegistry && fact.Statistic == "p10" && fact.ValueMbps > 0 {
-			return fact.ValueMbps
+// referenceDisk is the reference model's own account of what this Run asks of
+// this candidate's disk. It derives every part from the same published facts the
+// scheduler reads, and asks the domain the same question, because a machine that
+// cannot hold the work is not a machine that costs more: nothing this Run could
+// give up frees a byte it does not need straight back.
+func referenceDisk(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.DiskDemand {
+	work, locality := input.Image.StartWork(offer.Images)
+	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
+	caches := domain.CacheLandBytes(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches)
+	established := int64(0)
+	for _, found := range evidence {
+		if found.Locality != domain.LocalityUnknown {
+			established += found.FetchBytes
 		}
 	}
-	return 500
+	if locality != domain.LocalityUnknown {
+		established += work.TransferBytes
+	}
+	if offer.Caches.Known {
+		established += caches
+	}
+	return domain.DiskDemand{
+		FreeBytes:            offer.Resources.EphemeralDiskBytes,
+		ReservedBytes:        input.Workload.Spec.Resources.EphemeralDisk.MinBytes,
+		LandBytes:            work.TransferBytes + fetchBytes + caches,
+		EstablishedLandBytes: established,
+	}
 }
 
-func referenceTransferSeconds(bytes int64, bandwidthMbps float64) float64 {
-	if bytes <= 0 {
+// referenceQueue is how long this reference model says work arriving now waits.
+// A Rental Schedule is asked as of the evaluation moment, because the wait is a
+// projection from where its Bookings are and not a restatement of what their
+// callers declared.
+func referenceQueue(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.Estimate {
+	seconds := 0.0
+	if schedule, exists := input.Schedules[offer.RentalID]; exists {
+		seconds = schedule.ExpectedWaitSeconds(input.EvaluatedAt)
+	} else if offer.Queue != nil {
+		seconds = offer.Queue.QueuedWorkSeconds
+	}
+	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds}
+}
+
+// referenceProvision is what the provider published about bringing this machine
+// up, including its own tail. A quantile the provider left unstated is its
+// expectation restated rather than a spread of this model's invention.
+func referenceProvision(offer domain.OfferSnapshot) domain.Estimate {
+	if offer.Kind != domain.OfferKindProvisionable || offer.Provisioning == nil {
+		return domain.Estimate{}
+	}
+	published := *offer.Provisioning
+	estimate := domain.Estimate{Expected: published.Expected, P50: published.Expected, P90: published.Expected}
+	if published.P50 > 0 {
+		estimate.P50 = published.P50
+	}
+	if published.P90 > 0 {
+		estimate.P90 = published.P90
+	}
+	return estimate
+}
+
+// referenceContent is what content that has to move costs, tail included. Half
+// again as long is this model's own pessimism about a transfer, and it is stated
+// here rather than applied to the finished sum because a start's tail is made of
+// each part's tail.
+func referenceContent(seconds float64) domain.Estimate {
+	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds * 1.5}
+}
+
+// referenceStart assembles a start out of the parts a candidate waits on, plus
+// the second a launch costs whatever it holds.
+func referenceStart(parts ...domain.Estimate) domain.Estimate {
+	start := domain.Estimate{
+		Expected: domain.LaunchSeconds,
+		P50:      domain.LaunchSeconds,
+		P90:      domain.LaunchSeconds * 1.25,
+	}
+	for _, part := range parts {
+		start.Expected += part.Expected
+		start.P50 += part.P50
+		start.P90 += part.P90
+	}
+	return start
+}
+
+// referenceObjectStoreSeconds is the reference model's own account of reading a
+// Run's declared inputs out of the object store. It carries no fixed overhead
+// because nothing has measured one: the only honest terms are the bytes and the
+// assumed rate they cross.
+func referenceObjectStoreSeconds(bytes int64) float64 {
+	return float64(bytes*8) / 1_000_000 / domain.DefaultObjectStoreDownloadMbps
+}
+
+// referenceStartWorkSeconds is the reference model's own account of how long a
+// candidate is from starting: bytes over the wire, plus bytes already here that
+// still have to be unpacked. Fetching and unpacking are separate work over
+// separate resources, so an independent model that folded them together would
+// disagree with the scheduler about every half-assembled host for a reason that
+// has nothing to do with either model.
+func referenceStartWorkSeconds(work domain.ImageWork, bandwidthMbps float64) float64 {
+	if work.None() {
 		return 0
 	}
-	return float64(bytes*8)/1_000_000/bandwidthMbps + 0.5
-}
-
-func referenceUncertainty(offer domain.OfferSnapshot) float64 {
-	penalty := 0.0
-	if offer.Capacity.Confidence > 0 && offer.Capacity.Confidence < 1 {
-		penalty += 1 - offer.Capacity.Confidence
-	}
-	if offer.Reliability.Confidence > 0 && offer.Reliability.Confidence < 1 {
-		penalty += 1 - offer.Reliability.Confidence
-	}
-	if !offer.Images.Known {
-		penalty++
-	}
-	if !offer.Pricing.Known {
-		penalty++
-	}
-	return penalty
+	return float64(work.TransferBytes*8)/1_000_000/bandwidthMbps +
+		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
 }
 
 func CheckOfferOrderIndependence(ctx context.Context, production scheduler.Scheduler, input scheduler.SchedulingInput) error {
@@ -236,8 +341,13 @@ func CheckWarmingDoesNotShrinkInventory(before, after domain.OfferSnapshot) erro
 		return fmt.Errorf("warming made a host that could enumerate its content stop being able to")
 	}
 	for _, layer := range before.Images.LayerDigests {
-		if !after.Images.HoldsLayer(layer) {
+		if !after.Images.HoldsLayer(domain.ImageLayer{Digest: layer}) {
 			return fmt.Errorf("warming lost layer %s the host already held", layer)
+		}
+	}
+	for _, diffID := range before.Images.LayerDiffIDs {
+		if !after.Images.HoldsLayer(domain.ImageLayer{DiffID: diffID}) {
+			return fmt.Errorf("warming lost layer %s the host already held", diffID)
 		}
 	}
 	for _, image := range before.Images.ImageDigests {
@@ -252,7 +362,8 @@ func CheckReducedBandwidthDoesNotReduceTransferDuration(bytes int64, fasterMbps,
 	if bytes <= 0 || fasterMbps <= slowerMbps || slowerMbps <= 0 {
 		return fmt.Errorf("bandwidth metamorphism requires positive bytes and faster > slower > 0")
 	}
-	if referenceTransferSeconds(bytes, slowerMbps) < referenceTransferSeconds(bytes, fasterMbps) {
+	transfer := domain.ImageWork{TransferBytes: bytes}
+	if referenceStartWorkSeconds(transfer, slowerMbps) < referenceStartWorkSeconds(transfer, fasterMbps) {
 		return fmt.Errorf("reducing bandwidth reduced transfer duration")
 	}
 	return nil

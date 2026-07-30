@@ -1,0 +1,50 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The producer runs on a twenty gigabyte machine and computes a forty gigabyte checkpoint. Nobody could have priced that: a Run declares which Artifacts it publishes and never how large they will be, so the only room it has for its output is the five gigabytes it reserved, which this machine holds back for as long as the workload runs. A machine with nowhere to put what a workload wrote does not publish a smaller Artifact, it fails with its disk full, so the execution ends non-zero and the checkpoint never becomes durable. Without that the world would create forty gigabytes of content on a twenty gigabyte disk, which is what safety.disk_reservation_respected catches.",
+  "seed": "mercator-lab-output-does-not-fit-v1",
+  "world": {
+    "images": {
+      "worker@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f": {
+        "layers": [
+          {
+            "digest": "sha256:11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a1",
+            "size": "1GB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:checkpoint:v1",
+        "content_digest": "sha256:c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+        "size": "40GB",
+        "produced_by": "producer"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "producer-rental",
+        "resources": {"disk": "20GB"},
+        "rate_per_hour_usd": 2.0
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "producer",
+        "at": "0s",
+        "request": {
+          "image": "worker@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f",
+          "resources": {"disk": "5GB"},
+          "expected_runtime": "5m",
+          "max_runtime": "20m",
+          "produces_artifacts": ["artifact:checkpoint:v1"]
+        }
+      }
+    ]
+  }
+}

@@ -70,7 +70,7 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	}
 	req := launchRequest()
 	req.Image = image
-	req.Platform = domain.Platform{OS: "linux", Architecture: "arm64"}
+	req.Platform = hostPlatform(t)
 	req.LaunchKey = "mercator-integration-" + time.Now().UTC().Format("20060102150405")
 	req.OperationKey = req.LaunchKey
 	req.CleanupLocator = req.LaunchKey
@@ -108,6 +108,26 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	if !released.Released {
 		t.Fatalf("expected release receipt: %+v", released)
 	}
+}
+
+// hostPlatform asks the daemon under test what it is, through the same reader
+// production places offers from. This case named linux/arm64 outright, which is
+// the machine it was written on: on an amd64 host that asks Docker for a foreign
+// build of the image, so the launch could only succeed by pulling one under
+// emulation and could not use the copy the machine already holds. What the case
+// is about is launch, observation and release against a real daemon, and that is
+// the same promise on either architecture.
+func hostPlatform(t *testing.T) domain.Platform {
+	t.Helper()
+	info, err := NewCLIClient("").Info(context.Background())
+	if err != nil {
+		t.Fatalf("read the daemon this case launches on: %v", err)
+	}
+	platform := domain.Platform{OS: "linux", Architecture: info.OCIArch()}
+	if platform.Architecture == "" {
+		t.Fatalf("the daemon reported no architecture: %+v", info)
+	}
+	return platform
 }
 
 func TestAdapterLaunchIsIdempotentByDeterministicName(t *testing.T) {

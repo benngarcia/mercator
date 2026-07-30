@@ -86,9 +86,17 @@ func NewRegistry(store Store, signer *Signer, controlPlaneURL string, opts ...Op
 	return registry
 }
 
-// NodeSupport reports what this runtime can do. The answer describes the node
-// protocol itself; what a particular agent build supports arrives with its
-// facts.
+// NodeSupport reports what this runtime performs, which is the whole point of a
+// negotiated capability set: a declaration is a promise the control plane will
+// place work against, so anything declared here that the Docker runtime does not
+// do is Placement believing in locality nothing produces. Four of the five are
+// earned today: the agent enumerates the images and layers it unpacked and
+// reports the platform of each, it attaches and enumerates workspace-scoped
+// cache volumes across workloads, it pulls an image it was not asked to launch
+// and answers Duplicate on a redelivery, and it replicates an immutable Artifact
+// from a location the control plane minted and reports the digest those bytes
+// actually hashed to. It still reclaims no disk, and garbage collection becomes
+// true in the slice that implements it and not before.
 func (registry *Registry) NodeSupport() capability.NodeSupport {
 	return capability.NodeSupport{
 		ContainerRuntime:       "docker",
@@ -96,7 +104,6 @@ func (registry *Registry) NodeSupport() capability.NodeSupport {
 		ArtifactReplicas:       true,
 		CacheMounts:            true,
 		Prewarm:                true,
-		GarbageCollection:      true,
 		MaxConcurrentWorkloads: 1,
 	}
 }
@@ -173,7 +180,7 @@ func (registry *Registry) Enroll(ctx context.Context, request capability.Enrollm
 	enrolled, err := registry.store.Enroll(ctx, record.WorkspaceID, record.ID, Enrollment{
 		EnrollmentTokenID: TokenID(request.EnrollmentToken),
 		AgentVersion:      request.AgentVersion,
-		Facts:             request.Facts,
+		Facts:             request.Facts.Established(),
 		EnrolledAt:        now,
 		LeaseExpires:      now.Add(registry.lease),
 	})

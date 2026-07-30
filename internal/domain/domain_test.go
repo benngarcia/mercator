@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateWorkloadRevisionEnforcesV1OCIContract(t *testing.T) {
@@ -241,5 +242,53 @@ func TestDispositionForOfferKind(t *testing.T) {
 		if _, err := DispositionForOfferKind(kind); err == nil {
 			t.Fatalf("DispositionForOfferKind(%q) accepted an unknown offer kind", kind)
 		}
+	}
+}
+
+// TestARegistryLinkIsWorthWhatItsPublisherSaid is the rule that a number
+// nothing stands behind cannot produce a confident duration. The existence of a
+// throughput fact used to be read as a measurement, so a literal an adapter
+// stamped onto every offer priced transfer durations at full certainty beside
+// enrolled nodes honestly recording an assumption.
+func TestARegistryLinkIsWorthWhatItsPublisherSaid(t *testing.T) {
+	observed := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	fact := func(mbps, confidence float64, validUntil time.Time) NetworkFact {
+		return NetworkFact{
+			Scope:      NetworkScopeRegistry,
+			Statistic:  "p10",
+			ValueMbps:  mbps,
+			ObservedAt: observed,
+			ValidUntil: validUntil,
+			Confidence: confidence,
+		}
+	}
+	cases := map[string]struct {
+		facts []NetworkFact
+		want  LinkSpeed
+	}{
+		"nothing measured this link": {
+			want: LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence},
+		},
+		"a valid measurement is worth what it says it is": {
+			facts: []NetworkFact{fact(250, 0.9, observed.Add(time.Hour))},
+			want:  LinkSpeed{Mbps: 250, Confidence: 0.9},
+		},
+		"a measurement that expired before this offer was observed is not one": {
+			facts: []NetworkFact{fact(250, 0.9, observed.Add(-time.Hour))},
+			want:  LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence},
+		},
+		"a fact about another link says nothing about this one": {
+			facts: []NetworkFact{{Scope: NetworkScopePublicInternet, Statistic: "p10", ValueMbps: 900, Confidence: 1}},
+			want:  LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence},
+		},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			offer := OfferSnapshot{ObservedAt: observed, Network: NetworkFacts{Download: testCase.facts}}
+
+			if got := offer.RegistryDownload(); got != testCase.want {
+				t.Fatalf("registry link = %+v, want %+v", got, testCase.want)
+			}
+		})
 	}
 }

@@ -25,6 +25,11 @@ func TestExecutionRunsTheRealControlPlaneAndReconcilesLostLaunchResponse(t *test
 	if _, err := execution.Drive(context.Background(), Advance(time.Hour)); err != nil {
 		t.Fatalf("advance through first actual runtime: %v", err)
 	}
+	// The consumer enters Mercator when its input is durable, which is one
+	// object-store upload after the producer finished writing it locally.
+	if _, err := execution.Drive(context.Background(), Advance(time.Hour)); err != nil {
+		t.Fatalf("advance through the producer's publication: %v", err)
+	}
 
 	events, err := execution.runtime.mercatorEvents(context.Background())
 	if err != nil {
@@ -86,6 +91,9 @@ func TestRestartPreservesExternalResourcesWithoutRepeatingLaunch(t *testing.T) {
 
 	if _, err := execution.Drive(context.Background(), Advance(time.Hour)); err != nil {
 		t.Fatalf("advance through first actual runtime: %v", err)
+	}
+	if _, err := execution.Drive(context.Background(), Advance(time.Hour)); err != nil {
+		t.Fatalf("advance through the producer's publication: %v", err)
 	}
 	if _, err := execution.Drive(context.Background(), Advance(time.Hour)); err != nil {
 		t.Fatalf("advance through second actual runtime: %v", err)

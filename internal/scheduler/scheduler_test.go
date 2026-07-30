@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +107,96 @@ func TestSchedulerMintsRentalForProvisionableOffer(t *testing.T) {
 	}
 	if decision.Booking == nil || !strings.HasPrefix(decision.Booking.RentalID, "rnt_") || decision.Booking.State != domain.BookingStateRunning {
 		t.Fatalf("provisionable Offer must mint a Rental and running Booking, got %+v", decision.Booking)
+	}
+}
+
+// TestAStartBoundIsAskedOfThePublishedProvisioningTail is the one term of the
+// start prediction somebody else publishes a quantile for. A provider that says
+// this machine takes a minute on average and ten in its tail has answered the
+// question a p90 bound asks, and the answer Mercator used to enforce was its own
+// expectation scaled by a factor of its own: the Run was promised a p90 start of
+// 76 seconds and recorded as compliant while the provider's published p90 was
+// ten minutes.
+func TestAStartBoundIsAskedOfThePublishedProvisioningTail(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	offer := schedulerOffer("off_slow_tail", now, 0.00012, 0)
+	offer.Kind = domain.OfferKindProvisionable
+	offer.RentalID = ""
+	offer.Provisioning = &domain.Estimate{Expected: 60, P90: 600}
+	workload := schedulerRevision()
+	workload.Spec.Placement.MaxP90StartSeconds = 300
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID: "run_impatient", Workload: workload, Offers: []domain.OfferSnapshot{offer},
+		ModelVersion: "latency-v1", EvaluatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	candidate := schedulerCandidate(t, decision, "off_slow_tail")
+	if candidate.Estimates.ProvisionSeconds.P90 != 600 {
+		t.Fatalf("the decision recorded a provisioning p90 of %v, and the provider published 600",
+			candidate.Estimates.ProvisionSeconds.P90)
+	}
+	if candidate.Feasible {
+		t.Fatalf("a machine whose own publisher says it takes ten minutes in the tail met a five-minute bound: %+v", candidate.Estimates)
+	}
+	if !slices.ContainsFunc(candidate.Rejections, func(rejection domain.Violation) bool {
+		return rejection.Code == "LATENCY_SLO_EXCEEDED"
+	}) {
+		t.Fatalf("the candidate was refused for %+v", candidate.Rejections)
+	}
+	if !slices.Contains(decision.SelectionReasonCodes, "NO_FEASIBLE_OFFERS") {
+		t.Fatalf("the decision recorded %v", decision.SelectionReasonCodes)
+	}
+}
+
+// TestAQueueThatIsNearlyDoneIsAShortWait is the queue half of the same bound. The
+// only Rental in the fleet is a minute from finishing an hour-long Booking, and
+// the wait Mercator projects has to be the minute that is left rather than the
+// hour its caller declared. Summing declared runtimes reported the same wait for
+// the whole hour, so this Run was refused capacity it could have had in a minute
+// and the decision said there was none.
+func TestAQueueThatIsNearlyDoneIsAShortWait(t *testing.T) {
+	reserved := time.Date(2026, 6, 20, 18, 0, 0, 0, time.UTC)
+	now := reserved.Add(59 * time.Minute)
+	schedule, _, err := domain.NewRentalSchedule("off_busy").Reserve(domain.BookingRequest{
+		BookingID:              "booking-long",
+		RunID:                  "run-long",
+		ExpectedRuntimeSeconds: 3600,
+		MaxRuntimeSeconds:      7200,
+		ReservedAt:             reserved,
+	})
+	if err != nil {
+		t.Fatalf("reserve the running Booking: %v", err)
+	}
+	offer := schedulerOffer("off_busy", now, 0.0001, 0)
+	workload := schedulerRevision()
+	workload.Spec.Placement.MaxP90StartSeconds = 180
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_impatient",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{offer},
+		Schedules:    map[string]domain.RentalSchedule{"off_busy": schedule},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	candidate := schedulerCandidate(t, decision, "off_busy")
+	if candidate.Estimates.QueueSeconds.Expected != 60 {
+		t.Fatalf("the decision projected %v seconds of waiting for a Booking a minute from its own expected finish",
+			candidate.Estimates.QueueSeconds.Expected)
+	}
+	if !candidate.Feasible {
+		t.Fatalf("the Run was refused a machine a minute from free: %+v", candidate.Rejections)
+	}
+	if candidate.Disposition != domain.CandidateDispositionQueue {
+		t.Fatalf("the candidate was recorded as %q, and there is a Booking to wait behind", candidate.Disposition)
 	}
 }
 
@@ -573,4 +664,200 @@ func containsString(values []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+// TestArtifactLocalityDecidesBetweenOtherwiseIdenticalHosts is the whole point
+// of Artifact evidence at placement time. Two machines are identical down to the
+// image they hold and the price they charge, and one of them is already holding
+// a checked copy of the 40GB dataset this Run reads. Nothing else can separate
+// them, so the decision has to reach the right answer through the transfer it
+// prices rather than through a tie-break on offer ID.
+func TestArtifactLocalityDecidesBetweenOtherwiseIdenticalHosts(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	dataset := schedulerArtifact()
+	// "off_cold" sorts before "off_holder", so an untouched tie-break picks the
+	// machine holding nothing and this case would pass for the wrong reason.
+	cold := schedulerOffer("off_cold", now, 0.0001, 0)
+	cold.Artifacts = domain.ArtifactInventory{Known: true, ObservedAt: now}
+	holder := schedulerOffer("off_holder", now, 0.0001, 0)
+	holder.Artifacts = schedulerHolds(dataset, domain.ArtifactReplicaVerified, now)
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_dataset",
+		Workload:     schedulerConsumingRevision(dataset.ID),
+		Artifacts:    []domain.ArtifactVersion{dataset},
+		Offers:       []domain.OfferSnapshot{cold, holder},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if decision.SelectedOfferSnapshotID != "off_holder" {
+		t.Fatalf("expected the machine holding the dataset to win, got %q", decision.SelectedOfferSnapshotID)
+	}
+	warm := schedulerCandidate(t, decision, "off_holder")
+	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityHot {
+		t.Fatalf("the holder recorded %+v", warm.ArtifactEvidence)
+	}
+	if warm.Estimates.ArtifactSeconds.Expected != 0 || warm.Estimates.ArtifactSeconds.Confidence != 1 {
+		t.Fatalf("a host holding a checked copy was priced %+v, and it owes nothing", warm.Estimates.ArtifactSeconds)
+	}
+	// 40GB at the assumed 500 Mbps is 640 seconds, over a link nothing measured.
+	empty := schedulerCandidate(t, decision, "off_cold")
+	if empty.Estimates.ArtifactSeconds.Expected != 640 || empty.Estimates.ArtifactSeconds.Confidence != domain.AssumedLinkConfidence {
+		t.Fatalf("a host holding no copy was priced %+v", empty.Estimates.ArtifactSeconds)
+	}
+	if empty.ArtifactEvidence[0].FetchBytes != dataset.SizeBytes {
+		t.Fatalf("a host holding no copy owes %d bytes, and the version is %d", empty.ArtifactEvidence[0].FetchBytes, dataset.SizeBytes)
+	}
+}
+
+// TestAHostThatCannotEnumerateItsCopiesRecordsUnknownAndNotZero is where silence
+// costs what absence costs. A machine nothing of Mercator's runs on holds
+// whatever it holds and can report none of it, and the one answer that would be
+// wrong is zero: that scores a machine nobody can describe exactly like one
+// provably holding the content.
+func TestAHostThatCannotEnumerateItsCopiesRecordsUnknownAndNotZero(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	dataset := schedulerArtifact()
+	silent := schedulerOffer("off_silent", now, 0.0001, 0)
+	silent.Artifacts = domain.ArtifactInventory{}
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_dataset",
+		Workload:     schedulerConsumingRevision(dataset.ID),
+		Artifacts:    []domain.ArtifactVersion{dataset},
+		Offers:       []domain.OfferSnapshot{silent},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	candidate := schedulerCandidate(t, decision, "off_silent")
+	if len(candidate.ArtifactEvidence) != 1 || candidate.ArtifactEvidence[0].Locality != domain.LocalityUnknown {
+		t.Fatalf("a machine that cannot enumerate its copies recorded %+v", candidate.ArtifactEvidence)
+	}
+	if candidate.Estimates.ArtifactSeconds.Expected != 640 {
+		t.Fatalf("silence was priced %v seconds, and absence costs 640", candidate.Estimates.ArtifactSeconds.Expected)
+	}
+	if candidate.Estimates.ArtifactSeconds.Source != "inventory_unknown" {
+		t.Fatalf("the estimate names its source %q, and this one rests on a machine nobody could ask", candidate.Estimates.ArtifactSeconds.Source)
+	}
+	if !candidate.Feasible {
+		t.Fatalf("a machine that cannot say what it holds was refused: %+v", candidate.Rejections)
+	}
+}
+
+func schedulerArtifact() domain.ArtifactVersion {
+	const id = "artifact:imagenet:v2.41"
+	return domain.ArtifactVersion{
+		ID:            id,
+		WorkspaceID:   "ws_scheduler",
+		ContentDigest: "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+		SizeBytes:     40_000_000_000,
+		Location:      domain.ArtifactLocation("ws_scheduler", id),
+		PublishedAt:   time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+func schedulerHolds(version domain.ArtifactVersion, state domain.ArtifactReplicaState, now time.Time) domain.ArtifactInventory {
+	return domain.ArtifactInventory{
+		Known:      true,
+		ObservedAt: now,
+		Replicas: []domain.ArtifactReplica{{
+			ArtifactID:    version.ID,
+			ContentDigest: version.ContentDigest,
+			SizeBytes:     version.SizeBytes,
+			State:         state,
+			VerifiedAt:    now,
+		}},
+	}
+}
+
+func schedulerConsumingRevision(artifactID string) domain.WorkloadRevision {
+	revision := schedulerRevision()
+	revision.Spec.Artifacts = domain.ArtifactRequirements{Consumes: []string{artifactID}}
+	return revision
+}
+
+func schedulerCandidate(t *testing.T, decision domain.BookingDecision, offerID string) domain.CandidateDecision {
+	t.Helper()
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == offerID {
+			return candidate
+		}
+	}
+	t.Fatalf("the decision records no candidate for %q", offerID)
+	return domain.CandidateDecision{}
+}
+
+// TestTheObjectiveDecidesWhichCandidateWins is what a Run's stated objective
+// does to a placement. Each row is the same two offers: one a fraction of a cent
+// cheaper per second and forty seconds from ready, the other pricier and five
+// seconds from ready. Nothing populates ScoreWeights in production, so before
+// the objective ordered candidates every one of these rows returned the cheaper
+// machine and the words in the public API meant nothing.
+func TestTheObjectiveDecidesWhichCandidateWins(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	for _, choice := range []struct {
+		objective domain.PlacementObjective
+		winner    string
+		reason    string
+	}{
+		{domain.ObjectiveCheapest, "off_slow", "LOWEST_SCORE"},
+		{domain.ObjectiveFastestStart, "off_fast", "EARLIEST_START"},
+		{domain.ObjectiveFastestCompletion, "off_fast", "EARLIEST_COMPLETION"},
+	} {
+		t.Run(string(choice.objective), func(t *testing.T) {
+			workload := schedulerRevision()
+			workload.Spec.Placement.Objective = choice.objective
+
+			decision, err := New().Evaluate(context.Background(), SchedulingInput{
+				RunID:        "run_1",
+				Workload:     workload,
+				Offers:       []domain.OfferSnapshot{schedulerOffer("off_slow", now, 0.00010, 40), schedulerOffer("off_fast", now, 0.00012, 5)},
+				ModelVersion: "latency-v1",
+				EvaluatedAt:  now,
+			})
+			if err != nil {
+				t.Fatalf("evaluate: %v", err)
+			}
+			if decision.SelectedOfferSnapshotID != choice.winner {
+				t.Fatalf("a Run that asked for %q landed on %q", choice.objective, decision.SelectedOfferSnapshotID)
+			}
+			if !slices.Contains(decision.SelectionReasonCodes, choice.reason) {
+				t.Fatalf("the decision recorded %v, and it ranked candidates on %q", decision.SelectionReasonCodes, choice.reason)
+			}
+		})
+	}
+}
+
+// TestEqualPricesAreDecidedByWhatEachCandidateHolds is the case Artifact
+// locality was added for and the one a pure cost ranking cannot answer. Two
+// machines at one price, one of them forty seconds from ready, and the cheapest
+// objective still has a second term to fall back on. Without it the winner is
+// whichever offer ID sorts first, and every locality answer in the decision is
+// arithmetic nobody read.
+func TestEqualPricesAreDecidedByWhatEachCandidateHolds(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	workload := schedulerRevision()
+	workload.Spec.Placement.Objective = domain.ObjectiveCheapest
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{schedulerOffer("off_a_slow", now, 0.0001, 40), schedulerOffer("off_b_ready", now, 0.0001, 1)},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.SelectedOfferSnapshotID != "off_b_ready" {
+		t.Fatalf("two machines at one price were decided by %q rather than by how ready each is", decision.SelectedOfferSnapshotID)
+	}
 }

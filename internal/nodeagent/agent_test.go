@@ -221,15 +221,22 @@ func (h *harness) heartbeats(t *testing.T) int {
 
 func (h *harness) prepareImage(t *testing.T, operationID string) {
 	t.Helper()
+	h.prepareImageReceipt(t, operationID)
+}
+
+func (h *harness) prepareImageReceipt(t *testing.T, operationID string) capability.OperationReceipt {
+	t.Helper()
 	command := capability.PrepareImageCommand{
 		ManifestDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
 		Reference:      "ghcr.io/acme/trainer@sha256:1111111111111111111111111111111111111111111111111111111111111111",
 	}
 	command.NodeRef = h.ref()
 	command.OperationID = operationID
-	if _, err := h.registry.PrepareImage(context.Background(), command); err != nil {
+	receipt, err := h.registry.PrepareImage(context.Background(), command)
+	if err != nil {
 		t.Fatalf("dispatch prepare image: %v", err)
 	}
+	return receipt
 }
 
 func (h *harness) launch(t *testing.T, operationID string) {
@@ -504,6 +511,30 @@ func TestALongRunningCommandDoesNotCostTheNodeItsLease(t *testing.T) {
 
 	if !heard {
 		t.Fatalf("heartbeats stopped at %d while a command was running; the control plane would declare this node lost mid-pull", before)
+	}
+}
+
+// TestARedeliveredPreparationPullsOnce is the promise that makes preparation
+// safe to retry at all. A prepare is a multi-gigabyte transfer, and the control
+// plane redelivers whenever it did not hear an answer: a lost response, a
+// dropped session, a restart. One operation identity is one pull however many
+// times it is sent, and the second delivery says so out loud rather than
+// silently doing nothing.
+func TestARedeliveredPreparationPullsOnce(t *testing.T) {
+	harness := start(t)
+
+	first := harness.prepareImageReceipt(t, "op-prepare-once")
+	harness.runtime.awaitAttempts(t, 1)
+	second := harness.prepareImageReceipt(t, "op-prepare-once")
+
+	if first.Duplicate {
+		t.Fatal("the first preparation was reported a duplicate, and nothing had asked for it before")
+	}
+	if !second.Duplicate {
+		t.Fatalf("a redelivered preparation was accepted as new work: %+v", second)
+	}
+	if attempts := harness.runtime.attempts(); attempts != 1 {
+		t.Fatalf("the runtime pulled %d times for one operation identity, want one", attempts)
 	}
 }
 

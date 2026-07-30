@@ -29,6 +29,66 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for ArtifactEvidenceLocality.
+const (
+	ArtifactEvidenceLocalityCold    ArtifactEvidenceLocality = "cold"
+	ArtifactEvidenceLocalityHot     ArtifactEvidenceLocality = "hot"
+	ArtifactEvidenceLocalityUnknown ArtifactEvidenceLocality = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the ArtifactEvidenceLocality enum.
+func (e ArtifactEvidenceLocality) Valid() bool {
+	switch e {
+	case ArtifactEvidenceLocalityCold:
+		return true
+	case ArtifactEvidenceLocalityHot:
+		return true
+	case ArtifactEvidenceLocalityUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ArtifactReplicaState.
+const (
+	Unverified ArtifactReplicaState = "unverified"
+	Verified   ArtifactReplicaState = "verified"
+)
+
+// Valid indicates whether the value is a known member of the ArtifactReplicaState enum.
+func (e ArtifactReplicaState) Valid() bool {
+	switch e {
+	case Unverified:
+		return true
+	case Verified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CacheEvidenceLocality.
+const (
+	CacheEvidenceLocalityCold    CacheEvidenceLocality = "cold"
+	CacheEvidenceLocalityHot     CacheEvidenceLocality = "hot"
+	CacheEvidenceLocalityUnknown CacheEvidenceLocality = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the CacheEvidenceLocality enum.
+func (e CacheEvidenceLocality) Valid() bool {
+	switch e {
+	case CacheEvidenceLocalityCold:
+		return true
+	case CacheEvidenceLocalityHot:
+		return true
+	case CacheEvidenceLocalityUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CandidateDecisionDisposition.
 const (
 	ProvisionFreshRental CandidateDecisionDisposition = "provision_fresh_rental"
@@ -44,6 +104,30 @@ func (e CandidateDecisionDisposition) Valid() bool {
 	case QueueExistingRental:
 		return true
 	case RunNowExistingRental:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CandidateDecisionImageLocality.
+const (
+	Cold    CandidateDecisionImageLocality = "cold"
+	Hot     CandidateDecisionImageLocality = "hot"
+	Partial CandidateDecisionImageLocality = "partial"
+	Unknown CandidateDecisionImageLocality = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the CandidateDecisionImageLocality enum.
+func (e CandidateDecisionImageLocality) Valid() bool {
+	switch e {
+	case Cold:
+		return true
+	case Hot:
+		return true
+	case Partial:
+		return true
+	case Unknown:
 		return true
 	default:
 		return false
@@ -158,6 +242,27 @@ func (e NetworkRequirementsInbound) Valid() bool {
 	}
 }
 
+// Defines values for NodeSummaryDiskReport.
+const (
+	Measured      NodeSummaryDiskReport = "measured"
+	NeverReported NodeSummaryDiskReport = "never_reported"
+	Unmeasurable  NodeSummaryDiskReport = "unmeasurable"
+)
+
+// Valid indicates whether the value is a known member of the NodeSummaryDiskReport enum.
+func (e NodeSummaryDiskReport) Valid() bool {
+	switch e {
+	case Measured:
+		return true
+	case NeverReported:
+		return true
+	case Unmeasurable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NodeSummaryState.
 const (
 	Enrolling NodeSummaryState = "enrolling"
@@ -252,6 +357,55 @@ type AdapterListResponse struct {
 // AdapterManifest An adapter's self-description for onboarding surfaces. Lives next to the adapter's code; carries no per-connection state and never any secret material.
 type AdapterManifest = adapter.Manifest
 
+// ArtifactEvidence What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object.
+type ArtifactEvidence struct {
+	ArtifactId string `json:"artifact_id"`
+
+	// FetchBytes What this host still has to read out of the object store for this version.
+	FetchBytes int64 `json:"fetch_bytes,omitempty"`
+
+	// Locality Hot is a checked copy of exactly this version on this host. Cold is no such copy, which includes a copy nobody verified. Unknown is a host that could not enumerate its copies at all, which is uncertainty to price and never infeasibility.
+	Locality ArtifactEvidenceLocality `json:"locality"`
+}
+
+// ArtifactEvidenceLocality Hot is a checked copy of exactly this version on this host. Cold is no such copy, which includes a copy nobody verified. Unknown is a host that could not enumerate its copies at all, which is uncertainty to price and never infeasibility.
+type ArtifactEvidenceLocality string
+
+// ArtifactInventory The Artifact content this host says it holds. Like the image inventory it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence.
+type ArtifactInventory struct {
+	// Known Whether the holder enumerated its Artifact replicas at all.
+	Known      bool              `json:"known"`
+	ObservedAt time.Time         `json:"observed_at,omitempty"`
+	Replicas   []ArtifactReplica `json:"replicas,omitempty"`
+}
+
+// ArtifactReplica One host's local copy of an Artifact version. It is an optimisation over the object store and never the authority: a copy is worth what its verification against the catalog entry's content digest says it is worth.
+type ArtifactReplica struct {
+	ArtifactId string `json:"artifact_id"`
+
+	// ContentDigest What this copy claims its bytes hash to.
+	ContentDigest string `json:"content_digest"`
+	SizeBytes     int64  `json:"size_bytes"`
+
+	// State Verified means these bytes were hashed and matched the catalog entry. Unverified means a copy is present and nobody checked it, which is not evidence that the right bytes are here.
+	State ArtifactReplicaState `json:"state"`
+
+	// VerifiedAt When this copy was last checked against the catalog entry's content digest.
+	VerifiedAt time.Time `json:"verified_at,omitempty"`
+}
+
+// ArtifactReplicaState Verified means these bytes were hashed and matched the catalog entry. Unverified means a copy is present and nobody checked it, which is not evidence that the right bytes are here.
+type ArtifactReplicaState string
+
+// ArtifactRequirements The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine.
+type ArtifactRequirements struct {
+	// Consumes Artifact version identities this workload reads. The Run is accepted at once and is not placed until every one of them is durable in the object store, so it waits for a publication and never for a particular machine. A Mercator with no object store configured cannot establish that any of them exists, and refuses the request with ARTIFACT_CATALOG_UNAVAILABLE rather than accepting a Run it could never place.
+	Consumes []string `json:"consumes,omitempty"`
+
+	// Produces Artifact version identities this workload publishes. A version is immutable, so a workload may not also consume one it produces.
+	Produces []string `json:"produces,omitempty"`
+}
+
 // Booking defines model for Booking.
 type Booking = domain.Booking
 
@@ -268,29 +422,92 @@ type CPURequirement struct {
 	MinMillis int64 `json:"min_millis"`
 }
 
+// CacheEvidence What one candidate was found holding of one cache the Run declared. It is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured, so turning it into seconds would be an exchange rate nobody established.
+type CacheEvidence struct {
+	// HeldCompatibilityKey The generation this host actually holds under the name, when it holds one. It separates the two ways a cache is cold: a machine that has never done this work, and one holding the generation before the one now asked for.
+	HeldCompatibilityKey string `json:"held_compatibility_key,omitempty"`
+
+	// Locality Hot is this workspace's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all.
+	Locality CacheEvidenceLocality `json:"locality"`
+	Name     string                `json:"name"`
+}
+
+// CacheEvidenceLocality Hot is this workspace's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all.
+type CacheEvidenceLocality string
+
+// CacheInventory The mutable caches this host says it holds. Like the image and Artifact inventories it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence.
+type CacheInventory struct {
+	// Known Whether the holder enumerated its caches at all.
+	Known      bool         `json:"known"`
+	Mounts     []CacheMount `json:"mounts,omitempty"`
+	ObservedAt time.Time    `json:"observed_at,omitempty"`
+}
+
+// CacheMount One mutable cache on one host, as the holder reports it. It carries no digest and no verification state, because there is nothing to check it against: the contents are whatever the application last wrote. It carries no size either, because nothing on a real node measures one without walking every volume on the machine.
+type CacheMount struct {
+	// CompatibilityKey The generation of content under this name, as the application stated it when the cache was written.
+	CompatibilityKey string `json:"compatibility_key,omitempty"`
+
+	// CreatedAt When this generation of the cache started existing here. It is the freshness a container runtime can state: a holder that makes new storage per compatibility key can say when this one began, and cannot say when anything last read it.
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	Name      string    `json:"name"`
+
+	// WorkspaceId The workspace that owns this cache. It is part of the identity rather than a label on it.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// CacheMountRequirement One mutable, application-owned cache a workload wants mounted across Runs. Its identity is the name, scoped to the workspace the Run belongs to: two tenants that both declare compiler-cache declare two caches, and neither is ever handed the other's bytes. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running.
+type CacheMountRequirement struct {
+	// CompatibilityKey The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own. It is recorded beside the storage it names on whatever host holds the cache, so it must be a printable label.
+	CompatibilityKey string `json:"compatibility_key,omitempty"`
+
+	// Name This cache's identity within its workspace. It also names durable storage on whatever host holds the cache, so it must be a lowercase label.
+	Name string `json:"name"`
+
+	// SizeBytes How much room the application expects this cache to take. It is a declaration rather than a measurement.
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+}
+
 // CandidateDecision defines model for CandidateDecision.
 type CandidateDecision struct {
-	AdapterType     string                       `json:"adapter_type,omitempty"`
-	ConnectionId    string                       `json:"connection_id,omitempty"`
-	Disposition     CandidateDecisionDisposition `json:"disposition"`
-	Estimates       CandidateEstimates           `json:"estimates"`
-	Feasible        bool                         `json:"feasible"`
-	NativeRef       string                       `json:"native_ref,omitempty"`
-	OfferSnapshotId string                       `json:"offer_snapshot_id"`
-	Rejections      []Violation                  `json:"rejections,omitempty"`
-	ScoreUsd        float64                      `json:"score_usd,omitempty"`
+	AdapterType string `json:"adapter_type,omitempty"`
+
+	// ArtifactEvidence What this candidate was found holding of the immutable content the Run reads, one entry per declared input. It stands beside image_locality rather than folded into it: an image is what the runtime fetches to start a container, an Artifact is what the workload reads once it is running, and one host is routinely warm for one and cold for the other.
+	ArtifactEvidence []ArtifactEvidence `json:"artifact_evidence,omitempty"`
+
+	// CacheEvidence What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name.
+	CacheEvidence []CacheEvidence `json:"cache_evidence,omitempty"`
+	ConnectionId  string          `json:"connection_id,omitempty"`
+
+	// Disk What one Run asked of one candidate's disk: the room the machine said it had left, the room the Run reserved for its own working state, and the content that still had to land there. It is one question over every kind of content at once because the disk is one resource, and a candidate short of room is refused rather than priced: nothing this Run could give up frees a byte it does not need straight back, and the only content that would make room belongs to somebody else.
+	Disk        DiskDemand                   `json:"disk,omitempty"`
+	Disposition CandidateDecisionDisposition `json:"disposition"`
+	Estimates   CandidateEstimates           `json:"estimates"`
+	Feasible    bool                         `json:"feasible"`
+
+	// ImageLocality How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility.
+	ImageLocality   CandidateDecisionImageLocality `json:"image_locality,omitempty"`
+	NativeRef       string                         `json:"native_ref,omitempty"`
+	OfferSnapshotId string                         `json:"offer_snapshot_id"`
+	Rejections      []Violation                    `json:"rejections,omitempty"`
+	ScoreUsd        float64                        `json:"score_usd,omitempty"`
 }
 
 // CandidateDecisionDisposition defines model for CandidateDecision.Disposition.
 type CandidateDecisionDisposition string
 
+// CandidateDecisionImageLocality How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility.
+type CandidateDecisionImageLocality string
+
 // CandidateEstimates defines model for CandidateEstimates.
 type CandidateEstimates struct {
-	CostUsd          Estimate `json:"cost_usd"`
-	ProvisionSeconds Estimate `json:"provision_seconds"`
-	PullSeconds      Estimate `json:"pull_seconds"`
-	QueueSeconds     Estimate `json:"queue_seconds"`
-	StartSeconds     Estimate `json:"start_seconds"`
+	ArtifactSeconds         Estimate `json:"artifact_seconds"`
+	CostUsd                 Estimate `json:"cost_usd"`
+	EstablishedStartSeconds Estimate `json:"established_start_seconds"`
+	ProvisionSeconds        Estimate `json:"provision_seconds"`
+	PullSeconds             Estimate `json:"pull_seconds"`
+	QueueSeconds            Estimate `json:"queue_seconds"`
+	StartSeconds            Estimate `json:"start_seconds"`
 }
 
 // CapabilityProfile defines model for CapabilityProfile.
@@ -427,6 +644,21 @@ type CreateWorkspaceRequest struct {
 // Credential defines model for Credential.
 type Credential = credential.Credential
 
+// DiskDemand What one Run asked of one candidate's disk: the room the machine said it had left, the room the Run reserved for its own working state, and the content that still had to land there. It is one question over every kind of content at once because the disk is one resource, and a candidate short of room is refused rather than priced: nothing this Run could give up frees a byte it does not need straight back, and the only content that would make room belongs to somebody else.
+type DiskDemand struct {
+	// EstablishedLandBytes The part of that somebody enumerated. Content nobody could describe is priced in seconds and never refuses a machine, because those bytes may already be on its disk.
+	EstablishedLandBytes int64 `json:"established_land_bytes,omitempty"`
+
+	// FreeBytes The room the offer said this machine had left. A machine that could not measure its disk offers none.
+	FreeBytes int64 `json:"free_bytes"`
+
+	// LandBytes Everything this Run's content still had to put on this disk: the image bytes it must transfer, the Artifact versions it must read out of the object store, and the caches it declared that this host does not hold.
+	LandBytes int64 `json:"land_bytes,omitempty"`
+
+	// ReservedBytes The ephemeral disk the workload declared it needs. It is asked for beside the content rather than out of it, because a Run admitted on a fifty gigabyte floor whose fifty gigabytes turn out to be its own dataset was promised nothing.
+	ReservedBytes int64 `json:"reserved_bytes,omitempty"`
+}
+
 // DiskRequirement defines model for DiskRequirement.
 type DiskRequirement struct {
 	MinBytes int64 `json:"min_bytes"`
@@ -466,17 +698,26 @@ type ExecutionPolicy struct {
 
 // ImageInventory What this host says it holds. It answers what is here and never what is missing: what a Run would still have to fetch depends on which image is being asked about, and only the scheduler holds both halves.
 type ImageInventory struct {
-	// ImageDigests Image manifests this host holds whole.
+	// ImageDigests Image manifests this host holds whole and has unpacked, so it can start a container on one now.
 	ImageDigests []string `json:"image_digests,omitempty"`
 
 	// Known Whether the holder enumerated its content at all. False is an honest answer rather than a failure: a provider that cannot say what a fresh machine holds says so, and the uncertainty is priced rather than mistaken for warmth.
 	Known bool `json:"known"`
 
-	// LayerDigests Layer blobs this host holds. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first.
+	// LayerDiffIds The same unpacked content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in.
+	LayerDiffIds []string `json:"layer_diff_ids,omitempty"`
+
+	// LayerDigests Compressed layer blobs this host holds unpacked, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first.
 	LayerDigests []string `json:"layer_digests,omitempty"`
 
-	// ObservedAt When the holder last looked. Locality decays, so the age of this answer is material.
+	// ObservedAt When the holder last looked. Locality decays, so the age of this answer is material. How long anyone stands behind it is the offer's own expiry: the enumeration and the capacity claim come out of one observation, and an expired offer is refused whole.
 	ObservedAt time.Time `json:"observed_at,omitempty"`
+
+	// PulledImageDigests Image manifests whose content arrived here and which are not assembled into a runnable layer chain. Fetching and unpacking are separate acts, and a host that has done the first and not the second is neither warm nor cold: what is left is local work rather than a pull.
+	PulledImageDigests []string `json:"pulled_image_digests,omitempty"`
+
+	// UnknownImageDigests Image manifests this host looked at and could not account for: a runtime that would not describe one, or a store reporting part of its content present and unable to name which part. A host that enumerates itself can still fail on one image, and an image absent from every other list would otherwise read as the confident claim that none of it is here.
+	UnknownImageDigests []string `json:"unknown_image_digests,omitempty"`
 }
 
 // InviteNodeRequest defines model for InviteNodeRequest.
@@ -574,19 +815,28 @@ type NodeListResponse struct {
 
 // NodeSummary defines model for NodeSummary.
 type NodeSummary struct {
-	Accelerators          int       `json:"accelerators,omitempty"`
-	AgentVersion          string    `json:"agent_version,omitempty"`
-	ContainerRuntime      string    `json:"container_runtime,omitempty"`
-	Generation            int64     `json:"generation"`
-	Id                    string    `json:"id"`
-	LastHeartbeatAt       time.Time `json:"last_heartbeat_at,omitempty"`
-	LeaseExpires          time.Time `json:"lease_expires,omitempty"`
-	RentalId              string    `json:"rental_id"`
-	ShadowPriceUsdPerHour float32   `json:"shadow_price_usd_per_hour"`
+	Accelerators     int    `json:"accelerators,omitempty"`
+	AgentVersion     string `json:"agent_version,omitempty"`
+	ContainerRuntime string `json:"container_runtime,omitempty"`
+
+	// DiskFreeBytes The room this node last measured, always stated. It is zero unless disk_report is measured, because bytes nobody established are not room: it is what the node's offer advertises, so a node with none wins no placement that declares a disk floor. Zero with disk_report measured is a machine that is full.
+	DiskFreeBytes int64 `json:"disk_free_bytes"`
+
+	// DiskReport What is known about the room on the filesystem this node's daemon keeps content on, which is three answers and not two. never_reported is an identity nobody has heard from yet, so nothing has been measured because nothing has been asked. unmeasurable is a node that answered and could not measure: its daemon keeps content somewhere its agent cannot see, which costs it every placement that declares a disk floor and never its membership of the fleet. measured is a number this node established, and zero of it is a full machine.
+	DiskReport            NodeSummaryDiskReport `json:"disk_report"`
+	Generation            int64                 `json:"generation"`
+	Id                    string                `json:"id"`
+	LastHeartbeatAt       time.Time             `json:"last_heartbeat_at,omitempty"`
+	LeaseExpires          time.Time             `json:"lease_expires,omitempty"`
+	RentalId              string                `json:"rental_id"`
+	ShadowPriceUsdPerHour float32               `json:"shadow_price_usd_per_hour"`
 
 	// State What the control plane believes about this node. A lost node is unobserved, not dead.
 	State NodeSummaryState `json:"state"`
 }
+
+// NodeSummaryDiskReport What is known about the room on the filesystem this node's daemon keeps content on, which is three answers and not two. never_reported is an identity nobody has heard from yet, so nothing has been measured because nothing has been asked. unmeasurable is a node that answered and could not measure: its daemon keeps content somewhere its agent cannot see, which costs it every placement that declares a disk floor and never its membership of the fleet. measured is a number this node established, and zero of it is a full machine.
+type NodeSummaryDiskReport string
 
 // NodeSummaryState What the control plane believes about this node. A lost node is unobserved, not dead.
 type NodeSummaryState string
@@ -777,13 +1027,18 @@ type WorkloadRevisionResponse struct {
 
 // WorkloadSpec defines model for WorkloadSpec.
 type WorkloadSpec struct {
-	Containers []ContainerSpec        `json:"containers"`
-	Execution  ExecutionPolicy        `json:"execution"`
-	Metadata   map[string]string      `json:"metadata,omitempty"`
-	Network    NetworkRequirements    `json:"network"`
-	Placement  PlacementPolicy        `json:"placement"`
-	Raw        map[string]interface{} `json:"raw,omitempty"`
-	Resources  ResourceRequirements   `json:"resources"`
+	// Artifacts The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine.
+	Artifacts ArtifactRequirements `json:"artifacts"`
+
+	// Caches The mutable, application-owned state this workload wants mounted across Runs. Every name is scoped to the Run's own workspace, which is what makes two tenants naming one cache two caches.
+	Caches     []CacheMountRequirement `json:"caches,omitempty"`
+	Containers []ContainerSpec         `json:"containers"`
+	Execution  ExecutionPolicy         `json:"execution"`
+	Metadata   map[string]string       `json:"metadata,omitempty"`
+	Network    NetworkRequirements     `json:"network"`
+	Placement  PlacementPolicy         `json:"placement"`
+	Raw        map[string]interface{}  `json:"raw,omitempty"`
+	Resources  ResourceRequirements    `json:"resources"`
 }
 
 // Workspace defines model for Workspace.

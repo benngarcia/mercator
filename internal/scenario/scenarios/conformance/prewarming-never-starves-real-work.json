@@ -1,0 +1,126 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One machine and four Runs. The first is admitted and spends ten minutes fetching the forty gigabytes it runs, and the second is queued behind it, so Mercator knows where that Run is going and can get the machine ready. It does not start until the admitted Run's own fetch is finished: a node performs its commands in order and a link carries what it carries, so preparing speculatively while a Run is waiting to start is Mercator delaying its own work. One piece of content moves at a time and no sooner than a minute after the last, which is the whole of the restraint Mercator has, because nothing below the control plane refuses a transfer. A third Run arrives once the machine holds both, and its Booking Decision prices that host at zero pull seconds and a checked copy of the dataset, on a machine that has executed neither. The fourth arrives wanting sixty gigabytes nothing else needs, and its caller withdraws it eight minutes in: the preparation stops and the room goes back to the machine, because content is prepared for work that is going to happen and this work is not.",
+  "seed": "mercator-lab-prewarm-yields-v1",
+  "world": {
+    "prewarm": {
+      "max_concurrent": 1,
+      "min_interval": "1m"
+    },
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "40GB"
+          }
+        ]
+      },
+      "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c": {
+        "layers": [
+          {
+            "digest": "sha256:aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66",
+            "size": "20GB"
+          }
+        ]
+      },
+      "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d": {
+        "layers": [
+          {
+            "digest": "sha256:bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77",
+            "size": "60GB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:corpus:v7",
+        "content_digest": "sha256:cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77bb88",
+        "size": "20GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "builder",
+        "rate_per_hour_usd": 3.0,
+        "resources": {
+          "cpu_millis": 16000,
+          "memory": "128GB",
+          "disk": "2TB"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "long",
+        "candidate": "builder",
+        "minimum": "40m",
+        "maximum": "40m"
+      },
+      {
+        "run": "patient",
+        "candidate": "builder",
+        "minimum": "10m",
+        "maximum": "10m"
+      },
+      {
+        "run": "curious",
+        "candidate": "builder",
+        "minimum": "10m",
+        "maximum": "10m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "long",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "expected_runtime": "40m",
+          "max_runtime": "2h"
+        }
+      },
+      {
+        "name": "patient",
+        "at": "2m",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "consumes_artifacts": ["artifact:corpus:v7"],
+          "expected_runtime": "10m",
+          "max_runtime": "1h"
+        }
+      },
+      {
+        "name": "curious",
+        "at": "25m",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "consumes_artifacts": ["artifact:corpus:v7"],
+          "expected_runtime": "10m",
+          "max_runtime": "1h"
+        }
+      },
+      {
+        "name": "abandoned",
+        "at": "30m",
+        "request": {
+          "image": "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d",
+          "expected_runtime": "10m",
+          "max_runtime": "1h"
+        }
+      }
+    ],
+    "cancellations": [
+      {
+        "run": "abandoned",
+        "at": "43m"
+      }
+    ]
+  }
+}

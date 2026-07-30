@@ -56,9 +56,8 @@ A single-decision Blueprint:
 ```json
 {
   "schema": "mercator.lab/blueprint.v1",
-  "classification": "target",
+  "classification": "green",
   "summary": "The Rental holding the immutable input beats a colder Rental.",
-  "missing_capabilities": ["artifacts", "artifact_evidence"],
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
@@ -71,13 +70,21 @@ A single-decision Blueprint:
       }
     },
     "artifacts": [
-      {"id": "artifact:imagenet:v2.41", "size": "40GB"}
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
     ],
     "rentals": [
       {
         "id": "rental-warm",
-        "artifact_replicas": ["artifact:imagenet:v2.41"],
-        "cache_mounts": ["compiler-cache"],
+        "artifact_replicas": [
+          {"artifact": "artifact:imagenet:v2.41", "state": "verified"}
+        ],
+        "cache_mounts": [
+          {"name": "compiler-cache", "compatibility_key": "cuda-12.4", "size": "8GB"}
+        ],
         "rate_per_hour_usd": 2.5
       }
     ]
@@ -85,19 +92,29 @@ A single-decision Blueprint:
   "request": {
     "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
     "consumes_artifacts": ["artifact:imagenet:v2.41"],
-    "cache_mounts": [{"name": "compiler-cache"}]
+    "cache_mounts": [
+      {"name": "compiler-cache", "compatibility_key": "cuda-12.4", "size": "8GB"}
+    ]
   },
   "expect": {
     "outcome": "place",
     "offer": "rental-warm",
     "candidates": {
       "rental-warm": {
+        "artifact_seconds": 0,
         "artifact_evidence": {"artifact:imagenet:v2.41": "hit"}
       }
     }
   }
 }
 ```
+
+`artifact_evidence` says what each candidate was found holding of each Artifact
+the Run reads: `"hit"` for a checked copy of exactly that version, `"miss"` for
+none, and `"unknown"` for a machine that could not enumerate its copies at all.
+A copy nobody checked is a miss, because it is not evidence the right bytes are
+here. `artifact_seconds` is what that candidate would still spend reading its
+inputs out of the object store.
 
 `request` and `expect` are the single-decision shorthand. A Placement fixture
 that advances virtual time or submits several Runs uses `timeline`; each step
@@ -112,7 +129,7 @@ An arrival-driven Lab Blueprint uses:
     "type": "fixed",
     "runs": [
       {"name": "producer", "at": "0s", "request": {}},
-      {"name": "consumer", "at": "0s", "request": {}}
+      {"name": "consumer", "at": "0s", "workspace": "other-tenant", "request": {}}
     ]
   },
   "faults": [],
@@ -130,11 +147,27 @@ strictly validated before execution.
 - Sizes use decimal units such as `"40GB"` and `"512MB"`.
 - Image references are digest-pinned OCI identities.
 - Image layers use exact `sha256:` digests. Shared digests mean shared content.
-- Artifacts are immutable and versioned. Runs declare
-  `consumes_artifacts` and `produces_artifacts`; Rentals carry exact
-  `artifact_replicas`.
+- Artifacts are immutable and versioned. An Artifact states its
+  `content_digest`, and `produced_by` when a Run in the same Blueprint publishes
+  it; an Artifact with a producer is not durable at virtual time zero and no
+  machine may be seeded holding a copy of it. Runs declare `consumes_artifacts`
+  and `produces_artifacts`. Rentals carry exact `artifact_replicas`, each
+  stating whether that copy was checked against the catalog (`verified`) or is
+  merely present (`unverified`). The object store is what makes an Artifact
+  consumable; a replica only makes reading it faster.
 - Cache Mounts are mutable application-owned state. Their only identity is the
-  workspace-scoped `name`; they never carry content keys or sizes.
+  workspace-scoped `name`, and they never carry a content key: a key that
+  identifies content is what an Artifact version is for. A Run declares
+  `cache_mounts` with a `name`, the `compatibility_key` naming which generation
+  of content it can use, and the `size` it expects to take; a Rental holds
+  `cache_mounts` with the same fields plus the `workspace` that owns each one.
+  Mercator compares the compatibility key and never interprets it.
+- A Run arrival states the `workspace` it belongs to. It is a label rather than
+  an identity, because each backend mints its own workspace IDs, and an omitted
+  label is the Blueprint's default workspace. Two labelled tenants on one machine
+  is what makes cross-workspace isolation something a fixture can state, and an
+  Artifact belongs to the workspace that declared it, so a Run outside the
+  default workspace may not name one.
 - The world clock starts at `2030-01-01T00:00:00Z` unless `world.clock` says
   otherwise. Placement deadlines are offsets such as `"+6m"`.
 
@@ -156,8 +189,6 @@ Targets pin event contracts that production types may not carry yet:
 - a busy Rental candidate records ordered Rental Schedule evidence;
 - a full schedule rejects with `SCHEDULE_FULL` at
   `rental_schedule.queued`;
-- Artifact locality is
-  `"artifact_evidence": [{"artifact_id", "present"}]` on each candidate;
 - a false host fact is `CAPABILITY_MISMATCH` and an absent fact is
   `UNKNOWN_FACT`.
 
@@ -169,7 +200,7 @@ real orchestrator, Placement implementation, and SQLite event log. Tests assert
 recorded events, never private Placement state.
 
 The current backend can execute offer, image-layer, and basic Rental behavior.
-It records explicit notes when an Artifact, Cache Mount, seeded Rental
-Schedule, or host fact cannot yet cross the production seam. Later Lab slices
+It records explicit notes when a Cache Mount, seeded Rental Schedule, or host
+fact cannot yet cross the production seam. Later Lab slices
 replace this mutable scripted boundary with World Truth, Observed State, and a
 deterministic dispatcher while keeping the real control plane in the loop.

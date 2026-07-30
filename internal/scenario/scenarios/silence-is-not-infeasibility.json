@@ -1,0 +1,64 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One Run that refuses to wait more than three minutes to start, and two machines at one price that would both take nearly five. The Rental enumerated itself and holds none of the image, so it is struck out: that is a measured fact about a machine, and a hard bound is what a Run gets to do with one. The borrowed host cannot be asked at all, and the same bound must not strike it out, because nobody has established that it is slow. Silence is priced as the whole fetch so a machine nobody can describe never outranks one provably ready, and priced is as far as it goes. Turn that pricing into a rejection and the Run finds no capacity at all, on a machine that may already be holding every byte. What the decision must not do is call the placement compliant: the prediction is over the bound and rests on nothing, so it records START_SLO_UNVERIFIED rather than a promise made out of silence.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:1d12367e38d42cbadc64e72ba3e2093db9d6ed002d28bf5a29f8209d5e08db57": {
+        "layers": [
+          {
+            "digest": "sha256:8dfe51d494b415475c83a91d0a9aa290270d1dbe30e7d5f4daeb6d3d9cf3c71c",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:26876a336a38e6dca08194f204b743435de7be214e8752be855e3a30e30e3a3a",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "empty-rental",
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "hosts": [
+      {
+        "id": "silent-host",
+        "rate_per_hour_usd": 2.0
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "impatient",
+      "request": {
+        "image": "trainer@sha256:1d12367e38d42cbadc64e72ba3e2093db9d6ed002d28bf5a29f8209d5e08db57",
+        "max_start_latency": "3m",
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "silent-host",
+        "reasons": ["FEASIBLE", "LOWEST_SCORE", "START_SLO_UNVERIFIED"],
+        "disposition": "release",
+        "candidates": {
+          "empty-rental": {
+            "feasible": false,
+            "image_locality": "cold",
+            "pull_source": "image_inventory",
+            "rejected": [{"code": "LATENCY_SLO_EXCEEDED", "path": "placement.max_p90_start_seconds"}]
+          },
+          "silent-host": {
+            "feasible": true,
+            "image_locality": "unknown",
+            "pull_seconds": {"at_least": 285, "at_most": 292},
+            "pull_source": "inventory_unknown"
+          }
+        }
+      }
+    }
+  ]
+}

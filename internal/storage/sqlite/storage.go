@@ -23,6 +23,7 @@ type Storage struct {
 	schedules   *RentalScheduleStore
 	runs        *RunStore
 	nodes       *NodeStore
+	preparation *PreparationClock
 }
 
 func Open(ctx context.Context, dsn string) (*Storage, error) {
@@ -56,6 +57,10 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		_ = log.Close()
 		return nil, err
 	}
+	if err := migratePreparationClock(ctx, db); err != nil {
+		_ = log.Close()
+		return nil, err
+	}
 	if err := migrateNodes(ctx, db); err != nil {
 		_ = log.Close()
 		return nil, err
@@ -70,6 +75,7 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 	storage.runs = &RunStore{db: db, log: log}
 	storage.schedules = &RentalScheduleStore{db: db, log: log, runs: storage.runs}
 	storage.nodes = &NodeStore{db: db}
+	storage.preparation = &PreparationClock{db: db}
 	if err := storage.purgeDeletedConnectionCredentials(ctx); err != nil {
 		_ = log.Close()
 		return nil, err
@@ -108,6 +114,13 @@ func (s *Storage) Connections(sealer credentialSealer) (*ConnectionRepository, e
 // were given, and what they reported back.
 func (s *Storage) Nodes() *NodeStore {
 	return s.nodes
+}
+
+// Preparation is when this control plane last began preparing capacity
+// speculatively, which is the one part of that decision a restart may not
+// forget.
+func (s *Storage) Preparation() *PreparationClock {
+	return s.preparation
 }
 
 func (s *Storage) Close() error {

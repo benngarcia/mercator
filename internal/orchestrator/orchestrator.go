@@ -93,9 +93,14 @@ type Orchestrator struct {
 	schedules          rentalschedule.Store
 	now                func() time.Time
 	manifests          ImageManifests
+	artifacts          ArtifactCatalog
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
 	runLocks           keyedMutex
+	prewarmer          Prewarmer
+	prewarmPolicy      PrewarmPolicy
+	prewarmed          prewarmMemory
+	preparationClock   PreparationClock
 }
 
 type Adapter interface {
@@ -223,6 +228,27 @@ func resolveWorkloadImages(ctx context.Context, rev domain.WorkloadRevision, res
 	return rev, nil
 }
 
+// refuseUnpinnedImages rejects a Run whose image names a label instead of
+// content. A stored workload revision may carry a tag, because it is a template
+// and resolution is deferred to here, but a Run is a commitment to bytes: every
+// answer Mercator gives about an image afterwards is a digest comparison, so a
+// Run admitted with a tag is one whose content Mercator cannot name, cannot ask
+// a machine whether it holds, and cannot recognise as the same content another
+// Run wants. It is refused at intake rather than guarded downstream, because the
+// answer never changes and each downstream guard would have to invent one.
+func refuseUnpinnedImages(workload domain.WorkloadRevision) error {
+	for _, container := range workload.Spec.Containers {
+		if domain.PinnedImage(container.Image) {
+			continue
+		}
+		return fmt.Errorf(
+			"IMAGE_NOT_PINNED: Run image %q names no content; reference it as repository@sha256:<64 hex> or configure an image resolver to pin it",
+			container.Image,
+		)
+	}
+	return nil
+}
+
 type CreateRunResult struct {
 	RunID     string
 	Duplicate bool
@@ -276,6 +302,12 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	// Validate what we are about to store and launch, not what was submitted.
 	if violations := domain.ValidateWorkloadRevision(req.Workload); len(violations) > 0 {
 		return CreateRunResult{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
+	}
+	if err := refuseUnpinnedImages(req.Workload); err != nil {
+		return CreateRunResult{}, err
+	}
+	if err := o.refuseUnknowableInputs(req.Workload); err != nil {
+		return CreateRunResult{}, err
 	}
 	privateData, err := json.Marshal(runRequestedData{RunID: req.RunID, Workload: req.Workload})
 	if err != nil {
@@ -401,9 +433,14 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 		return true, o.recordTerminalTransition(ctx, workspaceID, runID, version, state)
 	case state.bookingQueued():
 		return o.dispatchQueuedBooking(ctx, workspaceID, runID, version, state)
-	case state.launchIntent == nil:
-		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
-	case state.replacementEligible():
+	case state.launchIntent == nil, state.replacementEligible():
+		// Placement is where admission binds: a Run whose declared Artifacts are
+		// not all durable is not placed, and stays exactly where it is until one
+		// of them is published.
+		durable, err := o.inputsAreDurable(ctx, workspaceID, state.requested.Workload)
+		if err != nil || !durable {
+			return false, err
+		}
 		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
 	case !state.launchAccepted && state.launchFailure == nil:
 		return o.stepLaunch(ctx, workspaceID, runID, version, state)
@@ -921,6 +958,7 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 		Environment:               env,
 		Ports:                     slices.Clone(container.Ports),
 		Resources:                 requested.Workload.Spec.Resources,
+		CacheMounts:               slices.Clone(requested.Workload.Spec.Caches),
 		MaxRuntimeSeconds:         requested.Workload.Spec.Execution.MaxRuntimeSeconds,
 		SelectedOfferSnapshotID:   selectedOffer.ID,
 		SelectedOfferConnectionID: selectedOffer.ConnectionID,

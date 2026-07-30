@@ -77,6 +77,7 @@ const ESTIMATE_COLUMNS: Array<{
   { key: "queue_seconds", label: "Queue", kind: "duration" },
   { key: "provision_seconds", label: "Provision", kind: "duration" },
   { key: "pull_seconds", label: "Pull", kind: "duration" },
+  { key: "artifact_seconds", label: "Inputs", kind: "duration" },
   { key: "start_seconds", label: "Start", kind: "duration" },
   { key: "cost_usd", label: "Cost", kind: "usd" },
 ];

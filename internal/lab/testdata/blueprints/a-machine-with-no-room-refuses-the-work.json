@@ -1,0 +1,59 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The only capacity in this world is a machine Mercator borrows a slot on, which says nothing about what it holds, and it is holding a checked copy of the version before the one this Run reads. Sixty gigabytes of disk, forty of them already spent on that copy, against a Run needing a ten gigabyte image and the forty gigabyte dataset the catalog names. Silence never refuses a candidate, so Placement cannot establish that the content will not fit and selects it. The machine then refuses the work rather than accepting it and filling up partway through, so nothing lands on that disk and the Run closes without ever executing. Both halves of what a copy is worth are in the refusal: a copy of other content under this version's name is not room this launch can use, and a world that counted it would let the launch through and hand the workload the wrong bytes. It is the Lab's own failing case for disk, and what safety.disk_reservation_respected exists to catch is a ledger holding more than the machine does.",
+  "seed": "mercator-lab-no-room-v1",
+  "world": {
+    "images": {
+      "worker@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f": {
+        "layers": [
+          {
+            "digest": "sha256:11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a1",
+            "size": "10GB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
+    ],
+    "hosts": [
+      {
+        "id": "cramped-host",
+        "resources": {
+          "disk": "60GB"
+        },
+        "rate_per_hour_usd": 2.0,
+        "artifact_replicas": [
+          {
+            "artifact": "artifact:imagenet:v2.41",
+            "state": "verified",
+            "content_digest": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b"
+          }
+        ]
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "too-big-to-land",
+        "at": "0s",
+        "request": {
+          "image": "worker@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f",
+          "expected_runtime": "5m",
+          "max_runtime": "20m",
+          "consumes_artifacts": [
+            "artifact:imagenet:v2.41"
+          ]
+        }
+      }
+    ]
+  }
+}

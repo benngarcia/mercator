@@ -62,6 +62,20 @@ const PlacementPolicy = Schema.Struct({
   max_expected_cost_usd: Schema.optionalKey(Schema.Number),
   allow_unknown_pricing: Schema.optionalKey(Schema.Boolean),
 });
+// ArtifactRequirements is what a workload reads and publishes, by Artifact
+// version. It is a dependency on durable content in the object store rather
+// than on any host, which is why the console never renders it as locality.
+const ArtifactRequirements = Schema.Struct({
+  consumes: Schema.optionalKey(mutableArray(Schema.String)),
+  produces: Schema.optionalKey(mutableArray(Schema.String)),
+});
+const ArtifactReplica = Schema.Struct({
+  artifact_id: Schema.String,
+  content_digest: Schema.String,
+  size_bytes: Schema.Number,
+  state: Schema.Literals(["verified", "unverified"]),
+  verified_at: Schema.optionalKey(Schema.String),
+});
 const WorkloadRevision = Schema.Struct({
   id: Schema.String,
   workspace_id: Schema.String,
@@ -76,6 +90,7 @@ const WorkloadRevision = Schema.Struct({
       max_runtime_seconds: Schema.Number,
       max_pre_start_attempts: Schema.Number,
     }),
+    artifacts: ArtifactRequirements,
     metadata: Schema.optionalKey(StringRecord),
     raw: Schema.optionalKey(UnknownRecord),
   }),
@@ -182,6 +197,11 @@ export const OfferSnapshot = Schema.Struct({
     image_digests: Schema.optionalKey(mutableArray(Schema.String)),
     layer_digests: Schema.optionalKey(mutableArray(Schema.String)),
   }),
+  artifacts: Schema.Struct({
+    known: Schema.Boolean,
+    observed_at: Schema.optionalKey(Schema.String),
+    replicas: Schema.optionalKey(mutableArray(ArtifactReplica)),
+  }),
   capacity: Schema.Struct({
     available: Schema.Boolean,
     confidence: Schema.Number,
@@ -204,7 +224,9 @@ const CandidateEstimateSet = Schema.Struct({
   queue_seconds: Estimate,
   provision_seconds: Estimate,
   pull_seconds: Estimate,
+  artifact_seconds: Estimate,
   start_seconds: Estimate,
+  established_start_seconds: Estimate,
   cost_usd: Estimate,
 });
 const CandidateDisposition = Schema.Literals([

@@ -17,7 +17,7 @@ import (
 // that keeps node credentials and operator credentials from standing in for
 // each other. The node routes exist, and the operator token opens none of them.
 func TestNodeProtocolIsMountedAndSeparateFromTheOperatorAPI(t *testing.T) {
-	address := startRuntime(t)
+	address, _ := startRuntime(t)
 
 	cases := map[string]struct {
 		path       string
@@ -67,18 +67,27 @@ func TestNodeProtocolIsMountedAndSeparateFromTheOperatorAPI(t *testing.T) {
 	}
 }
 
-func startRuntime(t *testing.T) string {
+func startRuntime(t *testing.T) (string, *daemon.Runtime) {
 	t.Helper()
 	return startRuntimeWithLease(t, 0)
 }
 
-func startRuntimeWithLease(t *testing.T, lease time.Duration) string {
+// startRuntimeWithLease answers with the address a client reaches this daemon on
+// and the runtime itself. The runtime is what a case drives the reconcile sweep
+// through: preparation is a controller rather than a request, so nothing an HTTP
+// caller can do makes it happen, and waiting out the production minute would be
+// a test of a ticker.
+func startRuntimeWithLease(t *testing.T, lease time.Duration) (string, *daemon.Runtime) {
 	t.Helper()
 	runtime, err := daemon.New(t.Context(), daemon.Config{
 		SQLiteDSN:     "file:" + filepath.Join(t.TempDir(), "mercator.db"),
 		OperatorToken: "operator-token",
 		MasterKey:     []byte("0123456789abcdef0123456789abcdef"),
 		NodeLease:     lease,
+		// An empty environment keeps the daemon off this machine's Docker
+		// credentials: a test registry is anonymous, and reading the developer's
+		// config.json would make the result depend on who ran the suite.
+		Getenv: func(string) string { return "" },
 	})
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
@@ -90,7 +99,11 @@ func startRuntimeWithLease(t *testing.T, lease time.Duration) string {
 	served := make(chan error, 1)
 	go func() { served <- runtime.Serve(listener) }()
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		// The same budget the production entrypoint gives itself. Draining waits
+		// for whatever an enrolled node is holding open, so a shorter one here
+		// asserts something about this machine's timing rather than about the
+		// daemon shutting down cleanly.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := runtime.Shutdown(ctx); err != nil {
 			t.Fatalf("shutdown runtime: %v", err)
@@ -99,5 +112,5 @@ func startRuntimeWithLease(t *testing.T, lease time.Duration) string {
 			t.Fatalf("serve returned: %v", err)
 		}
 	})
-	return listener.Addr().String()
+	return listener.Addr().String(), runtime
 }

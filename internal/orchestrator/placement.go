@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
@@ -38,17 +40,27 @@ func (o *Orchestrator) PreviewPlacement(ctx context.Context, workspaceID, runID 
 	return decision, err
 }
 
+// manifestBudget is how long Placement waits for a registry. Resolution is an
+// external read on the run-create path, and a registry that blackholes packets
+// would otherwise hold that request open long past the point its client is
+// gone. An unresolved manifest costs a placement its ability to tell a warm
+// host from a cold one; a hung one costs the caller the Run.
+const manifestBudget = 10 * time.Second
+
 // imageManifest resolves what this Run's image contains. A resolver that is
-// absent or that fails leaves the manifest unknown, which is recorded on every
-// candidate's transfer estimate rather than treated as nothing to fetch.
+// absent, too slow, or refused leaves the manifest unknown, and the reason is
+// carried onto every candidate's transfer estimate rather than the failure
+// being read as nothing to fetch.
 func (o *Orchestrator) imageManifest(ctx context.Context, workload domain.WorkloadRevision) domain.ImageManifest {
 	if o.manifests == nil || len(workload.Spec.Containers) == 0 {
 		return domain.ImageManifest{}
 	}
+	ctx, cancel := context.WithTimeout(ctx, manifestBudget)
+	defer cancel()
 	container := workload.Spec.Containers[0]
 	manifest, err := o.manifests.ResolveManifest(ctx, container.Image, container.Platform)
 	if err != nil {
-		return domain.ImageManifest{}
+		return domain.ImageManifest{Unreadable: ociresolver.Unreadable(err)}
 	}
 	return manifest
 }
@@ -98,10 +110,15 @@ func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, work
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, fmt.Errorf("%w: %v", ErrOfferQuery, err)
 	}
+	artifacts, err := o.consumedArtifacts(ctx, workload.WorkspaceID, workload)
+	if err != nil {
+		return domain.BookingDecision{}, nil, nil, err
+	}
 	decision, err := o.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
 		RunID:                    runID,
 		Workload:                 workload,
 		Image:                    o.imageManifest(ctx, workload),
+		Artifacts:                artifacts,
 		Offers:                   offers,
 		Schedules:                schedules,
 		ExcludedOfferSnapshotIDs: excludedOfferSnapshotIDs,

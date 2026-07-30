@@ -4,6 +4,7 @@
   "classification": "target",
   "missing_capabilities": [
     "node_bootstrap",
+    "execution_warms_capacity",
     "rental_schedule"
   ],
   "world": {

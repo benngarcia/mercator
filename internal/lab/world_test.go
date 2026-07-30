@@ -2,55 +2,82 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
-func TestWorldTruthChangesDoNotLeakIntoObservedOffers(t *testing.T) {
+// TestPlacementReadsTheHostAWorkloadWarmed is the claim the corpus is built on,
+// asserted at the seam Mercator actually reads. Running the image is what puts
+// it on the host, and the offer catalog says so on the next placement.
+func TestPlacementReadsTheHostAWorkloadWarmed(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
+	if _, err := world.Launch(context.Background(), worldLaunchRequest(arrival)); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("launch: %v", err)
+	}
 
-	before, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
+	world.setNow(world.nowTime().Add(time.Hour))
+
+	offers, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
 	if err != nil {
-		t.Fatalf("list observed offers: %v", err)
+		t.Fatalf("list offers: %v", err)
 	}
-	if !offerByID(t, before, "rental-warm").Capacity.Available {
-		t.Fatal("fixture rental is not initially observed available")
+	offer := offerByID(t, offers, "rental-warm")
+	// The host reports the image under the digest it pulled by, which is what a
+	// resolved manifest names it too.
+	if !offer.Images.Holds(domain.ReferenceDigest(arrival.Request.Image)) {
+		t.Fatalf("Placement cannot see the image the host just ran: %+v", offer.Images)
 	}
+	if !offer.Images.ObservedAt.Equal(world.nowTime()) {
+		t.Fatalf("inventory observed at %s, want the time the provider answered, %s", offer.Images.ObservedAt, world.nowTime())
+	}
+}
 
-	world.setTruthOfferAvailable("rental-warm", false)
+// TestPlacementCanReadAnOfferTheWorldHasAlreadyReclaimed is the separation ADR
+// 0004 requires: Mercator reads published observations, never world state, so a
+// world that moved on since the last publication is a stale answer a fixture can
+// write down and a launch the provider then refuses.
+func TestPlacementCanReadAnOfferTheWorldHasAlreadyReclaimed(t *testing.T) {
+	world, arrival := openWorldFixture(t, "producer")
+	prepareRun(t, world, "run-producer", arrival)
 
-	truth := world.truthSnapshot()
-	if offerByID(t, truth.Offers, "rental-warm").Capacity.Available {
-		t.Fatal("truth rental stayed available")
-	}
+	world.setOfferAvailable("rental-warm", false)
+
 	stale, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
 	if err != nil {
-		t.Fatalf("list stale observed offers: %v", err)
+		t.Fatalf("list offers: %v", err)
 	}
 	if !offerByID(t, stale, "rental-warm").Capacity.Available {
-		t.Fatal("truth leaked into observed offers before delivery")
+		t.Fatal("world state reached Placement without being observed, so no observation can ever be stale")
+	}
+	var failure *adapter.ProviderFailure
+	if _, err := world.Launch(context.Background(), worldLaunchRequest(arrival)); !errors.As(err, &failure) ||
+		failure.Kind != adapter.ProviderFailureCapacityUnavailable {
+		t.Fatalf("launching onto capacity the world reclaimed returned %v, want capacity unavailable", err)
 	}
 
-	world.deliverOfferObservation("rental-warm")
+	world.setNow(world.nowTime().Add(time.Minute))
 
-	delivered, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
+	fresh, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
 	if err != nil {
-		t.Fatalf("list delivered observed offers: %v", err)
+		t.Fatalf("list offers: %v", err)
 	}
-	if offerByID(t, delivered, "rental-warm").Capacity.Available {
-		t.Fatal("delivered observation did not expose unavailable capacity")
+	if offerByID(t, fresh, "rental-warm").Capacity.Available {
+		t.Fatal("the published observation never caught up with the world")
 	}
 }
 
 func TestWorldEffectLedgerRecordsAmbiguousAndDuplicateLaunches(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 	request := worldLaunchRequest(arrival)
 
 	if _, err := world.Launch(context.Background(), request); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
@@ -59,7 +86,7 @@ func TestWorldEffectLedgerRecordsAmbiguousAndDuplicateLaunches(t *testing.T) {
 	if got := len(world.truthSnapshot().ActiveExecutions); got != 1 {
 		t.Fatalf("active executions = %d, want 1", got)
 	}
-	first := world.effectRecords()[0]
+	first := launchEffects(world)[0]
 	if first.Operation != OperationProviderLaunch ||
 		first.Command != EffectCommandAccepted ||
 		first.Response != EffectResponseLost {
@@ -79,7 +106,7 @@ func TestWorldEffectLedgerRecordsAmbiguousAndDuplicateLaunches(t *testing.T) {
 	if got := len(world.truthSnapshot().ActiveExecutions); got != 1 {
 		t.Fatalf("repeat launch created %d active executions", got)
 	}
-	repeated := world.effectRecords()[1]
+	repeated := launchEffects(world)[1]
 	if repeated.Command != EffectCommandDuplicate || repeated.Response != EffectResponseDelivered {
 		t.Fatalf("duplicate launch effect = %+v", repeated)
 	}
@@ -89,7 +116,7 @@ func TestWorldEffectLedgerRecordsAmbiguousAndDuplicateLaunches(t *testing.T) {
 	if _, err := world.Launch(context.Background(), conflict); !errors.Is(err, adapter.ErrIdempotencyConflict) {
 		t.Fatalf("conflicting launch error = %v, want idempotency conflict", err)
 	}
-	rejected := world.effectRecords()[2]
+	rejected := launchEffects(world)[2]
 	if rejected.Command != EffectCommandRejected {
 		t.Fatalf("rejected launch effect = %+v", rejected)
 	}
@@ -134,7 +161,7 @@ func TestWorldEffectLedgerDistinguishesDelayedAndDuplicateResponses(t *testing.T
 				t.Fatalf("open simulated world: %v", err)
 			}
 			arrival := findRunArrival(t, tape, "producer")
-			world.prepareRun("run-producer", arrival)
+			prepareRun(t, world, "run-producer", arrival)
 
 			_, err = world.Launch(context.Background(), worldLaunchRequest(arrival))
 			if !errors.Is(err, test.wantError) {
@@ -152,6 +179,28 @@ func TestWorldEffectLedgerDistinguishesDelayedAndDuplicateResponses(t *testing.T
 				t.Fatal("accepted launch consequence was not preserved")
 			}
 		})
+	}
+}
+
+// launchEffects is the ledger read back for one operation. Launching also
+// records what the workload left on the host, so the launch commands are a
+// subsequence of the ledger rather than its first entries.
+func launchEffects(world *simulatedWorld) []EffectRecord {
+	var launches []EffectRecord
+	for _, effect := range world.effectRecords() {
+		if effect.Operation == OperationProviderLaunch {
+			launches = append(launches, effect)
+		}
+	}
+	return launches
+}
+
+// prepareRun tells the world about a Run it is about to be asked to execute,
+// and fails the test if the fixture named an image this world does not define.
+func prepareRun(t *testing.T, world *simulatedWorld, runID string, arrival RunArrival) {
+	t.Helper()
+	if err := world.prepareRun(runID, arrival); err != nil {
+		t.Fatalf("prepare Run %q: %v", runID, err)
 	}
 }
 
@@ -185,7 +234,7 @@ func offerByID(t *testing.T, offers []domain.OfferSnapshot, id string) domain.Of
 
 func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 	request := worldLaunchRequest(arrival)
 	_, _ = world.Launch(context.Background(), request)
 
@@ -203,7 +252,24 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 		t.Fatalf("initial phase = %q, want running", observation.Phase)
 	}
 
+	// The tape's runtime is measured from the moment the container started, and it
+	// cannot have started before the image it runs finished arriving.
 	world.setNow(world.nowTime().Add(arrival.ActualRuntime.Duration()))
+	observation, err = world.Observe(context.Background(), adapter.ObserveRequest{
+		WorkspaceID:    labWorkspace,
+		ConnectionID:   "connection:lab",
+		LaunchKey:      request.LaunchKey,
+		OwnershipToken: request.OwnershipToken,
+		RequestHash:    request.RequestHash,
+	})
+	if err != nil {
+		t.Fatalf("observe execution still waiting on its image: %v", err)
+	}
+	if observation.Phase != adapter.ExternalPhaseRunning {
+		t.Fatalf("phase after the runtime alone = %q, want a Run still owed its pull", observation.Phase)
+	}
+
+	world.setNow(world.executionHorizon())
 	observation, err = world.Observe(context.Background(), adapter.ObserveRequest{
 		WorkspaceID:    labWorkspace,
 		ConnectionID:   "connection:lab",
@@ -222,16 +288,16 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 	}
 
 	truth := world.truthSnapshot()
-	if !hasArtifactReplica(truth.ArtifactReplicas, "artifact:model-checkpoint:v1", "rental-warm") {
-		t.Fatalf("producer output Artifact was not published: %+v", truth.ArtifactReplicas)
+	if hasArtifactReplica(truth.ArtifactReplicas, "artifact:model-checkpoint:v1", "rental-warm") {
+		t.Fatalf("the producer's own output is filed as a copy something checked: %+v", truth.ArtifactReplicas)
 	}
-	if revision := cacheMountRevision(truth.CacheMounts, "rental-warm", "compiler-cache"); revision != 2 {
+	if revision := cacheMountRevision(truth.CacheMounts, "rental-warm", labWorkspace, "compiler-cache"); revision != 2 {
 		t.Fatalf("mutable Cache Mount revision = %d, want 2", revision)
 	}
 	assertEffect(
 		t,
 		world.effectRecords(),
-		OperationArtifactPut,
+		OperationArtifactWritten,
 		"run-producer",
 		EffectCommandAccepted,
 		EffectResponseDelivered,
@@ -239,21 +305,35 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 }
 
 func worldLaunchRequest(arrival RunArrival) adapter.LaunchRequest {
+	return worldLaunchRequestOn(arrival, "rental-warm")
+}
+
+func worldLaunchRequestOn(arrival RunArrival, offerID string) adapter.LaunchRequest {
+	return worldLaunchAttempt(arrival, offerID, 1)
+}
+
+func worldLaunchAttempt(arrival RunArrival, offerID string, attempt int) adapter.LaunchRequest {
+	ordinal := fmt.Sprint(attempt)
 	return adapter.LaunchRequest{
-		OperationKey:              "launch:producer:1",
-		RequestHash:               "sha256:producer-launch",
+		// The caches this launch asks the host to attach travel on the launch, as
+		// they do in production. The world reads and writes what the control plane
+		// declared rather than what the fixture's arrival says, so a launch that
+		// dropped them would leave the cache untouched.
+		CacheMounts:               arrival.Request.CacheRequirements(),
+		OperationKey:              "launch:producer:" + ordinal,
+		RequestHash:               "sha256:producer-launch-" + ordinal,
 		WorkspaceID:               labWorkspace,
 		RunID:                     "run-producer",
-		AttemptID:                 "attempt-producer-1",
-		OwnershipToken:            "owner-producer-1",
-		LaunchKey:                 "launch-producer-1",
-		CleanupLocator:            "cleanup-producer-1",
+		AttemptID:                 "attempt-producer-" + ordinal,
+		OwnershipToken:            "owner-producer-" + ordinal,
+		LaunchKey:                 "launch-producer-" + ordinal,
+		CleanupLocator:            "cleanup-producer-" + ordinal,
 		Image:                     arrival.Request.Image,
 		Platform:                  domain.Platform{OS: "linux", Architecture: "amd64"},
-		SelectedOfferSnapshotID:   "rental-warm",
+		SelectedOfferSnapshotID:   offerID,
 		SelectedOfferConnectionID: "connection:lab",
 		SelectedOfferAdapterType:  "lab",
-		SelectedOfferNativeRef:    "rental-warm",
+		SelectedOfferNativeRef:    offerID,
 		Disposition:               domain.DispositionRelease,
 	}
 }
@@ -267,11 +347,452 @@ func hasArtifactReplica(replicas []ArtifactReplica, artifactID, offerID string) 
 	return false
 }
 
-func cacheMountRevision(mounts []CacheMountState, offerID, name string) uint64 {
+// cacheMountRevision is how many times this workspace's cache of that name has
+// been written on that machine. The workspace is part of the lookup because it is
+// part of the identity: a cache of the same name in another workspace is another
+// cache.
+func cacheMountRevision(mounts []CacheMountState, offerID, workspaceID, name string) uint64 {
 	for _, mount := range mounts {
-		if mount.OfferID == offerID && mount.Name == name {
+		if mount.OfferID == offerID && mount.WorkspaceID == workspaceID && mount.Name == name {
 			return mount.Revision
 		}
 	}
 	return 0
+}
+
+// TestARentalHoldsWhatItRanOnlyOnceThePullCompletes is the honest version of
+// "running warms the host": the content is on the machine when its bytes have
+// arrived, and not at the instant the container was dispatched.
+func TestARentalHoldsWhatItRanOnlyOnceThePullCompletes(t *testing.T) {
+	world, arrival := openWorldFixture(t, "producer")
+	prepareRun(t, world, "run-producer", arrival)
+
+	if _, err := world.Launch(context.Background(), worldLaunchRequest(arrival)); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("launch: %v", err)
+	}
+
+	dispatched := offerByID(t, world.truthSnapshot().Offers, "rental-warm").Images
+	if dispatched.Holds(domain.ReferenceDigest(arrival.Request.Image)) {
+		t.Fatalf("the host holds the image at dispatch, before its bytes moved: %+v", dispatched)
+	}
+	world.setNow(world.nowTime().Add(time.Hour))
+	held := offerByID(t, world.truthSnapshot().Offers, "rental-warm").Images
+	if !held.Holds(domain.ReferenceDigest(arrival.Request.Image)) {
+		t.Fatalf("Rental that ran %q does not hold it whole: %+v", arrival.Request.Image, held)
+	}
+	for _, layer := range world.images[arrival.Request.Image].Layers {
+		if !held.HoldsLayer(domain.ImageLayer{Digest: layer.Digest}) {
+			t.Fatalf("Rental that ran the image does not hold layer %s: %+v", layer.Digest, held)
+		}
+	}
+	assertEffect(
+		t,
+		world.effectRecords(),
+		OperationImagePull,
+		"run-producer",
+		EffectCommandAccepted,
+		EffectResponseDelivered,
+	)
+	// The retention is recorded where the content appeared, which is the only
+	// record that can explain what the host holds.
+	if retained := retentionEffects(world, "rental-warm"); len(retained) != 1 {
+		t.Fatalf("the host holds the image with %d retentions recorded, want exactly one", len(retained))
+	}
+}
+
+// TestAWarmStartRecordsAPullThatMovedNothing keeps the ledger able to tell a
+// warm placement from a cold one. Reading back an accepted whole-image pull for
+// a launch where zero bytes moved is what would make phase 6's waterfall lie.
+func TestAWarmStartRecordsAPullThatMovedNothing(t *testing.T) {
+	world, arrival := openWorldFixture(t, "producer")
+	prepareRun(t, world, "run-producer", arrival)
+	if _, err := world.Launch(context.Background(), worldLaunchRequest(arrival)); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("first launch: %v", err)
+	}
+	world.setNow(world.nowTime().Add(time.Hour))
+	// The first Booking released, so the same image can run here again.
+	world.setOfferAvailable("rental-warm", true)
+
+	if _, err := world.Launch(context.Background(), worldLaunchAttempt(arrival, "rental-warm", 2)); err != nil {
+		t.Fatalf("second launch: %v", err)
+	}
+
+	pull := lastEffectConsequence(t, world, OperationImagePull)
+	if fetched := pull["fetched_digests"]; len(fetched.([]any)) != 0 {
+		t.Fatalf("a launch on a host that already held the image fetched %v", fetched)
+	}
+	if bytes := pull["fetched_bytes"]; bytes != float64(0) {
+		t.Fatalf("a warm start moved %v bytes", bytes)
+	}
+}
+
+func TestOneShotCapacityKeepsNothingItPulled(t *testing.T) {
+	world, arrival := openWorldFixture(t, "producer")
+	prepareRun(t, world, "run-producer", arrival)
+
+	if _, err := world.Launch(context.Background(), worldLaunchRequestOn(arrival, "fresh-4090")); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("launch: %v", err)
+	}
+	world.setNow(world.nowTime().Add(24 * time.Hour))
+
+	held := offerByID(t, world.truthSnapshot().Offers, "fresh-4090").Images
+	if len(held.ImageDigests) > 0 || len(held.LayerDigests) > 0 {
+		t.Fatalf("capacity Mercator does not keep held %+v", held)
+	}
+	if retained := retentionEffects(world, "fresh-4090"); len(retained) > 0 {
+		t.Fatalf("capacity Mercator does not keep recorded keeping content: %v", retained)
+	}
+	pull := lastEffectConsequence(t, world, OperationImagePull)
+	if fetched := pull["fetched_digests"]; len(fetched.([]any)) == 0 {
+		t.Fatal("the one-shot execution fetched nothing, so it never paid for the image at all")
+	}
+}
+
+// TestAnAbandonedPullLeavesNothingBehind is what stops the ledger from recording
+// content a host never received. An execution released while its image is still
+// moving cancels the transfer, so no retention is ever recorded for it and a Run
+// Bundle exported mid-pull cannot claim 18GB landed somewhere.
+func TestAnAbandonedPullLeavesNothingBehind(t *testing.T) {
+	world, arrival := openWorldFixture(t, "producer")
+	prepareRun(t, world, "run-producer", arrival)
+	request := worldLaunchRequest(arrival)
+	if _, err := world.Launch(context.Background(), request); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("launch: %v", err)
+	}
+
+	if _, err := world.Terminate(context.Background(), adapter.TerminateRequest{
+		OperationKey:      "terminate:producer:1",
+		RequestHash:       "sha256:producer-terminate",
+		LaunchKey:         request.LaunchKey,
+		OwnershipToken:    request.OwnershipToken,
+		LaunchRequestHash: request.RequestHash,
+	}); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	world.setNow(world.nowTime().Add(time.Hour))
+
+	held := offerByID(t, world.truthSnapshot().Offers, "rental-warm").Images
+	if held.Holds(arrival.Request.Image) {
+		t.Fatalf("a pull nothing was waiting on still warmed the host: %+v", held)
+	}
+	if retained := retentionEffects(world, "rental-warm"); len(retained) > 0 {
+		t.Fatalf("the ledger records content a cancelled transfer never delivered: %v", retained)
+	}
+}
+
+func retentionEffects(world *simulatedWorld, offerID string) []EffectRecord {
+	var retained []EffectRecord
+	for _, effect := range world.effectRecords() {
+		var host struct {
+			OfferID string `json:"offer_id"`
+		}
+		if effect.Operation != OperationImageRetained || json.Unmarshal(effect.Request, &host) != nil || host.OfferID != offerID {
+			continue
+		}
+		retained = append(retained, effect)
+	}
+	return retained
+}
+
+func lastEffectConsequence(t *testing.T, world *simulatedWorld, operation string) map[string]any {
+	t.Helper()
+	var consequence map[string]any
+	for _, effect := range world.effectRecords() {
+		if effect.Operation != operation {
+			continue
+		}
+		if err := json.Unmarshal(effect.Consequence, &consequence); err != nil {
+			t.Fatalf("decode %s consequence: %v", operation, err)
+		}
+	}
+	if consequence == nil {
+		t.Fatalf("the ledger records no %s", operation)
+	}
+	return consequence
+}
+
+// TestLocalityProvenanceRejectsOneShotCapacityThatKeptItsImage proves the
+// second half of the guard independently: an explained pull is still not a
+// licence for capacity Mercator does not keep to hold anything.
+func TestLocalityProvenanceRejectsOneShotCapacityThatKeptItsImage(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:     "oneshot-container",
+			Kind:   domain.OfferKindProvisionable,
+			Lane:   domain.LaneEphemeral,
+			Images: domain.ImageInventory{Known: true, LayerDigests: []string{"sha256:pulled"}},
+		}}},
+		Effects: []EffectRecord{{
+			Operation:   OperationImageRetained,
+			Command:     EffectCommandAccepted,
+			Request:     []byte(`{"offer_id":"oneshot-container"}`),
+			Consequence: []byte(`{"retained_digests":["sha256:pulled"]}`),
+		}},
+		SeededLocality: map[string]map[string]bool{},
+	}
+
+	err := localityProvenance(observation)
+
+	if err == nil {
+		t.Fatal("one-shot capacity was allowed to keep what it pulled")
+	}
+}
+
+// TestLocalityProvenanceRejectsBorrowedCapacityThatKeptACopy is the Artifact
+// half of that guard, and it exists because no Lab world can build the state the
+// rule forbids: keepReplica refuses to write a copy onto capacity that keeps
+// nothing, so the clause was a law about a world no fixture could reach and
+// deleting it changed nothing anywhere. The forbidden state is stated here
+// directly, exactly as the image half is, so removing the rule fails a test
+// rather than passing silently.
+func TestLocalityProvenanceRejectsBorrowedCapacityThatKeptACopy(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:   "borrowed-slot",
+			Kind: domain.OfferKindStanding,
+			Lane: domain.LaneEphemeral,
+			Artifacts: domain.ArtifactInventory{Known: true, Replicas: []domain.ArtifactReplica{{
+				ArtifactID: "artifact:imagenet:v2.41",
+				State:      domain.ArtifactReplicaVerified,
+			}}},
+		}}},
+		Effects: []EffectRecord{{
+			Operation:   OperationArtifactReplicated,
+			Command:     EffectCommandAccepted,
+			Request:     []byte(`{"artifact_id":"artifact:imagenet:v2.41","offer_id":"borrowed-slot"}`),
+			Consequence: []byte(`{"state":"verified"}`),
+		}},
+		SeededReplicas: map[string]map[string]bool{},
+	}
+
+	err := localityProvenance(observation)
+
+	if err == nil {
+		t.Fatal("capacity that holds nothing after its workload was allowed to keep a copy it accumulated")
+	}
+}
+
+// TestLocalityProvenanceAdmitsASeededCopyOnBorrowedCapacity is the other side of
+// that line, and the reason the rule cannot simply forbid copies on borrowed
+// capacity outright: a machine Mercator rents a slot on may well already be
+// sitting on the dataset, which is a fact about the world rather than warmth
+// Mercator produced.
+func TestLocalityProvenanceAdmitsASeededCopyOnBorrowedCapacity(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:   "borrowed-slot",
+			Kind: domain.OfferKindStanding,
+			Lane: domain.LaneEphemeral,
+			Artifacts: domain.ArtifactInventory{Known: true, Replicas: []domain.ArtifactReplica{{
+				ArtifactID: "artifact:imagenet:v2.41",
+				State:      domain.ArtifactReplicaVerified,
+			}}},
+		}}},
+		SeededReplicas: map[string]map[string]bool{
+			"borrowed-slot": {"artifact:imagenet:v2.41": true},
+		},
+	}
+
+	err := localityProvenance(observation)
+
+	if err != nil {
+		t.Fatalf("a copy the World Tape put on a borrowed machine was called a control-plane failure: %v", err)
+	}
+}
+
+// TestIdempotentExternalCommandsCoversImagePulls keeps the pull inside the
+// idempotency guard. Leaving an image on a host is a change to the world, so
+// one launch's pull, however many times it is reported, has one consequence.
+// A later launch of the same image on the same host is a different pull, which
+// is why the operation is keyed by launch: the second one legitimately moves
+// nothing.
+func TestIdempotentExternalCommandsCoversImagePulls(t *testing.T) {
+	pull := func(fetched string) EffectRecord {
+		return EffectRecord{
+			Operation:   OperationImagePull,
+			OperationID: "image-pull/launch-producer-1/trainer",
+			Command:     EffectCommandAccepted,
+			Consequence: []byte(`{"fetched_digests":[` + fetched + `]}`),
+		}
+	}
+
+	err := idempotentExternalCommands(InvariantObservation{
+		Effects: []EffectRecord{pull(`"sha256:a"`), pull("")},
+	})
+
+	if err == nil {
+		t.Fatal("one launch's pull was reported with two different consequences and accepted")
+	}
+}
+
+// TestLocalityProvenanceAllowsAHostToLoseWhatItHeld keeps locality decay out of
+// the safety rules. Content is reclaimed under disk pressure and machines are
+// replaced, so a host holding less than the World Tape put there is a fact to
+// state rather than a control-plane failure. The host still holds one seeded
+// digest and one it retained, so the rule inspects everything it has to inspect
+// while a third digest goes missing.
+func TestLocalityProvenanceAllowsAHostToLoseWhatItHeld(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:   "rental-warm",
+			Kind: domain.OfferKindStanding,
+			Lane: domain.LaneReusable,
+			Images: domain.ImageInventory{
+				Known:        true,
+				ImageDigests: []string{"trainer@sha256:ran-here"},
+				LayerDigests: []string{"sha256:seeded"},
+			},
+		}}},
+		Effects: []EffectRecord{{
+			Operation:   OperationImageRetained,
+			Command:     EffectCommandAccepted,
+			Request:     []byte(`{"offer_id":"rental-warm"}`),
+			Consequence: []byte(`{"retained_digests":["trainer@sha256:ran-here"]}`),
+		}},
+		SeededLocality: map[string]map[string]bool{
+			"rental-warm": {"sha256:seeded": true, "sha256:reclaimed": true},
+		},
+	}
+
+	err := localityProvenance(observation)
+
+	if err != nil {
+		t.Fatalf("a host that lost content it held was reported as a violation: %v", err)
+	}
+}
+
+// TestLocalityProvenanceCoversContentAHostFetchedAndNeverAssembled closes the
+// gap the pulled-but-not-unpacked vocabulary opened. Content is content whether
+// or not a container can be started on it, so a host reporting an image nothing
+// delivered is the same violation under either name. A rule that only inspected
+// what was ready to run would have left the other half of every inventory
+// unpoliced.
+func TestLocalityProvenanceCoversContentAHostFetchedAndNeverAssembled(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:   "rental-warm",
+			Kind: domain.OfferKindStanding,
+			Lane: domain.LaneReusable,
+			Images: domain.ImageInventory{
+				Known:              true,
+				PulledImageDigests: []string{"trainer@sha256:never-delivered"},
+			},
+		}}},
+		SeededLocality: map[string]map[string]bool{"rental-warm": {}},
+	}
+
+	err := localityProvenance(observation)
+
+	if err == nil {
+		t.Fatal("a host reported holding unassembled content nothing delivered and nothing objected")
+	}
+}
+
+// TestLocalityProvenanceCoversArtifactCopiesToo is the Artifact half of the
+// same rule. Durability says the content exists; it never says the content is
+// on this machine, so a copy no seed declared and nothing delivered is bytes
+// from nowhere on a host Placement would price warm. Images have been protected
+// against exactly this since retention was introduced.
+func TestLocalityProvenanceCoversArtifactCopiesToo(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:   "rental-warm",
+			Kind: domain.OfferKindStanding,
+			Lane: domain.LaneReusable,
+			Artifacts: domain.ArtifactInventory{
+				Known: true,
+				Replicas: []domain.ArtifactReplica{{
+					ArtifactID:    "artifact:reference-set:v1",
+					ContentDigest: "sha256:abcd",
+					SizeBytes:     1,
+					State:         domain.ArtifactReplicaVerified,
+				}},
+			},
+		}}},
+		SeededLocality: map[string]map[string]bool{"rental-warm": {}},
+		SeededReplicas: map[string]map[string]bool{"rental-warm": {}},
+	}
+
+	err := localityProvenance(observation)
+
+	if err == nil {
+		t.Fatal("a host reported holding a copy of an Artifact nothing delivered to it and nothing objected")
+	}
+}
+
+// TestArtifactDependenciesRefusesALaunchWithNoRecordedWorkload keeps a missing
+// fact from reading as no constraint. The rule checks Mercator's own admission
+// decision, so a launch the control plane holds no workload for is the one thing
+// it may never treat as a Run that consumes nothing.
+func TestArtifactDependenciesRefusesALaunchWithNoRecordedWorkload(t *testing.T) {
+	observation := InvariantObservation{
+		Workloads: map[string]domain.WorkloadRevision{},
+		Effects: []EffectRecord{{
+			Operation:     OperationProviderLaunch,
+			Command:       EffectCommandAccepted,
+			CorrelationID: "run-consumer",
+			Sequence:      1,
+		}},
+		ArtifactCatalog: map[string]domain.ArtifactVersion{},
+	}
+
+	err := artifactDependencies(observation)
+
+	if err == nil {
+		t.Fatal("a launch Mercator recorded no workload for was read as a Run that consumes nothing")
+	}
+}
+
+// TestSimulatedRegistryRefusesTheSameThreeWaysARealOneDoes keeps the Lab honest
+// about what it is standing in for. A registry that collapses "nobody pushed
+// this", "there is no build for this platform", and "your credentials were
+// refused" into one empty manifest is a world that cannot express the failure an
+// operator most often has to fix.
+func TestSimulatedRegistryRefusesTheSameThreeWaysARealOneDoes(t *testing.T) {
+	resolvable := "trainer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	unresolvable := "mystery@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	forbidden := "private@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	world, err := newSimulatedWorld(WorldTape{
+		Seed:  "registry-answers",
+		Start: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		InitialWorld: scenario.WorldSpec{Images: map[string]scenario.ImageSpec{
+			resolvable: {Layers: []scenario.LayerSpec{{
+				Digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				DiffID: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+				Size:   scenario.ByteSize(1000),
+			}}},
+			unresolvable: {Registry: scenario.RegistryUnresolvable},
+			forbidden:    {Registry: scenario.RegistryUnauthorized},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("open simulated world: %v", err)
+	}
+
+	testCases := []struct {
+		name  string
+		image string
+		want  error
+	}{
+		{"an image nobody pushed", "absent@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", ociresolver.ErrImageUnknown},
+		{"an image with no resolvable manifest", unresolvable, ociresolver.ErrManifestUnresolvable},
+		{"an image the credentials cannot read", forbidden, ociresolver.ErrUnauthorized},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := world.ResolveManifest(context.Background(), testCase.image, domain.Platform{OS: "linux", Architecture: "amd64"})
+
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("resolve error = %v, want %v", err, testCase.want)
+			}
+		})
+	}
+
+	manifest, err := world.ResolveManifest(context.Background(), resolvable, domain.Platform{OS: "linux", Architecture: "amd64"})
+	if err != nil {
+		t.Fatalf("resolve a readable image: %v", err)
+	}
+	if len(manifest.Layers) != 1 || manifest.Layers[0].DiffID == "" {
+		t.Fatalf("a readable manifest states both digest spaces, got %+v", manifest.Layers)
+	}
 }

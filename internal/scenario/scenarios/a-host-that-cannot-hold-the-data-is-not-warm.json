@@ -1,0 +1,153 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Four machines and one Run at a time. Two of them hold the same 18GB layer of the same image at the same price, and one of those has nowhere to put the 40GB dataset the Run reads: room is not a preference the scheduler weighs down, because nothing the cramped machine could delete helps. Every byte it gave up of this Run's content is a byte the Run needs back, so it is refused with RESOURCE_INSUFFICIENT naming its disk and the decision records the room it had beside what the Run asked of it. What may never refuse a machine is content nobody could enumerate, which is the other half of the same rule and is held in the Lab. The second Run states a disk floor of its own, and the machine that cannot meet it is struck out: until an offer stated real disk, that rejection was unreachable on capacity Mercator controls and every node in the fleet advertised zero bytes. The third Run states a floor the roomy machine could meet on its own and reads a second dataset beside it, and the two are spent against the same bytes, so the Run goes to the only machine with room for both. A floor asked for out of the content rather than beside it is a floor a Run is admitted on and does not get. The fourth machine is the cheapest in the world and offers no room at all, which is what an enrolled node that could not measure its disk advertises. It is refused on room for every Run, out loud and in the record, which is the whole reason the fleet listing states whether anybody established the number. A world that read a stated zero as a missing one would give that machine 200GB it never claimed and a green fixture would assert the opposite of what it says.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      },
+      {
+        "id": "artifact:eval-set:v1",
+        "content_digest": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-cramped",
+        "cached_layers": ["sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de"],
+        "resources": {"disk": "55GB"},
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-roomy",
+        "cached_layers": ["sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de"],
+        "resources": {"disk": "200GB"},
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-vast",
+        "resources": {"disk": "400GB"},
+        "rate_per_hour_usd": 4.0
+      },
+      {
+        "id": "rental-unmeasured",
+        "resources": {"disk": "0GB"},
+        "rate_per_hour_usd": 1.0
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "reads-the-dataset",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "expected_runtime": "20m",
+        "max_runtime": "1h",
+        "consumes_artifacts": ["artifact:imagenet:v2.41"]
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-roomy",
+        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "disposition": "release",
+        "candidates": {
+          "rental-unmeasured": {
+            "feasible": false,
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
+          "rental-cramped": {
+            "feasible": false,
+            "image_locality": "partial",
+            "artifact_evidence": {"artifact:imagenet:v2.41": "miss"},
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
+          "rental-roomy": {
+            "feasible": true,
+            "image_locality": "partial",
+            "pull_seconds": {"at_least": 1, "at_most": 2},
+            "pull_source": "image_inventory",
+            "artifact_seconds": {"at_least": 639, "at_most": 641},
+            "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+          }
+        }
+      }
+    },
+    {
+      "advance": "1m"
+    },
+    {
+      "submit": "needs-the-room",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "resources": {"disk": "100GB"},
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-roomy",
+        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "candidates": {
+          "rental-unmeasured": {
+            "feasible": false,
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
+          "rental-cramped": {
+            "feasible": false,
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
+          "rental-roomy": {
+            "feasible": true,
+            "image_locality": "hot",
+            "pull_seconds": 0
+          }
+        }
+      }
+    },
+    {
+      "advance": "1m"
+    },
+    {
+      "submit": "reserves-room-and-reads",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "resources": {"disk": "150GB"},
+        "expected_runtime": "20m",
+        "max_runtime": "1h",
+        "consumes_artifacts": ["artifact:eval-set:v1"]
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-vast",
+        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "candidates": {
+          "rental-unmeasured": {
+            "feasible": false,
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
+          "rental-cramped": {
+            "feasible": false,
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
+          "rental-roomy": {
+            "feasible": false,
+            "artifact_evidence": {"artifact:eval-set:v1": "miss"},
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          }
+        }
+      }
+    }
+  ]
+}

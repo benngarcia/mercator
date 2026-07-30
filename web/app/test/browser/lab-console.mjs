@@ -69,12 +69,26 @@ try {
   await assertCheckpoint("consumer-artifact-locality-visible");
 
   await restart();
-  await drive({ kind: "advance", duration: "30m" });
-  await page
+  const closedConsumer = page
     .locator("li")
     .filter({ hasText: "Closed" })
-    .filter({ hasText: "runs/run-consumer" })
-    .waitFor();
+    .filter({ hasText: "runs/run-consumer" });
+  // How long the consumer takes is the world's answer and not this flow's to
+  // assume. It waits for its producer's publication, queues behind it on the one
+  // warm machine, and then reads its input out of the object store, so a fixed
+  // advance encodes today's physics as a deadline: it closed within thirty
+  // minutes of the restart until reading an Artifact cost what it costs, and at
+  // forty afterwards. The flow advances until the console shows the Run closed,
+  // and gives up after four hours of virtual time, which is a stuck execution
+  // rather than a slow one.
+  for (
+    let advances = 0;
+    advances < 8 && (await closedConsumer.count()) === 0;
+    advances += 1
+  ) {
+    await drive({ kind: "advance", duration: "30m" });
+  }
+  await closedConsumer.waitFor();
   await assertCheckpoint("terminal-lifecycle-visible");
 
   const runs = await normalJSON("/v1/runs?workspace_id=ws_lab");

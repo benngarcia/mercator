@@ -1,11 +1,34 @@
 package scenario
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 )
+
+// TestLegacyPresenceMigratesAsAnUncheckedCopy pins what the old vocabulary
+// could and could not say. A legacy named cache stated that a machine has the
+// content a key names and nothing more, so the migrated copy is one nobody
+// checked: translating it as verified would assert a hash comparison against a
+// catalog that model had no concept of, and would price at zero a copy a
+// consumer still owes a fetch for.
+func TestLegacyPresenceMigratesAsAnUncheckedCopy(t *testing.T) {
+	blueprint, err := LoadBlueprint("testdata/blueprints/legacy/named-cache.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+
+	replicas := blueprint.World.Rentals[0].ArtifactReplicas
+	if len(replicas) != 1 {
+		t.Fatalf("migrated Artifact copies = %+v, want one", replicas)
+	}
+	if replicas[0].State != domain.ArtifactReplicaUnverified {
+		t.Fatalf("the migrated copy is %q, and the fixture only ever said the machine has it", replicas[0].State)
+	}
+}
 
 func TestLoadBlueprintAdaptsLegacyPlacementFixture(t *testing.T) {
 	blueprint, err := LoadBlueprint("testdata/blueprints/legacy/idle-rental.json")
@@ -79,14 +102,14 @@ func TestOpenCatalogPreservesPlacementClassifications(t *testing.T) {
 		counts[entry.Blueprint.Classification]++
 	}
 
-	if regressions != 14 {
-		t.Errorf("regression Blueprints = %d, want 14", regressions)
+	if regressions != 24 {
+		t.Errorf("regression Blueprints = %d, want 24", regressions)
 	}
-	if counts[ClassificationGreen] != 5 {
-		t.Errorf("green Blueprints = %d, want 5", counts[ClassificationGreen])
+	if counts[ClassificationGreen] != 16 {
+		t.Errorf("green Blueprints = %d, want 16", counts[ClassificationGreen])
 	}
-	if counts[ClassificationTarget] != 9 {
-		t.Errorf("target Blueprints = %d, want 9", counts[ClassificationTarget])
+	if counts[ClassificationTarget] != 8 {
+		t.Errorf("target Blueprints = %d, want 8", counts[ClassificationTarget])
 	}
 }
 
@@ -104,6 +127,54 @@ func TestLoadBlueprintModelsImmutableArtifactsSeparatelyFromCacheMounts(t *testi
 	}
 	if blueprint.Request.CacheMounts[0].Name == blueprint.Request.ConsumesArtifacts[0] {
 		t.Errorf("Cache Mount name must not become immutable Artifact identity")
+	}
+}
+
+// TestABlueprintStatesTheTenantEachRunBelongsTo is what makes a cross-workspace
+// claim expressible at all. Before it, every Blueprint ran in one workspace, so
+// "no cache crosses a workspace" was not merely unimplemented: no fixture could
+// build a world in which it could be false.
+func TestABlueprintStatesTheTenantEachRunBelongsTo(t *testing.T) {
+	blueprint, err := LoadBlueprint("scenarios/conformance/cache-mounts-never-cross-a-workspace.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+
+	workspaces := blueprint.Arrivals.Workspaces()
+
+	if !slices.Equal(workspaces, []string{"", "alpha", "beta"}) {
+		t.Fatalf("the Blueprint names workspaces %v, want the default beside its two tenants", workspaces)
+	}
+	runs, err := blueprint.Arrivals.ExpandedRuns()
+	if err != nil {
+		t.Fatalf("expand arrivals: %v", err)
+	}
+	if runs[0].Workspace != "alpha" || runs[1].Workspace != "beta" {
+		t.Fatalf("the first two Runs belong to %q and %q, want one tenant each", runs[0].Workspace, runs[1].Workspace)
+	}
+	declared := runs[0].Request.CacheRequirements()
+	if len(declared) != 1 || declared[0].CompatibilityKey != "cuda-12.4" || declared[0].SizeBytes != 8_000_000_000 {
+		t.Fatalf("the Run declares %+v, want one cache with its generation and the room it expects", declared)
+	}
+}
+
+// TestABlueprintRefusesAnArtifactOutsideTheWorkspaceThatDeclaredIt keeps one rule
+// from being quietly broken by another. An Artifact belongs to the workspace that
+// declared it, and a Blueprint's catalog is declared in the default one, so a Run
+// in another tenant naming one of those versions is a fixture implying content
+// crosses a workspace. It is refused at load rather than left to an admission
+// gate that could never be satisfied.
+func TestABlueprintRefusesAnArtifactOutsideTheWorkspaceThatDeclaredIt(t *testing.T) {
+	blueprint, err := LoadBlueprint("scenarios/conformance/artifact-must-be-durable-before-a-consumer-runs.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+	blueprint.Arrivals.Runs[2].Workspace = "beta"
+
+	err = blueprint.Arrivals.validate(blueprint.World)
+
+	if err == nil || !strings.Contains(err.Error(), "an Artifact belongs to the workspace that declared it") {
+		t.Fatalf("a Run in another tenant reading this catalog's Artifact gave %v", err)
 	}
 }
 
@@ -210,6 +281,26 @@ func TestLoadBlueprintRequiresExactLayerDigests(t *testing.T) {
 	_, err = LoadBlueprint("testdata/blueprints/invalid/layer-name.json")
 	if err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("versioned layer names must fail loudly, got %v", err)
+	}
+}
+
+// TestLoadBlueprintRejectsAWorldNoRegistryCouldServe holds the two shapes that
+// would let a fixture read green while stating a world production cannot
+// produce. A real config blob names one diff ID for every layer or none, and a
+// host that reports diff IDs against layers naming none enumerates nothing at
+// all: it would offer an inventory that is Known and empty, so a machine
+// holding every byte would be priced a full cold pull at full confidence while
+// the world's own transfer model moved nothing.
+func TestLoadBlueprintRejectsAWorldNoRegistryCouldServe(t *testing.T) {
+	for _, testCase := range []struct{ path, want string }{
+		{path: "testdata/blueprints/invalid/half-named-diff-ids.json", want: "one for every layer or none"},
+		{path: "testdata/blueprints/invalid/diff-id-host-without-diff-ids.json", want: "reports diff IDs"},
+	} {
+		_, err := LoadBlueprint(testCase.path)
+
+		if err == nil || !strings.Contains(err.Error(), testCase.want) {
+			t.Fatalf("loading %s gave %v, want a refusal naming %q", testCase.path, err, testCase.want)
+		}
 	}
 }
 

@@ -1,0 +1,56 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One machine reporting a checked copy of the 40GB dataset, and the bytes filed under that name belong to the version before it. That is what an operator leaves behind by restoring an older volume snapshot underneath a host: the local index survives and the content it points at does not match what the catalog says this version is. Mercator prices the whole read there, because a copy of other content under a version's name is worth what no copy is worth. The rest of this fixture is the half a placement corpus cannot see. The machine then reads all 40GB out of the object store rather than handing the workload the bytes it happened to be holding, the read the estimate charged is the read the execution made, and the restored snapshot is still sitting there afterwards: a workload reads its inputs into its own container, so nothing repaired this machine and the next Run sent here owes the same 640 seconds. A world that trusted the copy's own state would make the Run start 640 seconds earlier than every predicate in the control plane said it could, on content that is not the Artifact it asked for.",
+  "seed": "mercator-lab-restored-snapshot-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-restored-snapshot",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "artifact_replicas": [
+          {
+            "artifact": "artifact:imagenet:v2.41",
+            "state": "verified",
+            "content_digest": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b"
+          }
+        ],
+        "resources": {"disk": "400GB"},
+        "rate_per_hour_usd": 2.5
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "consumer",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "expected_runtime": "5m",
+          "max_runtime": "20m",
+          "consumes_artifacts": ["artifact:imagenet:v2.41"]
+        }
+      }
+    ]
+  }
+}

@@ -117,11 +117,47 @@ type NodeFacts struct {
 	Host       HostFacts `json:"host"`
 	// Images is the exact OCI inventory the node holds.
 	Images []ImageLocality `json:"images,omitempty"`
-	// Artifacts is the immutable replicas the node holds and has verified.
-	Artifacts []ArtifactLocality `json:"artifacts,omitempty"`
-	// Caches is the mutable, application-owned cache summary. It is
-	// best-effort by construction: contents are the application's business.
-	Caches []CacheLocality `json:"caches,omitempty"`
+	// Artifacts is what this node established about the immutable Artifact
+	// copies on its disk: whether it enumerated them at all, and each copy it
+	// found worth what checking it against the catalog said it is worth. It is
+	// the same record the control plane keeps, because a second vocabulary for
+	// one answer is how the two drift: a node reporting a copy "verified" beside
+	// a separate "state" would leave the control plane deciding which of the two
+	// it believes. Object storage remains the authority either way.
+	//
+	// Whether anything enumerated is this node's own claim, never a derivation
+	// from the fact that it answered about its host. A runtime with no replica
+	// store has not looked for a copy and will never find one, so a control
+	// plane reading "the node reported, therefore it enumerated" would publish
+	// "I hold no copy" as a fact on behalf of every machine in the fleet, and a
+	// hard start bound would then strike those machines out for content nobody
+	// ever looked for. A node that does not enumerate says nothing here, and
+	// silence is priced rather than refused.
+	Artifacts domain.ArtifactInventory `json:"artifacts,omitzero"`
+	// Caches is the mutable, application-owned state on this node's disk:
+	// whether it enumerated at all, and each cache it found under the workspace
+	// that owns it. It is best-effort by construction, because the contents are
+	// the application's business and nothing here can be checked against
+	// anything. It is the record the control plane already keeps, for the same
+	// reason the Artifact inventory is: a second vocabulary for one answer is
+	// how the two drift.
+	Caches domain.CacheInventory `json:"caches,omitzero"`
+}
+
+// Established is this report with every measurement it says it did not make
+// erased. A report is a claim by a machine Mercator does not compile, and the
+// contract lets one arrive whose halves disagree: an agent that carries a
+// previous measurement forward while marking it unestablished, an older build,
+// or a third-party runtime implementing NodeRuntime. Whichever half a reader
+// happens to take then decides whether a placement is promised room nobody
+// established, and this tree has two readers, the offer projection and the
+// fleet listing. The control plane keeps the half the reporter stands behind,
+// once, where the report crosses into it.
+func (facts NodeFacts) Established() NodeFacts {
+	if !facts.Host.Disk.Known {
+		facts.Host.Disk = DiskFacts{}
+	}
+	return facts
 }
 
 // HostFacts is the substrate the node runs on, which is separate from what a
@@ -142,64 +178,76 @@ type HostFacts struct {
 	Accelerators     []domain.AcceleratorInventory `json:"accelerators,omitempty"`
 	CPUMillis        int64                         `json:"cpu_millis"`
 	MemoryBytes      int64                         `json:"memory_bytes"`
-	DiskTotalBytes   int64                         `json:"disk_total_bytes"`
-	DiskFreeBytes    int64                         `json:"disk_free_bytes"`
+	Disk             DiskFacts                     `json:"disk,omitzero"`
 	Network          []domain.NetworkFact          `json:"network,omitempty"`
 }
 
-// LocalityState is how sure Mercator is that content is present. Unknown is a
-// first-class answer: it means uncertainty to price, not infeasibility.
-type LocalityState string
+// DiskFacts is the room on the filesystem this node's content lands on, and
+// separately whether this node could measure it at all. The two are stated
+// apart for the reason every other inventory here states them apart: a machine
+// that could not look is not a machine with no room, and a report that could
+// only say "zero" would make the two indistinguishable.
+//
+// A node that cannot measure its disk keeps reporting everything else. Its
+// liveness, its running containers, and the exit codes they produce are facts
+// the fleet needs whatever anyone knows about the disk, and failing the whole
+// report over this one measurement ends the node's session and, on a node with
+// no session yet, its enrollment. What silence costs instead is placements: an
+// offer states the room a machine established, so a node that established none
+// advertises none and is struck out by the disk floor every workload carries,
+// in the Booking Decision where an operator can read it.
+//
+// Bytes stated beside Known false are bytes nobody established, and NodeFacts.
+// Established erases them where the report arrives. Every reader downstream is
+// therefore reading one answer rather than deciding between two.
+type DiskFacts struct {
+	Known      bool  `json:"known"`
+	TotalBytes int64 `json:"total_bytes,omitempty"`
+	FreeBytes  int64 `json:"free_bytes,omitempty"`
+}
 
-const (
-	LocalityHot     LocalityState = "hot"
-	LocalityPartial LocalityState = "partial"
-	LocalityCold    LocalityState = "cold"
-	LocalityUnknown LocalityState = "unknown"
-)
-
-// ImageLocality is exact OCI image presence on one node.
+// ImageLocality is exact OCI image presence on one node. Every field states
+// what this machine HOLDS. What an image still needs is a subtraction between
+// this and a resolved manifest, and only the control plane holds both: a node
+// that answered it would be restating a manifest it has no way to read.
 type ImageLocality struct {
-	// ManifestDigest identifies the image exactly. A tag is never image
-	// identity.
-	ManifestDigest string          `json:"manifest_digest"`
-	Platform       domain.Platform `json:"platform"`
-	// LayerDigests is every layer the manifest names, in manifest order.
+	// ManifestDigest is the digest this image was pulled by, which for a
+	// multi-platform image is the index digest and never the platform manifest
+	// underneath it. It is the identity a Run is pinned to. A tag is never
+	// image identity.
+	ManifestDigest string `json:"manifest_digest"`
+	// Platform is which build of that digest this machine holds. An index
+	// digest names one image per platform, so the digest alone cannot say
+	// whether what is here is what this host would run: a machine that fetched
+	// another platform's build holds the same name and none of the bytes.
+	Platform domain.Platform `json:"platform"`
+	// LayerDigests is the compressed layer blobs this node holds unpacked,
+	// named the way a registry names them. A container daemon cannot enumerate
+	// these: it discards the compressed form when it unpacks an image, which is
+	// why LayerDiffIDs sits beside this rather than instead of it.
 	LayerDigests []string `json:"layer_digests,omitempty"`
-	// MissingLayerDigests is the subset the node does not hold.
-	MissingLayerDigests []string `json:"missing_layer_digests,omitempty"`
-	// MissingCompressedBytes is what still has to cross the network, which is
-	// the quantity transfer prediction actually needs.
-	MissingCompressedBytes int64 `json:"missing_compressed_bytes"`
-	// Unpacked reports whether the image is ready to run, not merely pulled.
-	Unpacked       bool          `json:"unpacked"`
-	State          LocalityState `json:"state"`
-	LastVerifiedAt time.Time     `json:"last_verified_at"`
-}
-
-// ArtifactLocality is one immutable artifact replica on one node. Object
-// storage remains the durable authority; this replica is acceleration.
-type ArtifactLocality struct {
-	ArtifactID string `json:"artifact_id"`
-	// ContentDigest is the manifest or content digest the replica was verified
-	// against.
-	ContentDigest  string        `json:"content_digest"`
-	SizeBytes      int64         `json:"size_bytes"`
-	Verified       bool          `json:"verified"`
-	State          LocalityState `json:"state"`
-	LastVerifiedAt time.Time     `json:"last_verified_at"`
-}
-
-// CacheLocality is one mutable, application-owned cache on one node. Its
-// identity is its workspace-scoped name; its contents provide no identity.
-type CacheLocality struct {
-	Name string `json:"name"`
-	// CompatibilityKey is the application's own statement of which cache
-	// generation this content belongs to. Mercator compares it and never
-	// interprets it.
-	CompatibilityKey string    `json:"compatibility_key,omitempty"`
-	SizeBytes        int64     `json:"size_bytes"`
-	LastUsedAt       time.Time `json:"last_used_at"`
+	// LayerDiffIDs is the same unpacked content named by its uncompressed form.
+	// This is what a Docker daemon can actually report, and comparing it
+	// against a registry manifest is what a resolved manifest carrying both
+	// spaces makes possible. Both lists name layers this node has assembled
+	// into a mountable chain: content a runtime has fetched and not unpacked is
+	// content it cannot name a layer identity for, which is why an image that
+	// is here and not ready says so with ContentPresent instead.
+	LayerDiffIDs []string `json:"layer_diff_ids,omitempty"`
+	// ContentPresent reports that every byte of this image is on this machine,
+	// whether or not the chain a container starts on is assembled. Fetching and
+	// unpacking are separate acts and only the node can say which it has done:
+	// what is left on content already here is local work rather than a pull,
+	// and an operator sent after a network problem for bytes on the disk finds
+	// nothing to fix. A runtime that cannot establish it says so with State
+	// unknown rather than guessing in either direction.
+	ContentPresent bool `json:"content_present"`
+	// State is how much of this image the node established it has: hot when the
+	// whole chain is assembled and a container can start on it now, partial
+	// when some of it is here, cold when none of it is, and unknown when the
+	// runtime could not establish which.
+	State          domain.LocalityState `json:"state"`
+	LastVerifiedAt time.Time            `json:"last_verified_at"`
 }
 
 // OperationReceipt acknowledges one node command. Duplicate is how a node says
@@ -256,10 +304,19 @@ type LaunchWorkloadCommand struct {
 	// workload spec.
 	ManifestDigest string
 	Environment    []EnvironmentBinding
-	// CacheMounts names the mutable caches to attach.
-	CacheMounts []string
-	// ArtifactMounts names the immutable replicas to attach read-only.
-	ArtifactMounts    []string
+	// CacheMounts is the mutable caches to attach, as the workload declared
+	// them. The workspace they belong to is the one on this command's NodeRef:
+	// a cache's identity is workspace-scoped, so a runtime that took a name
+	// alone would be free to hand one workspace another's bytes.
+	CacheMounts []domain.CacheMountRequirement
+	// It carries no Artifact mounts. A field naming the immutable copies to
+	// attach read-only was declared here, populated by nothing, and read by
+	// nothing: the Docker runtime builds mount arguments for the caches above and
+	// for no other content, so a verified replica in a node's replica store is
+	// not reachable from inside the container a Run executes in. Attaching it,
+	// and telling a workload which of its inputs are local, is
+	// https://github.com/benngarcia/mercator/issues/171. A declaration of the
+	// half that is missing reads like the half that is there.
 	MaxRuntimeSeconds int64
 }
 
