@@ -269,6 +269,7 @@ func assertExpect(session Session, start time.Time, bookings bookingNames, name 
 		}
 	}
 	failures = append(failures, assertDecisionChain(events, name, expect)...)
+	failures = append(failures, assertCapacityHandedBack(events, name, expect)...)
 	failures = append(failures, assertStartMoment(events, name, expect)...)
 	failures = append(failures, assertReadyMoment(session, events, name, expect)...)
 	for _, id := range sortedKeys(expect.Candidates) {
@@ -312,6 +313,89 @@ func assertDecisionChain(events []eventlog.StoredEvent, name string, expect Expe
 		failures = append(failures, fail("expected the supersession reason %q, recorded %q", want.SupersedesReason, newest.SupersedesReason)...)
 	}
 	return failures
+}
+
+// assertCapacityHandedBack reads whether the capacity an earlier decision took was
+// given back before the newest decision was recorded, and how.
+//
+// Before, rather than at some point, is the whole assertion. A control plane that
+// runs the work elsewhere and reclaims the first machine eventually is a control
+// plane an operator is paying twice, and one that never reclaims it at all leaves
+// the machine to whatever its provider does with capacity nobody is talking to.
+// Reading the order out of the Run's own stream is the only way this corpus can
+// tell those apart from the answer that changed.
+func assertCapacityHandedBack(events []eventlog.StoredEvent, name string, expect ExpectSpec) []string {
+	if expect.Reclaimed == nil {
+		return nil
+	}
+	want := *expect.Reclaimed
+	handed := handedBackBefore(events, lastIndexOf(events, orchestrator.EventBookingDecided))
+	disposition, ok := handed[want.Offer]
+	if !ok {
+		return []string{fmt.Sprintf(
+			"run %q: expected the capacity on %q to be handed back before this decision, and the record hands back %v",
+			name, want.Offer, handed,
+		)}
+	}
+	if disposition != want.Disposition {
+		return []string{fmt.Sprintf(
+			"run %q: expected %q to be handed back as %q, and the record confirms %q",
+			name, want.Offer, want.Disposition, disposition,
+		)}
+	}
+	return nil
+}
+
+// handedBackBefore is the capacity this Run gave back before the event at index,
+// by the machine it was taken on and what handing it back did with it.
+//
+// There are two ways a Run gives capacity back and they are read from two
+// different events, because they are two different acts. A cleanup ends a Run
+// that ran, names the launch key alone, and the machine that key was launched on
+// is named on the intent that recorded it, so the stream is read forwards and the
+// key resolved through the intent it belongs to. A reclamation ends a machine a
+// Run never started on, so there is no launch key to resolve and it names the
+// listing itself.
+//
+// Neither is recorded until the provider has confirmed it. A cleanup Mercator
+// requested and never confirmed is deliberately absent for the same reason a
+// terminate that failed leaves the reclamation unrecorded: capacity is handed
+// back when the provider says it is.
+func handedBackBefore(events []eventlog.StoredEvent, index int) map[string]domain.Disposition {
+	offers := map[string]string{}
+	handed := map[string]domain.Disposition{}
+	for position, event := range events {
+		if position >= index {
+			break
+		}
+		var payload struct {
+			LaunchKey   string             `json:"launch_key"`
+			Offer       string             `json:"selected_offer_snapshot_id"`
+			Listing     string             `json:"offer_snapshot_id"`
+			Disposition domain.Disposition `json:"disposition"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			continue
+		}
+		switch event.Type {
+		case orchestrator.EventLaunchIntentRecorded:
+			offers[payload.LaunchKey] = payload.Offer
+		case orchestrator.EventCleanupConfirmed:
+			handed[offers[payload.LaunchKey]] = payload.Disposition
+		case orchestrator.EventCapacityReclaimed:
+			handed[payload.Listing] = payload.Disposition
+		}
+	}
+	return handed
+}
+
+func lastIndexOf(events []eventlog.StoredEvent, eventType string) int {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == eventType {
+			return i
+		}
+	}
+	return -1
 }
 
 // placedInstead names the machine a Run the fixture said would be waiting was

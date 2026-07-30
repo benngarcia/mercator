@@ -20,22 +20,88 @@ limits.
 - No Mercator-managed secret vault, grant API, KMS integration, or key rotation
   flow exists. Workloads/runtimes own their secret-management backend.
 - Health, OpenAPI, and UI shell are public on the listen interface.
+- A registry credential minted for one pull is the operator's standing account
+  verbatim ([#238](https://github.com/benngarcia/mercator/issues/238)).
+  `credential.Mint.RegistryPull` wraps the account from the operator's
+  `config.json` in a scope naming one operation, one workspace, one digest and an
+  expiry no longer than an hour, and that scope is enforced by Mercator's own
+  agent on the machine. A password registry sees none of it: it sees a username
+  and a password valid for everything that account can read, for as long as the
+  account exists. An attacker who takes a rented host takes the whole account.
+  Narrowing it needs a per-registry token exchange, which nothing in the tree
+  performs. Contrast an Artifact read, where the scope is real on the far side
+  too, because a presigned GET is a signature over one object path and one
+  expiry. Operators renting machines from a provider whose physical security they
+  do not control should give Mercator a registry account scoped to only the
+  images it needs to pull.
 
 ## Capacity Reuse
 
-- Every provider backend is in the ephemeral lane. Docker, RunPod, Shadeform,
-  and Vast each create capacity for one workload and destroy it afterwards, so
-  no machine those backends allocate survives a Run and nothing is warm for the
-  next one. The reusable lane is reached only through the Mercator node runtime,
-  which today means a Docker host an operator enrolled by hand.
+- Shadeform is the only provider backend in the reusable lane. It rents a VM and
+  hands it a script that installs and starts the pinned node agent, so the
+  machine enrols itself and outlives the workloads run on it. Docker, RunPod and
+  Vast each still create capacity for one workload and destroy it afterwards, so
+  no machine those three allocate survives a Run.
+- A Shadeform connection publishes no placement candidate, so no Run can be
+  placed on it in production yet. A capacity connection is not asked for offers
+  ([#200](https://github.com/benngarcia/mercator/issues/200)) and a launch is
+  still addressed through the selected offer's native ref rather than the machine
+  a provisioning built ([#207](https://github.com/benngarcia/mercator/issues/207)).
+  Renting works; nothing production-side asks for a machine yet.
+- Shadeform has had no live run since it became a capacity provider. The path is
+  proven under its package's httptest fake only
+  ([#235](https://github.com/benngarcia/mercator/issues/235)).
+- A Shadeform connection needs an `agent_download_url` an operator hosts, because
+  Mercator's release archives ship no `mercator-node` binary
+  ([#234](https://github.com/benngarcia/mercator/issues/234)), and the control
+  plane needs `MERCATOR_AGENT_VERSION` to say which build that URL serves. Neither
+  has a default: a guessed URL is a paid machine fetching a 404, and a guessed
+  version is a pin nobody chose. A connection or a deployment missing either
+  verifies and lists capacity, and refuses to provision.
+- A provision the provider classified as fatal, such as an authentication failure
+  after a key rotation, is asked again on every advance for ever
+  ([#236](https://github.com/benngarcia/mercator/issues/236)). The capacity build
+  records no classified failure, and the enrolment deadline cannot bound it because
+  it is only consulted once a provision has succeeded. Out of reach today, because
+  a capacity connection publishes no placement candidate yet.
+- A repeated provision against a provider honouring no idempotency key is
+  resolved only by the adapter, and nothing in the Lab holds that
+  ([#237](https://github.com/benngarcia/mercator/issues/237)). Shadeform creates
+  the instance, then scans every instance wearing the lease's tag and destroys
+  the losers, so a create whose answer was lost and then repeated really does
+  rent a second billed machine carrying a second copy of the same single-use
+  invitation, and a failed delete leaves both up. The Lab's provider answers
+  every repeat under a lease with the machine that lease already has, so neither
+  `capacityAlreadyHeld` nor the clause about one invitation reaching two machines
+  is exercised by any world.
+- A provisioned Rental is never handed back
+  ([#206](https://github.com/benngarcia/mercator/issues/206)). Nothing ends the
+  lease of a machine nobody is using, so a machine that is rented, bootstrapped
+  and enrolled goes on being billed until an operator destroys it out of band.
+  The pieces exist (`Leases.EndGeneration` retires the runtime bound to the
+  generation, and `TerminateCapacity` gives the machine back), and nothing calls
+  them on an idle machine. Out of reach for a Run today only because a capacity
+  connection publishes no placement candidate; it is reachable right now through
+  the capacity seam, and `mercator verify --mode capacity` is the one path that
+  reliably gives a machine back, because the trial sweeps its own workspace.
+- The capacity conformance suite cannot see a second machine hidden behind a
+  lease that already holds one
+  ([#239](https://github.com/benngarcia/mercator/issues/239)). When a lease
+  already knows a machine and a later provision comes back indeterminate, the
+  repeat that would surface a duplicate is skipped, because on a conforming
+  provider that repeat answers with the machine that already exists and reporting
+  it would cry wolf. Nothing in the contract distinguishes the two, so a machine
+  really allocated by a lost answer can be billed and never named. Unreachable
+  today because nothing in the tree puts two machines under one lease, and it
+  becomes reachable the moment a lease grows a second generation.
 - An ephemeral execution still commits a Booking against a single-use Rental
   identity. Placement makes that binding unqueueable and records the honest
   `launch_ephemeral` disposition, but the Booking record type is shared with
   reusable placements, so a reader of the schema alone cannot tell them apart.
-- Reuse works only on nodes an operator enrolled by hand. Provisioned capacity
-  arrives with no agent on it, so renting a machine still produces one-shot
-  execution. Bootstrapping the agent through a provider is
-  [#155](https://github.com/benngarcia/mercator/issues/155) phase 5.
+- Reuse works end to end only on nodes an operator enrolled by hand. A machine
+  Shadeform rents is bootstrapped with an agent, but the two issues above stop a
+  Run from being placed on the result, so a provisioned machine is reachable
+  today only through the capacity seam rather than through a Run.
 - Enrolling a node is a manual two-step: `POST /v1/nodes` for the bootstrap,
   then run `mercator-node` with it. There is no CLI command and no quickstart
   step.
@@ -231,9 +297,27 @@ limits.
 
 These are gaps in the evidence rather than in the product, recorded so a reader
 knows which promises rest on CI or on a credential this repository does not
-carry. Stated as of the phase 4 close-out on 2026-07-27, from an amd64 Linux
-workstation running Docker Engine 29.6.2. The phase 3 entries below were restated
-on that host and still hold.
+carry. Restated at the phase 5 close-out on 2026-07-29, from the same amd64 Linux
+workstation, now running Docker Engine 29.6.2 on Ubuntu 26.04 with an RTX 5090.
+The phase 3 and phase 4 entries below were re-checked on that host.
+
+Three of them are narrower than they were, and one is wrong as written:
+
+- The accelerator probe this phase added ran against a real GPU through a real
+  container, rather than against a recorded fixture, so the host-facts work is
+  not in the unproven column at all.
+- Playwright's Chromium does run here. Both browser-driven console cases execute
+  against real headless Chromium on this host, which is how two races in the
+  runs-navigation script were found and fixed at the phase 5 close-out. Issue
+  [#197](https://github.com/benngarcia/mercator/issues/197) says the console can
+  only be verified in CI, and that is true of the machine it was written on
+  rather than of every workstation. The entry below is kept because the claim it
+  makes about CI finding console defects still holds, and because nothing here
+  guarantees another workstation can run the browser.
+- Seven of the ten cases that skip under a bare `go test ./...` skip behind an
+  environment flag rather than behind a missing capability, and all seven pass
+  here when asked. A reader counting skips should ask which kind each one is
+  before concluding anything about coverage.
 
 - The prediction key's recurrence is unproven against any live marketplace, which
   is phase 4's largest untested assumption
@@ -257,6 +341,13 @@ on that host and still hold.
   behaviour rests on the recorded fixtures in each adapter's tests and on
   `mercator verify` being run by an operator who holds a key. See
   `docs/production/provider-conformance.md`.
+- Shadeform sells capacity rather than one-shot execution, so the trial that
+  applies to it is `mode: "capacity"`, which rents machines and gives them back.
+  The bounded suite behind it runs on every build against the simulated provider
+  and against Shadeform's own marketplace served over `httptest`, and no machine
+  has ever been rented for real. The live run is
+  [#235](https://github.com/benngarcia/mercator/issues/235); the command is in
+  `docs/production/provider-conformance.md`.
 - The browser-driven console checkpoints cannot run on this workstation at all.
   Playwright's Chromium needs system libraries that are not installed and there
   is no sudo to add them, so the console half of the Lab acceptance flow is
@@ -269,9 +360,21 @@ on that host and still hold.
   order without a browser), so the same class of break fails locally next time.
   Anyone changing an event payload, a schema, or a placement weight should
   assume the console is affected and cannot confirm it here.
-- Provisioned reusable capacity has no live coverage at all, because no provider
-  bootstraps a node agent yet. Everything about a node that a real daemon proves
-  here was proven on this workstation's own daemon.
+- Provisioned reusable capacity has no live coverage at all. A provider does
+  bootstrap a node agent now, and no machine has ever been rented to carry one:
+  the bootstrap script is proven by running it under a real shell in a container
+  on this host, and the provider half is proven against Shadeform's API served
+  over `httptest`. Everything about a node that a real daemon proves here was
+  proven on this workstation's own daemon. What only a rented machine can
+  establish is whether a provider's image carries `systemd`, `curl` and a working
+  Docker daemon, and whether the script runs as root once the instance is active
+  ([#235](https://github.com/benngarcia/mercator/issues/235)).
+- The whole of phase 5 was developed on a branch with no upstream, so nothing it
+  built met CI until the close-out. Two defects survived every local slice and
+  every adversarial review for exactly that reason: a hand-edited generated file
+  that `go generate` plus `git diff --exit-code` catches immediately, and a
+  browser case that skips unless `MERCATOR_BROWSER_TEST` asks for it. Work kept
+  off CI for a long stretch should assume the same two classes are hiding in it.
 
 ## GA Documentation Gaps
 

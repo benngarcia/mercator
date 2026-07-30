@@ -90,10 +90,15 @@ type PortSpec struct {
 }
 
 type ResourceRequirements struct {
-	CPU           CPURequirement           `json:"cpu"`
-	Memory        MemoryRequirement        `json:"memory"`
-	Accelerators  []AcceleratorRequirement `json:"accelerators,omitempty"`
-	EphemeralDisk DiskRequirement          `json:"ephemeral_disk"`
+	CPU          CPURequirement           `json:"cpu"`
+	Memory       MemoryRequirement        `json:"memory"`
+	Accelerators []AcceleratorRequirement `json:"accelerators,omitempty"`
+	// Host is what this workload needs of the substrate under it rather than of
+	// the cards on it: the promises it will not run without, and the driver its
+	// image's own accelerator stack was built against. Counting cards says
+	// nothing about whether the image can talk to them.
+	Host          HostRequirements `json:"host,omitzero"`
+	EphemeralDisk DiskRequirement  `json:"ephemeral_disk"`
 }
 
 type CPURequirement struct {
@@ -347,6 +352,14 @@ type OfferSnapshot struct {
 	ExpiresAt    time.Time         `json:"expires_at"`
 	Platform     Platform          `json:"platform"`
 	Resources    ResourceInventory `json:"resources"`
+	// Host is what this machine, or the provider selling it, has established
+	// about the substrate under a workload: the promises it makes and the
+	// accelerator driver it runs. It is separate from the resources above
+	// because these are not quantities to compare, and because the answer that
+	// matters most is the one nobody gave. A machine states none of it until
+	// something establishes it, and Placement says which of the three states it
+	// read.
+	Host         HostFacts         `json:"host,omitzero"`
 	Capabilities CapabilityProfile `json:"capabilities"`
 	Network      NetworkFacts      `json:"network"`
 	Pricing      PriceModel        `json:"pricing"`
@@ -358,7 +371,12 @@ type OfferSnapshot struct {
 	Terms        CapacityTerms  `json:"capacity_terms,omitzero"`
 	Queue        *QueueSnapshot `json:"queue,omitempty"`
 	Provisioning *Estimate      `json:"provisioning,omitempty"`
-	Images       ImageInventory `json:"images"`
+	// Bootstrap is what this publisher says about the gap between allocating a
+	// machine and Mercator being able to run anything on it. Capacity that
+	// already exists states none: there is no agent still to arrive on a machine
+	// an agent is already enrolled on.
+	Bootstrap *CapacityBootstrap `json:"bootstrap,omitempty"`
+	Images    ImageInventory     `json:"images"`
 	// Artifacts is the immutable content this host says it holds a local copy
 	// of. It is placement evidence and never a dependency's authority: a Run's
 	// inputs are durable in the object store or the Run does not go anywhere.
@@ -400,6 +418,36 @@ type OfferSnapshot struct {
 // the only place Warmth can accumulate.
 func (offer OfferSnapshot) KeepsWhatItRuns() bool {
 	return offer.Kind == OfferKindStanding && offer.Lane.Reusable()
+}
+
+// HolderOfMachine is the lease this fleet already holds on the machine one
+// listing sells, where the fleet publishes that machine itself.
+//
+// A listing that names a machine is a name for that machine, so a fleet that
+// publishes both is publishing one host twice: once as capacity to acquire and
+// once as capacity acquired. The two answer differently on purpose. The machine
+// is the fleet's own and states the room it has left; the listing is the
+// marketplace's and states what a buyer of it would get. Which of them a Run
+// that fits neither is waiting on cannot be read off the listing alone, and
+// reading it off the listing alone is what went wrong: a sold listing is refused
+// as capacity somebody is spending, which is a wait that ends, so a Run no host
+// in the fleet could ever hold was recorded as waiting for a machine to come
+// free, named nothing it was behind, and dated the wait at nothing. That is the
+// head-of-line block Violation.EndedByWaiting is false by default to prevent.
+//
+// Nothing hands this machine back to end that wait. Mercator holds the lease, the
+// machine is in the fleet under its own name, and whether this Run can ever run
+// on that host is the machine's answer rather than the listing's.
+func HolderOfMachine(offers []OfferSnapshot, listing OfferSnapshot) (string, bool) {
+	if listing.Kind != OfferKindProvisionable || listing.MachineID == "" {
+		return "", false
+	}
+	for _, offer := range offers {
+		if offer.Kind == OfferKindStanding && offer.MachineID == listing.MachineID && offer.RentalID != "" {
+			return offer.RentalID, true
+		}
+	}
+	return "", false
 }
 
 // DefaultRegistryDownloadMbps is what a host is assumed to pull image content
@@ -571,6 +619,22 @@ type ResourceInventory struct {
 	// and the queue is ordered on the difference.
 	EphemeralDiskKnown bool                   `json:"ephemeral_disk_known"`
 	Accelerators       []AcceleratorInventory `json:"accelerators,omitempty"`
+	// AcceleratorsKnown is whether the list above is an inventory somebody took.
+	// A catalog listing its cards took one by selling them. A machine whose agent
+	// could not run the vendor tool took none, and the empty list it leaves
+	// behind is not a machine with no cards.
+	//
+	// It carries the same distinction into the same reader as the disk flag
+	// beside it, and for the same reason. The accelerator half of a report is the
+	// half that is empty on a CPU box and empty on an unmeasured 8xA100 box, so a
+	// reader with only the values cannot tell them apart. Read as an inventory,
+	// the silence strikes a machine holding eight cards out of every accelerator
+	// placement with RESOURCE_INSUFFICIENT, which tells an operator the fleet can
+	// never run this work on the strength of nobody having run nvidia-smi.
+	// Placement still refuses a machine that cannot say what cards it holds,
+	// because a Run pinned to eight A100s cannot be sent to a machine nobody
+	// counted, but it refuses it as a silence that says go and look.
+	AcceleratorsKnown bool `json:"accelerators_known"`
 }
 
 type AcceleratorInventory struct {
@@ -1010,6 +1074,21 @@ func ReferenceDigest(reference string) string {
 	return digest
 }
 
+// ReferenceRegistry is the host an image reference is served from, by the rule
+// the container ecosystem uses: the first path component is a host when it looks
+// like one, and is a Docker Hub namespace otherwise. It is what says whether a
+// credential minted for one registry is being carried to another.
+func ReferenceRegistry(reference string) string {
+	head, _, found := strings.Cut(reference, "/")
+	if !found {
+		return "docker.io"
+	}
+	if head == "localhost" || strings.ContainsAny(head, ".:") {
+		return head
+	}
+	return "docker.io"
+}
+
 // pinnedImagePattern is a reference that names content instead of a moving
 // label: a repository, and a digest of the length a digest has.
 var pinnedImagePattern = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
@@ -1025,6 +1104,38 @@ func PinnedImage(reference string) bool {
 type CapacityEvidence struct {
 	Available  bool    `json:"available"`
 	Confidence float64 `json:"confidence"`
+}
+
+// CapacityBootstrap is what stands between a provider allocating a machine and
+// Mercator being able to run anything on it: the agent has to boot on it and
+// open a session, and until it does the machine is billing with nothing that
+// will come for it.
+//
+// The bound is about giving up rather than about how long the arrival takes,
+// which is the provisioning estimate beside it. Mercator stops expecting the
+// agent at EnrolmentDeadlineSeconds and hands the machine back.
+//
+// A provider's own backstop, the moment it destroys a machine nobody enrolled on
+// whatever Mercator does, is deliberately not here. No world in this tree
+// performs one and no publisher reports one, and a machine ending on its own
+// account while Mercator still holds a Booking on it is a state the control
+// plane has no answer for yet. It belongs to the slice that builds that answer.
+type CapacityBootstrap struct {
+	// EnrolmentDeadlineSeconds is how long after the provider accepts the
+	// allocation Mercator goes on expecting the agent's session. Zero is a
+	// publisher that named no patience, and Mercator uses its own.
+	EnrolmentDeadlineSeconds float64 `json:"enrolment_deadline_seconds,omitempty"`
+}
+
+// EnrolmentDeadline is when Mercator stops expecting the agent on a machine
+// accepted at acceptedAt, given the patience Mercator holds for a publisher
+// that named none. A machine nobody gives up on bills for ever, so there is no
+// answer that means "wait indefinitely".
+func (bootstrap *CapacityBootstrap) EnrolmentDeadline(acceptedAt time.Time, patience time.Duration) time.Time {
+	if bootstrap != nil && bootstrap.EnrolmentDeadlineSeconds > 0 {
+		patience = time.Duration(bootstrap.EnrolmentDeadlineSeconds * float64(time.Second))
+	}
+	return acceptedAt.Add(patience)
 }
 
 // StatedRate is one share of a machine's history somebody measured, and how much
@@ -1125,7 +1236,79 @@ const (
 	// nowhere. The Run waited, the fleet was asked again, and this answer stands in
 	// for the refusal rather than erasing it.
 	SupersededSelectedNothing = "PREVIOUS_DECISION_SELECTED_NOTHING"
+	// SupersededCapacityReclaimed is capacity the previous decision took and
+	// Mercator gave back: a machine a provider allocated and is billing for that
+	// never became executable inside the patience the capacity stated, so Mercator
+	// stopped waiting, handed it back, and asked the fleet again.
+	//
+	// It is a separate reason from SupersededLaunchFailed because the two state
+	// opposite things about the world. A launch that failed left nothing behind,
+	// which is what makes its offer safe to retry elsewhere and its machine nothing
+	// to account for. This one is a machine that exists, and the reclamation is the
+	// fact in the record a reader checks it against: without a confirmed cleanup on
+	// the capacity the previous decision named, the reason claims something the Run's
+	// own stream contradicts.
+	SupersededCapacityReclaimed = "PREVIOUS_CAPACITY_RECLAIMED"
 )
+
+// OfferExclusion is one offer an earlier attempt on this Run proved unusable,
+// and what it proved. The two travel together because a later evaluation has to
+// say why a candidate it can see is not one it may take, and the reasons are
+// not interchangeable: a machine that refused the launch left nothing behind,
+// and capacity Mercator reclaimed is a machine a provider allocated, billed
+// for, and has now destroyed.
+type OfferExclusion struct {
+	OfferSnapshotID string               `json:"offer_snapshot_id"`
+	Reason          OfferExclusionReason `json:"reason"`
+}
+
+type OfferExclusionReason string
+
+const (
+	// OfferRefusedTheLaunch is the machine behind this offer having said it had
+	// nothing to run the work on.
+	OfferRefusedTheLaunch OfferExclusionReason = "launch_refused"
+	// OfferCapacityReclaimed is capacity allocated from this offer that never
+	// became executable inside the patience it stated, which Mercator handed
+	// back. Taking the same listing again would allocate another one.
+	OfferCapacityReclaimed OfferExclusionReason = "capacity_reclaimed"
+)
+
+// Violation is how a candidate struck out by this exclusion is refused, said in
+// the vocabulary a decision record is read in.
+func (reason OfferExclusionReason) Violation(offerSnapshotID string) Violation {
+	violation := Violation{
+		Path:     "offer_snapshot_id",
+		Required: "offer not rejected by an earlier attempt",
+		Offered:  offerSnapshotID,
+	}
+	switch reason {
+	case OfferCapacityReclaimed:
+		violation.Code = "PREVIOUS_ATTEMPT_CAPACITY_RECLAIMED"
+		violation.Message = "Capacity allocated from this offer never enrolled a node and was reclaimed by an earlier attempt."
+		// Nothing here was spent on somebody else's work. Mercator allocated the
+		// machine, waited out the patience the capacity stated, and destroyed it,
+		// so a Run struck out by this waited on a machine of its own.
+		return violation
+	default:
+		violation.Code = "PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE"
+		violation.Message = "Offer was rejected as unavailable by an earlier launch attempt."
+		// What this machine refused was a launch, and what it said was that it
+		// had nothing to run it on. That is capacity somebody else is spending.
+		violation.EndedByWaiting = true
+		return violation
+	}
+}
+
+// ExcludedOffer reports which exclusion, if any, strikes one offer out.
+func ExcludedOffer(exclusions []OfferExclusion, offerSnapshotID string) (OfferExclusion, bool) {
+	for _, exclusion := range exclusions {
+		if exclusion.OfferSnapshotID == offerSnapshotID {
+			return exclusion, true
+		}
+	}
+	return OfferExclusion{}, false
+}
 
 // Identity is the decision ID derived from the decision's own recorded content:
 // what was asked, when it was asked, what was weighed, what was chosen, and what
@@ -1446,6 +1629,13 @@ var LaunchStages = []LaunchStage{
 	StageApplicationReady,
 }
 
+// ProvisioningStages is the three a machine that does not exist yet goes
+// through before anything can be fetched onto it, in order. They are the stages
+// no capacity Mercator already holds spends anything on, and the only ones with
+// an actual the provider and the node registry can establish between them
+// rather than a container runtime.
+var ProvisioningStages = []LaunchStage{StageAcquisition, StageBoot, StageAgentReady}
+
 // LaunchStageEstimates is what this candidate is predicted to spend on each
 // stage of a launch. Every stage carries its own distribution, because a
 // prediction that cannot be told apart from the stage beside it cannot be
@@ -1648,11 +1838,11 @@ func (cleanupError CleanupError) Validate() error {
 // re-inferred from live offers/state at cleanup time. This is what makes
 // teardown crash-safe and orphan-free.
 //
-//   - DispositionTerminate: the run created a resource WE OWN (a provisioned
-//     host/instance) that MUST be destroyed on cleanup.
-//   - DispositionRelease: the run occupies a slot in a pool we DON'T own (a
-//     standing pool); cleanup removes only our job/container and never touches
-//     the host.
+//   - DispositionTerminate: the end of the Run is the end of the machine, so
+//     cleanup destroys it.
+//   - DispositionRelease: cleanup takes Mercator's workload off the host and
+//     leaves the host standing, because something other than this Run decides
+//     when the machine goes.
 type Disposition string
 
 const (
@@ -1664,16 +1854,34 @@ func (disposition Disposition) Valid() bool {
 	return disposition == DispositionRelease || disposition == DispositionTerminate
 }
 
-// DispositionForOfferKind maps the selected offer's ownership model to its
-// required cleanup action.
-func DispositionForOfferKind(kind OfferKind) (Disposition, error) {
-	switch kind {
-	case OfferKindProvisionable:
+// CleanupDisposition is what the end of a Run on this capacity does to the
+// machine under it. It reads both facts the offer states about itself, because
+// either one alone answers a different question and gets this wrong in a way
+// that costs money.
+//
+// A one-shot product Mercator allocated is the only capacity a Run's end
+// destroys. That is what the ephemeral lane is: nothing survives the workload,
+// so nothing is left to hand back, and cleanup terminates. Kind alone used to
+// decide this, and kind alone says only that the machine did not exist before
+// Mercator asked for it. That is equally true of the fresh machine a reusable
+// Rental is built on, and terminating there destroys the whole point of the
+// reusable lane: the machine outlives the Run, the lease owns when it goes, and
+// a Run that took its host with it would leave the next Run provisioning again
+// and an operator paying the boot twice.
+//
+// Everything else releases. A slot in a pool Mercator does not own is not
+// Mercator's to destroy, and a machine Mercator holds a lease on is destroyed by
+// that lease ending rather than by a workload finishing on it.
+func (offer OfferSnapshot) CleanupDisposition() (Disposition, error) {
+	switch {
+	case !offer.Lane.Valid():
+		return "", fmt.Errorf("domain: offer %q states execution lane %q, and cleanup cannot be decided without one", offer.ID, offer.Lane)
+	case offer.Kind != OfferKindProvisionable && offer.Kind != OfferKindStanding:
+		return "", fmt.Errorf("domain: cleanup disposition for unknown offer kind %q", offer.Kind)
+	case offer.Kind == OfferKindProvisionable && !offer.Lane.Reusable():
 		return DispositionTerminate, nil
-	case OfferKindStanding:
-		return DispositionRelease, nil
 	default:
-		return "", fmt.Errorf("domain: cleanup disposition for unknown offer kind %q", kind)
+		return DispositionRelease, nil
 	}
 }
 

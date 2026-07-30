@@ -77,6 +77,9 @@ func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidenc
 	}
 	evidence.TrialID = identity.trialID
 	evidence.ConnectionID = identity.connectionID
+	if trial.Mode == ModeCapacity {
+		return runner.verifyCapacity(trialCtx, trial, identity, evidence)
+	}
 
 	root, err := os.MkdirTemp(runner.tempRoot, "mercator-conformance-")
 	if err != nil {

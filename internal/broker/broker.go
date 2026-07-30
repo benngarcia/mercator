@@ -160,20 +160,12 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 	if err != nil {
 		return OfferAggregation{}, err
 	}
-	results, excluded := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]domain.OfferSnapshot, error) {
+	results, excluded := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) (Publication, error) {
 		backend, err := b.build(ctx, req.WorkspaceID, c)
 		if err != nil {
-			return nil, err
+			return Publication{}, err
 		}
-		executor, err := backend.Ephemeral()
-		if err != nil {
-			return nil, err
-		}
-		offers, err := executor.ListOffers(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return capability.StampLane(backend.Declaration, offers), nil
+		return backend.ListOffers(ctx, req)
 	})
 	aggregation := OfferAggregation{
 		Offers:   []domain.OfferSnapshot{},
@@ -197,27 +189,24 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 		aggregation.Offers = append(aggregation.Offers, nodeOffers...)
 	}
 	for _, result := range results {
-		aggregation.Queried = append(aggregation.Queried, result.connection.ID)
-		if result.err != nil {
+		switch {
+		case result.err != nil:
+			aggregation.Queried = append(aggregation.Queried, result.connection.ID)
 			aggregation.Failures = append(aggregation.Failures, connectionError(result))
-			continue
-		}
-		for i := range result.items {
-			result.items[i].ConnectionID = result.connection.ID
-			result.items[i].AdapterType = result.connection.AdapterType
-			id, err := offerSnapshotID(result.connection.ID, result.items[i].ID)
+		// A connection nobody asked is named where the record says nobody asked
+		// it. Counting it among the asked stated that a provider had been
+		// consulted about this Run, when nothing had contacted it and no answer
+		// of its could have changed the placement.
+		case result.value.NotAsked != "":
+			aggregation.Excluded = append(aggregation.Excluded, result.connection.ID+": "+result.value.NotAsked)
+		default:
+			aggregation.Queried = append(aggregation.Queried, result.connection.ID)
+			published, err := publishedBy(result.connection, result.value.Offers)
 			if err != nil {
 				return OfferAggregation{}, err
 			}
-			result.items[i].ID = id
-			// Only reusable capacity becomes a Rental. A standing offer in
-			// the ephemeral lane is a pool Mercator borrows a slot from, not
-			// a machine it holds across Runs.
-			if result.items[i].Lane.Reusable() && result.items[i].Kind == domain.OfferKindStanding {
-				result.items[i].RentalID = id
-			}
+			aggregation.Offers = append(aggregation.Offers, published...)
 		}
-		aggregation.Offers = append(aggregation.Offers, result.items...)
 	}
 	sort.Slice(aggregation.Offers, func(i, j int) bool {
 		if aggregation.Offers[i].ConnectionID != aggregation.Offers[j].ConnectionID {
@@ -227,7 +216,34 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 	})
 	sortConnectionErrors(aggregation.Failures)
 	sort.Strings(aggregation.Queried)
+	sort.Strings(aggregation.Excluded)
 	return aggregation, nil
+}
+
+// publishedBy names one connection's listings the way Mercator refers to them:
+// the connection that published each one, and an identity of Mercator's own
+// minting, derived from the connection and the adapter's own offer ID so the same
+// listing from the same connection is the same snapshot twice.
+//
+// No Rental identity is added here, and none survives: Backend.ListOffers stamped
+// the lane and cleared whatever lease the adapter claimed. A Rental is a lease
+// Mercator holds, and the only capacity it holds is the machines its own agents
+// enrolled on, which the node registry publishes with the Rental its invitation
+// named. Minting one here from the offer's kind bound a Booking to a lease nobody
+// had allocated: OfferKind says who owns the host, so a marketplace listing of
+// somebody else's idle machine is standing, and Runs queued behind it waited for a
+// Rental that never existed.
+func publishedBy(record connection.Record, offers []domain.OfferSnapshot) ([]domain.OfferSnapshot, error) {
+	for index := range offers {
+		offers[index].ConnectionID = record.ID
+		offers[index].AdapterType = record.AdapterType
+		id, err := offerSnapshotID(record.ID, offers[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		offers[index].ID = id
+	}
+	return offers, nil
 }
 
 func offerSnapshotID(connectionID, adapterOfferID string) (string, error) {
@@ -341,11 +357,7 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 		if err != nil {
 			return nil, err
 		}
-		executor, err := backend.Ephemeral()
-		if err != nil {
-			return nil, err
-		}
-		return executor.ListOwned(ctx, req)
+		return backend.ListOwned(ctx, req)
 	})
 	var all []adapter.OwnedExternalObject
 	var failures ConnectionErrors
@@ -354,10 +366,10 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 			failures = append(failures, connectionError(result))
 			continue
 		}
-		for i := range result.items {
-			result.items[i].ConnectionID = result.connection.ID
+		for i := range result.value {
+			result.value[i].ConnectionID = result.connection.ID
 		}
-		all = append(all, result.items...)
+		all = append(all, result.value...)
 	}
 	sortConnectionErrors(failures)
 	if err := failures.OrNil(); err != nil {

@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -62,15 +64,24 @@ func (file artifactReplicaFile) replica() domain.ArtifactReplica {
 }
 
 // PrepareArtifact replicates one immutable version onto this machine. It reads
-// from the location the command names and nowhere else: the control plane owns
-// the object store and mints the read, so a node holds no credential for it and
-// a compromised machine can fetch exactly the content it was told to.
+// through the location the control plane minted for this one fetch and nowhere
+// else: the object store's own key stays in the control plane, so a node holds no
+// standing read of anything and a compromised machine can fetch exactly the
+// content it was told to, until the read expires.
+//
+// A command with no minted read is refused rather than attempted. The durable
+// location the catalog states is a name for content, and a node that went to the
+// network with it would fail in the object store's vocabulary instead of in
+// Mercator's, which is an operator reading a 404 for a missing configuration.
 func (docker *DockerRuntime) PrepareArtifact(ctx context.Context, command capability.PrepareArtifactCommand) error {
 	if docker.artifactRoot == "" {
 		return fmt.Errorf("%w: this node has nowhere to keep Artifact copies", capability.ErrCapabilityUnsupported)
 	}
-	if command.ArtifactID == "" || command.Source == "" || command.ContentDigest == "" {
+	if command.ArtifactID == "" || command.ContentDigest == "" {
 		return fmt.Errorf("prepare Artifact: a replica needs a version, a source, and the digest to check it against")
+	}
+	if err := docker.authorisedRead(command); err != nil {
+		return fmt.Errorf("read Artifact %s: %w", command.ArtifactID, err)
 	}
 	directory := docker.artifactDirectory(command.WorkspaceID)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -90,18 +101,38 @@ func (docker *DockerRuntime) PrepareArtifact(ctx context.Context, command capabi
 	})
 }
 
+// authorisedRead is the machine checking the read it was handed before it
+// spends it. The scope names the operation this fetch is, the workspace the
+// content belongs to, and the version itself, and a read that names any other is
+// material this command was not the one for.
+//
+// No location is either of two things and both are the same refusal: a
+// deployment that minted nothing because it holds no object store, or a command
+// replayed on a later session, whose durable record holds the bound this read
+// was minted under and never the signed URL.
+func (docker *DockerRuntime) authorisedRead(command capability.PrepareArtifactCommand) error {
+	read := command.SourceCredential
+	if read.Location == "" {
+		return fmt.Errorf(
+			"this node was handed no read of %q, and the durable location the catalog names is not one",
+			command.Source,
+		)
+	}
+	return read.Authorises(command.OperationID, command.WorkspaceID, command.ArtifactID, docker.now().UTC())
+}
+
 // fetchArtifact streams the content to a temporary file and hashes it as it
 // goes, then puts it in place. Hashing the stream is what makes one read do both
 // jobs; landing it under its final name only once complete is what stops an
 // interrupted fetch from being reported as a copy.
 func (docker *DockerRuntime) fetchArtifact(ctx context.Context, command capability.PrepareArtifactCommand, path string) (string, int64, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, command.Source, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, command.SourceCredential.Location, nil)
 	if err != nil {
 		return "", 0, fmt.Errorf("prepare Artifact %s: %w", command.ArtifactID, err)
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return "", 0, fmt.Errorf("read Artifact %s from the object store: %w", command.ArtifactID, err)
+		return "", 0, transportFailure(command.ArtifactID, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
@@ -120,7 +151,7 @@ func (docker *DockerRuntime) fetchArtifact(ctx context.Context, command capabili
 	size, err := io.Copy(io.MultiWriter(partial, sum), response.Body)
 	if err != nil {
 		_ = partial.Close()
-		return "", 0, fmt.Errorf("read Artifact %s from the object store: %w", command.ArtifactID, err)
+		return "", 0, transportFailure(command.ArtifactID, err)
 	}
 	// This read is the measurement. The bytes and the seconds are both here, at
 	// the one moment anything in this system holds both, so the node offers what
@@ -144,6 +175,27 @@ func (docker *DockerRuntime) fetchArtifact(ctx context.Context, command capabili
 		return "", 0, fmt.Errorf("prepare Artifact %s: %w", command.ArtifactID, err)
 	}
 	return "sha256:" + hex.EncodeToString(sum.Sum(nil)), size, nil
+}
+
+// transportFailure is what this node says when the object store could not be
+// reached or the stream broke, and it is deliberately not the error the standard
+// library handed back. A read minted for one fetch is a presigned URL, and
+// net/http answers a failed request with a *url.Error whose message is the whole
+// request URL: signature, credential parameter and all. That string becomes the
+// operation's failure, which the control plane stores durably in a column whose
+// contract is that it never carries credential material, so wrapping it would
+// put a working read of the object into the record it was kept out of, for the
+// rest of its window and for the life of the database.
+//
+// What is kept is the transport's own reason, which is what an operator needs: a
+// refused connection and a reset stream read differently, and neither of them
+// needs the URL to be understood.
+func transportFailure(artifactID string, err error) error {
+	var transport *url.Error
+	for errors.As(err, &transport) {
+		err = transport.Err
+	}
+	return fmt.Errorf("read Artifact %s from the object store: %w", artifactID, err)
 }
 
 func writeArtifactRecord(path string, record artifactReplicaFile) error {

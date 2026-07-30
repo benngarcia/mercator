@@ -221,26 +221,57 @@ func mustRawMap(t *testing.T, value map[string]string) map[string]json.RawMessag
 	return out
 }
 
-func TestDispositionForOfferKind(t *testing.T) {
+// TestOnlyAOneShotExecutionIsDestroyedByTheEndOfItsRun holds the whole of the
+// cleanup rule, and the case it exists for is the middle one. A machine
+// provisioned to hold a Rental and a one-shot execution are both capacity that
+// did not exist until Mercator asked, so the offer kind alone answers the same
+// for both, and the answer it gives is right for only one of them. Destroying
+// the Rental's machine when a Run ends leaves the next Run provisioning again
+// and an operator paying for the boot twice, which is the reusable lane deleted.
+func TestOnlyAOneShotExecutionIsDestroyedByTheEndOfItsRun(t *testing.T) {
 	cases := []struct {
-		kind OfferKind
-		want Disposition
+		name  string
+		offer OfferSnapshot
+		want  Disposition
 	}{
-		{OfferKindProvisionable, DispositionTerminate},
-		{OfferKindStanding, DispositionRelease},
+		{
+			name:  "a one-shot execution Mercator allocated",
+			offer: OfferSnapshot{ID: "off_oneshot", Kind: OfferKindProvisionable, Lane: LaneEphemeral},
+			want:  DispositionTerminate,
+		},
+		{
+			name:  "a fresh machine allocated to hold a Rental",
+			offer: OfferSnapshot{ID: "off_fresh", Kind: OfferKindProvisionable, Lane: LaneReusable},
+			want:  DispositionRelease,
+		},
+		{
+			name:  "a slot on a machine Mercator does not own",
+			offer: OfferSnapshot{ID: "off_borrowed", Kind: OfferKindStanding, Lane: LaneEphemeral},
+			want:  DispositionRelease,
+		},
+		{
+			name:  "an enrolled machine Mercator holds",
+			offer: OfferSnapshot{ID: "off_node", Kind: OfferKindStanding, Lane: LaneReusable},
+			want:  DispositionRelease,
+		},
 	}
 	for _, tc := range cases {
-		got, err := DispositionForOfferKind(tc.kind)
+		got, err := tc.offer.CleanupDisposition()
 		if err != nil {
-			t.Fatalf("DispositionForOfferKind(%q): %v", tc.kind, err)
+			t.Fatalf("%s: %v", tc.name, err)
 		}
 		if got != tc.want {
-			t.Fatalf("DispositionForOfferKind(%q) = %q, want %q", tc.kind, got, tc.want)
+			t.Fatalf("%s is cleaned up by %q, want %q", tc.name, got, tc.want)
 		}
 	}
-	for _, kind := range []OfferKind{"", "unknown"} {
-		if _, err := DispositionForOfferKind(kind); err == nil {
-			t.Fatalf("DispositionForOfferKind(%q) accepted an unknown offer kind", kind)
+	for _, offer := range []OfferSnapshot{
+		{ID: "off_unknown_kind", Kind: "unknown", Lane: LaneReusable},
+		{ID: "off_no_kind", Lane: LaneReusable},
+		{ID: "off_unknown_lane", Kind: OfferKindStanding, Lane: "unknown"},
+		{ID: "off_no_lane", Kind: OfferKindStanding},
+	} {
+		if _, err := offer.CleanupDisposition(); err == nil {
+			t.Fatalf("offer %q states kind %q and lane %q, and cleanup was decided anyway", offer.ID, offer.Kind, offer.Lane)
 		}
 	}
 }

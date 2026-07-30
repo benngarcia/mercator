@@ -50,7 +50,8 @@ func (world *simulatedWorld) Prepare(_ context.Context, request adapter.PrepareR
 	world.desired[request.WorkspaceID] = wanted
 	receipt.Abandoned = world.abandonUnwantedPrefetches(world.everythingWanted())
 	for _, item := range request.Wanted {
-		outcome, started := world.startPrefetch(item)
+		world.noteContentCredentials(request.WorkspaceID, item)
+		outcome, started := world.startPrefetch(request.WorkspaceID, item)
 		switch outcome {
 		case prefetchStarted:
 			receipt.Started = append(receipt.Started, started)
@@ -86,7 +87,13 @@ const (
 // is moving, nothing was kept, and the same content asked for again is a first
 // ask rather than a redelivery. So the identity is remembered only once a fetch
 // this world really took on, which is the same rule the operation store holds.
-func (world *simulatedWorld) startPrefetch(item adapter.PrepareItem) (prefetchOutcome, string) {
+//
+// Content this machine may not have is refused for the same reason a fault is:
+// the registry or the object store turned the fetch away, nothing landed, and
+// asking again with material that authorises the read will work. It is checked
+// before the fault, because a fetch nobody would have served is refused whether
+// or not the fixture also arranged for the link to fail.
+func (world *simulatedWorld) startPrefetch(workspaceID string, item adapter.PrepareItem) (prefetchOutcome, string) {
 	operation := prefetchOperationID(item)
 	if world.prepared[operation] {
 		world.recordPrefetchEffect(item, operation, EffectCommandDuplicate, map[string]any{"already_requested": true})
@@ -98,6 +105,10 @@ func (world *simulatedWorld) startPrefetch(item adapter.PrepareItem) (prefetchOu
 			"reason": "this machine keeps nothing, so content prepared on it could not outlive one workload",
 		})
 		return prefetchUnsupported, operation
+	}
+	if reason := world.contentRefusal(workspaceID, item); reason != "" {
+		world.recordPrefetchEffect(item, operation, EffectCommandRejected, map[string]any{"reason": reason})
+		return prefetchRefused, operation
 	}
 	if fault := world.matchOperationFault(prefetchOperation(item), item.RunID, 0); fault != nil && fault.Action == scenario.FaultRejectCommand {
 		world.recordPrefetchEffectWithFault(item, operation, EffectCommandRejected, map[string]any{

@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 45 {
-		t.Fatalf("latest invariant results = %d, want 45", len(latest))
+	if len(latest) != 53 {
+		t.Fatalf("latest invariant results = %d, want 53", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -261,8 +261,103 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		"safety.secrets_absent": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{{Data: []byte(`{"password":"exposed"}`)}}
 		},
+		// The world this exists to catch is the one a machine that outlives its
+		// first session walks into: an agent whose credential lapsed answering with
+		// the invitation it joined on, so one bootstrap is redeemed twice and the
+		// thing that was supposed to be spent by being used never is.
+		"safety.bootstrap_credential_is_short_lived_and_single_use": func(observation *InvariantObservation) {
+			observation.BootstrapCredentials = []bootstrapCredential{mintedFor(1, 2)}
+		},
+		// A registry credential handed to a machine with nothing to expire it. It
+		// names the pull it was minted for and reads only that image, and it goes on
+		// reading it for as long as the host exists, which is the whole of what
+		// separates one fetch's material from the account behind it.
+		"safety.content_credentials_are_scoped_and_expiring": func(observation *InvariantObservation) {
+			observation.ContentCredentials = []contentCredential{credentialWithNoExpiry(now)}
+		},
 		"safety.ephemeral_capacity_not_reused": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{queuedBehindOneShotCapacity()}
+		},
+		// The world this exists to catch is the one provisioning walks into: a
+		// machine a provider allocated and billed for, whose agent never opened a
+		// session, publishing an image inventory and a queue anyway. Both are the
+		// agent's own work, so both are invented here, and every reader downstream
+		// takes them as warmth to prefer and a Booking to dispatch. The Run that
+		// wins the queue is then launched at a host nothing can reach.
+		"safety.reusable_capacity_has_an_enrolled_runtime": func(observation *InvariantObservation) {
+			observation.World.Offers = []domain.OfferSnapshot{{
+				ID:        "rental-nobody-is-on",
+				MachineID: "simcloud-4090-a17c",
+				Kind:      domain.OfferKindStanding,
+				Lane:      domain.LaneReusable,
+				RentalID:  "rnt_never_enrolled",
+				Images: domain.ImageInventory{
+					Known:        true,
+					LayerDigests: []string{"sha256:nobody-enumerated-this"},
+				},
+			}}
+			observation.RentalSchedules["rnt_never_enrolled"] = domain.RentalSchedule{
+				RentalID: "rnt_never_enrolled",
+				Version:  2,
+				Bookings: []domain.ScheduledBooking{
+					{Booking: domain.Booking{ID: "booking-running", State: domain.BookingStateRunning, ScheduleVersion: 1}},
+					{Booking: domain.Booking{ID: "booking-waiting", State: domain.BookingStateQueued, ScheduleVersion: 2}},
+				},
+			}
+		},
+		// A host stating a CUDA 12 driver taking a launch whose image declares
+		// CUDA 13. Nothing about the machine is short: it has the cards, the room,
+		// and a driver its provider stands behind, and the image's own accelerator
+		// stack cannot talk to that driver. Before this rule the only thing in the
+		// tree that would have noticed was the process dying, minutes into a
+		// machine Mercator had already paid to provision and boot.
+		"safety.host_supports_the_image_it_was_given": func(observation *InvariantObservation) {
+			observation.World.PublishedHostFacts = map[string]domain.HostFacts{
+				"rental-cuda-12": {
+					Attested: map[domain.HostFact]bool{domain.HostFactNvidiaDriver: true},
+					Driver:   domain.AcceleratorDriver{Vendor: "nvidia", Version: "525.85.12", Capability: "12.0"},
+				},
+			}
+			observation.Workloads["run-cuda-13"] = domain.WorkloadRevision{
+				Spec: domain.WorkloadSpec{Resources: domain.ResourceRequirements{
+					Host: domain.HostRequirements{MinDriverCapability: "13.0"},
+				}},
+			}
+			observation.Effects = []EffectRecord{{
+				Sequence:      1,
+				Operation:     OperationProviderLaunch,
+				Command:       EffectCommandAccepted,
+				CorrelationID: "run-cuda-13",
+				Request:       json.RawMessage(`{"run_id":"run-cuda-13","offer_id":"rental-cuda-12"}`),
+			}}
+		},
+		// A marketplace template publishing a lease. The machine does not exist
+		// yet, nothing has allocated it, and the Rental identity it carries is a
+		// Rental Schedule key: Placement can put a Booking on it and the next Run
+		// can queue behind a machine nothing will ever free. It is the world the
+		// production offer route was in twice over, from an adapter stating its own
+		// contract id and from aggregation minting one for any standing offer in
+		// the reusable lane.
+		"safety.a_rental_identity_is_capacity_mercator_holds": func(observation *InvariantObservation) {
+			observation.World.Offers = []domain.OfferSnapshot{{
+				ID:       "listing-nobody-rented",
+				Kind:     domain.OfferKindProvisionable,
+				Lane:     domain.LaneReusable,
+				RentalID: "rnt_never_allocated",
+			}}
+		},
+		// An agent that opened a session under a generation the machine behind its
+		// lease was never invited for. Mercator would tie the node to a machine that
+		// does not exist, and every act it addresses to the pair afterwards, the
+		// fencing token included, would go to the wrong one.
+		"safety.enrolment_names_the_generation_it_was_invited_for": func(observation *InvariantObservation) {
+			observation.Effects = []EffectRecord{provisionEffect(1), leasedEnrolmentEffect(8)}
+		},
+		// An invitation that went onto a machine and was then replaced before that
+		// machine redeemed it. The host is up, it is billing, and the only material
+		// it will ever present is one the registry no longer names.
+		"safety.a_machine_holds_material_the_control_plane_will_still_accept": func(observation *InvariantObservation) {
+			observation.BootstrapCredentials = []bootstrapCredential{refusedOnTheMachine()}
 		},
 		"safety.locality_provenance": func(observation *InvariantObservation) {
 			observation.World.Offers = []domain.OfferSnapshot{{
@@ -301,6 +396,20 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		// guarantee was already spent when the decision recording it was written.
 		"safety.promised_start_is_still_ahead": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{queuedOnADeadlineAlreadyReached(now)}
+		},
+		// The world this exists to catch is a machine a provider allocated, billed
+		// for, and that nothing ever came for: no agent opened a session on it and
+		// Mercator never gave it back. It is a full hour old here, past any patience
+		// a listing states and past the backstop, so what is left is a bill nobody
+		// is watching.
+		"liveness.provisioned_capacity_enrolls_or_is_reclaimed": func(observation *InvariantObservation) {
+			observation.Effects = []EffectRecord{{
+				ID:        "effect-abandoned",
+				Operation: OperationCapacityProvision,
+				At:        now.Add(-2 * time.Hour),
+				Command:   EffectCommandAccepted,
+				Request:   []byte(`{"rental_id":"rnt_abandoned"}`),
+			}}
 		},
 		"liveness.lost_response_reconciliation": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{{CorrelationID: "run-missing", Response: EffectResponseLost}}
@@ -602,6 +711,156 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 
 	if len(cases) != len(DefaultInvariantRegistry().invariants) {
 		t.Fatalf("deliberate cases = %d, default invariants = %d", len(cases), len(DefaultInvariantRegistry().invariants))
+	}
+}
+
+// TestTheLedgerReadsTheCapacityLifecycleItWillBeAskedToRecord is why the capacity
+// vocabulary lands before anything emits it. safety.idempotent_external_commands
+// reads only the operations the ledger counts as changing the world, so an
+// operation left out of that list is one the rule walks straight past: a machine
+// allocated twice under one operation key or a stopped machine resumed twice would
+// be a world no rule here objected to, and each is a bill Mercator would be wrong
+// about.
+//
+// It reads the whole registry rather than the one rule it is about, and that is
+// the half the first version of this test got wrong. A rule that trips over an
+// operation it has no business reading is a rule that will report a violation on
+// the first world to record a provision, and reading one result by ID hid exactly
+// that: two prewarming rules were decoding the request projection of every
+// accepted effect before deciding whether the effect was theirs.
+//
+// The ledger is written by hand so each pair is the one fact the case is about
+// and nothing else. Each record states the request projection its operation
+// really carries and the moment it happened, which
+// liveness.provisioned_capacity_enrolls_or_is_reclaimed needs to be a rule about
+// a machine at all: it is keyed on the lease, and it is the age of an allocation
+// nothing came for that it objects to. Two entries stamped now are a machine just
+// allocated, which is what every provision looks like for its first minute.
+func TestTheLedgerReadsTheCapacityLifecycleItWillBeAskedToRecord(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	for _, operation := range []string{
+		OperationCapacityProvision,
+		OperationCapacityStop,
+		OperationCapacityResume,
+		OperationCapacityTerminate,
+	} {
+		t.Run(operation, func(t *testing.T) {
+			observation := handWrittenLedger(now,
+				EffectRecord{
+					Operation: operation, OperationID: "operation-1", At: now,
+					Command: EffectCommandAccepted,
+					Request: []byte(`{"rental_id":"rnt_1"}`), Consequence: []byte(`{"native_ref":"machine-first"}`),
+				},
+				EffectRecord{
+					Operation: operation, OperationID: "operation-1", At: now,
+					Command: EffectCommandAccepted,
+					Request: []byte(`{"rental_id":"rnt_1"}`), Consequence: []byte(`{"native_ref":"machine-second"}`),
+				},
+			)
+
+			broken := brokenInvariants(DefaultInvariantRegistry().Evaluate(observation))
+
+			if !slices.Equal(broken, []string{"safety.idempotent_external_commands"}) {
+				t.Fatalf("one %s key with two answers broke %v, want the idempotency rule alone", operation, broken)
+			}
+		})
+	}
+}
+
+// TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated is the other
+// half of the same classification, and the half a list of operation names invites
+// getting wrong. Four kinds of entry are in the capacity family and are not
+// commands with an idempotency key behind them.
+//
+// Observing a machine and listing what this connection owns allocate nothing and
+// are asked repeatedly on purpose, so two answers that differ are a machine whose
+// state moved between them.
+//
+// An enrolment is not Mercator's command at all. The registry reinvites an agent
+// that restarted or let its lease lapse, and it enrols again under the same node
+// and the same generation: each enrolment closes the previous session, mints a
+// new one, and returns the next fencing token, so one identity has as many
+// different consequences as there were enrolments, every one of them correct. A
+// replayed token is refused with ErrEnrollmentSpent rather than answered as a
+// duplicate, so a token stays redeemable once whatever this rule does. Counted
+// here, a node that came back from a reboot would be a violation.
+//
+// Each record states the request projection its operation really carries, which is
+// what the enrolment case needs to be an enrolment at all:
+// safety.reusable_capacity_has_an_enrolled_runtime reads which machine and which
+// lease a session was opened for, so an entry with no projection is not an
+// enrolment this world would ever write, and asserting about one would be asserting
+// about nothing.
+func TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	for operation, record := range map[string]struct {
+		request string
+		answers [2]string
+	}{
+		OperationCapacityObserve: {
+			request: `{"rental_id":"rnt_1","native_ref":"machine-1"}`,
+			answers: [2]string{`{"state":"starting"}`, `{"state":"active"}`},
+		},
+		OperationCapacityListOwned: {
+			request: `{"workspace_id":"ws_lab"}`,
+			answers: [2]string{`{"owned":1}`, `{"owned":2}`},
+		},
+		OperationNodeEnrolled: {
+			request: `{"machine_id":"machine-1","rental_id":"rnt_1","node_id":"nod_1","generation":7}`,
+			answers: [2]string{`{"fencing_token":1}`, `{"fencing_token":2}`},
+		},
+	} {
+		t.Run(operation, func(t *testing.T) {
+			observation := handWrittenLedger(now,
+				EffectRecord{
+					Operation: operation, OperationID: "nod_1/generation-7",
+					Command: EffectCommandAccepted,
+					Request: []byte(record.request), Consequence: []byte(record.answers[0]),
+				},
+				EffectRecord{
+					Operation: operation, OperationID: "nod_1/generation-7",
+					Command: EffectCommandAccepted,
+					Request: []byte(record.request), Consequence: []byte(record.answers[1]),
+				},
+			)
+
+			broken := brokenInvariants(DefaultInvariantRegistry().Evaluate(observation))
+
+			if len(broken) > 0 {
+				t.Fatalf("two %s records answering differently broke %v", operation, broken)
+			}
+		})
+	}
+}
+
+// brokenInvariants is every registered rule this observation put into violation,
+// which is what a test about one rule has to read: a ledger entry that trips an
+// unrelated rule is the same defect as one the intended rule misses.
+func brokenInvariants(results []InvariantResult) []string {
+	var broken []string
+	for _, result := range results {
+		if result.Status != InvariantPassed {
+			broken = append(broken, result.ID)
+		}
+	}
+	slices.Sort(broken)
+	return broken
+}
+
+// handWrittenLedger is an observation whose only content is the effects a test
+// states, for rules about the ledger that no Blueprint can yet drive.
+func handWrittenLedger(now time.Time, effects ...EffectRecord) InvariantObservation {
+	return InvariantObservation{
+		StartedAt:                   now,
+		Now:                         now,
+		World:                       WorldTruthSnapshot{At: now},
+		Workloads:                   map[string]domain.WorkloadRevision{},
+		RentalSchedules:             map[string]domain.RentalSchedule{},
+		RunRequirements:             map[string]RunArrival{},
+		ArtifactCatalog:             map[string]domain.ArtifactVersion{},
+		SeededLocality:              map[string]map[string]bool{},
+		ProjectionRebuildEquivalent: true,
+		Effects:                     effects,
 	}
 }
 

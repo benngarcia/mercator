@@ -144,20 +144,29 @@ func TestCreateClassifiesProviderFailures(t *testing.T) {
 	}
 }
 
+// TestCreateFailureSanitizesAndBoundsResponseBody covers the one credential a
+// create body carries now: the machine's single-use invitation, inside the
+// bootstrap script. A provider that echoes the request back would otherwise put
+// a live credential into the operator's own diagnostic.
 func TestCreateFailureSanitizesAndBoundsResponseBody(t *testing.T) {
+	script, err := encodedBootstrapScript(bootstrap(), testAgentDownloadURL)
+	if err != nil {
+		t.Fatalf("render bootstrap: %v", err)
+	}
 	request := createRequest{LaunchConfiguration: &launchConfiguration{
-		Type: "docker",
-		DockerConfiguration: &dockerConfiguration{
-			Envs:                []envVar{{Name: "TOKEN", Value: "workload-secret"}},
-			RegistryCredentials: &registryCredentials{Username: "registry-user", Password: "registry-secret"},
-		},
+		Type:                "script",
+		ScriptConfiguration: &scriptConfiguration{Base64Script: script},
 	}}
-	body := `{"code":"INVALID_ARGUMENT","message":"secret-key workload-secret registry-secret registry-user","request":{"launch_configuration":"provider request payload"},"detail":"` + strings.Repeat("x", maxProviderResponseBodyBytes*2) + `"}`
+	// The padding field is named to sort last. Redaction re-marshals the decoded
+	// body, which orders keys alphabetically, so padding under an earlier name
+	// would push the echoed material past the size bound and the assertions below
+	// would pass on a body that never contained it.
+	body := `{"code":"INVALID_ARGUMENT","message":"secret-key ` + script + `","request":{"launch_configuration":"provider request payload"},"zz_detail":"` + strings.Repeat("x", maxProviderResponseBodyBytes*2) + `"}`
 	c := newTestClient(func(*http.Request) (*http.Response, error) {
 		return jsonResponse(http.StatusBadRequest, body), nil
 	})
 
-	_, err := c.createInstance(t.Context(), request)
+	_, err = c.createInstance(t.Context(), request)
 
 	var failure *adapter.ProviderFailure
 	if !errors.As(err, &failure) {
@@ -166,7 +175,7 @@ func TestCreateFailureSanitizesAndBoundsResponseBody(t *testing.T) {
 	if !failure.ResponseTruncated || len(failure.ResponseBody) > maxProviderResponseBodyBytes {
 		t.Fatalf("response body was not bounded: len=%d truncated=%v", len(failure.ResponseBody), failure.ResponseTruncated)
 	}
-	for _, secret := range []string{"secret-key", "workload-secret", "registry-secret", "registry-user", "provider request payload"} {
+	for _, secret := range []string{"secret-key", script, bootstrap().EnrollmentToken, "provider request payload"} {
 		if strings.Contains(failure.ResponseBody, secret) {
 			t.Fatalf("sanitized response contains %q: %s", secret, failure.ResponseBody)
 		}
@@ -195,26 +204,5 @@ func TestErrorsNeverIncludeAPIKeyAndAreTruncated(t *testing.T) {
 	}
 	if len(err.Error()) > 400 {
 		t.Fatalf("error must truncate the body, got %d bytes", len(err.Error()))
-	}
-}
-
-func TestShellJoinEdgeCases(t *testing.T) {
-	cases := []struct {
-		args []string
-		want string
-	}{
-		{nil, ""},
-		{[]string{"python", "train.py"}, "python train.py"},
-		{[]string{""}, "''"},
-		{[]string{"a b"}, "'a b'"},
-		{[]string{"$HOME"}, "'$HOME'"},
-		{[]string{`he said "hi"`}, `'he said "hi"'`},
-		{[]string{"don't"}, `'don'\''t'`},
-		{[]string{"--flag=value", "path/to/file:ro"}, "--flag=value path/to/file:ro"},
-	}
-	for _, tc := range cases {
-		if got := shellJoin(tc.args); got != tc.want {
-			t.Errorf("shellJoin(%q) = %q, want %q", tc.args, got, tc.want)
-		}
 	}
 }

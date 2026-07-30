@@ -40,9 +40,9 @@ func (o *Orchestrator) PreviewPlacement(ctx context.Context, workspaceID, runID 
 // this evaluation is standing in for. A preview knows neither, because it is
 // about a workload rather than about a Run that has been answered before.
 type placementRequest struct {
-	excludedOfferSnapshotIDs []string
-	supersedes               string
-	supersedesReason         string
+	excluded         []domain.OfferExclusion
+	supersedes       string
+	supersedesReason string
 }
 
 // manifestBudget is how long Placement waits for a registry. Resolution is an
@@ -134,13 +134,13 @@ func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, work
 			ConnectionsQueried:  collected.Queried,
 			ExcludedConnections: collected.Excluded,
 		},
-		Schedules:                schedules,
-		ExcludedOfferSnapshotIDs: request.excludedOfferSnapshotIDs,
-		Supersedes:               request.supersedes,
-		SupersedesReason:         request.supersedesReason,
-		History:                  history,
-		ModelVersion:             "latency-v1",
-		EvaluatedAt:              o.now().UTC(),
+		Schedules:        schedules,
+		Excluded:         request.excluded,
+		Supersedes:       request.supersedes,
+		SupersedesReason: request.supersedesReason,
+		History:          history,
+		ModelVersion:     "latency-v1",
+		EvaluatedAt:      o.now().UTC(),
 	})
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, err

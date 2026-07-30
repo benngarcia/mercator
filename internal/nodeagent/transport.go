@@ -60,6 +60,27 @@ func (transport *HTTPTransport) Enroll(ctx context.Context, request capability.E
 	return enrollment, nil
 }
 
+// RenewSession takes a later credential using the one this agent still holds.
+// It is the only exchange here authenticated by a credential the agent is about
+// to stop using, and it is what keeps a machine reachable past the life of the
+// invitation it joined with.
+func (transport *HTTPTransport) RenewSession(ctx context.Context, nodeID, sessionToken string) (capability.SessionRenewal, error) {
+	var response nodeapi.SessionRenewalResponse
+	if err := transport.post(ctx, "/v1/node-agent/"+nodeID+"/session/renew", sessionToken, struct{}{}, &response); err != nil {
+		return capability.SessionRenewal{}, err
+	}
+	expires, err := parseTime(response.SessionExpires)
+	if err != nil {
+		return capability.SessionRenewal{}, err
+	}
+	return capability.SessionRenewal{
+		NodeID:         response.NodeID,
+		SessionToken:   response.SessionToken,
+		SessionExpires: expires,
+		FencingToken:   response.FencingToken,
+	}, nil
+}
+
 // Session holds the command stream open until the connection ends or ctx is
 // cancelled. Commands arrive as newline-delimited JSON.
 func (transport *HTTPTransport) Session(ctx context.Context, nodeID, sessionToken string, commands chan<- node.Command) error {

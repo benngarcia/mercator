@@ -62,25 +62,44 @@ func OpenState(path, nodeID string) (*State, error) {
 	return state, nil
 }
 
-// Session returns a session credential that has not expired at now.
-func (state *State) Session(now time.Time) (string, uint64, bool) {
+// Session returns the credential this agent holds and the moment it lapses, and
+// whether it holds one at all.
+//
+// Whether the credential is still worth using is the agent's judgment rather
+// than this file's, which is why the expiry is answered instead of compared. An
+// agent has to renew before the lapse, because the material it would need to
+// enroll again is spent, so the interesting question is never "has this expired"
+// but "will it still be valid when the request I am about to make lands".
+func (state *State) Session() (string, time.Time, bool) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.data.SessionToken == "" || !now.UTC().Before(state.data.SessionExpires) {
-		return "", 0, false
+	if state.data.SessionToken == "" {
+		return "", time.Time{}, false
 	}
-	return state.data.SessionToken, state.data.FencingToken, true
+	return state.data.SessionToken, state.data.SessionExpires, true
 }
 
 // Enrolled records a fresh enrollment. A new fencing token means the control
 // plane has superseded whatever this agent was doing, so the applied-operation
 // memory stays and the session is replaced.
 func (state *State) Enrolled(enrollment capability.Enrollment) error {
+	return state.holds(enrollment.SessionToken, enrollment.SessionExpires, enrollment.FencingToken)
+}
+
+// Renewed records a later credential for the session this agent already has.
+// The fencing token comes back unchanged from a renewal, and it is written from
+// the answer rather than left alone for the same reason every other field is:
+// what this agent believes about itself is what the control plane last told it.
+func (state *State) Renewed(renewal capability.SessionRenewal) error {
+	return state.holds(renewal.SessionToken, renewal.SessionExpires, renewal.FencingToken)
+}
+
+func (state *State) holds(token string, expires time.Time, fencing uint64) error {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.data.SessionToken = enrollment.SessionToken
-	state.data.SessionExpires = enrollment.SessionExpires.UTC()
-	state.data.FencingToken = enrollment.FencingToken
+	state.data.SessionToken = token
+	state.data.SessionExpires = expires.UTC()
+	state.data.FencingToken = fencing
 	return state.persistLocked()
 }
 

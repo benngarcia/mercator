@@ -39,6 +39,8 @@ func TestARunIsNotPlacedUntilItsInputIsDurable(t *testing.T) {
 		scheduler.New(),
 		fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})),
 		WithArtifactCatalog(catalog),
+
+		withTestCapacity(),
 	)
 	createConsumingRun(t, ctx, orch)
 
@@ -93,6 +95,8 @@ func TestARunReadingAnArtifactNeedsAnObjectStoreToAskAbout(t *testing.T) {
 		openOrchestratorLog(t),
 		scheduler.New(),
 		fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})),
+
+		withTestCapacity(),
 	)
 	revision := orchRevision()
 	revision.Spec.Artifacts = domain.ArtifactRequirements{Consumes: []string{checkpointArtifact}}

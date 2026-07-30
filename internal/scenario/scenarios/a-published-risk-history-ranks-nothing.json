@@ -14,6 +14,7 @@
       {
         "id": "ask-flaky",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 2.0,
         "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
         "reliability": {"start_failure_rate": 0.4, "interruption_rate": 0.25, "confidence": 0.9}
@@ -21,6 +22,7 @@
       {
         "id": "ask-steady",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 2.0,
         "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
         "reliability": {"start_failure_rate": 0, "interruption_rate": 0, "confidence": 0.9}
@@ -28,6 +30,7 @@
       {
         "id": "ask-unmeasured",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 2.0,
         "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"}
       }
@@ -43,7 +46,7 @@
     "outcome": "place",
     "offer": "ask-flaky",
     "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
-    "disposition": "terminate",
+    "disposition": "release",
     "candidates": {
       "ask-flaky": {
         "feasible": true,

@@ -2,6 +2,7 @@ package capability
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
@@ -109,6 +110,29 @@ type Enrollment struct {
 	Duplicate bool `json:"duplicate"`
 }
 
+// SessionRenewal is a fresh credential for a session that already exists. It is
+// deliberately not an Enrollment. Enrolling redeems a single-use invitation and
+// moves the fencing token, which supersedes whatever the node was doing;
+// renewing spends nothing, moves nothing, and leaves the machine exactly as it
+// was a moment before.
+//
+// A node holds one of these because both credentials it ever has are short
+// lived. The invitation is spent the moment it is redeemed, so an agent whose
+// session lapsed has nothing left to present: it renews ahead of the lapse, or
+// it stops being able to speak to the control plane at all while its machine
+// goes on running.
+//
+// It carries the fencing token so the agent can see that renewing did not move
+// it. A renewal that came back with a different one would mean something
+// superseded this node while it was asking, and the agent's memory of what it
+// has already applied would no longer line up with the control plane's.
+type SessionRenewal struct {
+	NodeID         string    `json:"node_id"`
+	SessionToken   string    `json:"session_token"`
+	SessionExpires time.Time `json:"session_expires"`
+	FencingToken   uint64    `json:"fencing_token"`
+}
+
 // NodeFacts is everything the node reports about itself. Each group has one
 // authority: the node observes its own host and inventory, and nothing else
 // does.
@@ -157,6 +181,9 @@ func (facts NodeFacts) Established() NodeFacts {
 	if !facts.Host.Disk.Known {
 		facts.Host.Disk = DiskFacts{}
 	}
+	if !facts.Host.Accelerator.Established {
+		facts.Host.Accelerator = AcceleratorFacts{}
+	}
 	return facts
 }
 
@@ -165,21 +192,78 @@ func (facts NodeFacts) Established() NodeFacts {
 // against these, and never installs a workload's accelerator stack onto the
 // host.
 type HostFacts struct {
-	OS                 string `json:"os"`
-	KernelVersion      string `json:"kernel_version"`
-	Architecture       string `json:"architecture"`
-	ContainerRuntime   string `json:"container_runtime"`
-	RuntimeVersion     string `json:"runtime_version"`
-	AcceleratorToolkit string `json:"accelerator_toolkit,omitempty"`
-	DriverVersion      string `json:"driver_version,omitempty"`
-	// DriverCapability is the highest accelerator capability the driver
-	// supports, expressed in the vendor's own versioning.
-	DriverCapability string                        `json:"driver_capability,omitempty"`
-	Accelerators     []domain.AcceleratorInventory `json:"accelerators,omitempty"`
-	CPUMillis        int64                         `json:"cpu_millis"`
-	MemoryBytes      int64                         `json:"memory_bytes"`
-	Disk             DiskFacts                     `json:"disk,omitzero"`
-	Network          []domain.NetworkFact          `json:"network,omitempty"`
+	OS               string `json:"os"`
+	KernelVersion    string `json:"kernel_version"`
+	Architecture     string `json:"architecture"`
+	ContainerRuntime string `json:"container_runtime"`
+	RuntimeVersion   string `json:"runtime_version"`
+	// AcceleratorToolkit is what the container runtime needs in order to hand a
+	// container the cards at all, which is the runtime's business rather than the
+	// driver's. It sits beside the driver facts rather than inside them because
+	// the three legs of the contract have three owners: the host provides the
+	// driver, the container runtime provides the passthrough, and the image
+	// provides the workload's own accelerator stack.
+	AcceleratorToolkit string               `json:"accelerator_toolkit,omitempty"`
+	Accelerator        AcceleratorFacts     `json:"accelerator,omitzero"`
+	CPUMillis          int64                `json:"cpu_millis"`
+	MemoryBytes        int64                `json:"memory_bytes"`
+	Disk               DiskFacts            `json:"disk,omitzero"`
+	Network            []domain.NetworkFact `json:"network,omitempty"`
+}
+
+// AcceleratorFacts is what this node established about the cards under it and
+// the driver that drives them, and separately whether it established anything
+// at all.
+//
+// The two are stated apart for the reason DiskFacts states them apart, and the
+// cost of not stating them apart is larger here. Every field below is empty on
+// a machine with no cards and empty on a machine whose agent never looked, so a
+// reader with only the values cannot tell a CPU box from an unmeasured GPU box.
+// Read as a measurement, the empty inventory strikes a real GPU machine out of
+// every accelerator placement with RESOURCE_INSUFFICIENT, which says the fleet
+// can never run this work on the strength of nobody having run nvidia-smi.
+//
+// Established is the agent saying it looked, whatever it found. A machine that
+// looked and found no NVIDIA driver has established that there is none, which
+// is a refusal an operator can act on; a machine that never looked has
+// established nothing, and NodeFacts.Established erases whatever it happened to
+// carry so no reader downstream has two answers to choose between.
+type AcceleratorFacts struct {
+	Established bool `json:"established"`
+	// Vendor is who makes the driver this host runs, stated only where there is
+	// one. A machine that looked and found no driver states the fact that it
+	// looked and nothing else.
+	Vendor           string `json:"vendor,omitempty"`
+	DriverVersion    string `json:"driver_version,omitempty"`
+	DriverCapability string `json:"driver_capability,omitempty"`
+	// Devices is the cards this host holds, in the same vocabulary a provider
+	// lists them in, because Placement counts both against one requirement.
+	Devices []domain.AcceleratorInventory `json:"devices,omitempty"`
+}
+
+// Attestations is what this node's accelerator report says in the vocabulary an
+// offer publishes. A node that looked states the driver fact either way; a node
+// that never looked states nothing, so Placement refuses it as a silence rather
+// than as a machine with no driver.
+func (facts AcceleratorFacts) Attestations() map[domain.HostFact]bool {
+	if !facts.Established {
+		return nil
+	}
+	return map[domain.HostFact]bool{
+		domain.HostFactNvidiaDriver: strings.EqualFold(facts.Vendor, "nvidia") && facts.DriverVersion != "",
+	}
+}
+
+// Driver is the host half of the accelerator stack as an offer carries it.
+func (facts AcceleratorFacts) Driver() domain.AcceleratorDriver {
+	if !facts.Established {
+		return domain.AcceleratorDriver{}
+	}
+	return domain.AcceleratorDriver{
+		Vendor:     facts.Vendor,
+		Version:    facts.DriverVersion,
+		Capability: facts.DriverCapability,
+	}
 }
 
 // DiskFacts is the room on the filesystem this node's content lands on, and
@@ -277,21 +361,49 @@ type PrepareImageCommand struct {
 	// ManifestDigest.
 	Reference string
 	// RegistryCredential is short-lived material scoped to this pull. It is
-	// never logged, never persisted on the node, and never enters an event.
-	RegistryCredential string
+	// never logged, never persisted on the node, never entered into an event, and
+	// never written into the control plane's own record of the command.
+	//
+	// It is zero for an image any anonymous reader can have, which is a real
+	// answer rather than a missing one: Mercator holds no account at that
+	// registry and the node presents none.
+	RegistryCredential domain.RegistryPull
 	// Unpack requests the image be made ready to run, not merely fetched.
 	Unpack bool
+}
+
+// WithoutMaterial is this command as the durable record holds it. The secret is
+// dropped and the bound it was minted under is kept, so an operator reading the
+// record can say which pull this machine was authorised to make and until when,
+// and can present nothing.
+func (command PrepareImageCommand) WithoutMaterial() any {
+	command.RegistryCredential.Secret = ""
+	return command
 }
 
 type PrepareArtifactCommand struct {
 	nodeCommand
 	ArtifactID    string
 	ContentDigest string
-	// Source is the durable object-store location to replicate from.
+	// Source is the durable object-store location this version lives at. It is
+	// the catalog's own name for the content, which is what makes it safe to
+	// write down: nothing can be read with it.
 	Source string
-	// SourceCredential is short-lived material scoped to this fetch.
-	SourceCredential string
+	// SourceCredential is the read the control plane minted for this one fetch,
+	// which is what the node actually streams from. A node with none has no way
+	// to reach the object store at all, which is deliberate: the durable
+	// authority's own credential is never on a machine an operator rents.
+	SourceCredential domain.ArtifactRead
 	SizeBytes        int64
+}
+
+// WithoutMaterial is this command as the durable record holds it. A presigned
+// GET is a bearer credential written as a URL, so the location goes and the
+// bound stays; Source above is the catalog's own name for the same content and
+// is what a reader of the record uses to say which version this was.
+func (command PrepareArtifactCommand) WithoutMaterial() any {
+	command.SourceCredential.Location = ""
+	return command
 }
 
 type LaunchWorkloadCommand struct {

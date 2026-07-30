@@ -325,7 +325,7 @@ func (a *Adapter) Release(_ context.Context, req adapter.ReleaseRequest) (adapte
 
 // Terminate destroys the owned object the same way Release removes it, but
 // records that the TERMINATE disposition path was exercised. This lets the fake
-// drive the provisionable->terminate path end-to-end with no network while
+// drive the one-shot terminate path end-to-end with no network while
 // keeping the same idempotency (OperationKey/RequestHash) and ownership
 // machinery as Release.
 func (a *Adapter) Terminate(_ context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error) {

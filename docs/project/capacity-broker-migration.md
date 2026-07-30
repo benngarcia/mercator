@@ -2890,9 +2890,13 @@ complete because it works against a live provider.
     against the Run's own stream: `PREVIOUS_LAUNCH_FAILED` where the machine the
     last decision chose refused to start the work, and
     `PREVIOUS_DECISION_SELECTED_NOTHING` where the last decision placed the Run
-    nowhere and the fleet was asked again. Those are the only two ways Mercator
-    decides twice about one Run, and both are facts already in the log, which is why
-    the reason is read off the state rather than passed down by the caller.
+    nowhere and the fleet was asked again. Those are the two ways Mercator decides
+    twice about one Run today, and both are facts already in the log, which is why the
+    reason is read off the state rather than passed down by the caller. The vocabulary
+    holds a third, `PREVIOUS_CAPACITY_RECLAIMED`, which nothing produces until an
+    agent bootstraps on provisioned capacity in phase 5: it is capacity Mercator took,
+    gave back, and asked the fleet again about, and the fact a reader checks it
+    against is the confirmed cleanup on the machine the previous decision named.
   - Supersession is an input to the evaluation and part of the identity hash rather
     than a field stamped on afterwards. Two answers about one unchanged fleet at one
     instant are different decisions exactly because the second replaces the first,
@@ -3853,16 +3857,972 @@ complete because it works against a live provider.
     because an owned machine's shadow price already says its seconds are worth
     something to somebody else. Reserved capacity is delivered as eligible service
     classes rather than as a concept of its own, and is not deferred.
+- [x] 2026-07-27: Give the corpus the words for capacity, and the Effect Ledger the
+  operations. Nothing acts on either yet, and that is the order: the rules that
+  read a provision are already registered, so the day a provider really emits one
+  nothing else has to change for them to see it.
+  - A marketplace listing states what its provider negotiated over the machine,
+    carried as `capability.CapacitySupport` itself rather than as a Blueprint copy
+    of it. A parallel struct would be a translation of nothing and would drift, and
+    the whole point of the field is that a fixture states the set a real provider
+    answers with. It is a pointer, because a listing that negotiated nothing and a
+    listing whose provider can do nothing are different sentences, and every
+    listing in this corpus is the first.
+  - The set is a set of separate promises rather than a list of the capability
+    names a provider ticked. A provider that suspends a machine and cannot bring
+    the same one back exists, and a name list cannot tell a resume nobody offers
+    from a resume nobody mentioned.
+  - `CapacitySupport.Validate` is the contract's own coherence rule, and `Declare`
+    calls it, so an incoherent set is refused where the connection is built rather
+    than found later by whichever caller reads two of its fields together. A resume
+    without a stop, a persistent disk without a stop, an unknown idempotency
+    mechanism, and `none` with no owned listing are each refused. The last is the
+    one that matters most: a provider that deduplicates nothing and lists nothing
+    leaks every machine a lost response allocated, and there is no later moment at
+    which Mercator could find those machines to account for them. The Blueprint
+    door calls the same function, so a fixture cannot state a provider Mercator
+    would refuse to build.
+  - `capacity` and `bootstrap` belong to the reusable lane and are refused on an
+    `ephemeral` listing, because `Declare` stamps every connection that provides
+    capacity reusable. Capacity
+    implies the lane rather than accompanying a choice of one, and a one-shot
+    execution product holds nothing after its workload exits, so it has no machine
+    to stop, no machine to bring back, and no agent to enrol. Without the rule the
+    corpus could describe a provider-native one-shot execution that suspends a
+    machine and keeps its disk between Runs, which is the conflation ADR 0005 and
+    `safety.ephemeral_capacity_not_reused` exist to prevent.
+  - A listing that states any of it must name its `machine`. Every promise in the
+    set is about one machine keeping its identity through a stop, a resume, a
+    repeated provision, or a terminate, and a listing ID is numbered afresh on every
+    search.
+  - `bootstrap.never_enrolls` is stated rather than derived from a missing
+    `agent_ready` stage. Silence there already means a stage that costs nothing, and
+    a bootstrap that costs nothing is a machine ready the instant it booted, so
+    folding the two together would make the failure a provider bills for
+    indistinguishable from the fastest possible success. A listing that says its
+    agent never enrols therefore states no `agent_ready` at all, which is the one
+    provisioning stage a listing may leave out: a stage that never completes has no
+    seconds to state. It must name a deadline, because a machine nobody gives up on
+    bills for ever. The entry dated 2026-07-28 below deletes the `reclaim_after` this
+    originally offered as the alternative: no world performed it.
+  - The ledger gains six capacity operations and one enrolment.
+    `capacity.provision`, `capacity.stop`, `capacity.resume`, and
+    `capacity.terminate` change what a provider holds for Mercator and are counted
+    by `effectMutatesWorld`; `capacity.observe` and `capacity.list_owned` are reads
+    and deliberately are not, because two reads answering differently is a machine
+    whose state moved and counting them would make every reconciliation sweep a
+    violation. `node.enrolled` is not counted either, for the reason
+    `capacity.preempted` is not: both are the world acting on its own account rather
+    than a command Mercator issued under a key a provider honours. They are separate
+    from `provider.launch` and `provider.release` on purpose: those are an execution,
+    and ADR 0005 is the reason a stop that suspends a machine may never be filed
+    under a release that ends a workload. `capacity.resume` is named for the promise
+    the capability set negotiates rather than for `StartCapacity`, the method that
+    performs it.
+  - `Compile` refuses an arrival-driven Blueprint whose listing states a bootstrap,
+    for the reason it already refuses a seeded Rental Schedule. Provisioned capacity
+    bootstraps no agent in the Lab, so a listing saying its agent never arrives would
+    compile into a world that enrols nothing either way, and a fixture about a
+    stranded machine would read green beside a fixture about one that enrols
+    perfectly while both described the same world. A world statement that reaches
+    nothing is an error rather than a silence. The two new Blueprints are placement
+    fixtures, so they do not go through that path; a conformance fixture that wants
+    this world arrives with the provider.
+  - No Lab invariant, and the reason is the registry's own rule.
+    `TestEveryDefaultInvariantHasADeliberatelyFailingCase` refuses an invariant no
+    world can make fail, and no world emits a capacity operation yet. What lands
+    instead is the classification and two tests over a hand-written ledger, one for
+    each direction: an operation left out of `effectMutatesWorld` is one
+    `safety.idempotent_external_commands` walks straight past, and an operation
+    wrongly counted fails on a machine seen starting and then active. Both tests read
+    the whole registry rather than the one rule they are about, because a ledger entry
+    that trips a rule with no business reading it is the same defect as one the
+    intended rule misses.
+- [x] 2026-07-27: Take the stale claim off
+  `enrolled-node-survives-its-first-run`. It declared `rental_schedule` beside
+  `node_bootstrap` and `execution_warms_capacity`, and the Rental Schedule store,
+  its versioning, and its reservation are wired end to end with four green fixtures
+  exercising them. A target naming a capability the tree already has cannot be read
+  as evidence of anything. Its listing now names the machine it becomes and the set
+  its provider negotiated, and the new target
+  `provisioned-capacity-enrolls-or-is-reclaimed` states the other half of the same
+  transition: acquisition and boot succeed, the agent never opens a session, and
+  the record has to say the start was never observed and the application never
+  spoke. The corpus moves from 59 Blueprints, 56 green and 3 target, to 60, 56
+  green and 4 target.
+- [x] 2026-07-27: Fix what two reviewers refuted in the slice above. Every finding
+  held, two of the six being one defect stated twice, and all are fixed at the
+  source; the entries above are corrected where they stated something the tree no
+  longer does.
+  - `prefetchSettlements` decoded the request projection of every accepted effect
+    before deciding which operation the effect was, so an accepted
+    `capacity.provision`, whose answer lives in the consequence and which projects no
+    request at all, was a malformed effect rather than an operation the rule ignores.
+    The whole registry over the ledger the new test builds reported three violations,
+    not one: the intended `safety.idempotent_external_commands` plus
+    `safety.prewarm_yields_to_real_work` and `liveness.prefetch_converges`, both with
+    a JSON decode error. The slice's central claim, that the registered rules can read
+    a provision with nothing else changing, was false. Which operation an effect is
+    now decides whether the rule reads it at all, as its two sibling readers in the
+    same file already did, and both new tests read the whole registry.
+  - `node.enrolled` is no longer counted by `effectMutatesWorld`. Counting it
+    asserted that one enrolment identity yields one byte-identical consequence, and
+    the node registry is built the other way: `Reinvite` mints a fresh token for an
+    identity that already exists, so an agent that restarted or let its lease lapse
+    enrols again under the same node and generation, and every successful `Enroll`
+    closes the open session, mints a new one, and returns the next fencing token. A
+    node that came back from a reboot was a violation. A replayed token is refused
+    with `ErrEnrollmentSpent` rather than answered as a duplicate, so an enrolment
+    stays redeemable once whatever the ledger does: that guard is the registry's.
+  - The simulated world now honours `bootstrap.never_enrolls` instead of noting it
+    and enrolling anyway. Nothing can create a container on a machine Mercator has no
+    session to, so such a machine records no start moment and reports no readiness.
+    Refusing the statement in `Compile` alone was a guard in the wrong place: no
+    placement fixture uses that path, so a green Blueprint could state `never_enrolls`
+    and read green while its world booted the machine, started the workload, and
+    reported it ready at eight minutes twelve. It also settles what the exemption from
+    stating `agent_ready` was worth: provisioning does not complete on such a machine,
+    so it is never the listing that provisions fastest, and the published `expected`
+    and `p90` the scheduler predicts from are stated as they are for every other
+    listing.
+  - `provisioned-capacity-enrolls-or-is-reclaimed` asserts the reclaim half its name
+    promises. Stating only the outcome, the offer, and the two absent stages described
+    an indefinite wait: a control plane that provisions the silent machine and then
+    does nothing at all satisfied every expectation, so once the world honoured the
+    statement the fixture read as passing and would have been promoted to green as
+    evidence of a reclamation nobody built. It now carries a second, dearer listing
+    whose agent does arrive, and its last step expects the work to move there under an
+    appended decision that names the first.
+  - `capacity` and `bootstrap` are refused on an `ephemeral` listing, recorded with
+    the rule itself in the entry above.
+- [x] 2026-07-27: Fix what two reviewers refuted in the fix above. Both findings held
+  and both were the same class the entry above claims to have fixed: an expectation
+  that could not fail.
+  - The world's claim that a stranded machine holds none of the image was a property
+    of the fixture rather than of the guard. Content is recorded only for capacity
+    that keeps what it runs, so no provisionable machine in that world holds anything
+    whatever its bootstrap does, and the assertion passed with the guard deleted. What
+    is true is stronger and belongs at the world's door: Mercator keeps a machine
+    through the agent enrolled on it, so `AddMachine` refuses capacity it keeps
+    alongside an agent that never enrols, and there is now no world state in which one
+    can ask whether a stranded machine got warm. The readiness half was vacuous too,
+    because the world under test never said its applications come up at all, so no
+    launch in it recorded readiness; the world now says they do, and the enrolled
+    machine beside the stranded one is the control the silence is read against.
+  - `provisioned-capacity-enrolls-or-is-reclaimed` asserted nothing that depended on
+    time, so shortening its `advance` from twelve minutes to thirty seconds produced a
+    byte-identical failure list: it could not tell reclamation after the stated
+    deadline from giving up on any machine whose start has not been observed yet,
+    which in that fixture's own world would abandon the healthy machine too. It now
+    reconciles on both sides of the ten minutes, and the earlier look expects the
+    first answer still standing.
+  - The target pinned `PREVIOUS_LAUNCH_FAILED`, which in this tree means the launch
+    call failed with a side effect of `none`: nothing was created, which is the
+    opposite of a machine a provider allocated and is billing for.
+    `SupersededCapacityReclaimed` is the reason it states now, and it is checkable
+    against the Run's own record rather than taken on trust, because the step also
+    asserts the confirmed terminate on that machine before the work moved. The
+    expectation vocabulary gained `reclaimed` for that, read out of the cleanup and
+    the launch intent that names the machine the cleanup ended. Nothing produces the
+    new reason yet, which is the point of a target; the public contract is unchanged
+    until the behaviour that emits it lands with `node_bootstrap`.
+  - Neither half of the corpus could exercise `reclaimed` from both sides, because a
+    Run's cleanup is the last thing that happens to it and no world in the corpus
+    hands capacity back and then decides again. It is read from both sides through
+    `Run` against a replayed stream instead: handed back before the answer changed,
+    handed back after it, and released rather than terminated.
+- [x] 2026-07-28: Make a placement that chose to provision an act, and give a
+  machine nobody came for an end. `provisioned-capacity-enrolls-or-is-reclaimed`
+  is green with its `missing_capabilities` emptied, and the corpus moves from 56
+  green and 4 target to 57 and 3.
+  - The control plane gained two seams. `orchestrator.Capacity` is the lease,
+    satisfied by the Broker, and `orchestrator.Inviter` is the node registry.
+    They are separate from `orchestrator.Adapter` because Adapter is an
+    execution: ADR 0005 is why a terminate that destroys a machine may never be
+    filed under a release that ends a workload.
+  - What a Run placed on capacity to provision now does, in order: reserves its
+    Booking on the Rental the decision minted, sweeps the connection's owned
+    capacity for a machine already allocated against that Rental, invites the
+    node the machine will be with the listing's own rate on it, hands the
+    provider the bootstrap verbatim, and watches. Acquisition and boot are read
+    from the provider; whether an agent opened a session is read from the
+    registry, because nothing else can answer that. Each stage is recorded when
+    it completes with the seconds it really took, measured from the stage before
+    it.
+  - The owned-capacity sweep runs before every provision rather than only after
+    a failure. A command whose response was lost and a command never sent leave
+    Mercator's own record saying the same thing, so there is no state in which
+    the cheaper check would be correct.
+  - The enrollment token is never written down, in the public payload or the
+    private one. It is minted at the moment it is handed to a provider, and what
+    the record carries is the node identity it was minted for.
+    `TestTheProviderIsHandedTheBootstrapVerbatim` reads every event this Run
+    records back and refuses any that carries it.
+  - Reclamation is its own event and not a cleanup, because a cleanup ends a Run
+    and this is a Run that never started. The terminate happens before the work
+    moves and in the same commit that releases the Booking, and a provider that
+    refuses to destroy the machine leaves the Run exactly where it was:
+    `TestTheWorkDoesNotMoveUntilTheBillEnds` is that clause, and without it a
+    recorded reclamation would read the same in a world where the machine is
+    still billing.
+  - Offer exclusions are typed. A bare list of IDs could only say "an earlier
+    attempt refused this", which reads a machine somebody else was using and a
+    machine Mercator allocated and destroyed as one fact.
+    `PREVIOUS_ATTEMPT_CAPACITY_RECLAIMED` is the second code.
+  - Mercator's enrolment patience is fifteen minutes and a listing may state its
+    own. There is deliberately no value meaning "wait for ever".
+  - `liveness.provisioned_capacity_enrolls_or_is_reclaimed` is registered with a
+    thirty-minute bound and a deliberate failing world: an accepted
+    `capacity.provision` an hour old with no `node.enrolled` and no
+    `capacity.terminate` against its Rental. It is stated over the ledger alone,
+    because Mercator's own record can say a Run moved on and only the ledger says
+    whether the machine it moved off is still allocated.
+  - `safety.capacity_lifecycle_is_negotiated` is NOT registered, and the reason
+    is the registry's own rule. Nothing in the tree stops or resumes capacity:
+    this slice performs provision, observe, terminate, and list_owned, and
+    `CapacitySupport.Claims` returns true for the first three unconditionally.
+    The production half of that promise is already made where the provider is,
+    in `Broker.providerFor`, which refuses an operation a connection never
+    claimed before any request is sent. A rule policing an act no path performs,
+    against a set no ledger entry yet carries, would be a rule that could only
+    fail against a hand-written observation. It lands with the slice that stops
+    or resumes a machine.
+  - Two green Blueprints changed, and it is the honest consequence rather than a
+    fixture bent to fit. `a-launch-is-eight-stages` and
+    `a-start-is-a-moment-somebody-observed` both measured a start latency from
+    the moment the launch was accepted, and that moment used to be before the
+    machine existed, so the figure they asserted was provisioning plus the image.
+    The three provisioning stages are now spent under the lease with three
+    actuals of their own, so what is left between the launch being accepted and
+    the container starting is the content the machine still owed: 58s and 288s.
+    Both also need one more look, because a control plane that never looks never
+    launches.
+  - `capability.CapacityProvider.Provision` is now `ProvisionCapacity`. Every
+    sibling act was already named for the lease, and a provider that also
+    launches workloads has two things it could be asked to provision.
+  - `Compile` no longer refuses a listing that states a bootstrap. That refusal
+    was correct while the Lab built no machine from a listing; it now allocates
+    one, honours `never_enrolls`, and carries the stated patience onto the offer,
+    so the statement is performed rather than turned away. The test that guarded
+    it is replaced by two conformance cases over the Effect Ledger:
+    `provisioned-capacity-becomes-a-machine-mercator-holds` asserts an accepted
+    `capacity.provision`, a `node.enrolled` naming the same Rental, and a
+    `provider.launch` after both, in that order, with nothing terminated; and the
+    same Blueprint with `never_enrolls` set asserts the absence, which is a
+    machine allocated, no session opened, and nothing launched.
+
+- [x] 2026-07-28: Fix what two reviewers refuted in the entry below, which was the
+  fix for the entry below that. Three defects held, and both of the entry's own new
+  assertions were among them: one compared a value with itself, and the other could
+  not tell a measurement from a polling interval.
+  - `safety.enrolment_names_the_generation_it_was_invited_for` compared the
+    provision's generation against itself. The Lab stored `command.Generation` on the
+    lease and wrote that one field into both the provision facts and the enrolment
+    facts, so the generation the machine's bootstrap was actually minted under never
+    reached the ledger. The lease now holds the bootstrap it was handed, entire, and
+    the enrolment is recorded under what the agent redeems. Verified against the
+    control plane rather than against the recorder: `allocateCapacity` sending
+    `Generation: requested.Generation + 1` fails 15 Lab tests mid-drive, and at
+    3b2c3e4 the same defect drove a fully green `go test ./...`.
+  - `simulatedWorld.Enrolled` ignored the generation on the `NodeRef` while
+    `node.Registry` refuses a mismatch, so the Lab could not model the failure the
+    rule is about at all. It now refuses with the sentence the real registry writes.
+    The mirror-image defect, inviting under generation 2 while provisioning under 1,
+    now fails the Lab the way it fails production instead of reading as a machine
+    ready to launch on.
+  - Provisioning stages were recorded at `now.Sub(since)` with both ends at reconcile
+    moments, so the seconds were the world's spend rounded up to the polling grid.
+    The fixture's 30s, 4m and 45s were all exact multiples of the fifteen second
+    cadence, which is the only reason the assertion held. Each stage is now dated by
+    the authority that owns it: `CapacityObservation.StateSince` is the provider's own
+    account of when the machine entered the state it reports, and `Inviter.EnrolledAt`
+    replaces `Enrolled` so the registry answers with the moment the agent opened its
+    session. Where an authority will not date a transition the record carries
+    `bounded`, which is the honest reading and what keeps a calibration from training
+    on a polling interval. The fixture leaves the grid: 37s, 4m7s, 51s.
+  - The judgment call is to model the undated case rather than to require dating.
+    A provider that reports a state without a since is a real product, and refusing
+    to record anything for it would lose the one fact Mercator does have. What is
+    refused is the pretence: the seconds are published as a bound and marked as one.
+  - No Blueprint states either defect, and none can. A scenario describes a world,
+    and both are Mercator's own acts, so the deliberate failing cases reach the
+    world's two contracts directly and the control-plane evidence is the injected
+    defect recorded under Verification evidence.
+
+- [x] 2026-07-28: Fix what two reviewers refuted in the entry above. Four findings
+  held, and all four were the same class the entry claims to have fixed: a statement
+  that reaches nothing, or an assertion that could not fail.
+  - The listing's stated patience reached the offer and nothing measured it. The
+    fixture stated fifteen minutes, which is `enrolmentPatience` exactly, so even a
+    case that measured the reclaim moment could not tell the listing's patience from
+    Mercator's default, and replacing `state.offer.Bootstrap = ...` with a discard
+    left the whole tree green. The fixture states eight minutes now, and
+    `TestALabMachineWhoseAgentNeverArrivesIsHandedBackAtTheStatedPatience` reads the
+    machine handed back one reconcile inside it. With the assignment discarded, the
+    ledger holds no `capacity.terminate` at all inside the twelve minutes it drives.
+  - `bootstrap.reclaim_after` is deleted, along with `CapacityBootstrap.ReclaimAfterSeconds`.
+    It had one writer and no reader anywhere: no world performed it, so two
+    Blueprints stating a five minute and a forty five minute provider backstop
+    compiled into byte-identical worlds and neither ever destroyed anything. It was
+    stated in two fixtures decoratively, and one of them was the new conformance
+    case, which is exactly the dishonesty the deleted `Compile` guard existed to
+    prevent. The judgment call is to delete rather than to perform it: a machine
+    ending on its own account while Mercator still holds a Booking on it is a state
+    the control plane has no answer for, and building the answer is a slice rather
+    than a review fix. The vocabulary comes back with the act, which is the same rule
+    `safety.capacity_lifecycle_is_negotiated` is held to above. A `never_enrolls`
+    listing must now name a `deadline`, because Mercator's patience is the only thing
+    that ends such a machine and the fixture has to name the bound it is judged
+    against.
+  - `Compile` is narrowed rather than left open. It refuses a listing stating more
+    patience than `provisionedCapacityBound`, because
+    `liveness.provisioned_capacity_enrolls_or_is_reclaimed` accuses any machine still
+    waiting after thirty minutes: a Blueprint saying Mercator waits forty produced
+    that accusation against a control plane obeying the fixture, and before the guard
+    was deleted it was refused at compile time. That the harness bound is longer than
+    any patience the corpus states was true by coincidence and is now enforced.
+  - The generation binding is asserted for the first time.
+    `safety.enrolment_names_the_generation_it_was_invited_for` is registered with its
+    own deliberate failing world, and the conformance case compares the whole lease
+    rather than the Rental alone. Recording `lease.Generation + 7` in the Lab's
+    enrolment now fails the corpus mid-drive; before, it was green. Refuted by the
+    review round below: that evidence mutates the recorder rather than the control
+    plane, and the rule as registered here compared the provision's generation with
+    itself.
+  - The conformance cases reconcile every fifteen seconds rather than every three
+    minutes, and `TestEveryProvisioningStageIsRecordedAtWhatTheWorldSpent` holds each
+    stage to the seconds this world really spends. At the old cadence the record
+    carried the poll interval, including an `agent_ready` of zero for a stage that
+    took forty five seconds. The zero itself is not a defect: two stages found
+    complete in one look share a moment, and splitting an interval nothing observed
+    would be the control plane inventing a boundary. What was wrong was a green
+    fixture whose record read that way and asserted nothing about it. Refuted by the
+    review round below: a finer cadence narrows the error and does not make the
+    assertion capable of detecting it, and every stage in the fixture was an exact
+    multiple of the new interval.
+  - Not fixed here, and filed instead: a Run whose machine was provisioned under the
+    capacity lease has the listing's whole provisioning attributed to its launch, so
+    the Run Bundle reads `start_latency_seconds` predicted against an actual measured
+    from launch acceptance rather than from admission. It predates this work, it is
+    true of `every-stage-of-a-launch-has-an-actual` too, and it needs a decision about
+    which of the two accounts of the same stages is authoritative. Filed as #205.
+
+- [x] 2026-07-27: Make the capacity contract reachable from the control plane. Every
+  one of `CapacityProvider`'s nine methods was called by nothing, `Backend.Capacity`
+  had no caller, and `capability.Declare` refused capacity without a `NodeRuntime` on
+  the same Go value, which is a shape no provider adapter can have. A connection can
+  now sell capacity without selling one-shot execution, and the machine lifecycle is
+  a call the control plane can make.
+  - A `CapacityProvider` declares the reusable lane, because a machine a provider
+    allocates and holds is capacity that outlives the workload run on it. There is no
+    second condition, and the first two attempts at one both failed: a `NodeRuntime`
+    on the same Go value is a shape no provider adapter has, and a `NodeRuntime`
+    anywhere in the deployment is a shape every deployment has, because `daemon.New`
+    always builds a node registry and `Registry.NodeSupport` is a static literal that
+    consults no enrolment. That check refused nothing in any real deployment while
+    licensing a Rental identity, a prewarm claim and an artifact replica claim about
+    machines Mercator had not allocated.
+  - Whether a workload can run on one machine is that machine's own fact, established
+    by the agent enrolled on it, so the rule is made where offers are published. A
+    capacity connection publishes no placement candidate. What `ListCapacity` returns
+    is capacity to acquire, and acting on that selection means provisioning a Rental
+    and bootstrapping an agent onto it, which is
+    [#200](https://github.com/benngarcia/mercator/issues/200).
+  - Publishing it before then had no correct outcome, and both halves were reproduced
+    against the real daemon. Stated as completely as a provider honestly can, the offer
+    is struck out of every placement with `UNKNOWN_FACT container.max_containers`,
+    `CAPACITY_UNAVAILABLE capacity.available` and
+    `CAPABILITY_MISMATCH container.supports_digest_refs`, and every decision record in
+    the workspace carries a candidate that can never be feasible. Stated with those
+    container facts filled in, which is a provider asserting a container runtime it
+    does not own on a host that may have no agent, Placement selects it, the record
+    says `disposition:run_now_existing_rental` and `REUSE_EXISTING_RENTAL` for a machine
+    nobody rented, and the launch fails because the offer's `NativeRef` resolves to no
+    enrolled node. The Run is now told `NO_FEASIBLE_OFFERS` and
+    `NO_CAPACITY_FITS` instead, which is the truth about a fleet with nothing on it.
+  - A machine that does have an agent on it is published once, by the node registry,
+    from the enrolment: the Rental the invitation named and the container runtime,
+    idempotent launch, free capacity, image inventory and disk the agent reported.
+    Publishing the provider's own listing of that same machine beside it counted one
+    host twice under two Rental identities, gave one machine with
+    `MaxConcurrentWorkloads` of 1 two independent Rental Schedules, and split
+    per-machine learning between the node ID and the provider's instance ref.
+  - A Rental identity is Mercator's to mint. `StampLane` now clears whatever
+    `rental_id` an adapter stated, in every lane rather than only where the lane
+    cannot become a Rental, and aggregation mints none: it used to mint one for a
+    standing offer in the reusable lane, which is `OfferKind` answering a question it
+    does not answer. Kind says who owns the host, so a Vast-style listing of somebody
+    else's idle machine is standing, and a Booking bound to it accumulated Warmth and
+    a queue against capacity nobody had allocated.
+  - A connection that implements `CapacityProvider` and `EphemeralExecutor` at once is
+    refused. One lane is stamped on every offer a connection publishes, so a backend
+    answering both `ListCapacity` and `ListOffers` would publish machines and one-shot
+    executions under one word and nothing downstream could say which an offer came
+    from. A provider that sells both is two connections, and promoting one is
+    deliberate rather than a precedence rule inside the Broker.
+  - The ownership sweep converges workloads, and a capacity connection is running
+    none. It holds machines, and a machine carries no Run because a Rental outlives
+    the Run placed on it, so filing one as an `adapter.OwnedExternalObject` made
+    `janitor.decide` read it as capacity nobody could account for. The sweep then
+    wrote a durable `compute.capacity.orphan_converged.v1` with
+    `outcome:terminated reason:unattributed` about a live machine, failed to carry it
+    out because `Broker.Terminate` resolves an `EphemeralExecutor` a capacity
+    connection does not have, and aborted before reaching the one-shot executions that
+    were genuinely billing. The recorded decision was sticky, so every later sweep
+    read it back and failed identically. A capacity connection now reports no workload,
+    and machines are swept against Rental records by #199 in the Rental's own
+    vocabulary.
+  - What a capacity connection is asked for is settled on `Backend` rather than at the
+    call site, which is what fixed the sweep of the whole workspace: asking such a
+    connection for one-shot executions used to fail every reconcile of every workspace
+    that held one.
+  - The five capacity commands are one method each on the Broker, resolving the
+    connection from the command's own `CapacityRef` so a reconciler can act after a
+    restart with nothing in memory to look the machine up in. `CapacitySupport.Claims`
+    answers which negotiated promise each command needs, and a command a provider
+    never promised is refused with `ErrCapabilityUnsupported` naming the provider and
+    the operation before any request leaves Mercator. Provisioning, observing, and
+    destroying are the floor of the contract and have no field to negotiate; stop,
+    resume, and the owned listing do.
+  - No Blueprint and no Lab invariant, and the reason is the Lab's shape rather than a
+    gap. The Lab injects its simulated world directly as the orchestrator's `Adapter`
+    and constructs no `Broker`, so no world can reach this seam and an invariant here
+    would be one `TestEveryDefaultInvariantHasADeliberatelyFailingCase` refuses. It is
+    held at L1 by `internal/broker` and `internal/capability`, each new rule shown
+    failing with the production behaviour broken, and the Blueprints that exercise
+    what it makes possible arrive with the provider that emits a capacity command.
+  - The higher-fidelity half is two cases in `internal/daemon` against real SQLite,
+    the real connection registry, the real HTTP API and the production wiring.
+    `TestACapacityConnectionIsHeldByTheProductionControlPlane` authorizes a capacity
+    connection over the API, reads `/v1/offers`, submits a Run, and holds the recorded
+    Booking Decision to weighing no machine nothing can execute on while still naming
+    the connection in `connections_queried`.
+    `TestReconcilingAWorkspaceHoldingCapacityConvergesTheExecutionsThatLeaked` drives
+    `ReconcileWorkspace`, which is what the one-minute reconcile loop calls, over a
+    workspace holding a capacity connection and a one-shot connection that leaked an
+    execution, and holds the sweep to reclaiming the execution.
+- [x] 2026-07-28: A Rental is a domain aggregate with generations, and a generation
+  ending retires its node. The lease Mercator provisions had no type at all:
+  `node.StateRetired` was read in three places and written in none, `node.Store` had
+  no `Retire`, and nothing in the tree could say which machine a lease was on or what
+  it had been through. This is the vocabulary step the rest of phase 5 slice 3 is
+  written in, and nothing provisions yet.
+  - `domain.Rental` is the lease and `domain.RentalGeneration` is one lifecycle cycle
+    of the machine under it. A lease is not a machine: capacity that stops and resumes
+    comes back as a different machine with a different runtime on it, which is why a
+    Node is bound to a generation rather than to the Rental. Generations are kept in
+    order and never rewritten, so a lease says what it has been through rather than
+    only what it is now.
+  - An ending says which of three things happened, because they license different
+    next steps. A stop suspends capacity that is still Mercator's and a later
+    generation resumes it. A termination is capacity Mercator destroyed and a
+    reclamation is capacity the provider took back, and both release the lease,
+    because a lease over a machine that no longer exists is not capacity anything may
+    be placed on.
+  - The identity is minted before the provider is asked, so `Acquire` is a separate
+    act: until the provider answers, the lease says what was asked for and cannot say
+    what was got. Answering twice with the same machine changes nothing, which is what
+    makes a retried provision safe, and answering with a second machine is refused
+    rather than quietly replacing the first, which would leave the first billing with
+    nothing able to name it.
+  - `rental.Store` has a memory and a SQLite implementation held to one conformance
+    suite in `internal/rental/rentaltest`, exactly as `node.Store` is. A write states
+    the version it replaces, so two controllers ending one generation is a conflict
+    rather than a last-writer-wins, and a lease Mercator could not have reached is
+    refused before it is written.
+  - Ending a generation retires the node bound to it, which is the first write of
+    `node.StateRetired` in the tree. It is one act across two authorities, so it lives
+    on `rental.Leases`: the lease records that the machine stopped being Mercator's,
+    and only the registry can stop the runtime being offered and answered as capacity.
+  - The runtime is retired before the lease is written, and the two failures are not
+    symmetric. Retiring first and failing to write leaves a machine nothing offers
+    under a generation the record still calls open, and the next attempt ends it,
+    because retirement is idempotent. Writing first and failing to retire leaves a
+    runtime publishing itself as capacity for a machine the record says Mercator gave
+    up, and the Run that wins it starts by discovering there is nobody there.
+  - Retirement being terminal for `dispatch` is not something this ordering decides.
+    A successful end retires the runtime exactly as a failed write does, so after
+    either one no further command reaches that identity. Anything Mercator means to
+    stop on the machine is stopped before the generation's end is recorded, because
+    the ending is the record of a decision already carried out and not the request to
+    carry it out. The machine still gets its last word in either case, because
+    reporting is the half retirement leaves open.
+  - Retirement withdraws standing and withdraws nothing else. What it refuses is
+    every door that would give the identity capacity or work again: `Heartbeat` set
+    `StateReady` unconditionally in both stores, which is the one state the registry
+    publishes as capacity, so an agent on a machine being torn down would have put
+    itself back in the fleet with its next report and retirement would have been a
+    no-op against any live agent. Retiring also ends the session the node is holding
+    open, and `OpenSession` refuses the credential afterwards, so the agent's
+    immediate reconnect is answered with `ErrRetired` rather than with a fresh
+    session preloaded with every command the last one never acknowledged, and that
+    refusal is also how such an agent learns it is retired. `dispatch` refuses a
+    retired identity for the same reason from the other side: a node reference
+    resolved before the generation ended would otherwise append a durable command
+    that outlives the decision that issued it.
+  - What retirement must never refuse is the machine reporting what it already did.
+    A generation ends while a container is running every time a provider reclaims a
+    machine, and the agent is alive inside the interruption window when that
+    container exits. The node owns container lifecycle and exit codes and there is
+    no second authority on them, so `RecordEvents` and `RecordResult` stay open to a
+    retired identity: refusing them would leave a finished Run reading as unobserved
+    forever and an operation the machine really applied stranded as pending, with
+    dispatch refused so nothing could ever correct it. The authority model says
+    application callbacks must never be the only way Mercator learns a process
+    exited, and a retired node that could not report would make them exactly that.
+    A retired node's heartbeat is therefore kept as the event it is and renews no
+    lease, which is the whole of what the state costs it. The check lives at each
+    door rather than in `authenticate`, because `authenticate` answers both kinds and
+    a check there takes the second with the first.
+  - Ending a generation names the generation. The decision and the write it lands
+    are separated by a network, so an attempt whose answer was lost comes back to a
+    lease that may already have stopped and resumed onto a fresh machine, and ending
+    whichever generation is current then would retire a live runtime mid-Run on the
+    authority of a decision about a machine that is already gone. Ending a generation
+    the same way twice changes nothing and writes nothing, which is what makes that
+    retry safe; ending it a second way is refused.
+  - No Blueprint and no Lab invariant. For the lease itself that is not a gap: a
+    Rental that nothing provisions decides nothing, so a Blueprint asserting on it
+    would be a fixture about a struct, and an invariant over a store with no world
+    behind it is one `TestEveryDefaultInvariantHasADeliberatelyFailingCase` refuses.
+    The two target Blueprints stay red on purpose.
+  - For the two retirement rules in the node registry it is a real gap, stated
+    plainly rather than argued away. Delete the `StateRetired` check in
+    `OpenSession` and the one in `dispatch` together and `go test ./internal/lab/...
+    ./internal/scenario/...` is still green: only the hand-written cases in
+    `internal/node` catch either, so promoting a scenario into the corpus proves
+    nothing about retirement. The reason is that the Lab has no node registry in its
+    loop at all. It imports nothing from `internal/node`, writes an enrolment as one
+    `OperationNodeEnrolled` entry in the ledger, and models retirement in
+    `simulatedWorld.retireCapacity` as the machine ceasing to exist, so there is no
+    identity left to open a session, report an exit, or be dispatched to. Closing
+    this needs a node command lane in the simulated world: a machine that outlives
+    its generation, an agent that keeps reporting on it, and effects for the doors it
+    comes to. That is a slice, not a check, and it is where the deliberate failing
+    case for "retirement is terminal" belongs, and it is filed as #204. Until it
+    exists, the rules are held only at L1 and this plan says so.
+  - `safety.reusable_capacity_has_an_enrolled_runtime` was reviewed adversarially
+    before anything was built on it, because the run that landed it died with both
+    reviewers in flight. Three findings were fixed at the root and one was rejected
+    with the evidence that refutes it; the corpus is still red without the world's
+    enrolment, on the same 48 cases and the same three clauses.
+
+- [x] 2026-07-28: Let a Run end without taking its machine with it. The cleanup
+  disposition was derived from the offer's `Kind` alone, and `Kind` says only that
+  the machine did not exist before Mercator asked for it. That is equally true of a
+  one-shot execution product and of the fresh machine a reusable Rental is built
+  on, so every provisioned placement recorded `terminate` and the reusable lane
+  destroyed its own host the first time a Run finished on it. The next Run then
+  allocated and booted a second machine, and an operator paid twice for the four
+  minutes of getting ready that the lease exists to pay once.
+  - The rule now reads both facts an offer states about itself.
+    `domain.OfferSnapshot.CleanupDisposition` replaces
+    `domain.DispositionForOfferKind`, and the only capacity a Run's own ending
+    destroys is a provider-native one-shot product Mercator allocated: nothing
+    survives it, so there is no host left to hand back. Everything else releases,
+    including the fresh machine, because a lease decides when that machine goes and
+    a workload finishing is not a lease ending.
+  - The judgment call is that the rule reads both terms rather than collapsing to
+    the lane. A slot in a pool Mercator does not own and a machine it holds a lease
+    on release for two different reasons, and a standing one-shot offer is a real
+    shape a provider can sell. Stating the kind keeps the reason an operator reads
+    true of the capacity in front of them.
+  - Ten green fixtures and the target moved with it, which is the corpus stating the
+    change rather than being repaired around it. `enrolled-node-survives-its-first-run`
+    now expects the first Run to release, which is the disposition half of that
+    target and the half that had to land before the second Run could ever find a
+    machine. Its own second-Run disposition is deliberately no longer evidence of
+    reuse and the fixture says so: both lanes of that Run release now, so what
+    carries the reuse claim is the selection reason, the candidate disposition, and
+    the two stages costing nothing.
+  - `a-machine-two-launches-disagree-about-is-not-adopted` needed its listing
+    declared ephemeral. The whole fixture is two launches that recorded opposite
+    dispositions, and after this change a provisioned reusable listing and a
+    borrowed slot agree, so the disagreement it is named for could only be stated by
+    the lane that really disagrees: a one-shot product against a standing host.
+  - A defect the change surfaced at the seam. `offerFromDecision`, which rebuilds
+    the offer a queued Booking was placed on when it is finally dispatched, stated
+    no execution lane at all. `broker.Launch` dispatches on that lane, so a Run that
+    queued on an enrolled node was launched down the ephemeral seam, looking for a
+    provider connection under the node registry's own connection id. Only reusable
+    capacity can carry a Booking, so the lane is now stated from the candidate's own
+    disposition. Deleting it again fails one orchestrator case and nine Lab cases
+    loudly, which is what an empty lane could never do before cleanup read it.
+  - What this leaves standing, said plainly. A machine provisioned for a reusable
+    Rental now outlives its Run and nothing yet ends the lease when the work stops:
+    the Rental aggregate and its stores exist and have no production caller, so an
+    idle provisioned machine is held until an operator intervenes. It is filed as
+    #206, blocking for phase 5, rather than softened here. The path is not reachable end to end in
+    production either, because `broker.launchOnNode` resolves the node from the
+    selected offer's native ref and a marketplace listing's ref is not a node id, so
+    a provisioned Run cannot launch at all until the launch is re-addressed to the
+    machine that was built, which is #207. Both are named in the slice list below.
+
+- [x] 2026-07-28: Fix what two reviewers refuted in the disposition entry above.
+  Three findings held and two were rejected with the evidence that refutes them.
+  The one that mattered is that the rule was made to read a fact the Blueprint was
+  allowed to leave unsaid.
+  - A Blueprint's `lane` is stated or the Blueprint is refused. It carried a silent
+    default of `reusable`, and that default was inert only for as long as cleanup
+    read the offer kind alone. The entry above made cleanup read the lane, so
+    twenty-five fixtures were deciding whether a machine gets destroyed on a key
+    none of them had written. ADR 0005 says of the production path that an offer
+    stating no lane is infeasible with `UNKNOWN_FACT` and that there is no default,
+    "because a silent default is exactly how the previous conflation survived"; the
+    Blueprint contract now says the same thing, `MarketplaceOfferSpec.ExecutionLane`
+    is deleted, and every listing in the corpus says what it sells.
+  - Each of those twenty-five was written as `reusable`, which is a transcription
+    rather than a decision: it is the lane they were already running under, it is
+    what their expectations were computed from, and it is what they mean, because a
+    listing whose candidate disposition is `provision_fresh_rental` is a fresh
+    Rental by construction. What changed is that a reader can see it.
+    `listing-that-states-no-lane` is the deliberate failing case, and it is a
+    Blueprint refused at load rather than a rule refuted at L1, because a fixture
+    that got past that door would be asserting the money decision instead of
+    describing it.
+  - `TestAReusableProvisionedRunReleasesItsWorkloadAndLeavesItsHost` swept the whole
+    forty-five virtual minutes for a `capacity.terminate` and failed if it ever found
+    one, which required the machine to still be billing ten minutes after its only
+    Run ended. That is the #206 leak written down as a requirement, and the #206 fix
+    would have had to delete the case to land. It is now bounded at the moment the
+    Run's cleanup is confirmed, which is the only moment this case is about, and a
+    lease that ends its own generation afterwards passes it.
+  - `janitor.byRecordedDisposition` maps `release` to adoption, and the janitor's
+    own comment said the opposite, so the comment is fixed. It was then rewritten
+    into a second wrong claim, that an operator's sweep now keeps a provisioned
+    machine it used to destroy, and the entry below has the corrected reading: no
+    production sweep sees a machine at all, and adoption acts by calling
+    `adapter.Release`, which every VM adapter implements as an instance delete.
+  - Rejected, with the evidence. First, that no green fixture would catch a
+    regression flipping a one-shot placement to `release`:
+    `ephemeral-execution-is-never-a-rental` and `ephemeral-execution-holds-nothing`
+    are both green, both sell a provisionable ephemeral listing, and both assert
+    `terminate` on it, and `TestAOneShotExecutionStillTakesItsHostWithIt` reads the
+    same answer out of the Effect Ledger in the green conformance world
+    `an-owned-hour-is-charged-to-somebody`. Collapsing the rule that way was shown
+    failing on all three in the evidence section. Second, that the sweep
+    lost its coverage of a provisioned machine. The janitor reads the recorded
+    disposition and cannot see a lane, so a leased machine and a borrowed slot are
+    the same input to it, and a second janitor case stating a lane cannot be
+    written. That much holds. The conclusion drawn from it, that nothing is left
+    uncovered, does not, and the entry below names the axis that is: what an
+    adoption leaves standing.
+  - The plan's claim that the Lab suite carries a live half was false and is
+    corrected where it was made. `internal/lab` holds no Docker and no object-store
+    case; the live cases in this tree are `internal/nodeagent`'s and
+    `internal/adapter/docker`'s, and this slice touched neither.
+
+- [x] 2026-07-28: Fix what a fourth review refuted in the entry above. Both
+  findings held, and both are one mistake told twice: the entry described an
+  operator sweeping a provisioned machine, and no such sweep exists or can happen
+  today. Nothing in `internal/janitor` changed except what it says about itself.
+  - No production sweep sees a machine. `Backend.ListOwned` answers no workloads
+    for a capacity connection by design, a reusable launch is placed on a node and
+    a node is not a connection `Broker.ListOwned` fans out to, and
+    `TestTodaysBackendsAreAllOneShot` pins docker, runpod, shadeform and vast to
+    the ephemeral lane. Every `adapter.OwnedExternalObject` the janitor can reach
+    was therefore launched by a one-shot executor, where `CleanupDisposition`
+    answers standing with release and provisionable with terminate: the same
+    kind-only mapping as before the disposition slice, value for value. The one
+    branch that slice changed, provisionable and reusable, is reachable only from
+    `internal/lab`'s simulated provider, and
+    `TestASweepOfAWorkspaceHoldingCapacityConvergesTheWorkloadsItLeaked` is the
+    case that keeps it that way. So the claim that a sweep now keeps a machine it
+    used to destroy was operator-visible behaviour this system cannot produce in
+    either direction. It is struck from the plan and from the janitor's comment,
+    which now says what bounds the rule instead of what an operator would see.
+  - Adoption is not the keeping its name promises, and the plan asserted it was as
+    settled fact. `janitor.reclaim` carries an adoption by calling
+    `adapter.Release`, and `shadeform`, `vast` and `runpod` implement `Release` as
+    the identical `deleteOwned` their `Terminate` performs. Only
+    `internal/adapter/docker` distinguishes them, by removing the container and
+    leaving a host that was never Mercator's to destroy. `internal/adapter/fake`
+    deletes on `Release` too, so
+    `TestJanitorAdoptsCapacityItsOwnRecordSaysSurvives` reports the machine adopted
+    and the object is gone from `ListOwned` afterwards, which is reproduced in the
+    evidence below. This costs nothing today, because adoption fires only on a
+    standing slot and giving a slot back is exactly what those adapters do. It
+    costs a leased machine the first time a provider joins the reusable lane, which
+    is the purpose of this branch, so it is filed as #208 and blocking that
+    promotion rather than softened here.
+  - The coverage the third review rejected is therefore genuinely missing, and not
+    as a second janitor case. The uncovered axis is what `Release` leaves standing,
+    and no adapter in the tree can express an adoption that keeps a machine, so the
+    case has to arrive with the fix rather than before it.
+  - The judgment call is that no guard was added to `internal/janitor`. A rule that
+    cannot be handed the wrong input cannot be defended by refusing it, and the
+    distinction such a guard would need, a leased machine against a borrowed slot,
+    is in nothing the sweep reads. Widening the sweep to machines is #199, and the
+    action seam is answered there or in #208 rather than by a check that no caller
+    can currently reach.
+
+- [x] 2026-07-28: Make a bootstrapped machine keep its session. An agent whose
+  session credential lapsed re-enrolled by replaying the invitation it joined
+  with, which the store had already spent and the signer refuses on its own, so a
+  real node stopped being able to authenticate about thirty minutes after
+  bootstrapping while its containers went on running. No test noticed, because
+  every one of them finished inside the window.
+  - The registry gained `RenewSession`, over `POST
+    /v1/node-agent/{node}/session/renew`, authenticated by the credential being
+    replaced. It writes nothing: a session credential is signed rather than
+    stored, the fencing token does not move, and no invitation is spent, which is
+    what makes renewing a different act from enrolling rather than a gentler one.
+    A retired machine renews nothing, and that is the whole of what bounds a
+    leaked bearer credential.
+  - The agent asks for a credential at each use rather than holding one for the
+    life of a connection, and renews when less than two heartbeat intervals of
+    its life remain. Two heartbeats is enough for one failed attempt to be retried
+    before anything it sends could outlive the credential carrying it, and it
+    scales with the cadence the agent was configured for instead of a constant
+    that would be wasteful or too late depending on it.
+  - A defect this uncovered: the registry told a node a session expiry its
+    credential did not have. A token carries whole seconds, so an expiry with a
+    fraction in it was truncated at signing and the node renewed against the
+    moment it was told rather than the moment the credential died. `Signer.Expiry`
+    is now what every window is computed through. It is invisible at thirty
+    minutes and it is exactly what made the first conformance run fail.
+  - Enrollment's two doors are told apart. `ErrEnrollmentSpent` is the store's
+    record that this invitation was redeemed; `ErrEnrollmentInvalid` is the
+    signer refusing material that is not this node's or whose window has closed.
+    Inside the window only the first fires, so collapsing them would leave a
+    replayed bootstrap accepted for the rest of its window. The HTTP answer stays
+    opaque on purpose.
+  - Evidence. `a-machine-keeps-working-past-its-first-session` is a green
+    conformance Blueprint whose Run outlives one session lifetime, and the ledger
+    holds one `node.enrolled` and a `node.session_renewed` recorded while the work
+    was still running. At L2, a real `nodeagent.Agent` against the daemon's own
+    server with a two second session renews twice on the wire, then places and
+    completes a Run, and redeemed exactly one invitation. Removing the renewal
+    from the agent turns that into a loop of `ENROLLMENT_REFUSED`, which is
+    `ErrEnrollmentSpent` behind the deliberately opaque answer.
+  - Found and not fixed here: `Reinvite` has no operator surface. The only caller
+    is the orchestrator's own provisioning path, so an operator whose machine lost
+    its state has no supported way to reinvite that identity. Filed as #211 and
+    recorded in docs/production/node-agent.md rather than papered over.
+
+- [x] 2026-07-29: Rent a real machine and bootstrap an agent onto it. Shadeform
+  implements `CapacityProvider` and is the first backend in the reusable lane. Its
+  create carries a script launch configuration that installs the pinned node agent
+  and starts it under systemd, so the machine enrols itself outbound and Mercator
+  opens nothing on it.
+  - The promotion deleted the one-shot half. `capability.Declare` refuses a backend
+    that both provides capacity and executes one-shot work, because one lane is
+    stamped on every offer a connection publishes, so `Launch`, `Observe`,
+    `Release`, `Terminate`, `ListOwned`, `EphemeralSupport` and the docker launch
+    configuration are gone rather than kept beside the new contract.
+  - `CapacitySupport` states only what the four endpoints do: no stop, no resume,
+    no disk that survives one, provision idempotency by client-side tag
+    reconciliation because create honours no operation key, owned capacity
+    listable, and a destroyed instance observable while it is deleting.
+  - The agent source is required connection configuration with no default, because
+    the release archives ship no node agent binary and a guessed URL is a paid
+    machine fetching a 404. Shipping it, so the key can have a default that is a
+    pin, is #234.
+  - The manifest now declares every key `New` reads. `base_url` and `os` were read
+    and undeclared, which the conformance validator rejects while production
+    accepts the same connection silently.
+  - Blocked and not faked: no live Shadeform run. This host holds no credential and
+    no `op`, which is #235. Full detail, evidence, and the six deliberate breaks
+    that proved each rule can fail are in the verification section below.
+
+- [x] 2026-07-29: What two reviewers refuted about the slice above, repaired. Six
+  findings were real and are fixed at the root; one is real and is its own slice.
+  - The slice landed with no Blueprint and no Lab invariant. The world can now
+    lose a provision answer, and
+    `a-lost-provision-answer-costs-one-repeat-and-not-the-machine` drives that
+    world through the real orchestrator: one machine, adopted under the lease, its
+    agent enrolled on it, the workload launched.
+  - The defect that Blueprint exists for. `Reinvite` minted a fresh token every
+    time and the store wrote it over the old one, and `Enroll` matches the token
+    the record names exactly. `allocateCapacity` asks for the bootstrap before
+    every provision, because it cannot know whether an earlier attempt landed a
+    machine until the provider answers, so a create whose answer was lost and
+    which the next attempt adopts hands the Run a paid machine holding material
+    the control plane invalidated a moment earlier. It enrols nowhere and the Run
+    burns its whole enrolment patience. An invitation still outstanding is now
+    handed back, rebuilt from the record's own digest.
+    `safety.a_machine_holds_material_the_control_plane_will_still_accept` is the
+    rule.
+
+- [x] 2026-07-29: What a second review round refuted about the repairs above,
+  repaired. Four findings were real and are fixed at the root; one is rejected
+  with evidence, and one is real and is now #237.
+  - `sqlite.NodeStore.Invite` never returned `node.ErrIdentityExists`. It wrapped
+    the driver's constraint failure verbatim, so the sentinel came only from the
+    in-memory store, the Lab, and two orchestrator doubles, and every deployment
+    storing its fleet durably took the collision as an opaque failure.
+    `bootstrapFor` therefore never reached `Reinvite` in production: a second
+    attempt for a lease failed at the invitation, no capacity was ever recorded
+    as accepted, the enrolment deadline was never consulted, and the machine an
+    earlier attempt rented billed until the provider's own backstop. Any first
+    attempt that failed reaches it, not only one whose answer was lost. The store
+    names the collision now, matched on the constraint code, and the shared store
+    suite asks it of both stores: every case invited one identity once, which is
+    why the one promise the reconciliation path rests on was the one nothing
+    checked. Asking it of both also found the in-memory store answering per
+    workspace where `Find` resolves an identity with no workspace at all.
+  - The Lab had a registry of its own, so the executable specification could not
+    fail on a regression of the production fix: deleting `Reinvite`'s outstanding
+    branch left `./internal/lab` and `./internal/scenario` fully green. The
+    registry is control-plane code rather than external behaviour, so the Lab
+    runs the real one over the same durable store an execution already has, and
+    what the world keeps is the part that is its own: the material Mercator
+    handed out, watched as it leaves. Enrolment is a machine presenting its
+    bootstrap and being answered, so the invariant is now about a paid host
+    turned away at the one door it has, which covers both a superseded
+    invitation and an expired one. Deleting the outstanding branch now fails
+    `a-lost-provision-answer-costs-one-repeat-and-not-the-machine` mid-drive.
+  - Two Lab infidelities had to go first, because they were what made the rule
+    unfalsifiable. The Lab reconciled an ambiguous provision by asking again
+    inside the same instant, which no reconcile loop does and which matters
+    because a bootstrap signs the moment it stops being redeemable: two mints at
+    one instant come out byte for byte the same. And
+    `liveness.lost_response_reconciliation` declared a five minute bound and
+    enforced an instant, which only a control plane asking again in the same
+    breath can keep. Both now match what `reconcileWorkspaces` does.
+  - An invitation was redeemable for thirty minutes, always, unrelated to how
+    long Mercator waits for the agent, which the operator states per connection.
+    A host is handed its material once, when it is created, so a connection whose
+    machines take longer than half an hour to boot rented hosts that could never
+    join the fleet they were paid for. The invitation now lasts exactly as long
+    as the caller says it is waiting, and `Reinvite` hands back an outstanding one
+    only while it covers that wait: material that lapses inside the wait cannot
+    end in an enrolment whoever is holding it, so replacing it is the difference
+    between one machine locked out and two. `provisionedCapacityBound` was thirty
+    minutes, the same number, and compile refuses a Blueprint stating more
+    patience than that bound, so no Blueprint could state the world where the two
+    being unrelated shows. It is an hour now, and
+    `an-invitation-outlives-the-wait-it-was-minted-for` is the world.
+  - `capacity.idempotent_provision` reached nothing. The Blueprint declared that
+    its provider honours no key while the Lab answered every repeat under a lease
+    with the machine that lease already has, so the case read as one about
+    Mercator resolving a duplicate while the simulator was resolving it, and
+    deleting `capacityAlreadyHeld` left it green. Compile refuses any listing
+    declaring a contract this world does not keep, and the Blueprint declares
+    `operation_key`, which is what it always was: a backend resolving duplicates
+    below the capacity seam, which is what the Shadeform adapter does. The world
+    where the repeat really rents a second machine holding a second copy of one
+    single-use invitation is #237, and it is what would hold both the sweep and
+    the adapter's own reconciliation.
+  - Rejected: that `Reinvite` handing back an invitation without extending its
+    window is a defect of `Reinvite`. It is a defect of the window, which is why
+    the repair is above rather than a floor on the remaining time. Extending the
+    window while keeping the token is impossible by construction, because the
+    token is a signature over the expiry, and a floor would supersede the
+    invitation on a machine that is still booting for a machine that may not
+    exist. Tying the window to the wait removes the case instead: every attempt
+    for one Run asks for the same deadline, so the outstanding invitation always
+    covers it and is always handed back.
+  - `agent_download_url` required `{version}` because a URL naming no version is
+    not a pin, and the value substituted into it was the literal `"dev"` in every
+    production deployment: `node.Registry` defaulted to it and nothing ever set
+    `daemon.Config.AgentVersion`. The default is gone rather than corrected, and
+    `MERCATOR_AGENT_VERSION` is where an operator states which build their URL
+    serves. A deployment that states none provisions nothing.
+  - `agent_download_url` is the one bootstrap value an operator writes, and it
+    lands inside a single-quoted word in the `curl` line. The bar on unattended
+    values permitted the single quote, so a URL carrying one closed that word and
+    ran the rest as root on the rented machine. Proved on the build host against a
+    real shell in `busybox:1.37` before the fix, refused after it.
+  - Four paths read the same account listing for the same lease and disagreed
+    about ownership. The reconciler verified only the machine it kept and then
+    destroyed every other instance wearing the Rental tag, which the teardown
+    beside it refuses to touch on exactly that mismatch; and the observation had
+    been narrowed to the machine it was about to report, on the strength of a
+    second generation this provider cannot have, which hid a second machine the
+    account was being billed for. Both now ask about every match.
+  - `capability.ErrCapacityIndeterminate` is a provision whose outcome nobody
+    knows, which was prose in Shadeform and a bare error everywhere else. It is
+    typed now, because callers act on the difference: a failure allocated nothing
+    and can be asked again, and asking this again is how one lost answer becomes
+    two machines.
+  - Not fixed here and filed as #236: a provision the provider classified as fatal
+    is retried for ever. `allocateCapacity` unwraps no `*adapter.ProviderFailure`,
+    records no classified failure, and `EnrolmentDeadlineAt` cannot bound it
+    because it is only consulted after a provision succeeds. That is a new failure
+    path with its own policy decisions and its own Blueprint to write, rather than
+    a defect in code that already exists.
+
+- [x] 2026-07-29: State what every `CapacityProvider` promises once, and run both
+  backends against it. Until this, the contract was readable only as
+  `internal/adapter/shadeform`'s code, so the second provider would have
+  discovered the promises by disagreeing with the first.
+  `internal/capability/capacitytest` holds eight promises: a listing is capacity
+  to acquire, a negotiated set is one a provider could keep, a credential check
+  allocates nothing, one provision command produces one machine, a lost answer is
+  reconcilable, terminate is confirmed and stays confirmed, an operation the
+  provider never promised is refused rather than quietly succeeding, and a trial
+  leaves nothing owned. Each names the Lab rule it is the higher-fidelity half of,
+  as a constant rather than a comment. The suite imports no `testing` package, so
+  the `mercator` binary links none when `verify` reaches it, and `mercator verify
+  --mode capacity` is the mode that rents a machine and gives it back.
+  - The deliberate failing case is kept rather than performed once and deleted:
+    one stub keeps the contract and eight break a single clause each, and every
+    case asserts both halves, that the promises about that clause fail and that
+    the rest do not.
+  - Recovery is two mechanisms in sequence rather than a choice between them. The
+    first revision made it a `switch`, so a provider declaring both an owned
+    listing and an operation key was asked the listing, learned nothing, and never
+    reached the repeat, which is exactly the pairing `fake` and Shadeform both
+    declare. The listing is asked first because it allocates nothing, and the
+    repeat follows only when nothing has been named.
+  - An operation key names the machine as well as the lease. `lease.act` keyed on
+    operation plus Rental ID, so a lease holding two machines sent both terminates
+    under one key, and the production sweep had the same collision on exactly the
+    machines it exists to find. Latent rather than leaking today, because neither
+    the Lab nor Shadeform caches a terminate by key.
+  - An acceptance that names no machine is carried as
+    `capability.ErrCapacityIndeterminate`, because that is the position it leaves
+    a caller in. It previously recorded nothing, ran no recovery, and reported
+    nothing.
+
+- [x] 2026-07-29: Close phase 5 out. Full verification re-run on the Linux build
+  host and recorded below, documentation brought level with the tree, and every
+  blocked or deferred piece of phase scope filed as its own issue rather than left
+  in a report.
+  - Two code changes, both defects the close-out's own verification found rather
+    than anything the phase built. `internal/httpapi/contract.gen.go` was
+    hand-edited rather than regenerated when the host-facts slice added
+    `AcceleratorDriver`, `HostFacts` and `HostRequirements`, so CI's `go generate
+    ./...` followed by `git diff --exit-code` would have failed on the first push.
+    Regenerating also restored the `HostRequirementsFacts` enum the hand-written
+    copy had flattened to `[]string`.
+  - `TestConsoleRunsNavigation` failed four runs in six here while passing in CI.
+    Two races in the browser script, both of the same shape: it read a state that
+    settles after the call it was waiting on returned. Focus restoration was
+    compared by DOM node identity and sampled immediately; sheet dismissal goes
+    back through router history and nothing waited for it. Fixed at the root and
+    now 20 passes in 20. No console source changed, because the product behaves
+    correctly in both cases. Recorded here because a test that only fails on fast
+    hardware is a test that stops being evidence exactly where it matters most.
+  - A third, found by CI itself on the first push and fixed rather than re-run
+    away. `TestAMachineGoesOnWorkingAfterItsFirstSessionCredentialLapses` failed
+    at 10.05s on a two core runner while passing every time here. An agent renews
+    once its credential is within two heartbeats of lapsing, and the harness had
+    paired a twenty millisecond heartbeat with a two second window, so it ran the
+    agent forty milliseconds from a cliff. Losing that race is not a late
+    renewal: the credential lapses, the renewal is refused `SESSION_REFUSED`, and
+    the invitation that would let the machine rejoin was spent at enrolment, so
+    it is locked out for good and the counter never moves again. The slack is now
+    a quarter of whatever window a case asks for.
+  - All three were invisible until now for the same structural reason: this
+    branch had no upstream for the whole phase, so nothing it did had ever met
+    CI, and the browser cases skip unless an environment flag asks for them.
+  - Judgment call worth recording: the corpus and invariant figures in this
+    document had drifted again, by one Blueprint and two conformance cases and one
+    invariant. They are counted off the tree at close-out and the previous wrong
+    figures are named, because a number quoted from memory is how the last three
+    revisions got it wrong.
 
 ## Phase status
 
 | Phase | What it delivers | Status |
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
-| 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
+| 2 | Node protocol and Go agent | done; hand enrolment was all it delivered, and phase 5 added the bootstrap that lets provisioned capacity enrol itself |
 | 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
-| 5 | One true VM provider with agent bootstrap and conformance | not started |
+| 5 | One true VM provider with agent bootstrap and conformance | done under simulation and conformance, and unproven against a live marketplace: every promise below is held by the Blueprint corpus, the Lab, the shared provider conformance suite, and this host's real Docker daemon, and none of them has been checked against a billed Shadeform account, because this host holds no credential (#235). The corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. A Rental is now a domain aggregate with generations, held in a memory and a SQLite store under one conformance suite, and ending a generation retires the runtime bound to it, which is the first write of `node.StateRetired` in the tree and the first thing that stops a machine Mercator gave up being published as capacity. A Run that ends on a machine provisioned to hold a Rental now releases its workload and leaves the host standing, because the cleanup disposition reads the execution lane as well as the offer kind: only a one-shot product Mercator allocated is destroyed by the end of its own Run. A bootstrapped machine now keeps its session for as long as it works: the registry renews a credential over the node protocol, the agent renews ahead of each lapse, and the invitation it joined with is redeemed exactly once and appears in no event, ledger entry, or Run Bundle. Before it, a real node stopped being able to authenticate about thirty minutes after bootstrapping while its containers went on running, and no test could see it. A machine now states what it has to state to be placed on at all: the agent reports the cards under it and the driver over them, an offer carries both, a workload declares the accelerator stack its image was built against, and Placement refuses a host that said no with `CAPABILITY_MISMATCH` and a host that said nothing with `UNKNOWN_FACT` rather than installing a stack onto somebody's host or finding out at launch. Before it, every enrolled GPU machine advertised zero accelerators and was struck out of every GPU placement it was perfect for. Shadeform is now a CapacityProvider and the first backend in the reusable lane: it rents a VM, hands it a script launch configuration that installs the pinned node agent and starts it under systemd, states a negotiated set that promises no stop, no resume and no persistent disk, and reconciles a repeated provision by scanning the account for the lease's own tag because the API honours no operation key. Its one-shot half went with the promotion, because one connection cannot sell both. No live provider run has happened: this host holds no Shadeform credential, so the whole path is proven under the package's httptest fake and the live half is blocked and filed rather than claimed. The promises every `CapacityProvider` keeps are now a suite rather than a reading of one adapter's code, run against the simulated provider and against Shadeform's own marketplace over `httptest` on every build, and `mercator verify` has the mode that rents a machine and gives it back. `enrolled-node-survives-its-first-run`, the phase 1 target that named this whole phase, is green: the placement world provisions, enrols, and publishes the machine a listing became, and the second Run reuses it. What the phase does not deliver, each filed: the launch is still not addressed to the machine a provisioning built (#207), a capacity connection still publishes no placement candidate so no production Run can reach a rented machine (#200), nothing yet ends the lease of a machine nobody is using (#206), a provision the provider classified as fatal is retried for ever (#236), and no live marketplace run has happened (#235) |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
 ## Scenario and invariant coverage
@@ -3872,12 +4832,170 @@ Phase 1 added:
 - `ephemeral-execution-is-never-a-rental` (green): a one-shot product is the
   cheapest and fastest candidate and still records `launch_ephemeral`, because
   nothing survives the workload's exit.
-- `enrolled-node-survives-its-first-run` (target, missing `node_runtime` and
-  `rental_schedule`): capacity provisioned for the first Run is still there when
-  the second arrives, and the second reuses it rather than provisioning again.
+- `enrolled-node-survives-its-first-run` (green since 2026-07-28): capacity
+  provisioned for the first Run is still there when the second arrives, and the
+  second reuses it rather than provisioning again. This was the phase 1 target
+  that named the whole of phase 5, and it went green in four instalments rather
+  than one. `rental_schedule` was paid off in phase 5 slice 1, when the Rental
+  Schedule store, its versioning, and its reservation were wired end to end.
+  `execution_warms_capacity` was paid off by the disposition slice: the first Run
+  releases its workload rather than terminating its host, which had to be true
+  before there could be a machine for the second Run to find at all.
+  `node_bootstrap` was paid off when the placement world learned to provision,
+  enrol, and publish the machine a listing became, so the two Runs win two
+  different things wearing two different names and the listing is refused a
+  second time rather than sold twice.
+  Read what its green status does and does not prove. It is a Blueprint, so it is
+  green against the simulated world, and what it holds is Mercator's own
+  reasoning: that a provisioning becomes an enrolment, that the machine and the
+  listing it came from are distinct offers, and that the second Run lands on the
+  machine. It does not prove that a rented VM anywhere boots and enrols, which is
+  what the blocked live trial in
+  [#235](https://github.com/benngarcia/mercator/issues/235) is for.
 - `safety.ephemeral_capacity_not_reused` (Lab invariant): no Run is ever queued
   behind one-shot capacity, and capacity held for a one-shot execution never
   accumulates a second Booking.
+- `safety.a_rental_identity_is_capacity_mercator_holds` (Lab invariant): an offer
+  carrying a Rental identity is capacity Mercator holds, standing and in the
+  reusable lane. A Rental Schedule is keyed by Rental identity, so a template for a
+  machine that does not exist yet publishing one gives Placement somewhere to put a
+  Booking and the next Run somewhere to wait, behind a machine nothing will free.
+  Added in the second review round of phase 5 slice 2.
+- `safety.reusable_capacity_has_an_enrolled_runtime` (Lab invariant): no machine
+  accumulates an image, a cache, an Artifact copy, or a second Booking unless an
+  enrolment for that machine is in the ledger. It is the counterpart to
+  `safety.ephemeral_capacity_not_reused` from the other side: that rule holds that
+  a one-shot product accumulates nothing, this holds that the capacity which does
+  accumulate is capacity Mercator can reach, because all four are the agent's own
+  work. Added in phase 5 slice 3, together with the Lab world recording
+  `node.enrolled` for the Rentals it holds, which is the first writer that operation
+  has ever had.
+- `a-machine-keeps-working-past-its-first-session` (conformance, green): one
+  provisioned machine, an agent that enrols four minutes in, and a forty five
+  minute Run, so the credential the agent joined with lapses while the container
+  is still running. The ledger holds one `node.enrolled` and a
+  `node.session_renewed` recorded while the work was still going. Nothing in the
+  corpus reached that state before, because every fixture finished inside one
+  session lifetime. Added in phase 5 slice 4.
+- `safety.bootstrap_credential_is_short_lived_and_single_use` (Lab invariant):
+  one machine holds a given enrollment token, it is redeemed once, and it appears
+  nowhere in Mercator's own record. Each clause is read off World Truth, because
+  the world is the only thing that knows what it handed each machine. A double
+  redemption is deliberately not producible through the Lab's own registry, which
+  refuses it exactly as production does, and that refusal is asserted so the
+  clause is not left checking a state nothing can reach. Added in phase 5 slice 4.
+- `safety.secrets_absent` (Lab invariant, strengthened in phase 5 slices 4 and 5):
+  it matched field names, so material in a field called credential, password, or
+  secret was caught and the same material in a field called enrollment_token was
+  not, which is the field a bootstrap would honestly be filed under. It now also
+  refuses a signed URL wherever it appears, because a presigned read is a bearer
+  credential written as a location, and any credential the world minted whatever
+  field it is filed under. Slice 5 extended that last clause from bootstrap
+  tokens to the material a machine was handed for one fetch, which the name
+  clause and the signed-URL markers between them do not reach: a registry
+  password filed under a name nobody thought of passed both.
+- `safety.content_credentials_are_scoped_and_expiring` (Lab invariant): every
+  credential Mercator hands a machine so it can fetch content names one
+  operation, one workspace, one piece of content and an expiry; is checked
+  against the command it arrived on rather than against itself; has not lapsed
+  when it is handed over; and states a window no longer than an hour. The four
+  clauses fail separately on four hand-written worlds, and the world can really
+  produce the state they are about: a private image asked for with nothing minted
+  is refused by the registry, the same image with material minted for that
+  operation is served, and the account handed over with no scope at all is
+  recorded and caught. Added in phase 5 slice 5.
+
+  Read what that last clause says and not more. It reads the bound Mercator
+  attached, never whether the far side can enforce it. Against an object store it
+  is both, because a presigned read is a signature over one object and one
+  window and the store refuses anything else on its own. Against a registry that
+  only knows how to check a password it is neither: the material handed over is
+  the operator's standing account verbatim, `credential.Mint` performs no token
+  exchange for any registry today, and the registry never sees a
+  `ContentCredentialScope`. What holds the machine to the scope there is
+  `authorisedPull` on the node, which is Mercator's own code on a host an
+  operator rents by the hour, so an attacker holding that host has the account
+  and it keeps working for every private image in that registry. Narrowing that
+  needs a registry token exchange, which is its own slice and is not built. The
+  Lab models the split rather than papering over it: the machine's check and the
+  far side's check are separate refusals in `internal/lab/content_credential.go`,
+  because a world where the registry honoured Mercator's scope is a world that
+  proves the control plane agrees with itself.
+
+  The clause that is deliberately not there is material uniqueness, which was the
+  obvious fourth and fails on correct behaviour. SigV4 presigns one object for
+  one expiry, so two operations minted for one version in one instant produce the
+  same URL; a registry that only knows how to check a password has one password
+  behind every image it serves. Neither is a defect. The material simply cannot
+  always be narrower than the far side is able to enforce, and what narrows it to
+  the operation is the scope, which the node checks before presenting anything.
+  What can always hold is that the window is bounded, so a read good for a day is
+  caught while a generous window for a large image over a slow link is not. The
+  bound is the Lab's own hour rather than `credential.DefaultMintWindow`, because
+  a rule that read the number production mints with would agree with production
+  by construction and could never fail.
+- `a-private-pull-uses-a-credential-that-expires` (conformance, green): one
+  machine, an occupant holding it for forty minutes, and a queued Run that needs
+  an image at a registry serving nothing to an anonymous reader and a corpus in
+  an object store answering only a signed read. Both fetches carry material
+  minted for that one operation and expiring inside the execution. The occupant's
+  own image is public and is fetched with nothing at all, which is the other half
+  of the claim: minting for content any anonymous reader can have would put an
+  account on a machine that never needed one. `ImageSpec.private` is the schema
+  this needed, and it is a fact about a registry rather than about the control
+  plane: a world where every image is anonymous can never catch a Mercator that
+  mints nothing, because nothing on any machine would notice. Added in phase 5
+  slice 5.
+- `safety.enrolment_names_the_generation_it_was_invited_for` (Lab invariant): an
+  agent that opened a session on a machine a provider allocated enrolled under the
+  generation that machine was invited for. A generation is what fences a lease, so
+  a session filed under another one is a node Mercator would address every later
+  act about, the fencing token included, to a machine that does not exist. A lease
+  with no provision behind it is exempt, because standing capacity a world seeded
+  has no invitation to be right or wrong about. Added in the review round of phase
+  5 slice 4, and made able to fail in the round after it: the enrolment is recorded
+  under the generation the agent's own bootstrap names, so the rule compares two
+  facts of Mercator's making rather than one field with itself. A control plane that
+  provisions under one generation and mints the token under another fails 15 Lab
+  tests mid-drive; before, it was fully green.
+- `safety.a_machine_holds_material_the_control_plane_will_still_accept` (Lab
+  invariant): a machine a provider allocated presented its bootstrap and the
+  registry took it. A rented host is handed its invitation once, in the bootstrap
+  written when it is created, and Mercator opens no connection to it afterwards,
+  so a host refused at that one door is locked out of the fleet it was paid for
+  with nothing else to try, and nothing about the machine looks wrong from the
+  provider's side. The refusal is `node.Registry`'s own answer rather than
+  anything the Lab decides, which is what makes the rule cover both doors that
+  close on an invitation: one a later mint replaced, and one whose window ran out
+  while the machine was still booting. A credential nobody has redeemed yet is not
+  the violation, because that is every machine still booting. Added in the review
+  round of phase 5 slice 7 and rewritten in the round after it, when the Lab
+  stopped running a registry of its own. Two worlds fire it:
+  `a-lost-provision-answer-costs-one-repeat-and-not-the-machine` when
+  `Reinvite`'s outstanding branch is deleted, and
+  `an-invitation-outlives-the-wait-it-was-minted-for` when the invitation goes
+  back to a fixed thirty minute window.
+- `bad-host-facts-rejected-loudly` (green as of phase 5 slice 6): four listings
+  for one training image that declares the accelerator stack it was built
+  against. The cheapest states outright that it has no working NVIDIA driver and
+  is refused `CAPABILITY_MISMATCH facts.nvidia_driver`; one states a driver four
+  years older than the image needs and is refused
+  `CAPABILITY_MISMATCH host.driver_version`; one is silent about the SSH access
+  the Run's operator will not do without and is refused
+  `UNKNOWN_FACT facts.ssh`; the well-attested host wins at twice the cheapest
+  price. It is the first time the Blueprint's facts map reaches an offer field,
+  and the fourth listing is new, because a map of booleans alone cannot state a
+  driver that is present and too old. It waited on `host_facts` since phase 1.
+- `safety.host_supports_the_image_it_was_given` (Lab invariant): no launch in the
+  world's ledger landed on a machine whose published facts cannot carry the
+  accelerator stack Mercator's own event log says the workload declared, and no
+  Booking Decision called such a machine feasible. The second clause is there
+  because a candidate ranked feasible is one busy machine away from being that
+  launch. Three sources meet in it and none is checking itself: what the machine
+  said is the World Tape's, what the workload declared is Mercator's public log,
+  and whether a launch happened is the world's ledger. Its deliberate failing
+  world is a host stating a CUDA 12 driver accepting a launch whose image
+  declares CUDA 13. Added in phase 5 slice 6.
 
 Phase 3 added:
 
@@ -5005,9 +6123,12 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 59 regression Blueprints: 56 green and 3 target, beside two demo
-documents, one minimized case, and forty conformance Blueprints, all of
-them green. The count is read off the
+The corpus is 63 regression Blueprints: 62 green and 1 target, beside two demo
+documents, one minimized case, and forty five conformance Blueprints, all of
+them green. Counted on 2026-07-29 at the phase 5 close-out; the previous
+revision of this paragraph said 62 regression and forty three conformance and
+was one and two behind respectively, which is the drift the assertion below
+exists to stop. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.
@@ -5015,15 +6136,22 @@ subdirectories beside them hold the demo and the one minimized case.
 Blueprint added without a classification fails the build rather than drifting the
 number quoted here.
 
-The three targets are the capabilities no simulated world performs yet.
-`enrolled-node-survives-its-first-run` needs an agent to bootstrap on provisioned
-capacity, which is phase 5. `queued-booking-deadline-expiry` needs
+One target is left, and it is the capability no simulated world performs yet.
+`queued-booking-deadline-expiry` needs
 `schedule_advancement`, which is a Booking expiring past its latest start and its
-Run being placed again. `bad-host-facts-rejected-loudly` needs a world that can
-publish host facts a machine then contradicts.
+Run being placed again, and it is [#190](https://github.com/benngarcia/mercator/issues/190).
+The other two are paid off. `enrolled-node-survives-its-first-run` went green on
+2026-07-28, when the placement world learned to provision, enrol, and publish the
+machine a listing became. `bad-host-facts-rejected-loudly` went green on
+2026-07-29: an offer now carries the promises a machine made about the substrate
+under a workload, a Run declares what its image needs of that substrate, and
+Placement refuses a stated no and a silence under different codes.
 
-The Lab registry holds forty five invariants, thirty eight safety and seven
-liveness. Every one carries a deliberate failing case, which
+The Lab registry holds fifty three invariants, forty five safety and eight
+liveness. The figure is counted off `DefaultInvariantRegistry` rather than
+remembered; an earlier revision of this section said forty five and was already
+two behind, a later one said forty eight, and the one before this said fifty two.
+Every one carries a deliberate failing case, which
 `TestEveryDefaultInvariantHasADeliberatelyFailingCase` requires of the registry
 itself: an invariant nothing can make fail is not evidence, so one cannot be
 registered without the world that breaks it.
@@ -5036,11 +6164,15 @@ afterwards, and what survived a control-plane restart.
 ## What phase 2 does not yet do
 
 Placement now routes Runs to enrolled nodes, and one node runs successive
-workloads. What is still missing is how a node comes to exist on capacity
-Mercator rents: a provisioned machine arrives with no agent, so only a node an
-operator enrolled by hand is reusable. That is phase 5, and it is why
-`enrolled-node-survives-its-first-run` stays a target scenario alongside the
-Rental Schedule work.
+workloads. What phase 2 left missing was how a node comes to exist on capacity
+Mercator rents: a provisioned machine arrived with no agent, so only a node an
+operator enrolled by hand was reusable. Phase 5 answered that. A Shadeform
+connection rents a VM and hands it a launch script that installs the pinned agent
+and starts it under systemd, the invitation it carries lasts exactly as long as
+Mercator waits, and the session renews itself for as long as the machine works.
+What is still true is that no production placement reaches that machine: a
+capacity connection publishes no offers, which is
+[#200](https://github.com/benngarcia/mercator/issues/200).
 
 Enrolling the local Docker host is a manual two-step: invite a node through
 `POST /v1/nodes`, then run `mercator-node` with the returned bootstrap. There is
@@ -5065,8 +6197,8 @@ bootstrap a node agent yet, which is phase 5. Both simulators keep such an offer
 cold, and the reason is the honest one: the offer is a template for a machine
 that does not exist, so nothing an execution fetches there is anywhere a later
 Run can see it. `enrolled-node-survives-its-first-run` declares
-`execution_warms_capacity` alongside `node_bootstrap` and `rental_schedule`,
-which is the corpus stating what its second step was always waiting on.
+`execution_warms_capacity` alongside `node_bootstrap`, which is the corpus stating
+what its second step was always waiting on.
 
 A host Mercator has not enrolled still reports `Images.Known: true` holding
 nothing. In production that machine cannot enumerate its own content at all and
@@ -5098,6 +6230,2042 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 5 close-out
+
+Run on 2026-07-29 on the Linux build host (`ws`, amd64, 24 cores, Go 1.25.11,
+native Docker), against `222860e` plus the contract regeneration described below.
+Every command below was executed in this worktree and its real result is
+recorded. Nothing here is quoted from a previous run.
+
+```text
+go build ./...                       exit 0
+go vet ./...                         exit 0
+go test ./...                        exit 0, 38 packages ok
+go test ./... -count=1 -v            1847 subtests PASS, 10 SKIP, 0 FAIL
+```
+
+The verbose run is the one to read, and the first draft of this section got it
+wrong in a way worth recording. `go test ./...` without `-v` prints no SKIP lines
+at all, so counting them in its output returns zero on a tree that skipped ten
+cases. A skip is how this repository's live suites report a missing daemon, a
+missing credential, or a rate-limited registry, which makes an unread skip count
+exactly the wrong thing to be confident about. Re-run with `-v`, the ten are:
+
+```text
+opt-in behind an environment flag, not missing capability:
+  TestIntegrationDockerAdapterLaunchObserveRelease            MERCATOR_DOCKER_INTEGRATION
+  TestIntegrationOneDaemonReachedTwoWaysIsOneMachine          MERCATOR_DOCKER_INTEGRATION
+  TestIntegrationTheJanitorConvergesOneAttemptsContainer...   MERCATOR_DOCKER_INTEGRATION
+  TestIntegrationThisEndpointCountsItsOwnCardsAndNames...     MERCATOR_DOCKER_INTEGRATION
+  TestE2EFakeAdapterHTTPAndCLI                                MERCATOR_E2E_FAKE
+  TestConsoleRunsNavigation                                   MERCATOR_BROWSER_TEST
+  TestLabConsoleUsesNormalAPIAndSSE                           MERCATOR_BROWSER_TEST
+genuinely not runnable here:
+  TestShadeformKeepsEveryCapacityPromiseAgainstTheLive...     no credential, #235
+  TestRegistryResolverAgreesWithDockerAboutAPublicImage       docker.io 429, #178
+a target Blueprint reporting itself pending, which is the corpus working:
+  TestPlacementScenarios/queued-booking-deadline-expiry       #190
+```
+
+Seven of the ten were skipping behind a flag rather than behind a missing
+capability, so they were run:
+
+```text
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+  4 PASS against Docker Engine 29.6.2 on Ubuntu 26.04
+MERCATOR_E2E_FAKE=1 go test ./internal/cli -run TestE2EFakeAdapterHTTPAndCLI
+  PASS
+MERCATOR_BROWSER_TEST=1 go test ./internal/lab -run TestLabConsoleUsesNormalAPIAndSSE
+  PASS
+MERCATOR_BROWSER_TEST=1 go test ./internal/httpapi -run TestConsoleRunsNavigation
+  FAILED 4 runs in 6, see below
+```
+
+`TestIntegrationThisEndpointCountsItsOwnCardsAndNamesTheirDriver` is the
+accelerator probe this phase added, and it ran against this host's real RTX 5090
+through a real container rather than against a recorded fixture. That is the
+strongest evidence in the phase for the host-facts work, and it exists only
+because this build host has a GPU and a native daemon.
+
+The first push found a third defect, which is what a first meeting with CI is
+for. `TestAMachineGoesOnWorkingAfterItsFirstSessionCredentialLapses` failed at
+10.05s on the two core runner while passing every time on this host. It is not a
+budget that was too tight. An agent renews once its credential is within two
+heartbeats of lapsing, a margin deliberately tied to the cadence the agent was
+configured for, and the harness had paired a twenty millisecond heartbeat with a
+two second session window. Those two numbers were chosen independently, for
+quick scripted dispatch and for a watchable lapse, and their product is forty
+milliseconds of slack, which is inside what a garbage collection pause costs.
+Losing that race does not renew late. The credential lapses, the control plane
+refuses the renewal `SESSION_REFUSED`, and the invitation the agent would need to
+rejoin was spent when it enrolled, so the machine is locked out for good, which
+is the production behaviour working as designed (#211). Reproduced here by
+freezing the process across the lapse with SIGSTOP, which is what a starved
+runner does to the agent's loop: three runs in three failed at 10.02s with
+`SESSION_REFUSED`, against CI's 10.05s. Under a stall straddling the old margin
+the previous build failed two runs in three and the repaired one passed three in
+three. `renewingEvery` now states the heartbeat and the budget together with the
+window, so the slack is a quarter of whatever window a case asks for.
+
+`TestConsoleRunsNavigation` was genuinely broken here and is now fixed. Two
+defects, both the same shape: the script read a state that settles after the call
+it was waiting on returned. The focus hand-back when the create sheet closes was
+compared by DOM node identity against a handle taken before the sheet opened, and
+sampled the instant `waitForURL` resolved, so it lost two races at once, because
+the hand-back happens after the URL returns and the event feed refetching
+`useRuns` re-renders the header and replaces the button element. Behind it, and
+never reached while it kept failing, dismissing the sheet with Escape goes back
+through the router's history and nothing waited for that, so the next scenario
+could capture `?action=create` as the address it later expects `goBack` to return
+to and then wait out its full thirty second timeout for a URL the app will never
+show again. Before: 2 passes in 6. After both fixes: 20 passes in 20. No console
+source changed, because the product hands focus back correctly and the router
+returns correctly; only the test's idea of when to look was wrong.
+
+Worth stating for the next reader, because it cuts against a filed issue:
+[#197](https://github.com/benngarcia/mercator/issues/197) says the console can
+only be verified in CI because Playwright's Chromium will not run on a dev
+workstation. It runs here. Both browser cases execute against a real headless
+Chromium on this host, which is how the two races above were found at all. The
+issue is true of the machine it was written on rather than of every workstation.
+
+After that, three of the original ten remain unrun, and none of them can be run
+here: the live Shadeform trial needs a credential this host does not hold, the
+public-image registry comparison needs a Docker Hub quota this address has spent,
+and the target Blueprint is the corpus correctly reporting unbuilt work.
+
+```text
+go test -race -count=1 <every package this phase touched>
+  32 packages, 26 ok, 6 with no test files, 0 FAIL, 0 SKIP
+```
+
+The package list is derived rather than remembered: every directory holding a Go
+file that differs between `beng/prediction-and-service-classes` and this branch.
+
+```text
+go test ./internal/scenario -run 'TestPlacementScenarios|TestCorpusCoversBothStatuses' -v -count=1
+  TestCorpusCoversBothStatuses: corpus: 62 green, 1 target
+  TestPlacementScenarios: 62 subtests PASS, 1 SKIP
+```
+
+The one skip is `queued-booking-deadline-expiry`, which is the corpus reporting a
+target case as pending rather than a failure. It waits on `schedule_advancement`,
+which is [#190](https://github.com/benngarcia/mercator/issues/190) and belongs to
+the Lab rather than to this phase.
+`enrolled-node-survives-its-first-run`, the target that named this phase in
+phase 1, is among the 62 that pass.
+
+The console changed, because the generated API contract did:
+
+```text
+cd web/app
+bun run typecheck   exit 0
+bun run test        7 files, 46 tests, all passed
+bun run build       3 artifacts
+```
+
+The remaining CI gates were run rather than assumed, because this branch had
+never been pushed and so had never met them:
+
+```text
+go generate ./... && git diff --exit-code     initially FAILED, see below
+scripts/check-open-source-launch.sh           25 checks passed
+scripts/build-release-archives.sh v0.0.0-ci   5 archives built
+```
+
+`go generate` is the one that found something. `internal/httpapi/contract.gen.go`
+had been hand-edited rather than regenerated when the host-facts slice added
+`AcceleratorDriver`, `HostFacts` and `HostRequirements`, so the first push would
+have failed CI's `git diff --exit-code` immediately after it. Two differences: the
+hand-written types were appended at the end of the file where the generator emits
+them in schema order, which is cosmetic and would still have failed the gate; and
+`HostRequirements.facts`, which `openapi.json` declares as an enum of `ssh` and
+`nvidia_driver`, had been flattened to `[]string`, dropping the named
+`HostRequirementsFacts` type and its `Valid` method that the generator produces
+for every other enum in the contract. Regenerating restores both. Nothing in Go
+reads those three types (they carry no `x-go-type`, so unlike `Run` they are wire
+shapes rather than aliases onto the domain, and their consumer is the generated
+TypeScript client), `domain.HostRequirements` and `domain.HostFact` are untouched,
+and a second `go generate` now leaves the tree clean.
+
+`scripts/check-open-source-launch.sh` needs Ruby, which CI installs and this host
+does not carry on the default PATH. Reported four failures until
+`~/.local/share/mise/installs/ruby/3.4.7/bin` was put in front, then passed all
+twenty five. Three of those four were the missing interpreter reported once per
+check that uses it, so nothing was actually wrong with the tree. Worth knowing
+before somebody reads a red audit here as a defect.
+
+Two files are not `gofmt` clean, `internal/adapter/vast/client.go` and
+`internal/scheduler/scheduler_test.go`. Both were already unformatted on
+`beng/prediction-and-service-classes`, CI runs no `gofmt` gate, and three phase 5
+slices each noticed them and each left them alone to keep its diff to the
+findings under review. That is the right call per slice and the wrong outcome
+across a phase, so it is filed as
+[#240](https://github.com/benngarcia/mercator/issues/240) with the gate that
+would stop the next one, rather than reformatted here inside a documentation
+commit.
+
+Platform note, because the phase brief asked for one. Every earlier phase 5 slice
+was built on arm64 macOS and this close-out ran on amd64 Linux. Nothing failed
+here for a reason that was about the instruction set, and two things failed here
+for reasons about the host, which is a distinction worth keeping.
+
+The contract drift is a logic defect that would have failed on either platform
+and had simply never been checked, because the branch had no upstream and CI had
+never seen it. The two console races are the interesting kind: neither is a
+platform difference and both are speed differences. The assertions were always
+wrong, and they were wrong in a direction that only loses on a machine fast
+enough to finish the synchronous work before the asynchronous work settles. A
+slower laptop and a two core CI runner both hide them. A 24 core workstation
+does not. Anything of that shape will surface here first and should be read as a
+real defect rather than as this host misbehaving, which is what happened.
+
+What this evidence does not establish, said plainly: none of it touched a live
+provider. Every Shadeform statement in this phase is held by the package's
+`httptest` fake, the shared conformance suite, and the Lab, because this host
+holds no `SHADEFORM_API_KEY` and no `op` to read one with. The blocked run is
+[#235](https://github.com/benngarcia/mercator/issues/235) and carries the exact
+command an operator runs.
+
+### Phase 5 the promises every provider keeps
+
+The capacity contract had one implementation and one set of tests, so what a
+`CapacityProvider` promises was readable only as `internal/adapter/shadeform`'s
+code. `internal/capability/capacitytest` states the promises once and runs them
+against any backend: a listing is capacity to acquire, a negotiated set is one a
+provider could keep, a credential check allocates nothing, one provision command
+produces one machine, a lost answer is reconcilable from what the connection owns
+rather than by asking again, terminate is confirmed and stays confirmed, an
+operation the provider never promised is refused rather than quietly succeeding,
+and a trial leaves nothing owned.
+
+Each promise names the Lab rule it is the higher-fidelity half of, and the
+citation is a constant rather than a comment so a failure can be read against the
+rule that holds the same fact. `safety.capacity_lifecycle_is_negotiated` is cited
+and is still deliberately unregistered, for the reason recorded above: nothing in
+the tree stops or resumes a machine, so a Lab rule about it could only fail
+against a hand-written observation. Its production half is
+`broker.Backend.CapacityFor`, and the suite is the provider's own side of the
+same refusal.
+
+What a not-found observation after a terminate means is read off
+`CapacitySupport.ObserveAfterTerminate` as that type documents it: a provider
+that promises a destroyed machine stays observable owes an answer, and one that
+promises nothing of the kind may have no record left, so its silence is the
+confirmation. Neither may report the machine still running. The slice brief read
+the flag the other way round; the type is what the tree acts on, and following
+the brief would have made the suite pass a Shadeform that stopped answering about
+machines it had just destroyed. No `ErrCapacityNotFound` was added to carry the
+distinction, because no backend in the tree produces one and it would have been a
+branch nothing could exercise.
+
+`ErrNotApplicable` is the third answer, and it is why the evidence has three
+outcomes rather than a boolean. A provider that deduplicates on an operation key
+is entitled to enumerate nothing it owns, `CapacitySupport.Validate` permits
+exactly that pairing, and the two owned-capacity promises cannot be looked at
+against one. Reporting them green would be a suite claiming to have read a
+listing that does not exist.
+
+The suite imports no `testing` package, so the `mercator` binary links none when
+the verify command reaches it. The six-line subtest loop is written out in each
+adapter's conformance file instead, which is the cost of that.
+
+The deliberate failing case is kept rather than performed once and deleted.
+`internal/capability/capacitytest` has one stub that keeps the contract and eight
+that each break a single clause, and every case asserts both halves: the promises
+about that clause fail, and the rest do not. A credential check that allocates a
+machine breaks two of them, and that is the suite working rather than a case
+stated loosely, because the machine it left behind is still owned when the trial
+sweeps.
+
+The production halves were broken too, one clause at a time, and each break was
+caught by exactly the promise about it:
+
+```text
+fake, provision ignores its own allocation:
+  one_provision_command_produces_one_machine (safety.idempotent_external_commands)
+fake, the owned listing forgets which machines were destroyed:
+  a_trial_leaves_nothing_owned: this trial's workspace still holds 5 machines
+shadeform, a duplicate provision reports a fresh allocation:
+  one_provision_command_produces_one_machine: a caller would count the effect twice
+shadeform, a repeated terminate reports a second destruction:
+  terminate_is_confirmed_and_stays_confirmed: a reader would count two machines ending
+shadeform, StopCapacity answers a stop it cannot perform:
+  an_operation_the_provider_never_promised_is_refused
+shadeform, the owned listing keeps instances that are deleting:
+  a_trial_leaves_nothing_owned: still holds 5 machines
+```
+
+A defect in the suite itself was found by writing that stub. Every promise gave
+its machine back in a `defer`, and the `defer` was registered after the receipt
+was judged, so a provider that allocated a machine and then answered about it in
+a way the contract refuses kept the machine and the bill. It is fixed by
+registering the return before the judgement, and
+`TestAReceiptTheSuiteRefusesStillCostsNoMachine` is the standing case: a stub
+that dates no allocation, every promise run, and nothing owned afterwards. With
+the old ordering it reports one machine left behind.
+
+Two more machines were leaking past that fix, and both were leaking because
+reclamation was keyed on one receipt the suite happened to like. A promise now
+gives back a lease rather than a receipt, and the lease holds every machine
+anything has named under its Rental.
+
+The first is the machine the idempotency promise is about. A provider that
+allocates a fresh machine per command produces a second one, the promise reports
+it, and the old `defer` terminated only the first: the machine the suite was
+complaining about went on billing. Worse, the pairing of operation-key
+idempotency with no owned-capacity listing is legal, and against that set both
+sweep promises are out of reach, so nothing downstream would ever find it.
+`TestTheSecondMachineOneCommandAllocatedIsGivenBack` is the standing case, run
+against a connection that enumerates nothing it owns so the promise's own
+reclamation is the only thing that can work. The in-package stub could not
+express this before, because it kept one machine per Rental and the second
+provision overwrote the first; it now addresses machines by their own native
+ref, the way every real backend does.
+
+The second is the machine no receipt ever named. `reconcileDuplicates` in the
+Shadeform adapter creates an instance, fails to see it in the listing, and
+returns an empty receipt wrapped in `ErrCapacityIndeterminate`; the Lab does the
+same under `FaultLoseResponse`. The old reclamation was `if nativeRef == ""
+{ return nil }`, so exactly the case that costs money returned quietly. A lease
+that was answered with no machine now asks the mechanism the provider negotiated
+for that case: a connection that enumerates what it owns is asked what it holds
+for this Rental, and one that deduplicates on the operation key is sent the same
+command again, which answers with the machine it already made. Those are the two
+legal sets, and `TestAProvisionNobodyGotAnAnswerToIsStillGivenBack` exercises
+both. When neither can name a machine, the lease says so loudly rather than
+recording a clean return, because nothing can destroy what nothing can address
+and an operator has to hear about it.
+
+Three things in that paragraph were wrong, and review caught all three. There
+are three legal sets rather than two, and the overlap is the one that matters: a
+provider declaring both an owned-capacity listing and operation-key idempotency
+is what `fake.World` declares, what Shadeform declares, and what the Lab's world
+keeps. Recovery was a `switch`, so such a provider was asked the listing, learned
+nothing, and never reached the repeat. It learned nothing because a listing that
+already named the machine would have made the answer slow rather than unknown:
+Shadeform returns `ErrCapacityIndeterminate` only after four listings fail to see
+the instance it just created, and the Lab writes the same fact as `Unlisted`.
+Recovery now asks every mechanism the provider negotiated, listing first because
+it allocates nothing, and the standing cases are one per mechanism: deleting
+either branch fails exactly one of them. The stub's lost answer is now missing
+from the owned listing too, so the case that proves the repeat is a world that
+can produce the error being recovered from.
+
+The second correction is the operation key on a terminate. `CapacityCommand`
+says a key performs its effect exactly once and answers a repeat with
+`Duplicate`, and both the suite's `giveBack` and the trial's own sweep were
+keying on the lease alone. A lease holding two machines, which is exactly what
+the idempotency promise reports, sent both terminates under one key: a provider
+honouring the contract destroys the first and reports the second as a repeat of
+it, leaving the machine the suite was complaining about billing. Both keys now
+name the machine as well as the lease.
+`TestTheSweepDestroysEveryMachineWearingOneLeasesTag` is the standing case for
+the sweep, an account holding two machines tagged for one Rental with a provider
+that honours the key, and it reports one machine still running against the old
+key.
+
+The third is one condition over from the leak this slice was about. A provision
+that named no machine now starts recovery whether it failed or not: a provider
+that answers with no error and no `NativeRef` has allocated a machine just the
+same, and reclamation keyed on `err != nil` recorded a clean return for it.
+An acceptance naming no machine is carried as an outcome nobody knows, because
+that is the position it leaves a caller in.
+
+The higher-fidelity half is `TestAnAccountWhoseListingLagsIsLeftHoldingNothing`,
+in the Shadeform package rather than beside the stub. Its account registers every
+create and withholds it from the listing for one look longer than the adapter's
+own visibility scan, so the adapter really returns `ErrCapacityIndeterminate`
+naming no machine, over HTTP, from the code that returns it in production. The
+suite has to ask the account what it holds for the lease and destroy what it
+names, and the case reads the account rather than the listing, because an
+instance the listing withholds is billing just the same. With the recovery by
+listing removed it reports five instances still running.
+
+One break was absorbed, and it is worth writing down. Removing Shadeform's
+pre-scan before create leaves the suite green, because `reconcileDuplicates`
+still keeps the oldest instance carrying the lease's tag and destroys the rest:
+the contract survives and what is lost is one wasted create. The suite reads what
+an account holds rather than how many requests it took to get there, so counting
+requests stays where it already is, in that adapter's own cases. That bound is
+stated in `docs/production/provider-conformance.md` rather than left for a reader
+to discover.
+
+`mercator verify` gains `mode: "capacity"`. It stands up no control plane and
+creates no workspace through the API, because nothing it asserts reads one: what
+it establishes is that a backend keeps the capacity contract, and whether an
+agent then enrols on a rented machine needs the whole daemon and is the launch
+path's job. The workspace it tags machines with is minted from the trial ID, so
+the sweep finds this trial's machines and nobody else's. It rents the cheapest
+listing available at a known USD rate whose cost over the whole timeout stays
+inside `max_expected_cost_usd`, and asks for a provider-side reclamation backstop
+of the same length.
+
+The callback topology rules are unchanged and still refuse a trial without a
+fixed listen port and an origin-only public URL. A capacity trial serves nothing
+itself, and it hands every machine it rents a bootstrap naming that origin: a
+trial that wrote an origin nothing serves onto a real machine could not tell a
+provider defect from a control plane nobody could have reached. The document
+names no image, and one that does is refused, because a capacity trial launches
+no workload.
+
+What this slice does not do.
+
+- No live Shadeform run, again and for the same reason: this host holds no
+  `SHADEFORM_API_KEY` and no `op`. The whole path is proven under the simulated
+  provider, under Shadeform's own marketplace served over `httptest`, and through
+  the verify command's own runner. The live case skips by name, with the command
+  that runs it, and the blocked run stays
+  [#235](https://github.com/benngarcia/mercator/issues/235).
+- The live Go case is gated twice, on `SHADEFORM_API_KEY` and on
+  `MERCATOR_SHADEFORM_LIVE=1`. An exported API key is not consent to rent a GPU
+  inside `go test ./...`, and the deliberate operator act is the verify command.
+- Nothing in the suite waits for an agent. A rented machine is handed an
+  enrolment token nothing minted, so it boots, is turned away, and is destroyed.
+  A token that worked would be a credential left on a host for no reason, and
+  proving a machine enrols is the launch path's question.
+- No scenario and no new Lab invariant. This is step six of the development rule
+  for the slices that made the capacity contract reachable, made Shadeform a
+  provider, and gave the Lab its enrolment rule, and every promise it asserts
+  cites the rule it is the other half of rather than adding one.
+
+On 2026-07-29, on the amd64 Linux workstation with Go 1.25.11, the worktree
+passed:
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/capability/... ./internal/conformance \
+  ./internal/adapter/fake ./internal/adapter/shadeform
+```
+
+`web/app` is untouched by this slice, so its checks were not run.
+
+### Phase 5 the machine Shadeform rents and the agent it starts
+
+Shadeform is a `CapacityProvider` and is the first backend in the reusable lane.
+It rents a VM and hands it a script launch configuration that installs the pinned
+node agent and starts it under systemd, so the machine enrols itself over an
+outbound session and Mercator never opens anything on it.
+
+The promotion took the one-shot half away rather than adding to it, and that is
+`capability.Declare`'s rule rather than a choice made here: a backend that both
+provides capacity and executes one-shot work is refused, because one lane is
+stamped on every offer a connection publishes and nothing could then say which of
+the two an offer came from. `Launch`, `Observe`, `Release`, `Terminate`,
+`ListOwned`, `EphemeralSupport` and the docker launch configuration are gone, and
+so is the argv shell-joining that existed only to fill
+`docker_configuration.args`. `TestTheCatalogRecordsWhichBackendsHaveBeenPromoted`
+is the deliberate act: `shadeform: reusable`, with docker, runpod and vast
+unchanged.
+
+What the negotiated set says, and why each half of it is what the four endpoints
+can really do. There is no stop and no resume, because `/instances/{id}/delete`
+destroys a machine and nothing suspends one, which also settles the persistent
+disk: a disk that survives a stop is a claim about a provider that can stop.
+Create honours no idempotency key, so `IdempotentProvision` is `none` and the
+account listing is what a repeated provision is reconciled against, which is
+exactly the pair `CapacitySupport.Validate` refuses a provider for breaking. A
+destroyed instance stays in the listing while it is deleting and then disappears,
+so `ObserveAfterTerminate` holds for that window.
+
+The idempotency is the same convergence the deleted launch path used, rekeyed
+from the launch key to the Rental: scan for a live instance tagged with this
+lease before creating, scan again after, keep the oldest and destroy the rest,
+and adopt what an indeterminate create landed instead of asking again. The tags
+are exactly the fields `capability.OwnedCapacity` carries, because the listing is
+the only place a reconciler can read them back from, and the filter is the Rental
+tag rather than the Mercator prefix: a machine carrying no lease is not capacity
+Mercator holds, and naming one there would have the reconciler adopt a lease
+nothing ever took out.
+
+The agent source is required connection configuration with no default, and that
+is the judgment call this slice is most exposed on. Mercator publishes no node
+agent binary today: `scripts/build-release-archives.sh` ships `cmd/mercator`
+only. A download URL guessed in the adapter would be a paid machine fetching a
+404 and never enrolling, and the Run would wait out its whole enrolment patience
+to find out. So `agent_download_url` is declared, must be https, and must contain
+`{version}`, which is replaced with the build the bootstrap pinned; a URL naming
+no version installs whatever is behind it on the day the machine boots, which is
+not a pin. The refusal is at provision rather than at construction, because
+`Factory.Declarations` builds every backend with empty configuration and a
+constructor that demanded it would take the whole catalog down. Shipping the
+agent in the release archives, so this key can have a default that is a pin, is
+[#234](https://github.com/benngarcia/mercator/issues/234).
+
+What the machine is told is the invitation and nothing else. It goes into a 0600
+environment file the unit loads rather than onto the agent's command line, where
+every user on the machine could read it out of the process table, and what stays
+on the disk after enrolment opens no door: the token is single-use and spent on
+redemption. Values an unattended script cannot carry are refused before an
+instance is created, and the refusal never quotes the value, because one of them
+is a credential. The one credential a create body now carries is that script, so
+it is redacted as a whole when a provider echoes the request back.
+
+Two things the promotion corrected on the way past. A capacity listing no longer
+states container capabilities, an idempotent launch or a concurrency limit: those
+are the enrolled agent's facts, established from the machine, and they arrive on
+that node's own offer, while what this provider promises about the lease it sells
+is negotiated in `CapacitySupport`. And the manifest now declares every key `New`
+reads: `base_url` and `os` were read and undeclared, which is a real
+disagreement rather than a tidiness point, because the conformance validator
+rejects a trial setting them while production accepts the same connection
+silently. `TestATrialMaySetEveryKeyProductionReads` is the guard.
+
+Evidence. `go build ./...`, `go vet ./...` and `go test ./...` are green, and
+`go test -race -count=1 ./internal/adapter/shadeform ./internal/broker
+./internal/providers ./internal/conformance` is green on amd64 Linux. Every rule
+was proven able to fail by breaking the production behaviour it covers: a create
+with no launch configuration fails the bootstrap case at `launch configuration =
+<nil>`; an indeterminate create retried instead of reconciled fails at `got 2
+create calls`; a stop that quietly succeeds fails at `stop = <nil>, want
+ErrCapabilityUnsupported`; an owned listing that stops excluding deleting
+machines returns two leases where one is live; a manifest that stops declaring
+`base_url` fails the trial at `config key "base_url" is not public`; a bootstrap
+that stops refusing unsafe material accepts a token carrying a heredoc
+terminator; and a create body echoed back unredacted surfaces the whole base64
+bootstrap in the operator's diagnostic.
+
+The live half ran, on this host's own Docker daemon, and it found a defect no
+string comparison could. `TestTheBootstrapScriptRunsOnARealMachine` renders the
+script Mercator would hand a machine and runs it under a real shell on a real
+filesystem in a `busybox:1.37` container, with `curl` and `systemctl` stubbed
+because there is no agent binary to fetch and a container is not a booted host.
+The script assumed `/usr/local/bin` and `/etc/systemd/system` already existed: on
+a userland where they do not, it fetched the agent and then failed at `install:
+can't create '/usr/local/bin/mercator-node'`, leaving a paid machine that had
+downloaded an agent it never installed. It now installs every directory it writes
+into. Removing the `systemctl enable --now` afterwards fails the case at the ask
+rather than at the effect, which is what the stub is for.
+
+The one break also found a defect in the test it was breaking. Redaction
+re-marshals the decoded response body, which orders keys alphabetically, and the
+fixture's 8KB padding field was named `detail`: it sorted before `message` and
+pushed the echoed material past the size bound, so the assertion had been passing
+on a body that no longer contained what it was looking for. The padding is
+renamed to sort last, and only then does removing the redaction fail the test.
+
+What this slice does not do, said plainly.
+
+- No live Shadeform run. The bootstrap runs on a real machine here, and the
+  provider does not: this host holds no `SHADEFORM_API_KEY` and no `op`, so
+  everything that needs the marketplace itself is blocked rather than done, and
+  nothing here claims otherwise. What only a live run can establish is whether a
+  `shade_os` image carries `systemd`, `curl` and a working Docker daemon, and
+  whether Shadeform runs the script as root once the instance is active.
+  The exact command an operator runs is in `docs/production/shadeform.md` and the
+  blocked run is [#235](https://github.com/benngarcia/mercator/issues/235).
+- A Shadeform connection publishes no placement candidate, so no Run can be
+  placed on it in production. `broker.Backend.ListOffers` answers a capacity
+  connection with `NotAsked`, which is mercator#200, and `broker.launchOnNode`
+  still resolves a node from the selected offer's native ref, which is
+  mercator#207. Renting a machine works and nothing production-side asks for one
+  yet.
+- The bounded provider conformance suite is not here. The promises every
+  `CapacityProvider` keeps are its own slice, and until it lands a `shadeform`
+  conformance trial validates and then finds no offers, because the runner
+  launches through the ephemeral lane. It landed on 2026-07-29, and a `shadeform`
+  trial in the launch modes still finds no offers: `mode: "capacity"` is the mode
+  for a backend that sells machines.
+- mercator#208 said the adoption defect had to land before any provider joined
+  the reusable lane. It did not, and the hazard it names is nonetheless out of
+  reach: `janitor.reclaim` acts on `adapter.OwnedExternalObject`s, a capacity
+  connection answers `Backend.ListOwned` with nothing, and this adapter no longer
+  implements `Release` at all. The issue stays open for the lane rather than for
+  this backend.
+- The broker's provider-failure test lost its production adapter, because the
+  only backend that classifies provider failures has left the ephemeral lane. It
+  is rewritten against a one-shot executor written for the case. Which status and
+  code one marketplace calls out of stock is that adapter's own classification,
+  held by `internal/adapter/shadeform`'s own tests; what the rewritten test
+  watches is what the control plane does with a failure that is already
+  classified.
+
+### Phase 5 the driver a host provides and the stack an image brings
+
+The defect had two halves and one cause: nothing in the tree ever wrote down
+what accelerator hardware a machine had, so nothing could decide anything about
+it.
+
+`capability.HostFacts` declared `DriverVersion`, `DriverCapability` and
+`Accelerators` in phase 2, and no agent ever populated them. `node.Registry`
+publishes the accelerator inventory straight onto every node offer, so an
+enrolled machine holding eight A100s advertised zero cards and was struck out of
+every accelerator placement with `RESOURCE_INSUFFICIENT`. Read as a decision,
+that says the fleet can never run the work; what happened is that nobody looked.
+It blocked the whole phase, because the machines this phase exists to rent are
+GPU machines.
+
+The other half is compatibility. The host provides the driver and the image
+provides the CUDA runtime that talks to it, and an image built against a newer
+driver than the machine runs cannot start there. Nothing stated either number, so
+the mismatch was something a launch discovered: minutes into a machine Mercator
+had already paid to acquire, boot, and enrol, with a stack trace out of somebody
+else's runtime and nothing in the record naming a driver.
+
+What the agent reports, and the three states it can be in.
+`internal/nodeagent/accelerator.go` asks `nvidia-smi` twice: `--version` for the
+driver and the highest CUDA version that driver supports, and `--query-gpu` for
+the cards. The container runtime's own answer is not a substitute: `docker info`
+naming the nvidia runtime says a container can be handed the cards and says
+nothing about how many there are or which driver is under them, and a toolkit
+installed on a machine whose driver never loaded reports exactly what a working
+workstation reports.
+
+`capability.AcceleratorFacts` is tri-state, like the disk report beside it, and
+the reason is sharper here. Every field is empty on a CPU box and empty on a GPU
+box whose agent never looked, so a reader holding only the values cannot tell
+them apart. `Established` is the agent saying it looked, whatever it found, and
+`NodeFacts.Established` erases what an unestablished report happened to carry, so
+no reader downstream has two answers to choose between.
+
+What separates stated-false from silence is the kernel, and not the vendor
+tool's exit status. What the tool establishes is what it printed: a machine whose
+`nvidia-smi` named a driver has one, and the cards it went on to list are the
+inventory. Every other outcome is this agent failing to reach an answer.
+
+Reading a non-zero exit as the stated-false case was the third thing this slice
+got wrong about the same question, and the review round that caught it
+reproduced the harm on this workstation, whose driver works:
+
+    unshare -rm sh -c 'mount -t tmpfs none /dev && nvidia-smi --version'
+    -> NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA
+       driver.  (exit 9)
+
+A hardened unit with `PrivateDevices=yes`, and an agent in a container with only
+the docker socket mounted, are both in that execution context, and both give the
+same words and the same status a machine with no driver gives. Filed as the
+established negative, an 8xH100 box refuses every GPU Run with
+`CAPABILITY_MISMATCH facts.nvidia_driver` and tells its operator to buy a
+different machine, which is exactly the harm the round before it fixed for
+`exec.ErrNotFound`.
+
+So the kernel is asked. A loaded NVIDIA driver publishes its version under
+`/proc/driver/nvidia/version`, so a tool that failed beside a kernel holding the
+module is an agent that could not see what is there, and a tool that failed
+beside a kernel with no module is a machine that has established it runs no
+NVIDIA driver. A kernel this agent cannot read establishes nothing, which is what
+a host with no procfs is. `nodeagent.WithKernelReports` points the read at a
+stand-in, because hardware is the one thing a case cannot arrange and the kernel
+under it is the second: a case reading this host's own `/proc` would state one
+machine on the workstation it was written on and another on the build box. It
+also deletes a state: the tool's exit status no longer decides anything, so the
+three-way `smiAnswer` collapses into whether this agent got to ask.
+
+`exec.ErrNotFound` is still not a machine with no cards. It is the tool off this
+unit's `PATH`, or unreadable to this user, or wedged. The slice hit that inside
+its own daemon fleet and answered it in the test rather than in the product.
+`-nvidia-smi` and `MERCATOR_NODE_NVIDIA_SMI` on `cmd/mercator-node` are the
+operator's half of that answer, matching `-docker` beside them.
+
+The two calls also fail independently, and the driver is stated as soon as
+`--version` yields it. A card that has fallen off the bus answers `--version`
+with a working driver and fails `--query-gpu` on the handle; discarding the
+driver there published one report saying both that the machine established it has
+no driver and that it never stated one, in a single Booking Decision, which is
+exactly the distinction `domain.HostFacts` exists to keep. The cards it could not
+count are an empty inventory, which is the true answer for a card that is gone.
+
+Both calls are bounded at three seconds, because `Facts` runs on the heartbeat
+select loop. That is the goroutine command work was deliberately moved off so
+nothing long-running could stop the heartbeats and have the control plane declare
+a healthy machine lost in the middle of the work it asked for, and this slice put
+a new external command directly onto it.
+
+The bound is this agent's own, and the earlier claim that `Cmd.WaitDelay` made it
+real was wrong. `os/exec`'s `Cmd.Wait` runs `c.Process.Wait()` as its first
+statement and only afterwards reads the watch result carrying the `WaitDelay`
+timer, so nothing in `os/exec` returns while the process is still there. An Xid
+79 puts `nvidia-smi` into an uninterruptible ioctl on `/dev/nvidiactl`, where the
+SIGKILL behind the deadline is a signal left pending on a process that never
+exits, and the heartbeat stops with seven good cards still running work. The call
+now runs on its own goroutine and the heartbeat waits on the deadline, so the
+report comes back whether or not the process ever does. `WaitDelay` stays for
+what it really does, which is keeping the abandoned call from holding a goroutine
+and a stdout pipe for the six hundred seconds the tool asked for.
+
+The regression case was defanged for the same reason and is now honest about what
+it arranges. Its stand-in trapped `TERM` and `INT`, which `SIGKILL` ignores, so
+the trap was inert; what held the call open was an orphaned grandchild on the
+stdout pipe, which is [go.dev/issue/23019](https://go.dev/issue/23019) and not the
+unkillable process the text described. The fixture spawns that orphan on purpose
+now, and the assertion is that the report comes back at the deadline rather than
+at the deadline plus the reap delay, so deleting the goroutine bound goes red. A
+process in `TASK_UNINTERRUPTIBLE` is not arrangeable from a test, which is why the
+bound is written so that no case has to arrange one.
+
+The memory a card states goes through `gpunorm.CardMemoryBytes`, for the reason
+its model name goes through `gpunorm.Canonical`. A marketplace lists the capacity
+a card is sold with and `--query-gpu=memory.total` measures the framebuffer left
+after the driver and ECC have held their own regions back: this workstation's RTX
+5090 is sold as 32GB and measures 32607MiB. Published raw, a `memory_min_bytes` a
+caller copied out of a listing admitted the Shadeform 5090 and refused the
+enrolled 5090, which is the silent strike-out this slice exists to remove, on the
+lane phase 5 is about.
+
+Rounding up to the whole gibibyte was not the conversion. It covers a driver
+reserve of a few hundred mebibytes and leaves every part that holds ECC out of
+band a whole gibibyte short: a T4 is sold as 16GB and measures 15360MiB, which is
+exactly 15 GiB, and an L4 and an A10G sold as 24GB measure 23 GiB. All three are
+in `gpunorm`'s own alias table, and the pinned fixtures were an RTX 5090, an RTX
+4090, two H100s and two A100s, every one of which has a sub-gibibyte gap, so
+nothing could go red where the rule failed. The conversion is now to the capacity
+a part is sold with, from the list of capacities parts are sold in, and it is
+bounded: a measurement with no sold capacity within an eighth of it is published
+at the whole gibibyte, because a part `gpunorm` has never heard of is better
+stated a little low than restated as the next size up.
+
+A partition is not a card and is left as measured. A MIG `1g.10gb` instance
+measures about 9856MiB, and publishing it as 10 GiB admits a Run that asked for
+10 GiB onto less than it asked for, which is the same silent wrong answer in the
+other direction. `nvidia-smi` names a MIG instance after the profile it was cut
+to, so the model travels beside the measurement and the name is where the
+distinction is read. The conversion is still not a tolerance in the comparison,
+which would loosen every floor including the ones written against a real
+measurement. `internal/adapter/docker`'s GPU probe shares it. The remaining unit
+assumption is on the Shadeform adapter's side, where a listing's own number is
+read as binary, and it is
+[#234](https://github.com/benngarcia/mercator/issues/234).
+
+What an offer carries. `domain.HostFacts` is its own field on `OfferSnapshot`
+rather than more `ResourceInventory`, because these are promises and not
+quantities, and because the answer that matters most is the one nobody gave.
+`Attested` is a map rather than a set of the true ones: false is an answer.
+Placement refuses a stated no with `CAPABILITY_MISMATCH` and a silence with
+`UNKNOWN_FACT`, and an operator reading the decision then knows whether to buy a
+different machine or to go and find out about this one. `HostFact` is a closed
+set, checked where a Blueprint states one and where a Run declares one, because a
+misspelling on either side is a promise nothing matches and a refusal that reads
+as a fleet too small.
+
+`domain.HostFacts.Violations` and `CompareDottedVersions` live in the domain
+because two readers ask them: Placement deciding, and the Lab judging what
+Placement decided. Two implementations of one rule is how the judge comes to
+agree with the accused. The comparison answers separately whether two versions
+could be ordered at all, because an unparseable component read as zero refuses
+machines that are fine and read as large admits machines that are not. A
+difference settled before the unreadable component is still settled, so a
+distribution's patched `550.54.15-ubuntu3` clears a floor of 535 and is unknown
+against 550.54.16.
+
+A node states nothing about SSH, and that is the true answer rather than an
+omission. Mercator reaches an enrolled machine over the agent's own outbound
+session and holds no login on it, so a Run that wants a shell on its host is
+refused `UNKNOWN_FACT` there. SSH is a provider's promise about a machine nobody
+has allocated yet, which is where the corpus states it.
+
+Evidence, in order of fidelity. At L0, `internal/domain/host_test.go` holds the
+four arms apart: a fact nobody stated refused as a silence, a fact stated false
+refused for what it is, a CUDA 12 driver refused under a CUDA 13 image, and a
+driver nobody can order recorded as unknown; plus the admission refusal, so a
+caller's typo is caught where the Run enters rather than in every Booking
+Decision it would spoil. Reading a missing component as zero turns the fourth
+into `CAPABILITY_MISMATCH` and fails it.
+
+At L1, `bad-host-facts-rejected-loudly` is promoted green with its
+`missing_capabilities` emptied. It gained a fourth listing, because the boolean
+facts map alone cannot state the arm this slice is really about: `driverless-host`
+is refused `CAPABILITY_MISMATCH facts.nvidia_driver`, `old-driver-host` is refused
+`CAPABILITY_MISMATCH host.driver_version` on a 470 driver under a 535 floor,
+`unattested-host` is refused `UNKNOWN_FACT facts.ssh`, and `good-host` wins at
+twice the cheapest price. Deleting the one line that asks the offer's host facts
+makes all four candidates feasible and places the Run on the machine with no
+driver.
+
+`safety.host_supports_the_image_it_was_given` asks two things over three sources
+that are not checking themselves: no launch in the world's ledger landed on a
+machine whose published facts cannot carry the workload Mercator's own event log
+says it declared, and no Booking Decision called such a machine feasible. The
+second clause is there because a candidate ranked feasible is one busy machine
+away from being that launch. Its deliberate failing world is a host stating a
+CUDA 12 driver accepting a launch whose image declares CUDA 13.
+`WorldTruthSnapshot.PublishedHostFacts` keeps what a machine said after the
+machine is gone, for the reason the published paths beside it are kept: a
+placement is decided at one moment and judged at a later one.
+
+What that rule does not yet have is a conformance Blueprint of its own. The
+Blueprint vocabulary reaches both simulated worlds, `RentalSpec` states a driver
+and `lab/world.go` publishes it, and no conformance Blueprint declares a host
+requirement, so the rule passes vacuously on all forty three of them and its only
+failing world is one a test constructs.
+[#227](https://github.com/benngarcia/mercator/issues/227) is the world that
+drives it: two rentals, one on a driver the image outgrew, and a Run that lands
+on the other.
+
+At L2, `TestANodeReportsTheCardsAndTheDriverUnderThem`,
+`TestAMachineWithNoDriverEstablishesThatItHasNone` and
+`TestAnAgentThatCannotSeeTheDriverEstablishesNothing` drive the real agent
+against a scripted vendor tool and a stand-in `/proc`, because hardware is the
+one thing a case cannot arrange and the kernel under it is the second.
+
+At L3, on this workstation, the live half ran. `TestThisMachineReportsItsOwnCardsAndDriver`
+checks the real agent against `nvidia-smi` asked directly, and
+`TestThisMachinesCardsReachAPlacementAndAnOutgrownDriverDoesNot` runs the real
+`nodeagent.DockerRuntime` against the real Docker daemon under the real node
+registry and the real Placement. The machine reports one NVIDIA GeForce RTX 5090
+with 32607 MiB on driver 595.71.05 supporting CUDA 13.2, the daemon has its
+nvidia runtime, the enrolled node offers that card and that driver, a Run needing
+an accelerator is placed on it, and a Run whose image declares a driver floor of
+596 is refused `CAPABILITY_MISMATCH` in the Booking Decision and never handed to
+the node. Removing the agent's accelerator read makes both fail with a driver of
+`""` against nvidia-smi's 595.71.05; removing the offer projection's host facts
+fails the fleet case the same way.
+
+That live case resolves `nvidia-smi` to an absolute path and passes it through
+`nodeagent.WithAcceleratorTool`, because the daemon fleet clears `PATH` so no
+local Docker connection is seeded. Since the review round it is the same option
+production uses, and an agent inside that fleet without it now reports a machine
+nobody asked rather than a workstation with no driver. The live case also asserts
+that every card the node offers states a whole number of gibibytes, which is the
+unit a marketplace floor is written in; asserting a number instead would go stale
+the next time this host's card changes.
+
+`Established` reaching only the facts half of the offer was the blocking defect
+of the round after that, and it is the one that mattered most. A node whose agent
+could not run the vendor tool published `Resources.Accelerators` as an empty list
+with no flag beside it, and `Resources` is where the count, the model, and the
+memory floor are read: a Run declaring `resources.accelerators [{count: 8,
+model_any_of: ["nvidia-a100"]}]` was refused `RESOURCE_INSUFFICIENT` on the
+machine holding the cards, and only a Run that separately declared
+`facts: ["nvidia_driver"]` ever reached the silence. No GPU Run is written that
+way. `ResourceInventory.AcceleratorsKnown` now travels beside the list the way
+`EphemeralDiskKnown` travels beside the room, every publisher states it, and the
+scheduler asks it the way it asks the disk: `UNKNOWN_FACT` against a machine
+nobody counted, `RESOURCE_INSUFFICIENT` against a machine that counted and came
+up short.
+
+The Docker lane publishes host facts now, and the claim that it was a catalog
+with nothing to say was wrong. Its GPU probe enumerates the cards by running a
+container with `--gpus all`, which is the same act a Run's own container
+performs and which no endpoint without a loaded NVIDIA driver can complete, so a
+probe that listed the cards has established the driver behind them in the pass
+that built the offer. It asks for `driver_version` in the same query and returns
+the same `capability.AcceleratorFacts` an enrolled node reports, so one
+vocabulary states what a machine established about its cards on both lanes. A
+daemon that answered and registered no NVIDIA runtime cannot hand a container a
+card, which is an inventory of none somebody took; a daemon nobody could reach
+establishes nothing.
+
+That probe had also never worked. The NVIDIA container runtime injects the
+host's own `nvidia-smi` and driver libraries into the container it starts, and
+those are linked against glibc, so running them inside `busybox:1.37` dies with
+`error while loading shared libraries: libdl.so.2` on every endpoint there has
+ever been. Every Docker endpoint therefore advertised no cards whatever it was
+holding, and no unit case could see it, because they all parse the output a
+working probe would have printed. The GPU probe runs in `debian:12-slim` now; the
+disk probe keeps busybox, which is the right image for `df`.
+
+What is still missing on the provider lane. Nothing in `internal/adapter` outside
+`docker` writes `OfferSnapshot.Host`, so a Run declaring `min_driver_version` or
+`facts: ["ssh"]` is refused `UNKNOWN_FACT` on every Shadeform, RunPod, and Vast
+offer. That refusal is the true answer for a catalog that publishes no driver
+version, and `ssh` is deliberately a provider's promise about a machine nobody
+has allocated yet, which is where the corpus states it. It is a gap in coverage
+rather than a defect in the rule, and it is
+[#230](https://github.com/benngarcia/mercator/issues/230).
+
+What is still missing on the node lane, which the round before this one wrongly
+implied was the covered one. Nothing in `internal/lab` or `internal/scenario`
+imports `internal/nodeagent`, and `node.NewRegistry` is wired only in
+`internal/daemon/runtime.go`, so neither simulated world runs the agent or
+`node.Registry.offer`: `lab/world.go` builds its offers itself and stands in for
+enrolment with its own `Invite`. Deleting the `Host` block from
+`internal/node/offers.go`, or `gpunorm.CardMemoryBytes` from `smiDevices`, leaves
+the whole Blueprint corpus green, and only the Go cases and the live daemon case
+catch it. The accelerator-knownness rule this round added is stated in the corpus
+because both worlds read `scenario.HostInventory`, which is where the flag is
+set; the writers above it are not. That is
+[#233](https://github.com/benngarcia/mercator/issues/233).
+
+`go build ./... && go vet ./... && go test ./...` is green. The corpus gains
+`a-machine-nobody-counted-is-not-a-machine-with-no-cards` as a green Blueprint
+and its arrival-driven copy under `internal/lab/testdata/blueprints`, so the Lab
+grades the refusal against
+`safety.a_silence_is_not_an_answer_about_capacity` rather than against a
+fixture's expectation. Reverting the scheduler clause turns the Blueprint red
+with `NO_CAPACITY_FITS` where it expects `CAPACITY_UNSTATED`, which is its
+deliberate failing case. The Lab found one more thing on its first run:
+`safety.decision_is_reproducible` failed because `CanonicalHash` hashed the Go
+value rather than the document it becomes, so a refusal carrying a struct in
+`Required` hashed one way where it was built and another where it was read back.
+It hashes the document now.
+
+On this host, the live half ran again and further: the real Docker daemon, the
+real RTX 5090, and the real driver, through both the node agent and the Docker
+adapter's own probe. `TestIntegrationThisEndpointCountsItsOwnCardsAndNamesTheirDriver`
+reports one card at 32 GiB on driver 595.71.05 and a Run needing an NVIDIA driver
+not refused there.
+
+### Phase 5 the session a machine keeps
+
+The defect was that a node stopped being able to authenticate about thirty
+minutes after it bootstrapped. `nodeagent.Agent.session` treated an expired
+credential as no credential and enrolled again, presenting the invitation the
+machine was bootstrapped with. `memoryStore.Enroll` clears `EnrollmentTokenID`
+when it redeems it, so the replay answered `ErrEnrollmentSpent`, and past thirty
+minutes the signer refused the same material on its own. The machine went on
+running containers that nothing could reach and nothing could stop.
+
+Why nothing caught it. Every case in the tree finishes inside `DefaultSession`.
+The agent suite runs for milliseconds, the daemon fleet for seconds, and the Lab
+had no notion of a session at all. A defect whose earliest possible symptom is
+thirty minutes in is invisible to a suite whose longest case is thirty seconds,
+which is why the shortened window is configuration rather than a test double:
+`daemon.Config.NodeSession` and `node.WithSession` make the lapse a thing a case
+states.
+
+Renewal is its own act, in the ledger and in the code. `node.session_renewed` is
+a separate operation from `node.enrolled` because the two have different material
+behind them and different consequences: enrolling redeems a single-use invitation
+and moves the fencing token, renewing spends nothing and moves nothing. Filed
+under one name, a machine working for a day would read as a machine that joined
+the fleet forty eight times, and the question the ledger exists to answer, which
+invitation made this machine executable, would have no answer.
+
+The truncation defect the conformance run found. The first L2 run failed with the
+daemon refusing every renewal, and the cause was not renewal at all: `Signer.mint`
+formats the expiry as whole Unix seconds, and the registry was telling the node a
+moment with a fraction in it. At a two second session the credential died up to a
+second before the moment the node was renewing against. At thirty minutes it is
+invisible, and it would have stayed invisible until a clock skew or a slow round
+trip made the difference matter on a real machine. `Signer.Expiry` is now what
+every credential window is computed through, so a node is told the moment its
+credential really has.
+
+What the record is held to. `safety.bootstrap_credential_is_short_lived_and_single_use`
+reads three things off World Truth: how many accepted allocations carried each
+credential, how many times each was redeemed, and whether the bytes turn up in
+Mercator's event log or Effect Ledger. The Lab world keeps every token it ever
+minted, keyed by the token, because the interesting one is the credential a
+reinvitation superseded: an invitation nobody is offering any more is exactly the
+one that must not be redeemable a second time. The credentials travel on the
+invariant observation and never on `WorldTruthSnapshot`, which the Lab's own HTTP
+surface serves.
+
+`safety.secrets_absent` was a rule about vocabulary. It searched for the field
+names credential, password, and secret, so a token filed under `enrollment_token`
+passed it, which is the name a bootstrap would honestly be filed under. It now
+scans values as well: any credential this world minted wherever it is filed, and
+any signed URL, because a presigned read is a bearer credential written as a
+location and recording one would put a working read of the object store into
+every exported bundle.
+
+Evidence, in order of fidelity. At L1,
+`a-machine-keeps-working-past-its-first-session` drives forty minutes of virtual
+time and the ledger holds one enrolment and a renewal sequenced after the launch
+and before the Run ends; deleting the renewal from the world's sweep fails it with
+"the machine outlived its first session credential and the ledger holds no
+renewal". A byte scan of the exported Run Bundle finds no credential material. At
+L2, `TestAMachineGoesOnWorkingAfterItsFirstSessionCredentialLapses` runs a real
+`nodeagent.Agent` against the daemon's own HTTP server with a two second session,
+counts two renewals on the wire, then places and completes a Run, and asserts
+exactly one invitation was redeemed; restoring the old behaviour turns it into a
+loop of `ENROLLMENT_REFUSED` and fails on the renewal count.
+`go test -race ./internal/daemon/ ./internal/lab/` is green, at 31s and 253s.
+
+### Phase 5 the machine a listing becomes
+
+`enrolled-node-survives-its-first-run` has been a target since phase 1 and is
+green. What it was waiting on was never the bootstrap alone: the placement world
+allocated a machine, handed it a bootstrap, and let its agent enrol against the
+real node registry, and then had nowhere to publish the machine from, so the
+second Run saw the listing it had already bought and bought it again.
+
+The decision that unblocked it. Both the harness's own registry and the world
+itself could publish an enrolled machine, and the world does. Publishing from the
+registry is production's own shape, and reaching it means a Broker in the
+placement harness, node facts carrying the machine's inventory, and a launch
+addressed at a node runtime the placement world does not have; that is the Lab's
+fidelity level and the placement corpus is about decisions. The world is already
+the provider, so it publishes the machine the same way it publishes every other:
+`fake.World.publishEnrolledMachine` adds a standing reusable offer at the moment
+the agent's session opens, which is the same moment `AddMachine` already refuses
+to call a machine reusable without.
+
+What the machine is called. The offer ID is the provider's own handle for the
+machine, which is the `machine` a Blueprint's listing declares:
+`simcloud-4090-0f31` rather than `reusable-4090`. Naming the machine after the
+listing would have made reuse an arithmetic identity rather than a decision, and
+would have filed a launch history under a product. `WorldSpec.candidateIDs` now
+admits a listing's declared machine so a fixture can name the winner.
+
+A listing that declares no machine is a product rather than a host, and the
+machine it yields is one nothing has named yet, so `fake.machineHandle` mints one
+from the lease that bought it. The first version of this reached for the
+listing's own ID, which replaced the product: the catalog entry stopped being
+sold, the provisioning stages it published vanished, and two green fixtures were
+doing it silently.
+
+One machine is sold once, which is the rule the naming above rests on. A listing
+that names a machine is a listing of that machine, so `ProvisionCapacity` refuses
+a second purchase by name, and every listing of a machine under a live lease
+answers `Capacity.Available: false`. Two listings of one machine are refused the
+same way, which is a shape this corpus already contains on purpose:
+`history-answers-for-the-machine-it-was-measured-on` publishes `machine-77` under
+two ask IDs, because an ask ID is a fresh integer for every search. The first
+version of this sold the machine as many times as the listing was bought, and
+each publication overwrote the last: the second lease inherited the first
+machine's identity and lost its layers, its busy window and its Rental.
+
+A sold listing is refused rather than withdrawn, for the same reason
+`TerminateCapacity` leaves the listing alone: a decision has to see an offer to
+record having refused it, and the product is on sale again the moment the lease
+ends. `ListCapacity` is the other question and answers only capacity to acquire,
+which is what its own doc comment already claimed and what mercator#200 will
+read.
+
+`TerminateCapacity` withdraws the machine, which is the inverse the publication
+owed. Without it a provider went on advertising available standing reusable
+capacity it had destroyed, while `ListOwnedCapacity` in the same world reported
+nothing owned, so a later Run could be placed on, and recorded as having
+successfully executed on, a host nobody is billed for.
+
+Where a workload runs. A Run placed on a listing is launched at the listing, and
+`fake.World.executionHost` sends it to the machine that listing was allocated
+into for that very attempt. The ownership token is what correlates them: the same
+token stamps the provision command and the launch, and it is already what the
+ownership sweep attributes a machine by. Without it the first Run's eighteen
+gigabytes would land on a product nobody can run anything on, and the second Run
+would find a cold machine.
+
+The first Run has to end, and could not. Nothing in the placement world ever
+finished a workload, so every Booking it created was immortal and every machine
+it published carried one. `World.DefineRuntime` reads the Blueprint's existing
+`runtime_models`, which is what the Lab already samples for the same question,
+and a launch whose runtime a fixture stated exits when its work is done. A launch
+nobody timed behaves exactly as before, still running for as long as the scenario
+lasts, so no fixture that says nothing about runtimes changed.
+
+One production defect fell out of it, and it is not the world's. A standing
+reusable offer whose Rental Schedule is exhausted was feasible whenever the offer
+said its capacity was available, and `domain.RentalSchedule.Reserve` then refused
+the reservation, which failed the whole placement rather than striking out one
+candidate. The two answers come from different authorities and can disagree,
+which is why the schedule is now asked in its own right:
+`RENTAL_SCHEDULE_EXHAUSTED` in `feasibility`, beside the availability check
+rather than behind it. It does not end by waiting, which the first version of it
+got wrong. The refusal's own message says the schedule cannot promise a start,
+and that is not the claim that the capacity comes back when the work spending it
+finishes: every projection off an exhausted schedule reads zero, so a refusal
+counted as a wait deferred a Run behind a Booking that had already overrun, named
+that Booking's Run as work ahead of it, and dated the wait at nothing. That is
+the head-of-line block `domain.Violation` names as the reason the flag is false
+by default. `an-exhausted-schedule-is-not-a-queue-to-wait-in` states the reason,
+the work ahead and the fleet's own count, and fails on all three with the flag
+put back. `an-overrun-booking-is-not-an-empty-queue` states both
+codes, and it fails with the check removed.
+`registry-manifest-bridges-digest-spaces` advanced thirty minutes past a twenty
+minute bound and asserted the overrun Rental was still a candidate, which was the
+hole written down; its advance is now ten minutes, which is what it meant.
+
+The higher-fidelity half, and the live run.
+`TestAMachineItsProviderBootstrappedIsWarmCapacityForTheNextRun` in
+`internal/daemon` is the same claim against this workstation's own Docker daemon.
+A real capacity connection holding a real `capability.CapacityProvider` is
+authorized over the API, the real node registry mints a bootstrap, the provision
+command carries it to that provider, and the production `nodeagent.Agent` is
+started from the provider's own copy of it and no other input, so an identity the
+provider was never handed could not enrol. The machine then appears as placeable
+standing capacity, a Run lands on it and really fetches the image over the
+registry protocol, and a second Run lands on the same machine charged zero boot
+and zero image fetch from `image_inventory`. The image is taken off this host
+before the fleet starts: a case that placed content the workstation already held
+would charge the first Run nothing either, and would pass against a control plane
+that learned nothing at all from the execution. Publishing an empty image
+inventory from `Registry.offer` fails it, on the machine never reporting what it
+ran.
+
+The image the case places is built on the host and served from a registry the
+case runs there. It used to be `alpine:3.20` pulled from Docker Hub and deleted
+again on every run, and a refusal turned into a skip: once this address had spent
+its anonymous quota, Docker Hub answered 429, the case reported SKIP in under a
+second, and `go test ./...` reported the package green with the only live
+statement about provider bootstrap never having executed. The case now commits an
+image onto a base this host keeps, whose top layer is four megabytes of
+randomness made for the run, pushes it to a registry container, and takes it back
+off the daemon. The fetch is real, and the content is cold because it did not
+exist until the run made it. What still comes from a public registry is the two
+tags that scaffolding is built out of, `busybox:1.37` and `registry:2`, read at
+most once per machine and never deleted. A host holding neither and unable to
+fetch them now fails the case rather than skipping it, which is the rest of this
+tree's answer to the same question. The reason to differ is what a skip costs
+here: the live cases in `internal/nodeagent` and `internal/ociresolver` check a
+reader against what this daemon itself reports and have in-process siblings
+making the same claim, while this case is the only live statement Mercator has
+about provider bootstrap and is the evidence cited for it above, so a skip
+retires that claim with the tree still green. It did exactly that on this
+workstation once. Reviewers found the skip surviving in this case's own gate
+after the paragraph above was written, which is why it says this now instead of
+saying nothing asks Docker Hub for anything.
+
+The live cases hold this machine's Docker daemon while they use it, through
+`internal/dockertest.Exclusive`. Three packages drive the one daemon this host
+has, `go test ./...` runs them at once in separate processes, and run together
+they measure each other rather than Mercator: that is mercator#212, and the file
+lock is the option it asked for. It is also what makes a budget stated as "what
+this host's Docker really takes" true, because a wait taken while four other
+suites work the same machine is a measurement of them.
+
+What that case deliberately does not do is let Placement choose to provision. A
+capacity connection publishes no candidate, which is mercator#200, and the launch
+that follows one cannot be addressed at the machine that was built, which is
+mercator#207. The one act a placement would perform is performed by the case;
+everything after it is production's.
+
+### Phase 5 a Run that ends without taking its machine
+
+Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
+`go vet`, and `go test ./...` are green, and so is `go test -race -count=1` over
+`internal/domain`, `internal/orchestrator`, `internal/scenario`, `internal/httpapi`,
+`internal/broker`, and `internal/lab`. Nothing in `web/app` was touched. No live
+half ran for this rule, and there was none to run: `internal/lab` drives the
+tape-driven simulated world end to end and holds no Docker and no object-store
+case, and the live cases in the tree are `internal/nodeagent`'s and
+`internal/adapter/docker`'s, which this slice did not touch. Cleanup disposition
+is a control-plane decision, so what stands behind it is the corpus and the two
+Lab cases below rather than a real daemon.
+
+The behaviour was shown failing from both sides, which is what this rule needs: a
+disposition has two wrong answers and each of them is invisible to the test that
+catches the other.
+
+Restoring the old rule, `case offer.Kind == OfferKindProvisionable`, so every
+provisioned placement terminates again:
+
+```text
+domain       a fresh machine allocated to hold a Rental is cleaned up by
+               "terminate", want "release"
+orchestrator TestAProvisionedRentalRecordsReleaseAndLeavesItsHostStanding
+               recorded disposition = "terminate", want "release"
+lab          TestAReusableProvisionedRunReleasesItsWorkloadAndLeavesItsHost
+               the Run recorded disposition "terminate", and a machine held under
+               a lease is not a Run's to destroy
+scenario     nine green Blueprints regress at once
+```
+
+Collapsing it the other way, so nothing ever terminates:
+
+```text
+domain       a one-shot execution Mercator allocated is cleaned up by "release",
+               want "terminate"
+orchestrator TestOneShotOfferRecordsTerminateDispositionAndInvokesTerminate
+               recorded disposition = "release", want "terminate"
+lab          TestAOneShotExecutionStillTakesItsHostWithIt
+               the one-shot execution was never terminated
+lab          TestCapacityNoRecordedLaunchAccountsForIsDestroyed
+               the capacity two launches disagree about was adopted on
+               recorded_disposition_release
+scenario     ephemeral-execution-holds-nothing and
+               ephemeral-execution-is-never-a-rental regress
+```
+
+The two new Lab cases are the higher-fidelity half and they read the Effect
+Ledger, because Mercator's own record cannot answer this. The record says a
+cleanup was confirmed under a recorded disposition; only the ledger says which
+command the world received and what became of the machine.
+`TestAReusableProvisionedRunReleasesItsWorkloadAndLeavesItsHost` drives
+`provisioned-capacity-becomes-a-machine-mercator-holds` until that Run's cleanup
+is confirmed, past the end of the twenty-minute Run the other cases in that world
+stop short of, and holds four things together at that moment: the Run succeeded,
+the workload was released, no `provider.terminate` and no `capacity.terminate`
+had been carried out, and the lease is still held with its agent's session open.
+The bound is the cleanup rather than the end of virtual time, and that is the
+whole difference between a case about the end of a Run and a case that pins the
+#206 leak in place: a Rental that ends its own generation when the last Booking
+on it completes destroys this machine later, correctly, and would fail an
+assertion swept over the whole ledger.
+`TestAOneShotExecutionStillTakesItsHostWithIt` asks the same
+question of `an-owned-hour-is-charged-to-somebody`, where the Run wins an
+ephemeral listing, and requires the terminate that world's machine has coming.
+
+Neither invariant went vacuous and neither needed changing.
+`safety.ephemeral_capacity_not_reused` and
+`safety.reusable_capacity_has_an_enrolled_runtime` still hold across every
+execution, and `TestEveryDefaultInvariantHasADeliberatelyFailingCase` still
+refutes both with the worlds it always did. What the change did to their coverage
+is add to it: `a-machine-two-launches-disagree-about-is-not-adopted` now declares
+its listing ephemeral, so one more L1 execution runs a one-shot product through
+placement, launch, refusal, and the orphan sweep.
+
+One honest gap in that coverage, which this slice did not close.
+`safety.reusable_capacity_has_an_enrolled_runtime` reads the fleet as published,
+and no world publishes the machine a provider allocated: the Lab's enrolment
+writes a ledger entry and no offer, so in the provisioned worlds the rule is
+carried by its queue clause alone and asks nothing about the machine that was
+built. That is the same missing publication the second Run of
+`enrolled-node-survives-its-first-run` waits on, and the rule gets its full
+reading over provisioned capacity when that lands rather than by being rewritten.
+
+### Phase 5 the disposition, under the third review
+
+Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
+`go vet`, and `go test -count=1 ./...` are green, and so is `go test -race
+-count=1` over `internal/domain`, `internal/scenario`, `internal/lab`,
+`internal/janitor`, and `internal/orchestrator`. Nothing in `web/app` was touched,
+and no live half ran, for the same reason as above: this is a control-plane
+decision and `internal/lab` holds no Docker and no object-store case to run it
+against.
+
+Requiring the lane has its own deliberate failing case, and it is a Blueprint
+rather than a rule. Deleting the refusal in `validateWorld` and loading
+`testdata/blueprints/invalid/listing-that-states-no-lane.json`:
+
+```text
+scenario     TestLoadBlueprintRefusesACapacityAccountNoProviderCouldKeep
+               loading listing-that-states-no-lane.json gave <nil>, want a
+               refusal naming "the end of a Run destroys one lane and hands the
+               other back"
+```
+
+The bounded Lab case still refuses both wrong cleanups, which is the thing the
+bound had to keep. Restoring the kind-only rule so a provisioned placement
+terminates again, the case fails on the recorded disposition; with that assertion
+suppressed it fails because nothing released the workload; with that one
+suppressed too it fails on the ledger itself:
+
+```text
+lab          TestAReusableProvisionedRunReleasesItsWorkloadAndLeavesItsHost
+               the Run recorded disposition "terminate", and a machine held
+               under a lease is not a Run's to destroy
+               nothing released the workload, so nothing took Mercator's
+               container off a machine it means to keep
+               effect_0a880782f1d37c272c55b4f2 destroyed the machine by the time
+               this Run was cleaned up, and the Run ending is not the lease ending
+```
+
+Collapsing the rule the other way, so nothing ever terminates, still fails on
+all three of the green one-shot worlds the reviewers said were not there:
+
+```text
+lab          TestAOneShotExecutionStillTakesItsHostWithIt
+               the Run recorded disposition "release" on a one-shot execution,
+               which holds nothing once its workload exits
+scenario     ephemeral-execution-holds-nothing
+             ephemeral-execution-is-never-a-rental
+             an-idle-machine-is-not-free
+```
+
+### Phase 5 the disposition, under the fourth review
+
+Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
+`go vet`, and `go test -count=1 ./...` are green, and so is `go test -race
+-count=1` over `internal/janitor`, `internal/domain`, `internal/broker`,
+`internal/providers`, and `internal/lab`. Nothing in `web/app` was touched. The
+only files that changed are this plan and one comment in
+`internal/janitor/janitor.go`, because both findings were about what the plan
+claimed rather than about what the code does.
+
+What a sweep can actually be handed, read out of the code rather than asserted.
+`Backend.ListOwned` returns `nil, nil` for a capacity connection, and
+`TestASweepOfAWorkspaceHoldingCapacityConvergesTheWorkloadsItLeaked` fails if it
+ever asks one for its machines. `Broker.Launch` sends a reusable launch to
+`launchOnNode`, and `Broker.ListOwned` fans out over connection records, which a
+node is not. `TestTodaysBackendsAreAllOneShot` pins docker, runpod, shadeform and
+vast to `domain.LaneEphemeral`. So the only offer shapes a production sweep can
+be deciding about are ephemeral standing and ephemeral provisionable, which
+`OfferSnapshot.CleanupDisposition` answers with release and terminate, before the
+disposition slice and after it. The branch that slice changed, provisionable and
+reusable, has no production producer.
+
+What an adoption leaves standing, reproduced. Running the arrangement of
+`TestJanitorAdoptsCapacityItsOwnRecordSaysSurvives` with one assertion added, on
+what the adapter still reports owning after the sweep:
+
+```text
+janitor      sweep={Found:1 Adopted:1 Terminated:0}, owned after adoption=0
+```
+
+`fake.Adapter.Release` deletes the object exactly as its `Terminate` does, and so
+do `shadeform`, `vast` and `runpod`. That is #208. The probe was deleted rather
+than kept, because a case asserting `owned after adoption=0` would write today's
+defect down as the requirement.
+
+### Phase 5 the generation binding and the measured stage, under the second review
+
+Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
+`go vet` and `go test ./...` are green, including the live half: the node agent's
+object-store cases and the Docker runtime cases execute against real containers on
+this host rather than being skipped, so `TestANodeReplicatesAnArtifactFromARealObjectStore`
+and `TestDockerRuntimeReportsTheLayersItUnpacked` are evidence rather than
+simulation.
+
+Three defects held. Both new assertions the previous entry added were among them.
+
+The generation rule compared one value with itself. `simulatedWorld.ProvisionCapacity`
+stored `command.Generation` on the lease, and `deliverEnrolments` wrote that same
+field into the enrolment facts, so `invitedGenerations` and the rule read the same
+number twice. The generation the bootstrap was minted under, which is what the node
+redeems and what the fencing token is issued against, never reached the ledger. The
+lease now holds the bootstrap verbatim and the enrolment is recorded under what the
+agent redeems.
+
+It was verified by injecting the defect into the control plane rather than into the
+recorder. In a scratch copy of the tree, `allocateCapacity` sending
+`Generation: requested.Generation + 1` while the token is minted for generation 1:
+
+```text
+enrolment effect_d3c9… opened a session under Rental "rnt_c915…" generation 1,
+  and the machines allocated for that lease were invited for [2]
+```
+
+15 Lab tests fail on it, `TestProvisionedCapacityBecomesAMachineMercatorHolds` and
+`TestDefaultInvariantRegistryPassesTheCanonicalExecution` included. At 3b2c3e4 the
+same defect drove a fully green `go test -count=1 ./...`.
+
+The mirror-image defect, `bootstrapFor` inviting under generation 2 while the
+provider is asked for generation 1, now fails the Lab with the sentence the real
+registry writes, because `simulatedWorld.EnrolledAt` honours the generation on the
+`NodeRef` as `node.Registry.record` does:
+
+```text
+advance Lab Run "builder": orchestrator: read whether node "nod_c915…" enrolled:
+  node: "nod_c915…" is generation 2, not 1
+```
+
+Before the fix the Lab answered "enrolled" to that question and reported a machine
+ready to launch on where the real deployment cannot make progress at all.
+
+The stage record carried the polling grid. Each stage was `now.Sub(since)` with both
+ends at reconcile moments, and the fixture's 30s, 4m and 45s were exact multiples of
+the fifteen second cadence, so grid and spend coincided. Each stage is now dated by
+its authority, and where an authority does not date its transitions the record says
+`bounded` and the seconds are published as the upper bound they are.
+
+Both halves were shown failing. Forcing every stage to fall back to the look:
+
+```text
+agent_ready is recorded at 60s and this world spends 51s on it        (Lab)
+the acquisition stage was recorded as 37s, and this machine spent 30s on it
+the boot stage was recorded as 253s, and this machine spent 240s on it
+the agent_ready stage was recorded as 70s, and this machine spent 45s on it
+  and each of the three is also reported as a bound                   (orchestrator)
+```
+
+The probe the reviewers used now passes. With the fixture's `boot` at `4m10s` and
+the expectation at 250 the case is green, and with the expectation left at 247 it
+fails with `boot is recorded at 250s and this world spends 247s on it`. The record
+follows the world rather than the reconcile interval, and the fixture's three
+stages, 37s, 4m7s and 51s, are deliberately none of them multiples of it.
+
+`TestAStageNoAuthorityDatesIsRecordedAsABound` holds the other half: a provider that
+reports a state without saying since when yields the whole 37 second interval marked
+`bounded`, rather than a 30 second measurement nobody made.
+
+Two cases are new and both are load-bearing.
+`TestTheWorldRecordsTheGenerationTheAgentRedeems` fails if the world's enrolment
+line is restored to `lease.Generation`, and
+`TestTheWorldAnswersAboutANodeAndAGenerationTogether` fails if the Lab's registry
+goes back to looking a node up by name alone. Neither can be stated as a Blueprint:
+a scenario describes a world, and what has to disagree here is two acts of
+Mercator's, so both reach the world's own contracts directly.
+
+### Phase 5 what a machine has to be for anything to accumulate on it
+
+`safety.reusable_capacity_has_an_enrolled_runtime` is registered, and the Lab
+world writes the enrolment it reads. It ran on the amd64 Linux workstation with
+Go 1.25.11, which is a different host and a different architecture from the arm64
+macOS laptop the phase 3 and phase 4 slices were verified on, and nothing in this
+slice behaved differently for it.
+
+Both halves were shown failing. Removing the world's enrolment record fails 20 Lab
+tests across the corpus, and the violations name the machine and the clause:
+
+```text
+offer "producer-rental" holds sha256:9f2c1e2a…, and no agent has enrolled on
+  machine "node-1", so nothing of Mercator's fetched or enumerated it
+offer "rental-warm" holds cache "compiler-cache" for workspace "ws_lab", and no
+  agent has enrolled on machine "node-1", so no workload of Mercator's ever wrote
+  it there
+Rental "rental-only" holds 2 Bookings and no agent ever enrolled against it, so
+  the Runs waiting there wait for a dispatch nothing can carry
+```
+
+The fourth clause, an Artifact copy on a machine nobody enrolled on, is reachable
+from no Blueprint: every fixture holding a copy on a Rental holds image content
+there too, so the image clause answers first and the copy clause is never asked.
+It is driven directly by `TestEveryClauseOfTheEnrolledRuntimeRuleCanFail`, and
+deleting it from the rule fails that case alone.
+
+One existing test changed. The hand-written ledger in
+`TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated` wrote
+`node.enrolled` records with no request projection, and this rule reads which
+machine and which lease a session was opened for. An enrolment naming no machine
+is not a record this world would ever write, so the fixture now states the
+projection each of its three operations really carries.
+
+### Phase 5 the Rental aggregate and the node a generation's end retires
+
+Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
+`go vet`, and `go test ./...` are green, and so is `go test -race` over
+`internal/domain`, `internal/rental`, `internal/node`, `internal/storage/sqlite`,
+and `internal/lab`. Nothing in `web/app` was touched.
+
+Every behaviour was shown failing with the production code broken.
+
+```text
+Retire leaves the record alone          -> nodetest "a retired node can never enroll again"
+  (both stores)                            nodetest "a retired node renews no lease ..."
+                                           rental TestEndingAGenerationRetiresTheRuntimeItWasServing
+                                           rental TestARetiredRuntimeIsNoLongerPublishableAsCapacity
+                                           node   TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet
+Heartbeat sets StateReady               -> nodetest "a retired node renews no lease ..." (both stores)
+  unconditionally again                    node   TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet
+Save keeps only the current generation   -> rentaltest "a lease comes back with the generations
+                                             it has been through" (both stores)
+Save ignores the version it replaces     -> rentaltest "a write that does not follow the version
+                                             the store holds is refused" (both stores)
+                                           rentaltest "a lease identity is taken once" (both stores)
+End the generation before retiring      -> rental TestALeaseNothingCanWriteRetiresNoRuntime
+  its runtime
+A destroyed machine leaves the lease     -> domain TestAnEndingThatLeavesNothingReleasesTheLease
+  held                                     domain "a destroyed machine still held"
+                                           rentaltest "a released lease comes back released"
+Two generations may be open at once      -> domain "two generations open at once"
+                                           rentaltest "a lease Mercator could not have reached
+                                             is refused before it is written"
+authenticate stops refusing a retired   -> node   TestARetiredRuntimeOpensNoFurtherSession
+  identity                                          OnTheCredentialItHolds
+dispatch stops refusing a retired       -> node   TestARetiredRuntimeIsAskedForNothingFurther
+  identity
+EndGeneration ends whichever            -> domain TestAnEndingNamesTheGenerationItDecidedAbout
+  generation is current                    domain TestAGenerationRecordsOneEnding
+                                           rental TestAnEndingRetriedAcrossAResume
+                                                    TouchesNeitherTheLiveMachineNorItsRuntime
+                                           rental TestAnEndingRefusesAGenerationTheLeaseHasNotReached
+A lease-ending ending may be followed   -> domain "a generation after the lease was given up"
+  by another generation                    rentaltest "a generation after the lease was given up"
+                                             (both stores)
+```
+
+The resurrection is the one worth stating on its own, because it made the whole
+retirement a no-op against any live agent. `Heartbeat` wrote `StateReady`
+unconditionally in both stores, and `StateReady` inside its lease is exactly what
+`Registry.Offers` publishes, so an agent on a machine being torn down put itself
+back into the fleet with its next report. Both stores now refuse it, and the
+SQLite one matches the state inside the statement rather than reading it first, so
+a retirement landing between the two cannot be missed.
+
+### Phase 5 the Rental aggregate under review
+
+Two reviewers read beacf7e adversarially. Three findings were real and are fixed
+at the root; one framing inside them was rejected.
+
+Fixed. Retirement stopped nothing an agent actually does. `Retire` wrote
+`StateRetired` and closed the open session, and `authenticate` never read the
+state, so the agent's transport reconnected on the same credential within
+milliseconds and `OpenSession` handed it every unacknowledged operation. The
+retired machine launched the container of a generation whose lease the record says
+was released. `dispatch` had the same hole from the other side: a `NodeRef`
+resolved before the generation ended appended a durable command that nothing would
+ever expire. Both now refuse a retired record, and the state is checked after the
+credential verifies so an unauthenticated caller learns nothing about the node.
+
+Rejected, one framing. The finding asked `dispatch` to check liveness. It checks
+retirement instead. `StateLost` is a node Mercator has stopped hearing from rather
+than a node that is gone, commands are durable and redelivered on the next
+session, and `StopWorkload` against a machine that went quiet is exactly the
+command an operator most needs to land. Refusing dispatch on liveness would delete
+that. Retirement is the only terminal state and it is the only one refused.
+
+Fixed. `Leases.EndGeneration` took no generation number, so a retry read the lease
+fresh and ended whatever was current at read time. A reconcile loop that stopped
+generation 1 and lost its answer would, after a resume, terminate generation 2 and
+retire the runtime of a live machine mid-Run. `domain.Rental.EndGeneration` now
+names the generation, answers a repeat of the same ending with the lease unchanged
+and no write, and refuses a second, different ending for a generation that already
+has one. `Rental.Generation` reads a generation by number, which the numbering
+invariant `Validate` already holds makes a position.
+
+Fixed. `Validate` accepted a lease whose earlier generation ended in a termination
+or a reclamation and was then followed by a new open generation. `BeginGeneration`
+refuses that, but `Validate` is what every store calls: `generationsRunInOrder`
+only checked numbering and that non-final generations are closed, and
+`releaseFollowsTheLastEnding` only inspects the newest generation. Written and
+read back, `Held` reported true and `Current` reported the later generation open,
+so Placement would send a Run to a host the record says was destroyed and the
+workspace would keep a lease nothing releases. Nothing may follow the ending that
+gave the lease up, and the conformance suite now holds both directions against
+both stores.
+
+### Phase 5 the enrolment rule under review
+
+`safety.reusable_capacity_has_an_enrolled_runtime` landed in be301d5 and was never
+refuted, because that run died with both reviewers in flight. It was read
+adversarially before anything was built on it. Three findings were fixed at the
+root and one was rejected.
+
+Fixed. An enrolment naming no machine or no lease was skipped rather than refused.
+It was a silent weakening in the one direction that matters: the listing clause
+was keyed on a machine handle being absent, so one such record read as an
+enrolment of the empty handle would have cleared every listing in the world at
+once. It is now a violation naming the effect, held by
+`TestAnEnrolmentThatNamesNoMachineIsRefusedRatherThanDropped`.
+
+Fixed. The rule asked every offer although its name says reusable capacity, and it
+is registered ahead of `safety.locality_provenance`, which owns exactly the same
+worlds for a listing and for a one-shot host and refuses them the same three
+things. A driver reports the first broken rule, so a bad ephemeral world was
+answered with "no agent has enrolled on machine X", and enrolling an agent is the
+one remedy the ephemeral lane must never apply. The rule now asks only capacity
+that keeps what it runs, which deleted `describeUnenrolledMachine` and the listing
+branch with it. The division of labour is asserted in
+`TestCapacityThatKeepsNothingIsAnsweredByTheRuleAboutKeeping`, which holds that
+this rule stays quiet and `localityProvenance` objects. Removing the world's
+enrolment still fails the same 48 Lab cases on the same three clauses, so the
+narrowing cost the corpus nothing.
+
+Fixed. The Lab world recorded the machine handle as the enrolment's causation ID
+and left its correlation ID empty, which is backwards from every other writer in
+`world.go`: the correlation is what an entry is about and the causation is what
+brought it about. These were the only entries in the ledger a Run Bundle could not
+tie to anything. They are now correlated on the machine and caused by the
+enrolment.
+
+Rejected. The commit message explains the change to
+`TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated` as an
+ontological correction, and the mechanical reason is that without a request
+projection the rule reports `decode enrolment : unexpected end of JSON input` as a
+failed invariant rather than as a violation. That was reproduced directly. It is
+not this commit's defect: every effect reader in `invariant.go` returns a decode
+error the same way, and turning a tree-wide convention over in a vocabulary slice
+would bury it. The fixture change is correct on its own terms either way, because
+an enrolment naming no machine is now refused outright.
+
+### What phase 5 slice 3 does not yet do
+
+`enrolled-node-survives-its-first-run` is green as of 2026-07-28. Its four pending
+assertions are gone: the second Run wins the machine rather than the listing, at a
+boot and an image fetch of exactly zero, on a Rental Schedule that did not exist
+when the first Run was placed. The listing beside it is refused as capacity
+already leased rather than weighed and rejected on price. The counts move to 61
+regression Blueprints, 59 green and 2 target.
+
+What is missing, in the order it has to land. The Rental aggregate, its two
+stores, the node retirement a generation's end performs, the provisioning path in
+the orchestrator, and the disposition that leaves a provisioned host standing all
+landed on 2026-07-28 and are struck from this list; the rest is not built, and
+none of it is half built.
+
+- The launch re-addressed to the machine that was built, filed as #207.
+  `broker.launchOnNode`
+  resolves the node from the selected offer's native ref, and the offer a
+  provisioned Run was placed on is a marketplace listing whose ref is not a node
+  id, so a Run that provisions a machine and watches its agent enrol cannot then
+  be launched on it. This is why the whole provisioned lane is unreachable end to
+  end in production today, and why the disposition that landed is held at L1 and
+  in the orchestrator's own cases rather than against a real provider.
+- An end for a lease nobody is using, filed as #206. A provisioned machine now
+  outlives its Run,
+  which is the point, and nothing yet decides when it stops being Mercator's:
+  `domain.Rental`, its stores, and `rental.Leases.EndGeneration` have no
+  production caller, so no idle machine is ever handed back. The one path that
+  destroys capacity is the enrolment deadline in `orchestrator.reclaimCapacity`,
+  and it fires only for a machine whose agent never came.
+- An adoption that keeps the machine it says it kept, filed as #208.
+  `janitor.reclaim` carries an adoption by calling `adapter.Release`, and `vast`
+  and `runpod` implement `Release` as the same instance delete their `Terminate`
+  performs. This said the fix had to land before any provider joined the reusable
+  lane; Shadeform joined it on 2026-07-29 and the hazard is still out of reach,
+  for a reason worth writing down rather than relying on: the janitor acts on
+  `adapter.OwnedExternalObject`s, a capacity connection answers `Backend.ListOwned`
+  with nothing, and a promoted backend no longer implements `Release` at all. So
+  the issue is about the ephemeral lane's two remaining backends and about any
+  future adapter that serves both, and the regression case belongs with it: no
+  adapter in the tree can currently express an adoption that leaves a machine
+  standing.
+- The Lab world publishing the machine a listing became, filed as #209. The
+  placement world does as of 2026-07-28 and the Lab still does not:
+  `deliverEnrolments` writes `node.enrolled` and adds nothing to `world.truth`, so
+  a Lab scenario with two Runs would send the second one back to the listing.
+  Publishing alone is half of it, which is why it is its own slice: the Lab's
+  launch, disk ledger, replicas and caches are all keyed by the selected offer,
+  which for a provisioned Run is the listing, so a published machine would stay
+  cold for ever. Making the execution land on the machine means an execution's
+  offer and the decision's selected offer become legitimately different strings,
+  which several invariants compare. Nothing in the conformance corpus runs two
+  Runs against one provisioned machine today, so it has no reader yet.
+- A stop this world performs, filed as #210. `fake.World.StopCapacity` returns a receipt saying
+  the machine is stopped and changes nothing: the allocation carries no stopped
+  state, `capacityStateAt` never reports one, and the machine goes on publishing
+  itself as available capacity somebody could launch on. The negotiated capability
+  set says this provider stops and resumes, so nothing refuses a Blueprint that
+  asks it to. It predates the publication and is untouched by it, and the machine
+  a stop should hold with its disk is now a thing this world has, which is what
+  makes stating it worthwhile. Terminate's own half landed on 2026-07-28.
+- `safety.capacity_lifecycle_is_negotiated` and
+  `liveness.provisioned_capacity_enrolls_or_is_reclaimed`. Neither can be stated
+  without a world that issues capacity commands, so both wait on the item above
+  rather than on the rule being written.
+
+### Phase 5 the capacity connection under review
+
+Two reviewers refuted parts of the slice that made the capacity contract
+reachable. Six of the eight findings were one defect described twice from two
+angles, and every one of them was reproduced before anything was changed, against
+the real daemon on the amd64 Linux workstation with Go 1.25.11: real SQLite, the
+real HTTP API, the production reconcile path, and the slice's own provider fixture.
+
+What the reproductions showed.
+
+```text
+FIRST reconcile:  reclaimed=0 err=capability: operation unsupported by this
+                  backend: machines connection in the reusable lane does not
+                  provide one-shot execution
+SECOND reconcile: reclaimed=0 err=(the same, forever)
+```
+
+`ReconcileWorkspace` is what the one-minute reconcile loop calls. Before it failed
+it appended `compute.capacity.orphan_converged.v1` to stream `orphan/i-held` with
+`{"outcome":"terminated","reason":"unattributed","external_id":"i-held"}`, a
+durable statement that a machine the provider deliberately holds was destroyed,
+and `recordedDecision` reads that back on every later sweep, so the decision was
+sticky and would have been carried out by the first sweep after #199 gave
+`Terminate` a capacity route.
+
+With the offer's container facts left unstated, which is all a provider can
+honestly state, the recorded Booking Decision was `feasible:false` with
+`UNKNOWN_FACT container.max_containers`, `CAPACITY_UNAVAILABLE capacity.available`
+and `CAPABILITY_MISMATCH container.supports_digest_refs`, and the Run sat in
+`admission_deferred NO_CAPACITY_FITS`. With them filled in, the Run was booked:
+`rental_id:off_1c722f8c…`, `disposition:run_now_existing_rental`,
+`REUSE_EXISTING_RENTAL`, and then
+`ERROR provider operation failed operation=launch offer_native_ref=i-held`,
+because the reusable lane sends a launch to a node and `i-held` is not one.
+
+Each new rule was then shown failing with the production behaviour broken, which
+is the discipline this project holds an invariant to.
+
+```text
+publish the listing again        -> broker TestACapacityConnectionPublishesNoCandidateForAMachineNobodyIsOn
+                                   broker TestNoAdapterListingBringsALeaseIntoPlacement
+                                   daemon TestACapacityConnectionIsHeldByTheProductionControlPlane
+report machines to the sweep     -> broker TestASweepOfAWorkspaceHoldingCapacityConvergesTheWorkloadsItLeaked
+                                   daemon TestReconcilingAWorkspaceHoldingCapacityConvergesTheExecutionsThatLeaked
+                                   (failing with the reviewer's exact error)
+keep the adapter's rental_id     -> capability TestNoAdapterCanStateARentalIdentity
+                                   broker TestNoAdapterListingBringsALeaseIntoPlacement
+count an unasked connection      -> broker TestACapacityConnectionPublishesNoCandidateForAMachineNobodyIsOn
+  as asked                         daemon TestACapacityConnectionIsHeldByTheProductionControlPlane
+publish a lease on capacity      -> Lab safety.a_rental_identity_is_capacity_mercator_holds
+  Mercator does not hold           (13 Lab cases, against labOffer minting for every offer)
+mint one from OfferKind again    -> nothing, and this row said otherwise
+```
+
+The last row is the correction. Restoring the deleted aggregation mint verbatim
+leaves the whole suite green, which two reviewers demonstrated in a copy of the
+worktree and this round reproduced before changing anything. The named test could
+not fail: its double is a one-shot executor, so its offer is stamped ephemeral and
+the reusable branch never ran, and the assertion passed because `StampLane` had
+cleared the field rather than because aggregation minted nothing. After the slice
+the branch is unreachable by construction, because `Backend.ListOffers` publishes
+nothing for a capacity connection and every other declaration is ephemeral.
+
+So the rule is now stated as the construction it rests on.
+`TestNoAdapterListingBringsALeaseIntoPlacement` holds two things that can fail:
+an adapter's stated `rental_id` does not survive aggregation, which fails when
+`StampLane` stops clearing it, and every candidate an adapter published arrives in
+the ephemeral lane, which fails the moment a capacity connection publishes its
+listing again. A future slice that re-mints a Rental identity from `OfferKind` now
+lands on a test with something to say about it.
+
+Every finding was confirmed. One proposed remedy was not taken: consulting
+`ListOwnedCapacity` during aggregation to decide which listing earns a Rental
+identity. A provider saying it owns a machine is not Mercator holding a lease on
+one, so that would have replaced the wrong evidence with different wrong evidence.
+The machines Mercator holds are the ones its own agents enrolled on, and the
+identity comes from the invitation that named the Rental.
+
+### Phase 5 the second review round
+
+Two reviewers refuted the round above. Four of the seven findings were real and are
+fixed here; the rest are answered rather than changed, and each answer is a
+measurement.
+
+The census was recording an unasked question. `Backend.ListOffers` returns no
+candidates for a capacity connection and makes no call to reach that answer, and
+aggregation named the connection in `connections_queried` regardless, so a Booking
+Decision stated that a provider had been consulted about a Run nothing had
+contacted it about. `Backend.ListOffers` now answers with a `Publication` carrying
+either the offers or the reason nobody asked for any, and aggregation files the
+second under `excluded_connections`, where a de-authorised connection already goes.
+`fanOut` carries one value per connection rather than a slice, which is what lets
+the answer be typed where it is known. `StampLane` moved into `Backend.ListOffers`
+with it, because that is where the offers cross out of the adapter.
+
+The aggregation mint had no falsifying test, and the evidence table above said it
+did. That row is corrected in place, and the rule is restated as the construction
+it rests on.
+
+One host is genuinely published twice, and this plan and ADR 0005 both asserted the
+opposite. Reproduced live here through the production daemon, with a real Docker
+daemon and the production agent enrolled on this same workstation:
+
+```text
+offer=nod_VSeQSRVTJ4IE9bJR connection=connection:nodes adapter=node
+  machine=nod_VSeQSRVTJ4IE9bJR lane=reusable max_containers=1
+  rate=0.00034722 available=true
+offer=off_960b765d…e81e759e connection=docker adapter=docker
+  machine=aa8e26d6-09e8-4870-91e9-c3979dc55ab9 lane=ephemeral max_containers=8
+  rate=0 available=true
+```
+
+Two offers, one physical machine, no shared machine identity to deduplicate on: the
+node names it by node ID and the Docker connection by the Docker daemon's ID. The
+free copy wins every cost-based ranking and can hold eight containers on a host
+whose runtime declares one, and per-machine learning splits across the two keys.
+That is [#201](https://github.com/benngarcia/mercator/issues/201), with the
+reproduction, and ADR 0005 now says nothing correlates the two rather than that the
+registry supersedes the connection. It is not the capacity lane: a provider listing
+publishes nothing at all.
+
+An enrolled node's offer does not state what its runtime reported. Three of the five
+capability facts, `container.max_containers`, `capacity.available` and the
+digest-ref, entrypoint-override and `operation_id` launch promises, come from
+`Registry.NodeSupport`, a static literal describing the agent Mercator ships, and
+`capability.NodeSupport` never crosses the enrolment. ADR 0005 called all five the
+agent's own report; it now attributes each one, and
+[#202](https://github.com/benngarcia/mercator/issues/202) puts the set on the
+enrolment. It is the same defect as the lane guard deleted in the round above, one
+level down, and it is a wire change rather than a comment.
+
+The corpus is blind to the offer route, and that stays true. The Lab serves
+`/v1/offers` from `labOfferAggregator` and reads placement from
+`simulatedWorld.CollectOffers`, so no scenario executes `broker.AggregateOffers`,
+`Backend.ListOffers`, or `capability.StampLane`, and the four publication rules are
+held by package tests. Closing it is not a comment fix: the Lab world is the
+provider and the enrolled fleet at once, `capability.Declare` refuses one backend
+that is both, and its standing reusable offers would have to come from a node
+registry, which is the enrolment half of #200.
+[#203](https://github.com/benngarcia/mercator/issues/203) records it, in the shape
+#193 already records two orphan-policy rules held the same way.
+
+What did land in the corpus is the half that fits it.
+`safety.a_rental_identity_is_capacity_mercator_holds` fails when either simulated
+world publishes a Rental identity on capacity Mercator does not hold, which is the
+production rule stated over a fleet. Its deliberate failing case is in the registry
+test, and it was also shown failing against the real corpus: minting an identity for
+every offer in `labOffer`, which is the defect in the shape production had it, fails
+thirteen Lab cases and names the offer and the reason each time.
+
+Rejected, with the reason. Consulting `ListCapacity` during a placement read so a
+broken provider fails the collection closed: a connection with no candidate to
+contribute cannot change a placement, so failing every Run in a workspace over an
+unreachable provider replaces an inaccurate census with an outage. A revoked
+credential is caught by `Verify` at authorize time and by provisioning in #200,
+which is the first caller `ListCapacity` gets. And the claim that
+`ephemeral-execution-is-never-a-rental` is a false green: it is a `green` blueprint
+because it passes, and it specifies the acquisition path production does not have
+yet, which is #200, the same way twenty-five other fixtures in the corpus do. The
+Lab spends `acquisition`, `boot` and `agent_ready` on a reusable listing and hands
+back placeable capacity; what is missing is production, not the specification.
+
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test ./internal/nodeagent ./internal/ociresolver -count=1
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration -count=1
+go test ./internal/daemon -run TestTheFleetListingReportsTheRoomThisMachineReallyHas -count=1
+```
+
+The live half ran. Docker here is native on Linux at 29.6.2, so nothing skipped:
+`internal/nodeagent` and `internal/ociresolver` are 67 cases against a real
+engine, a real object store and a real registry with zero skips, the three
+`internal/adapter/docker` integration cases ran with the gate set, and the third of
+them is the janitor sweeping a real container this adapter launched, which is the
+case that would catch the sweep change breaking a real reclamation. The daemon
+case that stands up the production agent against this host's own Docker daemon and
+reads the disk it really has passed as well. All green. #165 does not reproduce
+here and was left alone.
+
+### Phase 5 the publication reviewed again
+
+Two more reviewers went at the same slice and its plan entry. Five findings
+arrived, one of them the same claim about the plan sentence stated twice. All of
+them hold. Every one was reproduced against the tree before anything changed, on
+this amd64 Linux workstation with Go 1.25.11, and each fix was then shown failing
+by reverting it in turn.
+
+A sold listing was counted as a wait that ends. Once a listing's machine enrols,
+one host is published twice: the listing advertises the whole machine a buyer of
+it would get, and the machine publishes the room it has left. Both are true and
+they answer different questions. What was wrong is what the listing's refusal was
+read as. `CAPACITY_UNAVAILABLE` carries `EndedByWaiting`, because capacity
+somebody is spending comes back when they stop, and here Mercator is the one
+spending it, on a machine standing in the same fleet under its own name, which
+nothing hands back. So a Run no machine in the fleet could ever hold was recorded
+as waiting for capacity to come free, named nothing it was behind, dated the wait
+at nothing, and held the queue against everything after it. That is the
+head-of-line block the same slice's `RENTAL_SCHEDULE_EXHAUSTED` half was written
+to prevent, arriving through the other half.
+
+The fix is where the refusal is stamped rather than in the world.
+`domain.HolderOfMachine` reads the collision off the offer set, which is where
+the two names for one host are both visible, and the scheduler refuses such a
+listing `CAPACITY_ALREADY_HELD` without `EndedByWaiting`: whether this Run can
+ever run on that host is the machine's own answer beside it. Making the listing
+restate the machine's free bytes was tried first and fixed nothing, which is
+worth recording. Content a candidate does not enumerate is never counted against
+its room, on purpose, so a listing publishing the true 110GB still passed the
+disk check for a Run needing 120GB, and the fleet still answered that one machine
+could hold it once free. It is also not a lie to correct: a marketplace
+publishing what a buyer of a leased-out host would get is answering a different
+question from the fleet's.
+
+It is stated in the corpus twice.
+`a-listing-of-a-machine-mercator-holds-is-not-a-wait` drives the queue
+consequence end to end, and `enrolled-node-survives-its-first-run` now records
+both refusals on the listing it already weighed. Both fail without the rule. The
+Lab states nothing about it and cannot: `simulatedWorld` never publishes a
+machine beside the listing it was allocated from, so an invariant over this
+collision could not fire in any Lab case, and an invariant that can never fire is
+worse than none.
+
+`TerminateCapacity` withdrew the machine on every call, including the repeat it
+had just detected and reported as a duplicate. A listing that names a machine
+hands the same handle to whoever buys it next, so giving one lease back twice
+destroyed the next lease's live machine, and the provider then owned and billed a
+host it published nowhere while no launch could resolve a host for its ownership
+token. That is the mirror of the state the withdrawal exists to prevent. It now
+belongs to the terminate that performed it, beside the moment the bill ended,
+which a repeat does not move either. The path is real: reclaim terminates and
+then commits the events recording it, and a failed commit leaves the next sweep
+re-entering the same branch under the same operation key, which is what the
+receipt's `Duplicate` field is for.
+
+`ListCapacity` stated its rule on the Rental identity, which is too narrow for
+the world to keep. Capacity that keeps nothing carries no Rental identity, so a
+standing host was published as capacity to acquire, allocating it minted a lease
+over a machine already in the fleet, and the fleet then held that one host twice
+with the pre-existing one silently marked sold. The test is now what the capacity
+is: a listing is for sale and a machine that already exists is a host this world
+publishes. `ProvisionCapacity` refuses the rest at the source rather than leaving
+the catalogue as the only thing between a caller and a lease on a machine that
+was already there.
+
+The plan sentence the last round wrote was false and is corrected above. Those
+last two rules are held by package tests on the simulated world and by no
+Blueprint, and this round cannot change that either. Production's only
+`TerminateCapacity` caller is the enrolment-deadline reclaim, whose Blueprint
+reclaims capacity that never enrolled, so no machine was ever published there and
+the withdrawal is a no-op that cannot fail. `ListCapacity` has no caller at all
+until [#200](https://github.com/benngarcia/mercator/issues/200), so no Blueprint
+can reach it. Both were landed against the mandatory order and neither is
+protected by the corpus an agent gates on; the honest record is that they are
+package-level rules on the simulated provider until #200 gives them a caller a
+Blueprint can drive.
+
+```
+go build ./... && go vet ./... && go test ./... -count=1
+go test ./internal/nodeagent ./internal/ociresolver -count=1
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration -count=1
+go test ./internal/daemon -run TestAMachineItsProviderBootstrappedIsWarmCapacityForTheNextRun -count=1
+```
+
+### Phase 5 the publication under review
+
+Two reviewers refuted parts of the commit that published the machine a listing
+becomes. Seven findings arrived and five are distinct: the same collision and the
+same missing withdrawal were each described twice from two angles. Every one was
+reproduced against the tree before anything changed, on this amd64 Linux
+workstation with Go 1.25.11.
+
+What the reproductions showed. `history-answers-for-the-machine-it-was-measured-on`
+had grown two candidates the commit never touched it to state, and it stayed green
+only because its measuring Runs held Bookings 2100 and 600 seconds past the
+runtime Mercator enforces and nothing in that world could ever end one; stating
+runtimes for those Runs made it fail on the winner. A second purchase from one
+listing produced a second Rental on the same handle and a fresh `machineBehind`
+that wiped the first machine's layers, its busy window and its Rental. A
+terminated Rental went on publishing itself as available standing reusable
+capacity while `ListOwnedCapacity` in the same world reported nothing owned.
+`ListCapacity` offered a workspace a machine it was already leasing. And the
+scheduler's new `RENTAL_SCHEDULE_EXHAUSTED` was stamped `EndedByWaiting`, which
+made a machine 2100 seconds past its bound count as capacity that comes back.
+
+All five are fixed at the root. Three of them are stated in the corpus above and
+two are not, which the round below corrects the record on: the `TerminateCapacity`
+withdrawal and the `ListCapacity` filter are held by package tests on the
+simulated world and by no Blueprint or Lab invariant. One attribution in the
+findings is wrong and is recorded here rather than accepted:
+`ListCapacity` selling capacity the querying workspace already holds was not
+introduced by the publication. `w.machines` is this world's whole fleet and
+`ListOffers` is the fleet census, so a Rental a Blueprint declares was already in
+`ListCapacity`'s answer before any machine was ever published, under its own
+Rental ID. That was reproduced directly. The publication added one more machine
+to a list that was already the wrong list. The fix is the same either way and it
+landed.
+
+The reviewers also missed the same collision in its other form, which the fix
+covers: a listing that declares no `machine` was having its own catalog entry
+replaced by the machine it yielded, because the publication key fell back to the
+listing's ID. Two green fixtures were doing it silently on every run.
+
+```
+go test ./... -count=1
+go test ./internal/daemon -run TestAMachineItsProviderBootstrappedIsWarmCapacityForTheNextRun -count=1
+```
+
+The live half ran. Docker here is native on Linux at 29.6.2 on amd64, and the
+daemon case that bootstraps the production `nodeagent.Agent` from the provider's
+own copy of the invitation, runs two Runs on the machine it enrolled, and reads
+the second one warm off the first passed against it. #165 does not reproduce here
+and was left alone.
+
+### Phase 5 the credential a machine fetches content with
+
+`PrepareImageCommand.RegistryCredential` and
+`PrepareArtifactCommand.SourceCredential` had been declared since phase 2 and
+populated by nobody. The node ran a bare `docker pull` and issued a plain
+unauthenticated GET, and the only way a private image ever reached a rented host
+was a registry account written onto the machine, which outlived every pull it was
+ever needed for. This slice fills both fields and makes the far side refuse
+anything else.
+
+What crosses to a machine is `domain.ContentCredentialScope`: one operation, one
+workspace, one piece of content, one expiry, with `RegistryPull` and
+`ArtifactRead` carrying what is presented. `internal/credential.Mint` holds the
+registry accounts and the object-store key, the orchestrator asks it as part of
+deciding what a machine should be holding, and the Broker delivers the answer
+without narrowing anything of its own. A public image is minted nothing, which is
+the answer rather than a failure.
+
+The shipped daemon builds that mint from what the deployment already states, and
+for one revision of this slice it built none, which made every sentence above
+true of the Lab and false of the product: `daemon.New` composed the orchestrator
+without `WithContentCredentials`, so `mintPull` and `mintRead` returned zero
+silently and every `PrepareItem` in a real deployment carried nothing. That was a
+regression rather than an unbuilt path, because the same slice moved `PrepareImage`
+off the Docker CLI, which reads `config.json` and sends the auth itself, onto the
+daemon API, which does not. Registry accounts now come from the file `docker
+login` writes, read by `ociresolver.DockerConfigAccounts` and keyed the way an
+image reference names a registry, because the manifest resolver already reads that
+file and a second place to say the same thing is one place to say it wrong. The
+object store is `MERCATOR_OBJECT_STORE_ENDPOINT`, `_BUCKET`, `_REGION`,
+`_ACCESS_KEY` and `_SECRET`, with nothing defaulted: unset is a deployment that
+has none, which is real and refuses to mint a read rather than inventing a
+location, and partially set is a startup error rather than a machine reporting it
+was handed nothing.
+
+Three seams enforce it, and each is tested where it lives. The registry and the
+object store refuse: in the Lab because `ImageSpec.private` says the world serves
+that image to nobody anonymous and the store answers only a signed read, and on
+this host because distribution behind htpasswd really does. The machine refuses
+before presenting anything: `authorisedPull` and `authorisedRead` check the scope
+against the command, so material minted for another operation never reaches the
+network. And the record holds the bound without the material.
+
+Those last two are one seam rather than two, and keeping them apart is what the
+slice got wrong the first time. A node command is durable so a machine that was
+disconnected still receives it, and `node_operations` is kept for the life of the
+deployment and pruned by nothing, so one encoding used for both the wire and the
+record puts a fifteen minute credential in a SQLite blob for years. `dispatch`
+now marshals twice: the machine gets the command as issued, and the row gets the
+command without its material. The registry secret and the signed location go; the
+operation, the workspace, the content, the expiry and the catalog's own durable
+`Source` stay, which is the record of what Mercator authorised and is presentable
+to nobody. The failure string was the same leak one hop on, because a transport
+error from a presigned GET is a `*url.Error` whose message is the whole URL and
+that string is stored in `node_operations.failure`.
+
+What that costs is a replay. A command outlives the credential inside it, so an
+agent reconnecting to a command issued while it was down is handed the record
+rather than the pull, says so in Mercator's vocabulary, and the identity stays
+reissuable. It replaces a worse failure: before this the same command arrived
+carrying material minted before the disconnection and was refused as expired,
+with the secret still in the row. Neither version recovers on its own, because
+the orchestrator never learns a machine refused a preparation at all, which is
+filed as [#224](https://github.com/benngarcia/mercator/issues/224) and reaches
+every other way a prepare can fail.
+
+The Broker hop has its own test because nothing else can see it. The Lab replaces
+the world at the desired-set seam, which sits above `Broker.prepareOnNode`, so a
+Broker that dropped the credential leaves every rule in the corpus green and
+every private pull on a real machine refused. That was verified by breaking it:
+the Lab stays green, `internal/broker` fails.
+
+`PrepareImage` now pulls through the daemon API rather than the CLI, landed in the
+production half of this slice. The CLI reads registry material out of a config
+file, so a private pull through it means writing the credential onto a rented host
+and remembering to remove it, and a pull killed halfway leaves it there.
+`X-Registry-Auth` keeps it in the agent's memory for one request. A refused pull
+arrives as a 500 whose body carries the denial, so the status is read and the
+stream is drained rather than the status alone: a node reading less than that
+reports every image it may not have as content it holds.
+
+Shadeform's standing account is gone. The adapter read `registry_username` and
+`registry_password` out of connection config, undeclared by its own manifest, and
+wrote them verbatim into every create body, from where Shadeform put them on the
+machine. The wire type went with them. The obvious replacement, a credential on
+`adapter.LaunchRequest`, is wrong twice over: that struct is the private payload
+of `launch_intent_recorded`, so minted material on it is a credential in the
+durable record, and `RequestHash` is a canonical hash of the whole struct, so
+material re-minted on a retry moves the operation identity every adapter
+deduplicates on and a redelivered launch creates a second machine. The ephemeral
+lane needs a seam that is not the recorded launch intent, filed as
+[#218](https://github.com/benngarcia/mercator/issues/218); until it lands, an
+ephemeral workload runs an image an anonymous reader can pull. The reusable lane
+is unaffected.
+
+The live half ran on this host. Docker here is native on Linux at 29.6.2 on
+amd64. `registry:3` behind htpasswd, an image built for the case so it shares no
+image object with anything else on the daemon, pushed through the daemon API,
+removed locally, and pulled back three ways: with minted material it arrives,
+with nothing the registry refuses it, and with material minted for another
+operation the node refuses to present it. Each was proven able to fail by
+breaking the production half it covers. The MinIO-backed Artifact cases stay
+green with zero skips.
+
+What this slice does not close.
+`capability.LaunchWorkloadCommand` has no credential field, and the only producer
+of `PrepareImageCommand.RegistryCredential` is the preparation sweep, which runs
+for queued placements. A Run admitted and dispatched straight to an enrolled node
+never passes through prepare, so `LaunchWorkload` runs `docker run` and the daemon
+pulls implicitly, anonymously, and untimed. Whether a private image works there is
+decided by whether prewarm happened to reach that machine first, which is a
+scheduling accident rather than a contract. Filed as
+[#221](https://github.com/benngarcia/mercator/issues/221), where the preferable
+fix is to precede a node launch with a `PrepareImage` so a node has exactly one
+place it ever fetches an image, rather than to grow a second credential path.
+
+The Lab does not catch that, it licenses it. `contentRefusal` is consulted from
+`startPrefetch` alone; `pullRunImage` moves the bytes with no reference to
+`ImageSpec.Private` and no credential at all, so a private image launched on a
+machine the sweep never reached is served anonymously and every rule stays green.
+Making the world honest there needs a launch failure path, which needs the launch
+to carry a credential for the corpus to stay green, which is #221's own slice.
+It is recorded on that issue rather than half-changed here, and the Blueprint's
+summary no longer claims a registry that serves nothing to an anonymous reader
+without saying which seam that is true of.
+
+A registry account is still the operator's standing account when it reaches the
+machine. `credential.Mint` performs no token exchange, so what is minted for a
+password registry is the same username and secret with a scope attached that only
+Mercator's own node-side check reads. The rule registry entry above says what
+that does and does not buy, and the live conformance case demonstrates the shape
+rather than counterexampling it: `registryAccountSecret` there is the htpasswd
+account itself. Narrowing it needs a per-registry token exchange, which no seam
+in this phase asks for.
+
+Preparation a machine refuses is never asked for again, whatever the reason:
+`Broker.Prepare` reports what it dispatched rather than what the machine did with
+it, and the orchestrator's in-process memory reads the unchanged desire on the
+next sweep and stays quiet. Filed as
+[#224](https://github.com/benngarcia/mercator/issues/224). It predates the
+credential work and is reached by a broken link, a full disk, or a command
+replayed past the material it was dispatched with.
+
+One real defect surfaced from running the whole tree rather than one package.
+Tagging a shared image into a local registry adds a repository digest to the image
+object every other case on this daemon reads, and mercator#212's lock does not
+help because the object outlives the lock: `ociresolver`'s conformance case took
+busybox's first repository digest and got a registry on a port nothing listens on
+any more. The case builds its own image now.
+
+```
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/lab ./internal/scenario ./internal/broker ./internal/adapter/shadeform ./internal/credential
+go test -count=1 ./internal/nodeagent -run 'PrivateImage|SameReference|MintedForAnother' -v
+```
 
 ### Phase 4 close-out
 

@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/capability"
+	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
@@ -42,6 +44,12 @@ const (
 	objectStoreUser   = "mercator"
 	objectStoreSecret = "mercator-secret"
 	objectStoreRegion = "us-east-1"
+	// artifactBucket is where this store keeps Mercator's Artifacts, and the
+	// object each version lives at inside it is derived from the durable
+	// location the catalog names. Identity determines the address, so the
+	// control plane can mint a read of a version without looking anything up.
+	artifactBucket = "mercator-artifacts"
+	liveWorkspace  = "ws_alpha"
 
 	producedLine  = "mercator producer affinity"
 	producedLines = 4096
@@ -57,19 +65,14 @@ func TestANodeReplicatesAnArtifactFromARealObjectStore(t *testing.T) {
 	endpoint := startObjectStore(t)
 	content := []byte(strings.Repeat("mercator artifact conformance\n", 4096))
 	digest := sha256.Sum256(content)
-	putObject(t, endpoint, "datasets", "corpus-v7", content)
+	putVersion(t, endpoint, "artifact:corpus:v7", content)
 
 	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
-	command := capability.PrepareArtifactCommand{
-		ArtifactID:    "artifact:corpus:v7",
-		ContentDigest: "sha256:" + hex.EncodeToString(digest[:]),
-		// The control plane mints the read. Nothing of the object store's
-		// material reaches this node: the signature in the URL is scoped to one
-		// object and expires.
-		Source:    presign(t, http.MethodGet, endpoint, "datasets", "corpus-v7", time.Hour),
-		SizeBytes: int64(len(content)),
-	}
-	command.WorkspaceID = "ws_alpha"
+	// The control plane mints the read. Nothing of the object store's material
+	// reaches this node: the signature in the URL is scoped to one object and
+	// expires, and the durable location beside it can read nothing.
+	command := prepareArtifact(t, endpoint, "artifact:corpus:v7",
+		"sha256:"+hex.EncodeToString(digest[:]), int64(len(content)))
 
 	if err := runtime.PrepareArtifact(context.Background(), command); err != nil {
 		t.Fatalf("replicate the Artifact: %v", err)
@@ -89,8 +92,21 @@ func TestANodeReplicatesAnArtifactFromARealObjectStore(t *testing.T) {
 	if replica.SizeBytes != int64(len(content)) {
 		t.Fatalf("the copy is %d bytes, want %d", replica.SizeBytes, len(content))
 	}
-	if strings.Contains(command.Source, objectStoreSecret) {
+	if strings.Contains(command.SourceCredential.Location, objectStoreSecret) {
 		t.Fatal("the minted URL carries the object store's secret, which is the one thing a node must never hold")
+	}
+	if command.SourceCredential.ExpiresAt.IsZero() || command.SourceCredential.Content != command.ArtifactID {
+		t.Fatalf("the node was handed %+v, and a credential states what it is for and when it stops working",
+			command.SourceCredential.ContentCredentialScope)
+	}
+	// The same node, the same store, the same object, and material minted for
+	// another operation. It never reaches the network: what refuses it is the
+	// scope, on the machine, which is what makes one fetch's credential useless
+	// for the next one.
+	elsewhere := command
+	elsewhere.SourceCredential.Operation = "prepare:artifact:nod_other:artifact:corpus:v7"
+	if err := runtime.PrepareArtifact(context.Background(), elsewhere); err == nil {
+		t.Fatal("the node spent a read minted for another operation")
 	}
 }
 
@@ -102,15 +118,10 @@ func TestANodeReplicatesAnArtifactFromARealObjectStore(t *testing.T) {
 func TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth(t *testing.T) {
 	requireDocker(t)
 	endpoint := startObjectStore(t)
-	putObject(t, endpoint, "datasets", "corpus-v8", []byte("the previous version of this content"))
+	putVersion(t, endpoint, "artifact:corpus:v8", []byte("the previous version of this content"))
 
 	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
-	command := capability.PrepareArtifactCommand{
-		ArtifactID:    "artifact:corpus:v8",
-		ContentDigest: "sha256:" + strings.Repeat("ab", 32),
-		Source:        presign(t, http.MethodGet, endpoint, "datasets", "corpus-v8", time.Hour),
-	}
-	command.WorkspaceID = "ws_alpha"
+	command := prepareArtifact(t, endpoint, "artifact:corpus:v8", "sha256:"+strings.Repeat("ab", 32), 0)
 
 	if err := runtime.PrepareArtifact(context.Background(), command); err != nil {
 		t.Fatalf("replicate the Artifact: %v", err)
@@ -171,14 +182,8 @@ func TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote(t *testing.T) {
 		t.Fatalf("the node reports %+v of content its workload wrote into its own container", produced.Replicas)
 	}
 
-	putObject(t, endpoint, "datasets", "checkpoint-v1", written)
-	command := capability.PrepareArtifactCommand{
-		ArtifactID:    "artifact:checkpoint:v1",
-		ContentDigest: digest,
-		Source:        presign(t, http.MethodGet, endpoint, "datasets", "checkpoint-v1", time.Hour),
-		SizeBytes:     int64(len(written)),
-	}
-	command.WorkspaceID = "ws_alpha"
+	putVersion(t, endpoint, "artifact:checkpoint:v1", written)
+	command := prepareArtifact(t, endpoint, "artifact:checkpoint:v1", digest, int64(len(written)))
 	if err := runtime.PrepareArtifact(context.Background(), command); err != nil {
 		t.Fatalf("replicate the Artifact this workload produced: %v", err)
 	}
@@ -276,11 +281,19 @@ func startObjectStore(t *testing.T) string {
 	return endpoint
 }
 
+// awaitObjectStore waits until the store will serve a bucket, which is what
+// these cases need of it.
+//
+// It asks the cluster probe rather than the liveness one. Liveness answers as
+// soon as the process is up, and a store that is up and not yet initialized
+// answers a bucket write with 503 XMinioServerNotInitialized, which is how this
+// case failed on a loaded workstation: the wait returned, the very next request
+// was refused, and the test read it as the node's fault.
 func awaitObjectStore(t *testing.T, endpoint string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		response, err := http.Get(endpoint + "/minio/health/live")
+		response, err := http.Get(endpoint + "/minio/health/cluster")
 		if err == nil {
 			_ = response.Body.Close()
 			if response.StatusCode == http.StatusOK {
@@ -292,13 +305,77 @@ func awaitObjectStore(t *testing.T, endpoint string) {
 	t.Fatalf("the object store at %s never became ready", endpoint)
 }
 
-// putObject creates the bucket and writes one object, both over presigned URLs,
-// so the test holds credentials exactly where the control plane would and the
-// node holds none.
-func putObject(t *testing.T, endpoint, bucket, key string, content []byte) {
+// putVersion writes one version's bytes where the catalog says its durable copy
+// lives, over presigned URLs, so the test holds the object store's key exactly
+// where the control plane holds it and the node holds none of it.
+//
+// It is the arrangement rather than the thing under test. What is under test is
+// the read the control plane mints of the same object, which is production's own
+// minter and is asked for by mintedRead below.
+func putVersion(t *testing.T, endpoint, artifactID string, content []byte) {
 	t.Helper()
-	send(t, http.MethodPut, presign(t, http.MethodPut, endpoint, bucket, "", time.Minute), nil, http.StatusOK, http.StatusConflict)
-	send(t, http.MethodPut, presign(t, http.MethodPut, endpoint, bucket, key, time.Minute), content, http.StatusOK)
+	send(t, http.MethodPut, presign(t, http.MethodPut, endpoint, artifactBucket, "", time.Minute), nil, http.StatusOK, http.StatusConflict)
+	send(t, http.MethodPut, presign(t, http.MethodPut, endpoint, artifactBucket, versionKey(artifactID), time.Minute), content, http.StatusOK)
+}
+
+// versionKey is the object one version's bytes live at, taken from the durable
+// location the catalog states rather than chosen here. A test that picked its own
+// key would be proving that a URL somebody typed can be read.
+func versionKey(artifactID string) string {
+	return strings.TrimPrefix(domain.ArtifactLocation(liveWorkspace, artifactID), "mercator://")
+}
+
+// prepareArtifact is the command a node really receives for one version: the
+// durable location the catalog names, and the read the production control plane
+// minted of that location for this one operation.
+//
+// The minter is internal/credential's own, holding the object store's key the way
+// a deployment holds it. That is the point of running it here: everything about a
+// presigned read that can be wrong is wrong against a real store and right against
+// a hand-written one, and the node is handed exactly what production hands it.
+func prepareArtifact(t *testing.T, endpoint, artifactID, contentDigest string, size int64) capability.PrepareArtifactCommand {
+	t.Helper()
+	operation := adapter.PrepareItem{
+		Kind:            adapter.PrepareArtifact,
+		OfferSnapshotID: "nod_live",
+		ArtifactID:      artifactID,
+	}.Operation()
+	command := capability.PrepareArtifactCommand{
+		ArtifactID:       artifactID,
+		ContentDigest:    contentDigest,
+		Source:           domain.ArtifactLocation(liveWorkspace, artifactID),
+		SourceCredential: mintedRead(t, endpoint, operation, artifactID),
+		SizeBytes:        size,
+	}
+	command.WorkspaceID = liveWorkspace
+	command.OperationID = operation
+	return command
+}
+
+// mintedRead is the control plane handing one machine one read of one object. The
+// material is a URL because a presigned GET is a bearer credential written as a
+// location, and it names the operation, the workspace, the version and the moment
+// it stops working, all of which the node checks before it spends it.
+func mintedRead(t *testing.T, endpoint, operation, artifactID string) domain.ArtifactRead {
+	t.Helper()
+	mint, err := credential.NewMint(credential.MintConfig{
+		ObjectStore: &credential.ObjectStoreAccount{
+			Endpoint:  endpoint,
+			Bucket:    artifactBucket,
+			Region:    objectStoreRegion,
+			AccessKey: objectStoreUser,
+			Secret:    objectStoreSecret,
+		},
+	})
+	if err != nil {
+		t.Fatalf("hold the object store account: %v", err)
+	}
+	read, err := mint.ArtifactRead(context.Background(), operation, liveWorkspace, artifactID,
+		domain.ArtifactLocation(liveWorkspace, artifactID))
+	if err != nil {
+		t.Fatalf("mint a read of %s: %v", artifactID, err)
+	}
+	return read
 }
 
 func send(t *testing.T, method, target string, body []byte, accept ...int) {
@@ -321,10 +398,14 @@ func send(t *testing.T, method, target string, body []byte, accept ...int) {
 	t.Fatalf("%s %s = %s: %s", method, target, response.Status, raw)
 }
 
-// presign mints one scoped, expiring read or write, which is what the control
-// plane hands a node instead of a credential. It is SigV4 over the standard
-// library: an object store client is its own slice, and this case needs exactly
-// the one URL.
+// presign is how this test arranges the fixture: one expiring write of one
+// object, signed with the store's key. The read a node is given is minted by
+// production's own code and never by this, which is the whole difference between
+// arranging a case and asserting one.
+//
+// Each path segment is escaped the way SigV4 canonicalises one, because a version
+// ID carries colons and a signature over the raw string would be a signature over
+// a different object than the request asks for.
 func presign(t *testing.T, method, endpoint, bucket, key string, expires time.Duration) string {
 	t.Helper()
 	parsed, err := url.Parse(endpoint)
@@ -339,6 +420,7 @@ func presign(t *testing.T, method, endpoint, bucket, key string, expires time.Du
 	if key != "" {
 		path += "/" + key
 	}
+	path = escapeObjectPath(path)
 	query := url.Values{
 		"X-Amz-Algorithm":     {"AWS4-HMAC-SHA256"},
 		"X-Amz-Credential":    {objectStoreUser + "/" + scope},
@@ -366,6 +448,14 @@ func presign(t *testing.T, method, endpoint, bucket, key string, expires time.Du
 	return endpoint + path + "?" + strings.ReplaceAll(query.Encode(), "+", "%20")
 }
 
+func escapeObjectPath(path string) string {
+	segments := strings.Split(path, "/")
+	for index, segment := range segments {
+		segments[index] = strings.ReplaceAll(url.QueryEscape(segment), "+", "%20")
+	}
+	return strings.Join(segments, "/")
+}
+
 func sign(key []byte, message string) []byte {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(message))
@@ -389,15 +479,11 @@ func TestANodeMeasuresTheObjectStorePathItJustCrossed(t *testing.T) {
 	// to the store, which is the distinction minimumMeasuredBytes draws.
 	content := []byte(strings.Repeat("mercator throughput conformance 0123456789abcdef\n", 340_000))
 	digest := sha256.Sum256(content)
-	putObject(t, endpoint, "datasets", "corpus-v9", content)
+	putVersion(t, endpoint, "artifact:corpus:v9", content)
 
 	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
-	if err := runtime.PrepareArtifact(context.Background(), capability.PrepareArtifactCommand{
-		ArtifactID:    "artifact:corpus:v9",
-		ContentDigest: "sha256:" + hex.EncodeToString(digest[:]),
-		Source:        presign(t, http.MethodGet, endpoint, "datasets", "corpus-v9", time.Hour),
-		SizeBytes:     int64(len(content)),
-	}); err != nil {
+	if err := runtime.PrepareArtifact(context.Background(),
+		prepareArtifact(t, endpoint, "artifact:corpus:v9", "sha256:"+hex.EncodeToString(digest[:]), int64(len(content)))); err != nil {
 		t.Fatalf("replicate the Artifact: %v", err)
 	}
 
@@ -658,13 +744,9 @@ func replicate(t *testing.T, runtime *DockerRuntime, endpoint, key string, size 
 	t.Helper()
 	content := []byte(strings.Repeat("mercator delivery conformance 0123456789abcdef\n", size/47+1))
 	digest := sha256.Sum256(content)
-	putObject(t, endpoint, "datasets", key, content)
-	if err := runtime.PrepareArtifact(context.Background(), capability.PrepareArtifactCommand{
-		ArtifactID:    "artifact:" + key,
-		ContentDigest: "sha256:" + hex.EncodeToString(digest[:]),
-		Source:        presign(t, http.MethodGet, endpoint, "datasets", key, time.Hour),
-		SizeBytes:     int64(len(content)),
-	}); err != nil {
+	putVersion(t, endpoint, "artifact:"+key, content)
+	if err := runtime.PrepareArtifact(context.Background(),
+		prepareArtifact(t, endpoint, "artifact:"+key, "sha256:"+hex.EncodeToString(digest[:]), int64(len(content)))); err != nil {
 		t.Fatalf("replicate %s: %v", key, err)
 	}
 }

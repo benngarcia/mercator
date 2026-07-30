@@ -116,10 +116,12 @@ type LaunchRequest struct {
 	// live offers, so a Run that landed on an enrolled node still reaches that
 	// node after a restart or an offer catalog change.
 	SelectedOfferLane domain.ExecutionLane `json:"selected_offer_lane,omitempty"`
-	// Disposition is the RECORDED cleanup intent, derived from the selected
-	// offer's Kind at launch time (provisionable->terminate, standing->release)
-	// and persisted on the launch_intent_recorded event. Cleanup dispatches on
-	// this recorded value; it is never re-inferred from live offers.
+	// Disposition is the RECORDED cleanup intent, derived at launch time from
+	// what the selected offer says it is and persisted on the
+	// launch_intent_recorded event. Only a one-shot execution Mercator allocated
+	// is terminated; capacity that outlives its workload is released, whether the
+	// host is a slot Mercator borrows or a machine it holds a lease on. Cleanup
+	// dispatches on this recorded value; it is never re-inferred from live offers.
 	Disposition domain.Disposition `json:"disposition,omitempty"`
 }
 
@@ -237,7 +239,8 @@ type ReleaseReceipt struct {
 	Duplicate bool
 }
 
-// TerminateRequest destroys a resource the broker owns (a provisioned host).
+// TerminateRequest destroys a one-shot execution product the broker allocated,
+// which is the only capacity whose host does not outlive its workload.
 // It carries the same idempotency machinery (OperationKey/RequestHash) and
 // ownership material (OwnershipToken/LaunchRequestHash) as ReleaseRequest so
 // the no-orphan reconciliation path is identical.

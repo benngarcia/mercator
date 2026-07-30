@@ -1,0 +1,133 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One host, published twice, and a Run neither name can hold. The listing sells simcloud-4090-0f31 with 200GB. The first Run buys it, enrols on it, lands a 90GB image and finishes, so the machine now stands in the fleet under its own name with 110GB left while the listing goes on advertising the whole 200GB a buyer of it would get. Both of those are true, and they are answers to different questions. The second Run then asks for a different 90GB image and reserves 30GB, which is 120GB, and there is nowhere for it to run. The record has to say NO_CAPACITY_FITS: a machine short of room is short of room until somebody adds a disk, so waiting for this fleet as it stands produces nothing and work behind this Run is not competing with it for anything. Reading the listing's refusal as a wait is what made that answer impossible. A sold listing is unavailable because the capacity is spent right now, which is ordinarily a wait that ends when whoever is spending it stops, so the fleet reported one machine that could hold this Run once free, named nothing this Run was behind, dated the wait at nothing, and held the queue against every later arrival. Nobody is going to end that wait. Mercator holds the lease itself, the machine is standing in the same fleet under its own name, and no Booking finishing anywhere hands the host back. So a listing of a machine this fleet already holds is refused for what it is, capacity already acquired, and that refusal does not end by waiting. Two candidates are still weighed, because two offers were published and a decision records what it saw; neither of them could ever hold this Run.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "first@sha256:1b9d6bcd4de488d1f8d1f1e6e0a8e1c4a1e4c9d1a6f3b0e2c5d8a7b4f1e0c3d6": {
+        "layers": [
+          {
+            "digest": "sha256:0a1c2e3f4b5d6a7c8e9f0b1d2c3a4e5f6b7d8c9a0e1f2b3d4c5a6e7f8b9d0c1a",
+            "size": "90GB"
+          }
+        ]
+      },
+      "second@sha256:2c8e7a5b3d1f0e9c7a5b3d1f0e9c7a5b3d1f0e9c7a5b3d1f0e9c7a5b3d1f0e9c": {
+        "layers": [
+          {
+            "digest": "sha256:9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0",
+            "size": "90GB"
+          }
+        ]
+      }
+    },
+    "marketplace": [
+      {
+        "id": "reusable-4090",
+        "machine": "simcloud-4090-0f31",
+        "provider": "simcloud",
+        "lane": "reusable",
+        "rate_per_hour_usd": 2.0,
+        "resources": {"disk": "200GB"},
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m",
+          "agent_ready": "36s"
+        },
+        "capacity": {
+          "stop": true,
+          "resume": true,
+          "persistent_disk": true,
+          "spot": false,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true,
+          "observe_after_terminate": false
+        },
+        "bootstrap": {
+          "deadline": "10m"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "run-first",
+        "candidate": "reusable-4090",
+        "minimum": "10m",
+        "maximum": "10m"
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "run-first",
+      "request": {
+        "image": "first@sha256:1b9d6bcd4de488d1f8d1f1e6e0a8e1c4a1e4c9d1a6f3b0e2c5d8a7b4f1e0c3d6",
+        "resources": {"disk": "10GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "30m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "reusable-4090"
+      }
+    },
+    {
+      "advance": "5m"
+    },
+    {
+      "reconcile": "run-first",
+      "expect": {
+        "outcome": "place",
+        "offer": "reusable-4090"
+      }
+    },
+    {
+      "advance": "30m"
+    },
+    {
+      "reconcile": "run-first",
+      "expect": {
+        "outcome": "place",
+        "offer": "reusable-4090"
+      }
+    },
+    {
+      "submit": "run-second",
+      "request": {
+        "image": "second@sha256:2c8e7a5b3d1f0e9c7a5b3d1f0e9c7a5b3d1f0e9c7a5b3d1f0e9c7a5b3d1f0e9c",
+        "resources": {"disk": "30GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "30m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_CAPACITY_FITS",
+          "behind": [],
+          "fleet": {
+            "weighed": 2,
+            "could_hold": 0
+          }
+        },
+        "candidates": {
+          "simcloud-4090-0f31": {
+            "feasible": false,
+            "rejected": [
+              {"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}
+            ]
+          },
+          "reusable-4090": {
+            "feasible": false,
+            "rejected": [
+              {"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"},
+              {"code": "CAPACITY_ALREADY_HELD", "path": "machine_id"}
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

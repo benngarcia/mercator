@@ -33,6 +33,12 @@ type fakeShadeform struct {
 	// /instances responses, modeling the async create's listing lag.
 	hideCreated bool
 	createdIDs  map[string]bool
+	// listingLag is how many listings a created instance stays missing from
+	// before the account catches up with it. It is the lag that ends rather than
+	// the one that never does: a create whose instance surfaces on a later look
+	// is what leaves an outcome nobody knows and a machine anybody can then find.
+	listingLag int
+	hiddenFor  map[string]int
 	// beforeCreateReturns injects state right before create responds, e.g. a
 	// concurrent duplicate that the pre-scan could not have seen.
 	beforeCreateReturns func(f *fakeShadeform)
@@ -48,6 +54,21 @@ func (f *fakeShadeform) addInstance(inst instance) {
 	f.instances = append(f.instances, inst)
 }
 
+// stillRunning is every instance this account is billing for, whatever any
+// caller believes it gave back. It reads the account rather than the listing,
+// because an instance the listing withholds is billing just the same.
+func (f *fakeShadeform) stillRunning() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var live []string
+	for _, inst := range f.instances {
+		if inst.Status != "deleting" {
+			live = append(live, inst.ID)
+		}
+	}
+	return live
+}
+
 func (f *fakeShadeform) instanceByID(id string) *instance {
 	for i := range f.instances {
 		if f.instances[i].ID == id {
@@ -57,22 +78,29 @@ func (f *fakeShadeform) instanceByID(id string) *instance {
 	return nil
 }
 
+// ServeHTTP is the same marketplace over a real socket. A round tripper stands
+// in for the transport, and the transport is part of what a conformance case is
+// there to exercise, so the conformance case serves this rather than injecting
+// it.
+func (f *fakeShadeform) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	response, err := f.RoundTrip(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = response.Body.Close() }()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, _ = io.Copy(w, response.Body)
+}
+
 func (f *fakeShadeform) RoundTrip(r *http.Request) (*http.Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	path := strings.TrimPrefix(r.URL.Path, "/v1")
 	switch {
 	case r.Method == http.MethodGet && path == "/instances":
-		visible := f.instances
-		if f.hideCreated {
-			visible = nil
-			for _, inst := range f.instances {
-				if !f.createdIDs[inst.ID] {
-					visible = append(visible, inst)
-				}
-			}
-		}
-		return marshalResponse(map[string]any{"instances": visible})
+		return marshalResponse(map[string]any{"instances": f.listed()})
 	case r.Method == http.MethodGet && path == "/instances/types":
 		q := r.URL.Query()
 		var out []instanceType
@@ -109,6 +137,12 @@ func (f *fakeShadeform) RoundTrip(r *http.Request) (*http.Response, error) {
 				f.createdIDs = map[string]bool{}
 			}
 			f.createdIDs[id] = true
+			if f.listingLag > 0 {
+				if f.hiddenFor == nil {
+					f.hiddenFor = map[string]int{}
+				}
+				f.hiddenFor[id] = f.listingLag
+			}
 			f.instances = append(f.instances, instance{
 				ID:                id,
 				Cloud:             req.Cloud,
@@ -135,6 +169,25 @@ func (f *fakeShadeform) RoundTrip(r *http.Request) (*http.Response, error) {
 		return jsonResponse(404, `{"error":"not found"}`), nil
 	}
 	return jsonResponse(404, fmt.Sprintf(`{"error":"no route %s %s"}`, r.Method, path)), nil
+}
+
+// listed is what this account answers a listing with, and what it withholds. An
+// instance registered through the create endpoint is missing while its lag runs
+// down, which is one look at the account per listing: a create nobody can find
+// in the listing is exactly what the adapter reports as an outcome nobody knows.
+func (f *fakeShadeform) listed() []instance {
+	var visible []instance
+	for _, inst := range f.instances {
+		switch {
+		case f.hideCreated && f.createdIDs[inst.ID]:
+			continue
+		case f.hiddenFor[inst.ID] > 0:
+			f.hiddenFor[inst.ID]--
+			continue
+		}
+		visible = append(visible, inst)
+	}
+	return visible
 }
 
 func marshalResponse(v any) (*http.Response, error) {
@@ -178,12 +231,17 @@ func vmType() instanceType {
 	}
 }
 
+const testAgentDownloadURL = "https://downloads.mercator.test/mercator-node/{version}/linux-amd64"
+
 func newTestAdapter(t *testing.T, fake *fakeShadeform, config map[string]string) *Adapter {
 	t.Helper()
 	if config == nil {
 		config = map[string]string{}
 	}
 	config["base_url"] = "https://shadeform.test/v1"
+	if _, stated := config["agent_download_url"]; !stated {
+		config["agent_download_url"] = testAgentDownloadURL
+	}
 	a, err := New("secret-key", config)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -194,22 +252,21 @@ func newTestAdapter(t *testing.T, fake *fakeShadeform, config map[string]string)
 	return a
 }
 
-func ownedInstance(id, launchKey, workspace, token, status string, createdAt time.Time) instance {
+// rentedInstance is a machine this account is already holding for one Rental, as
+// the account listing reports it.
+func rentedInstance(id, rentalID, workspace, token, status string, createdAt time.Time) instance {
 	return instance{
 		ID:        id,
 		Cloud:     "hyperstack",
 		Region:    "canada-1",
-		Name:      "mercator-" + launchKey,
+		Name:      "mercator-" + rentalID,
 		Status:    status,
 		CreatedAt: createdAt,
 		Tags: []string{
-			tagLaunchKey + "=" + launchKey,
+			tagRental + "=" + rentalID,
+			tagGeneration + "=1",
 			tagWorkspace + "=" + workspace,
-			tagRun + "=run_1",
-			tagAttempt + "=att_1",
 			tagOwnershipToken + "=" + token,
-			tagRequestHash + "=rh_1",
-			tagCleanupLocator + "=cl_1",
 		},
 	}
 }

@@ -37,14 +37,19 @@ func workloadKey(workspaceID, nodeID, runID, attemptID string) string {
 	return workspaceID + "/" + nodeID + "/" + runID + "/" + attemptID
 }
 
+// Invite reserves one identity across the whole fleet and not one per
+// workspace. An enrolling machine names only the node it is, so Find resolves an
+// identity without a workspace, and an identity handed out twice would be two
+// machines answering to one name with the second one's tenant deciding which.
 func (store *memoryStore) Invite(_ context.Context, record Record) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := nodeKey(record.WorkspaceID, record.ID)
-	if _, exists := store.records[key]; exists {
-		return fmt.Errorf("%w: %s", ErrIdentityExists, record.ID)
+	for _, held := range store.records {
+		if held.ID == record.ID {
+			return fmt.Errorf("%w: %s", ErrIdentityExists, record.ID)
+		}
 	}
-	store.records[key] = record
+	store.records[nodeKey(record.WorkspaceID, record.ID)] = record
 	return nil
 }
 
@@ -91,7 +96,7 @@ func (store *memoryStore) Enroll(_ context.Context, workspaceID, nodeID string, 
 		return Record{}, fmt.Errorf("%w: %s", ErrNotFound, nodeID)
 	}
 	if record.State == StateRetired {
-		return Record{}, fmt.Errorf("node: %q is retired and cannot enroll again", nodeID)
+		return Record{}, fmt.Errorf("%w: %s cannot enroll again", ErrRetired, nodeID)
 	}
 	if record.EnrollmentTokenID != enrollment.EnrollmentTokenID {
 		return Record{}, fmt.Errorf("%w: %s", ErrEnrollmentSpent, nodeID)
@@ -122,6 +127,19 @@ func (store *memoryStore) Reinvite(_ context.Context, workspaceID, nodeID, enrol
 	return nil
 }
 
+func (store *memoryStore) Retire(_ context.Context, workspaceID, nodeID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := nodeKey(workspaceID, nodeID)
+	record, ok := store.records[key]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotFound, nodeID)
+	}
+	record.State = StateRetired
+	store.records[key] = record
+	return nil
+}
+
 func (store *memoryStore) Heartbeat(
 	_ context.Context,
 	workspaceID, nodeID string,
@@ -134,6 +152,13 @@ func (store *memoryStore) Heartbeat(
 	record, ok := store.records[key]
 	if !ok {
 		return Record{}, fmt.Errorf("%w: %s", ErrNotFound, nodeID)
+	}
+	// A retired node reports on a Rental generation that is over. Renewing its
+	// lease here would put it back in StateReady, which is the one state the
+	// registry publishes as capacity, so the machine Mercator gave up would be
+	// offered again by its own agent's next heartbeat.
+	if record.State == StateRetired {
+		return Record{}, fmt.Errorf("%w: %s", ErrRetired, nodeID)
 	}
 	record.State = StateReady
 	record.Facts = facts

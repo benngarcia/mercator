@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	modernsqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
+
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/node"
 )
@@ -114,9 +117,27 @@ func (store *NodeStore) Invite(ctx context.Context, record node.Record) error {
 		record.AgentVersion, facts, record.ShadowPriceUSDPerHour, purchase,
 	)
 	if err != nil {
+		if isConstraintViolation(err) {
+			return fmt.Errorf("%w: %s", node.ErrIdentityExists, record.ID)
+		}
 		return fmt.Errorf("invite node %q: %w", record.ID, err)
 	}
 	return nil
+}
+
+// isConstraintViolation reports whether the driver refused a write because the
+// schema did, matched on the code rather than on the message. Both keys over
+// this table name the same fact: the primary key holds one record per identity
+// in a workspace, and the identity index holds one across all of them.
+//
+// It is what makes ErrIdentityExists an answer this store can give. Provisioning
+// asks for an identity again on every attempt, precisely because it cannot know
+// whether an earlier attempt landed a machine, and a store that reported the
+// collision as an opaque failure would leave a Rental with a machine already
+// rented and no route back to the invitation that machine is holding.
+func isConstraintViolation(err error) bool {
+	var sqliteError *modernsqlite.Error
+	return errors.As(err, &sqliteError) && sqliteError.Code()&0xff == sqlite3.SQLITE_CONSTRAINT
 }
 
 func (store *NodeStore) Get(ctx context.Context, workspaceID, nodeID string) (node.Record, error) {
@@ -168,7 +189,7 @@ func (store *NodeStore) Enroll(
 		return node.Record{}, err
 	}
 	if node.State(state) == node.StateRetired {
-		return node.Record{}, fmt.Errorf("node: %q is retired and cannot enroll again", nodeID)
+		return node.Record{}, fmt.Errorf("%w: %s cannot enroll again", node.ErrRetired, nodeID)
 	}
 	if tokenID != enrollment.EnrollmentTokenID {
 		return node.Record{}, fmt.Errorf("%w: %s", node.ErrEnrollmentSpent, nodeID)
@@ -200,6 +221,16 @@ func (store *NodeStore) Reinvite(ctx context.Context, workspaceID, nodeID, enrol
 	return requireRow(result, nodeID)
 }
 
+func (store *NodeStore) Retire(ctx context.Context, workspaceID, nodeID string) error {
+	result, err := store.db.ExecContext(ctx,
+		`UPDATE nodes SET state = ? WHERE workspace_id = ? AND node_id = ?`,
+		string(node.StateRetired), workspaceID, nodeID)
+	if err != nil {
+		return fmt.Errorf("retire node %q: %w", nodeID, err)
+	}
+	return requireRow(result, nodeID)
+}
+
 func (store *NodeStore) Heartbeat(
 	ctx context.Context,
 	workspaceID, nodeID string,
@@ -210,17 +241,39 @@ func (store *NodeStore) Heartbeat(
 	if err != nil {
 		return node.Record{}, fmt.Errorf("encode node facts: %w", err)
 	}
+	// A retired node reports on a Rental generation that is over. Renewing its
+	// lease here would put it back in the one state the registry publishes as
+	// capacity, so the machine Mercator gave up would be offered again by its own
+	// agent's next heartbeat. The state is matched in the statement rather than
+	// read first, so a retirement landing between the two cannot be missed.
 	result, err := store.db.ExecContext(ctx, `
 		UPDATE nodes SET state = ?, facts_json = ?, last_heartbeat_at = ?, lease_expires = ?
-		WHERE workspace_id = ? AND node_id = ?`,
-		string(node.StateReady), encoded, stamp(facts.ObservedAt), stamp(leaseExpires), workspaceID, nodeID)
+		WHERE workspace_id = ? AND node_id = ? AND state != ?`,
+		string(node.StateReady), encoded, stamp(facts.ObservedAt), stamp(leaseExpires),
+		workspaceID, nodeID, string(node.StateRetired))
 	if err != nil {
 		return node.Record{}, fmt.Errorf("heartbeat node %q: %w", nodeID, err)
 	}
-	if err := requireRow(result, nodeID); err != nil {
+	changed, err := result.RowsAffected()
+	if err != nil {
 		return node.Record{}, err
 	}
+	if changed == 0 {
+		return node.Record{}, store.refusedHeartbeat(ctx, workspaceID, nodeID)
+	}
 	return store.Get(ctx, workspaceID, nodeID)
+}
+
+// refusedHeartbeat says which of the two reasons a heartbeat matched no row: an
+// identity this control plane never invited, or one whose generation is over.
+// They send an operator somewhere different, and a statement that changed nothing
+// cannot say which on its own.
+func (store *NodeStore) refusedHeartbeat(ctx context.Context, workspaceID, nodeID string) error {
+	record, err := store.Get(ctx, workspaceID, nodeID)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %s", node.ErrRetired, record.ID)
 }
 
 func (store *NodeStore) RecordEvent(ctx context.Context, event node.Event) (bool, error) {

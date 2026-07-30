@@ -13,6 +13,53 @@ const (
 	OperationProviderTerminate   = "provider.terminate"
 	OperationProviderListOwned   = "provider.list_owned"
 	OperationControlPlaneRestart = "control_plane.restart"
+	// The six capacity operations are Mercator allocating and holding a machine,
+	// which is a different contract from launching a workload on one. The four
+	// provider operations above are an execution: a one-shot product Mercator
+	// starts and cannot hold. These are the lease. Collapsing the two would file a
+	// stop that suspends a machine and a release that ends a workload under one
+	// name, and every rule about what Mercator owns reads the ledger.
+	//
+	// Resume is named for the act rather than for the method that performs it
+	// (CapacityProvider.StartCapacity), because a capability set negotiates stop
+	// and resume and a reader of the ledger is asking which promise was exercised.
+	// Observe and the owned listing are reads: they allocate nothing, they change
+	// nothing, and two of them answering differently is a machine whose state moved
+	// rather than a command applied twice.
+	OperationCapacityProvision = "capacity.provision"
+	OperationCapacityObserve   = "capacity.observe"
+	OperationCapacityStop      = "capacity.stop"
+	OperationCapacityResume    = "capacity.resume"
+	OperationCapacityTerminate = "capacity.terminate"
+	OperationCapacityListOwned = "capacity.list_owned"
+	// OperationNodeEnrolled is a node agent opening its authenticated session and
+	// being admitted, which is the moment provisioned capacity becomes capacity
+	// Mercator can execute on. It is recorded because the ledger is the only
+	// account of what really happened on the machine: Mercator's own record can say
+	// a node is ready, and only this says which enrollment made it so and under
+	// which Rental generation.
+	//
+	// Like capacity.preempted it is the world acting on its own account rather than
+	// a command Mercator issued, and effectMutatesWorld classifies both the same
+	// way for the same reason. There is no operation key here for a provider to
+	// honour: an agent that restarts or loses its lease is reinvited and enrols
+	// again under the same node and generation, and the registry answers each
+	// enrolment with a fresh session and the next fencing token, so one identity
+	// correctly has many different consequences. A replayed token is refused
+	// outright with ErrEnrollmentSpent rather than answered as a duplicate, which is
+	// what makes an enrolment redeemable once, and that guard is the registry's
+	// rather than the ledger's.
+	OperationNodeEnrolled = "node.enrolled"
+	// OperationNodeSessionRenewed is an agent already on a machine taking a fresh
+	// session credential before the one it holds lapses. It is its own operation
+	// rather than a second node.enrolled, because the two are different acts with
+	// different material behind them: an enrolment redeems a single-use invitation
+	// and moves the fencing token, and a renewal spends nothing and moves nothing.
+	// Filed under one name, a machine that kept working for a day would read as a
+	// machine that joined the fleet forty eight times, and the one thing the ledger
+	// is here to answer, which invitation made this machine executable, would have
+	// no answer at all.
+	OperationNodeSessionRenewed = "node.session_renewed"
 	// The four Artifact operations are four different facts, and collapsing any
 	// two of them is how a local copy starts standing in for durable content.
 	// OperationArtifactRead is a consuming launch resolving one input, and says

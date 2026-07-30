@@ -776,10 +776,34 @@ export interface components {
             /** Format: int64 */
             memory_min_bytes: number;
         };
+        /** @description What a workload needs of the substrate under it rather than of the cards on it: the host promises it will not run without, and the driver its image's own accelerator stack was built against. The host provides the driver and the image provides the stack, so an image built against a newer driver than the machine runs is refused at placement rather than discovered by a process dying on capacity already paid for. Mercator never answers a mismatch by installing a stack onto somebody's host. */
+        HostRequirements: {
+            /** @description The host promises this Run refuses to run without. A machine that never stated one is refused UNKNOWN_FACT, as loudly as a machine that stated its opposite is refused CAPABILITY_MISMATCH. */
+            facts?: ("ssh" | "nvidia_driver")[];
+            /** @description The oldest accelerator driver this workload's image runs on, in the vendor's own versioning. */
+            min_driver_version?: string;
+            /** @description The lowest accelerator capability this workload's image was built for, in the vendor's own versioning. For NVIDIA it is the CUDA version the driver must support. */
+            min_driver_capability?: string;
+        };
+        /** @description The accelerator driver a host runs and the highest accelerator capability it supports, in the vendor's own versioning. It is the host half of the compatibility contract: the image carries the workload's own accelerator stack, and these two decide whether it can run here at all. */
+        AcceleratorDriver: {
+            vendor?: string;
+            version?: string;
+            capability?: string;
+        };
+        /** @description What a machine, or the provider selling it, has established about the substrate under a workload. Every promise is tri-state: stated true, stated false, or never stated at all. A machine with no driver can never run an image that needs one and a machine nobody asked is a machine nobody asked, so Placement refuses both and records them under different codes. */
+        HostFacts: {
+            /** @description Every host promise somebody established about this machine, by name. It is not a set of the true ones: false is an answer, and a name absent was never established. */
+            attested?: {
+                [key: string]: boolean;
+            };
+            driver?: components["schemas"]["AcceleratorDriver"];
+        };
         ResourceRequirements: {
             cpu: components["schemas"]["CPURequirement"];
             memory: components["schemas"]["MemoryRequirement"];
             accelerators?: components["schemas"]["AcceleratorRequirement"][];
+            host?: components["schemas"]["HostRequirements"];
             ephemeral_disk: components["schemas"]["DiskRequirement"];
         };
         NetworkDownloadRequirement: {
@@ -1174,7 +1198,7 @@ export interface components {
             connection_id: string;
             adapter_type: string;
             /**
-             * @description Who owns the host: standing capacity Mercator borrows a slot on, or provisionable capacity Mercator creates and must destroy.
+             * @description Whether the host exists yet: standing capacity Mercator can reach now, or provisionable capacity a provider allocates when Mercator asks. Whether the end of a Run destroys it is answered by the lane, not by this.
              * @enum {string}
              */
             kind: "standing" | "provisionable";
@@ -1192,6 +1216,7 @@ export interface components {
             expires_at: string;
             platform: components["schemas"]["Platform"];
             resources: components["schemas"]["ResourceInventory"];
+            host?: components["schemas"]["HostFacts"];
             capabilities: components["schemas"]["CapabilityProfile"];
             network: components["schemas"]["NetworkFacts"];
             pricing: components["schemas"]["PriceModel"];

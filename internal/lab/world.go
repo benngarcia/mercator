@@ -161,7 +161,12 @@ type WorldTruthSnapshot struct {
 	// retired. Offers above are the fleet as it stands; this is what the fleet has
 	// said, which is what a rule about a decision already taken has to ask.
 	PublishedPaths map[string][]domain.NetworkFact `json:"published_paths,omitempty"`
-	CacheMounts    []CacheMountState               `json:"cache_mounts"`
+	// PublishedHostFacts is what every machine in this world stated about the
+	// substrate under a workload, by offer, including machines since retired. A
+	// rule about what a launch landed on has to read what the machine said when
+	// the decision was taken, and the fleet as it stands has forgotten.
+	PublishedHostFacts map[string]domain.HostFacts `json:"published_host_facts,omitempty"`
+	CacheMounts        []CacheMountState           `json:"cache_mounts"`
 	// Disk is what each machine's content is taking up, stated as World Truth
 	// because an offer states only what is left. A rule that read the remainder
 	// could never catch a world that lost track of the difference.
@@ -259,6 +264,12 @@ type hostState struct {
 	// each stage has its own prediction to be measured against. Standing capacity
 	// spends none of it, because the machine is already there.
 	provisioning scenario.ProvisioningSpec
+	// neverEnrolls is a listing whose provider allocates and boots the machine
+	// and whose node agent never opens a session. Mercator has no session to it,
+	// so nothing can create a container there and no workload launched on it ever
+	// begins. It is stated rather than read out of a missing agent_ready stage,
+	// because silence there already means a stage that costs nothing.
+	neverEnrolls bool
 	// clockAhead is how far this machine's wall clock runs ahead of Mercator's. It
 	// changes nothing about when anything here happens and everything about the
 	// moment this machine states when asked: a host does not know its clock is
@@ -464,6 +475,15 @@ type simulatedWorld struct {
 	// alternative ADR 0004 rejects.
 	observed   map[string]hostState
 	observedAt time.Time
+	// leases is every machine this world holds under the capacity contract, keyed
+	// by the Rental it was allocated for. See capacity.go.
+	leases map[string]*capacityLease
+	// credentials is every enrollment token Mercator minted while this world was
+	// watching, keyed by the token itself, and what became of each. The registry
+	// keeps only a digest, deliberately, so this is the one place the material
+	// itself is known and the only thing a rule about a secret in the record can
+	// search for.
+	credentials map[string]*bootstrapCredential
 	// pulls is image content still moving onto a host.
 	pulls []pendingPull
 	runs  map[string]RunArrival
@@ -505,6 +525,11 @@ type simulatedWorld struct {
 	// a rule about one of those decisions has to be able to read what the machine
 	// published while it was here.
 	publishedPaths map[string][]domain.NetworkFact
+	// publishedHostFacts is what every machine in this world has told Mercator
+	// about the substrate under a workload, by offer, including machines this
+	// world has since retired. It is kept for the reason the paths above are: a
+	// launch is decided at one moment and judged at a later one.
+	publishedHostFacts map[string]domain.HostFacts
 
 	// paths is what this world declared about the links its machines cross, read
 	// for the world's own transfer model rather than off the offers Mercator sees.
@@ -543,8 +568,19 @@ type simulatedWorld struct {
 
 	operations  map[string]worldOperation
 	launchCount map[string]int
-	faults      []scenario.FaultSpec
-	usedFaults  map[string]bool
+	// provisionCount is how many times this world has been asked for a machine for
+	// each lease, which is what a fault targeting one attempt of a provision is
+	// numbered against.
+	provisionCount map[string]int
+	faults         []scenario.FaultSpec
+	usedFaults     map[string]bool
+
+	// handedOver is every credential this world watched Mercator give a machine
+	// so it could fetch one piece of content, in the order they arrived. It is
+	// World Truth rather than anything Mercator wrote about itself, which is the
+	// only place a rule about what a machine was handed can read: the material is
+	// in it, and the material may appear in no record anywhere.
+	handedOver []contentCredential
 
 	effectSequence uint64
 	effects        []EffectRecord
@@ -552,33 +588,41 @@ type simulatedWorld struct {
 
 func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	world := &simulatedWorld{
-		seed:           tape.Seed,
-		now:            tape.Start,
-		images:         make(map[string]scenario.ImageSpec, len(tape.InitialWorld.Images)),
-		truth:          map[string]hostState{},
-		observed:       map[string]hostState{},
-		runs:           map[string]RunArrival{},
-		store:          newObjectStore(labWorkspace, tape.InitialWorld.Artifacts, tape.Start),
-		replicas:       map[string]map[string]domain.ArtifactReplica{},
-		seededLocality: map[string]map[string]bool{},
-		seededReplicas: map[string]map[string]bool{},
-		cacheMounts:    map[string]map[string]CacheMountState{},
-		prewarm:        tape.InitialWorld.Prewarm,
-		publishedPaths: map[string][]domain.NetworkFact{},
-		paths:          slices.Clone(tape.InitialWorld.Paths),
-		launch:         tape.InitialWorld.Launch,
-		prepared:       map[string]bool{},
-		desired:        map[string]map[string]bool{},
-		executions:     map[string]externalExecution{},
-		orphans:        map[string]orphanedCapacity{},
-		seededOrphans:  map[string]bool{},
-		operations:     map[string]worldOperation{},
-		launchCount:    map[string]int{},
-		faults:         slices.Clone(tape.Faults),
-		usedFaults:     map[string]bool{},
+		seed:               tape.Seed,
+		now:                tape.Start,
+		images:             make(map[string]scenario.ImageSpec, len(tape.InitialWorld.Images)),
+		truth:              map[string]hostState{},
+		observed:           map[string]hostState{},
+		runs:               map[string]RunArrival{},
+		store:              newObjectStore(labWorkspace, tape.InitialWorld.Artifacts, tape.Start),
+		replicas:           map[string]map[string]domain.ArtifactReplica{},
+		seededLocality:     map[string]map[string]bool{},
+		seededReplicas:     map[string]map[string]bool{},
+		cacheMounts:        map[string]map[string]CacheMountState{},
+		prewarm:            tape.InitialWorld.Prewarm,
+		publishedPaths:     map[string][]domain.NetworkFact{},
+		publishedHostFacts: map[string]domain.HostFacts{},
+		paths:              slices.Clone(tape.InitialWorld.Paths),
+		launch:             tape.InitialWorld.Launch,
+		prepared:           map[string]bool{},
+		desired:            map[string]map[string]bool{},
+		executions:         map[string]externalExecution{},
+		orphans:            map[string]orphanedCapacity{},
+		seededOrphans:      map[string]bool{},
+		operations:         map[string]worldOperation{},
+		launchCount:        map[string]int{},
+		provisionCount:     map[string]int{},
+		faults:             slices.Clone(tape.Faults),
+		usedFaults:         map[string]bool{},
+		leases:             map[string]*capacityLease{},
+		credentials:        map[string]*bootstrapCredential{},
 	}
 	for reference, image := range tape.InitialWorld.Images {
-		world.images[reference] = scenario.ImageSpec{Layers: slices.Clone(image.Layers), Registry: image.Registry}
+		world.images[reference] = scenario.ImageSpec{
+			Layers:   slices.Clone(image.Layers),
+			Registry: image.Registry,
+			Private:  image.Private,
+		}
 	}
 	for _, artifact := range tape.InitialWorld.Artifacts {
 		world.replicas[artifact.ID] = map[string]domain.ArtifactReplica{}
@@ -622,7 +666,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			state.offer.Pricing = domain.PriceModel{Currency: "USD"}
 			state.offer.Capabilities.Pricing = domain.PricingCapabilities{}
 		}
-		world.publishOfferFacts(&state.offer, tape.InitialWorld, rental.ID, nil)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, rental.ID, nil, scenario.PublishedHostFacts(rental.Facts, rental.Driver))
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
 				state.heldLayers[layer.Digest] = layer
@@ -639,6 +683,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		world.truth[rental.ID] = cloneHostState(state)
 		world.seedReplicas(rental.ID, rental.ArtifactReplicas, tape.InitialWorld, tape.Start)
 		world.seedCaches(rental.ID, rental.CacheMounts, tape.Start)
+		world.enrollTheAgentThisMachineIsHeldThrough(state.offer)
 	}
 	for index, host := range tape.InitialWorld.Hosts {
 		state := hostState{
@@ -665,7 +710,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			}
 			state.heldImages[domain.ReferenceDigest(reference)] = true
 		}
-		world.publishOfferFacts(&state.offer, tape.InitialWorld, host.ID, nil)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, host.ID, nil, domain.HostFacts{})
 		world.seededLocality[host.ID] = state.seededDigests()
 		world.truth[host.ID] = cloneHostState(state)
 		world.seedReplicas(host.ID, host.ArtifactReplicas, tape.InitialWorld, tape.Start)
@@ -675,7 +720,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			offer: labOffer(
 				marketplace.ID,
 				domain.OfferKindProvisionable,
-				marketplace.ExecutionLane(),
+				marketplace.Lane,
 				// A listing names no machine, because the machine does not exist yet. What
 				// recurs about it is the provider, the place, and the product name, which is
 				// what the Blueprint states and what the identity falls back to.
@@ -695,8 +740,9 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			// published below, because a world that spent its provider's own
 			// expectation would make that expectation right by construction.
 			provisioning: marketplace.Provisioning,
+			neverEnrolls: marketplace.NeverEnrolls(),
 		}
-		world.publishOfferFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available, scenario.PublishedHostFacts(marketplace.Facts, marketplace.Driver))
 		world.seededLocality[marketplace.ID] = state.seededDigests()
 		state.offer.Provisioning = &domain.Estimate{
 			Expected: marketplace.Provisioning.Expected.Duration().Seconds(),
@@ -705,6 +751,11 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		if marketplace.Provisioning.P90 != nil {
 			state.offer.Provisioning.P90 = marketplace.Provisioning.P90.Duration().Seconds()
 		}
+		// How long Mercator waits for the agent on a machine allocated from this
+		// listing, and when its provider destroys one nobody enrolled on. Both are
+		// terms of the sale rather than predictions, which is why they are carried
+		// beside the estimate and never derived from it.
+		state.offer.Bootstrap = marketplace.CapacityBootstrap()
 		// The history this listing's provider publishes about the machine behind it.
 		// It is a fact about the machine rather than about the moment an offer was
 		// read, so it is stated once and republished with every snapshot, and a
@@ -815,18 +866,78 @@ func (world *simulatedWorld) seedCaches(offerID string, held []scenario.HeldCach
 	}
 }
 
+// enrollTheAgentThisMachineIsHeldThrough is the session an operator already opened
+// on a machine this world holds. A Rental in a Blueprint is capacity somebody
+// enrolled by hand before the world's clock started, and the agent is what makes
+// it capacity Mercator can launch on at all: nothing else can create a container
+// there, enumerate what the disk holds, attach a cache, or fetch and hash an
+// Artifact copy.
+//
+// It is written into the ledger rather than left implicit in the offer's shape,
+// because the ledger is the only account of what really happened on the machine.
+// safety.reusable_capacity_has_an_enrolled_runtime is the reader, and a rule that
+// took the offer's own standing-and-reusable shape as its evidence would be asking
+// the world whether it agreed with itself.
+//
+// The node identity is this world's own, exactly as it is the registry's in
+// production, and it is minted from the machine rather than from the lease: an
+// operator may invite a second machine against one lease when a generation ends,
+// and a node named after the lease could not tell the two apart. There is no
+// operation key, because an enrolment is not a command Mercator issued for a
+// provider to deduplicate; see OperationNodeEnrolled.
+//
+// The record is correlated with the machine and caused by the enrolment, in that
+// order, because that is what every other writer here means by the two: the
+// correlation is what the entry is about, and the causation is what brought it
+// about. An earlier revision put the machine handle in the causation and left the
+// correlation empty, which made these the only entries in the ledger a Run Bundle
+// could not tie to anything.
+func (world *simulatedWorld) enrollTheAgentThisMachineIsHeldThrough(offer domain.OfferSnapshot) {
+	const generation = 1
+	nodeID := DeterministicID(world.seed, "node", offer.MachineID)
+	world.recordEffect(
+		OperationNodeEnrolled,
+		fmt.Sprintf("%s/generation-%d", nodeID, generation),
+		EffectCommandAccepted,
+		EffectResponseDelivered,
+		offer.MachineID,
+		"enrolment",
+		"",
+		map[string]any{
+			"machine_id": offer.MachineID,
+			"rental_id":  offer.RentalID,
+			"node_id":    nodeID,
+			"generation": generation,
+		},
+		map[string]any{"node_id": nodeID, "fencing_token": generation},
+		"",
+	)
+}
+
 // publishOfferFacts is one machine being handed what this world says about it,
 // and this world writing down what it handed over. The publication outlives the
 // machine on purpose: a placement is decided at one moment and judged at a later
 // one, and a rule that asked only the machines still standing would read a
 // correct decision about capacity since retired as a decision priced from
 // nothing.
-func (world *simulatedWorld) publishOfferFacts(offer *domain.OfferSnapshot, spec scenario.WorldSpec, offerID string, available *bool) {
+func (world *simulatedWorld) publishOfferFacts(
+	offer *domain.OfferSnapshot,
+	spec scenario.WorldSpec,
+	offerID string,
+	available *bool,
+	host domain.HostFacts,
+) {
 	if available != nil {
 		offer.Capacity.Available = *available
 	}
 	offer.Network = spec.Paths.PublishedFacts(offerID, spec.Start())
 	world.publishedPaths[offerID] = slices.Clone(offer.Network.Download)
+	// What this machine says about the substrate under a workload, published for
+	// the reason its paths are and kept for the same reason: a launch is judged
+	// after the fact, and a rule that asked only the machines still standing would
+	// read a launch onto capacity since retired as a launch onto nothing.
+	offer.Host = host
+	world.publishedHostFacts[offerID] = host
 }
 
 // prepareRun is the world learning about a Run it will be asked to execute. An
@@ -1194,6 +1305,18 @@ func (world *simulatedWorld) executionHorizon() time.Time {
 			horizon = upload.completesAt
 		}
 	}
+	// A machine still being built is work in flight too. Without it the driver
+	// would find nothing owed the moment a Run was placed on capacity that does
+	// not exist yet, settle instantly, and end the execution at the liveness
+	// bound with the Run still waiting for a machine nobody advanced time toward.
+	for _, lease := range world.leases {
+		if lease.Terminated || lease.Enrolled {
+			continue
+		}
+		if arrives := lease.arrivesAt(world.truth[lease.OfferID].provisioning); arrives.After(horizon) {
+			horizon = arrives
+		}
+	}
 	return horizon
 }
 
@@ -1227,14 +1350,15 @@ func (world *simulatedWorld) truthSnapshot() WorldTruthSnapshot {
 		return executions[i].LaunchKey < executions[j].LaunchKey
 	})
 	return WorldTruthSnapshot{
-		At:               world.now,
-		Offers:           world.offerSnapshots(world.truth, world.now),
-		ActiveExecutions: executions,
-		Orphans:          world.orphanedCapacity(),
-		ArtifactReplicas: world.artifactReplicas(),
-		CacheMounts:      world.cacheMountStates(),
-		PublishedPaths:   maps.Clone(world.publishedPaths),
-		Disk:             world.diskLedgers(),
+		At:                 world.now,
+		Offers:             world.offerSnapshots(world.truth, world.now),
+		ActiveExecutions:   executions,
+		Orphans:            world.orphanedCapacity(),
+		ArtifactReplicas:   world.artifactReplicas(),
+		CacheMounts:        world.cacheMountStates(),
+		PublishedPaths:     maps.Clone(world.publishedPaths),
+		PublishedHostFacts: maps.Clone(world.publishedHostFacts),
+		Disk:               world.diskLedgers(),
 	}
 }
 
@@ -1259,6 +1383,17 @@ type worldFacts struct {
 	// SeededOrphans is the capacity this world began holding that Mercator never
 	// launched, by the identity a decision about it is filed under.
 	SeededOrphans map[string]bool
+	// BootstrapCredentials is every enrollment token this world minted and what
+	// became of it. It carries the credential itself, which is the one thing here
+	// that must never be written anywhere: it exists so a rule can search
+	// Mercator's own record for it, and it is read in memory and exported by
+	// nothing. A Run Bundle that carried this would be the leak the rule is about.
+	BootstrapCredentials []bootstrapCredential
+	// ContentCredentials is every credential Mercator handed a machine so it
+	// could fetch one image or one Artifact, beside what the command it arrived on
+	// was really for. It carries material for the reason the bootstraps do, and is
+	// exported by nothing for the same reason.
+	ContentCredentials []contentCredential
 }
 
 func (world *simulatedWorld) invariantFacts() worldFacts {
@@ -1278,6 +1413,10 @@ func (world *simulatedWorld) invariantFacts() worldFacts {
 	for offerID, artifacts := range world.seededReplicas {
 		facts.SeededReplicas[offerID] = cloneMap(artifacts)
 	}
+	for _, token := range slices.Sorted(maps.Keys(world.credentials)) {
+		facts.BootstrapCredentials = append(facts.BootstrapCredentials, *world.credentials[token])
+	}
+	facts.ContentCredentials = slices.Clone(world.handedOver)
 	return facts
 }
 
@@ -1410,19 +1549,22 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		}
 	}
 	execution := externalExecution{
-		ExternalID:        "lab-" + request.AttemptID,
-		RunID:             request.RunID,
-		AttemptID:         request.AttemptID,
-		LaunchKey:         request.LaunchKey,
-		OwnershipToken:    request.OwnershipToken,
-		RequestHash:       request.RequestHash,
-		OfferID:           request.SelectedOfferSnapshotID,
-		WorkspaceID:       request.WorkspaceID,
-		CacheMounts:       slices.Clone(request.CacheMounts),
-		Disposition:       request.Disposition,
-		Phase:             adapter.ExternalPhaseRunning,
-		AcceptedAt:        world.now,
-		ReadyAt:           world.now.Add(offer.provisioning.Spend()),
+		ExternalID:     "lab-" + request.AttemptID,
+		RunID:          request.RunID,
+		AttemptID:      request.AttemptID,
+		LaunchKey:      request.LaunchKey,
+		OwnershipToken: request.OwnershipToken,
+		RequestHash:    request.RequestHash,
+		OfferID:        request.SelectedOfferSnapshotID,
+		WorkspaceID:    request.WorkspaceID,
+		CacheMounts:    slices.Clone(request.CacheMounts),
+		Disposition:    request.Disposition,
+		Phase:          adapter.ExternalPhaseRunning,
+		AcceptedAt:     world.now,
+		// The machine exists by now: acquisition, boot, and the agent's arrival are
+		// spent under the capacity lease, before anything is launched here. What a
+		// launch still owes is content and a container.
+		ReadyAt:           world.now,
 		ReservedDiskBytes: request.Resources.EphemeralDisk.MinBytes,
 	}
 	if offer.offer.Kind == domain.OfferKindStanding {
@@ -1430,9 +1572,8 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		world.truth[request.SelectedOfferSnapshotID] = offer
 	}
 	// A process cannot execute bytes that have not landed, and that is as true
-	// of the Artifacts it reads as of the image it runs. Neither can be fetched
-	// before there is a machine to fetch them onto, so both transfers start when
-	// the world has finished acquiring, booting, and enrolling this host.
+	// of the Artifacts it reads as of the image it runs. Both transfers start on
+	// the machine Mercator already holds, which is what a launch is now handed.
 	execution.ImageAt = world.pullRunImage(execution, request.Image, execution.ReadyAt)
 	execution.ArtifactsAt = world.readRunArtifacts(execution, arrival.Request.ConsumesArtifacts, execution.ReadyAt)
 	// Bytes on a disk are not a layer chain, and a container runtime asked for a
@@ -2580,8 +2721,20 @@ func labOffer(
 		Pricing:  billing.PriceModel(ratePerHourUSD),
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
-	// Only capacity Mercator keeps names a Rental, which is the same stamp
-	// capability.StampLane applies to every offer in production.
+	// Only capacity Mercator keeps names a Rental, and the identity is this
+	// world's own rather than anything a provider said. That is the position
+	// internal/node.Registry.offer is in production: the machines that carry a
+	// Rental identity are the ones an agent enrolled on, and the identity comes
+	// from the invitation that named the Rental, not from the listing the machine
+	// was rented off.
+	//
+	// It is not capability.StampLane. StampLane is the adapter seam, and it clears
+	// the field in every lane, because no offer that crosses it is a machine
+	// Mercator holds. Nothing this world publishes crosses it: this world is the
+	// provider and the enrolled fleet at once, which is why the corpus specifies
+	// the acquisition path ahead of production and mercator#200 is what closes the
+	// gap. safety.a_rental_identity_is_capacity_mercator_holds is the rule that
+	// keeps this from drifting into publishing a lease nobody holds.
 	if offer.KeepsWhatItRuns() {
 		offer.RentalID = id
 	}
@@ -2611,6 +2764,7 @@ func cloneHostState(state hostState) hostState {
 		reportsDiffIDs: state.reportsDiffIDs,
 		leaseExpiresAt: state.leaseExpiresAt,
 		provisioning:   state.provisioning,
+		neverEnrolls:   state.neverEnrolls,
 		clockAhead:     state.clockAhead,
 	}
 }

@@ -42,22 +42,37 @@ type runState struct {
 	// selfImposedWait is how much of this Run's wait the caller's own declaration
 	// held, over the intervals that are closed. The interval still open is added
 	// where the wait is read, because how long it has run is a question about now.
-	selfImposedWait          time.Duration
-	deferralCount            int
-	attemptCount             int
-	excludedOfferSnapshotIDs []string
-	cancelRequested          bool
-	firstTerminal            *terminalFact
-	outcomeRecorded          bool
-	outcome                  domain.RunOutcome
-	cleanupRequested         bool
-	cleanupFailure           *domain.CleanupError
-	cleanupConfirmed         bool
-	closed                   bool
-	exitCode                 *int
-	lastObservedPhase        adapter.ExternalPhase
-	createdBy                string
-	cancelledBy              string
+	selfImposedWait time.Duration
+	deferralCount   int
+	attemptCount    int
+	excluded        []domain.OfferExclusion
+	// capacity is the machine this attempt promised to allocate, and the four
+	// fields under it are how far it got: what the provider accepted, which
+	// provisioning stages have an actual, when the last of them landed, and
+	// whether an agent ever opened a session. A Run placed on capacity that
+	// already exists carries none of it.
+	capacity            *capacityRequestedData
+	capacityAccepted    *capacityAcceptedData
+	capacityStages      map[domain.LaunchStage]bool
+	lastCapacityStageAt time.Time
+	nodeEnrolled        bool
+	// capacityReclaimed is Mercator having given this attempt's machine back
+	// because its agent never came. It makes the Run replaceable, exactly as a
+	// launch the provider refused does, and for the opposite reason: this one
+	// leaves a machine that existed and was billed for.
+	capacityReclaimed *capacityReclaimedData
+	cancelRequested   bool
+	firstTerminal     *terminalFact
+	outcomeRecorded   bool
+	outcome           domain.RunOutcome
+	cleanupRequested  bool
+	cleanupFailure    *domain.CleanupError
+	cleanupConfirmed  bool
+	closed            bool
+	exitCode          *int
+	lastObservedPhase adapter.ExternalPhase
+	createdBy         string
+	cancelledBy       string
 }
 
 type terminalFact struct {
@@ -72,7 +87,24 @@ func (state runState) externalObjectPossible() bool {
 }
 
 func (state runState) replacementEligible() bool {
+	if state.capacityReclaimed != nil {
+		return true
+	}
 	return state.launchFailure != nil && state.launchFailure.replacementEligible()
+}
+
+// exclude records what an attempt proved about the offer it was placed on, so
+// the evaluation that stands in for it can refuse that offer with the reason
+// rather than with a code covering both. An offer already struck out keeps the
+// reason it was struck out with: the first proof is the one the record explains.
+func (state *runState) exclude(offerSnapshotID string, reason domain.OfferExclusionReason) {
+	if offerSnapshotID == "" {
+		return
+	}
+	if _, struck := domain.ExcludedOffer(state.excluded, offerSnapshotID); struck {
+		return
+	}
+	state.excluded = append(state.excluded, domain.OfferExclusion{OfferSnapshotID: offerSnapshotID, Reason: reason})
 }
 
 // wait is how long this Run has been waiting at one moment, split into the whole
@@ -123,6 +155,9 @@ func (state runState) selfImposedSince(at time.Time) time.Duration {
 func (state runState) supersession() (string, string) {
 	if state.bookingDecision == nil {
 		return "", ""
+	}
+	if state.capacityReclaimed != nil {
+		return state.bookingDecision.ID, domain.SupersededCapacityReclaimed
 	}
 	if state.replacementEligible() {
 		return state.bookingDecision.ID, domain.SupersededLaunchFailed
@@ -242,6 +277,68 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		state.startedAt = nil
 		state.readyAt = nil
 		state.launchFailure = nil
+		// A new attempt is a new machine as well as a new container, so nothing
+		// the last one allocated, observed, or gave back belongs to this one.
+		state.capacity = nil
+		state.capacityAccepted = nil
+		state.capacityStages = nil
+		state.lastCapacityStageAt = time.Time{}
+		state.nodeEnrolled = false
+		state.capacityReclaimed = nil
+
+	case EventCapacityRequested:
+		var data capacityRequestedData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if data.RentalID == "" || data.NodeID == "" || data.OfferSnapshotID == "" {
+			return invalidRunEvent(stored, "requested capacity names its Rental, its node, and the offer it comes from")
+		}
+		state.capacity = &data
+
+	case EventCapacityAccepted:
+		var data capacityAcceptedData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if state.capacity == nil {
+			return invalidRunEvent(stored, "accepted capacity requires a recorded capacity request")
+		}
+		if !data.State.Valid() {
+			return invalidRunEvent(stored, "accepted capacity states a lifecycle state Mercator knows")
+		}
+		state.capacityAccepted = &data
+		// The machine the provider named, which is not always the one the listing
+		// pointed at: a catalog selling a product mints the reference on accepting.
+		state.capacity.NativeRef = data.NativeRef
+
+	case EventCapacityStageObserved:
+		var data capacityStageObservedData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if !slices.Contains(domain.ProvisioningStages, data.Stage) {
+			return invalidRunEvent(stored, "observed stage is one a machine being built goes through")
+		}
+		if state.capacityStages == nil {
+			state.capacityStages = map[domain.LaunchStage]bool{}
+		}
+		state.capacityStages[data.Stage] = true
+		state.lastCapacityStageAt = data.FinishedAt.UTC()
+		if data.Stage == domain.StageAgentReady {
+			state.nodeEnrolled = true
+		}
+
+	case EventCapacityReclaimed:
+		var data capacityReclaimedData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if data.RentalID == "" || data.Policy == "" {
+			return invalidRunEvent(stored, "reclaimed capacity names its Rental and the policy that decided it")
+		}
+		state.capacityReclaimed = &data
+		state.exclude(data.OfferSnapshotID, domain.OfferCapacityReclaimed)
 
 	case EventLaunchIntentRecorded:
 		var data adapter.LaunchRequest
@@ -279,8 +376,8 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		state.launchFailure = &data
-		if data.replacementEligible() && state.launchIntent != nil && !slices.Contains(state.excludedOfferSnapshotIDs, state.launchIntent.SelectedOfferSnapshotID) {
-			state.excludedOfferSnapshotIDs = append(state.excludedOfferSnapshotIDs, state.launchIntent.SelectedOfferSnapshotID)
+		if data.replacementEligible() && state.launchIntent != nil {
+			state.exclude(state.launchIntent.SelectedOfferSnapshotID, domain.OfferRefusedTheLaunch)
 		}
 
 	case EventCancelRequested:

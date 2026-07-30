@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
+	"github.com/benngarcia/mercator/internal/dockertest"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
@@ -599,6 +600,7 @@ func standInDaemon(t *testing.T, script string) string {
 
 func requireDocker(t *testing.T) {
 	t.Helper()
+	dockertest.Exclusive(t)
 	if err := exec.Command("docker", "info").Run(); err != nil {
 		t.Skipf("no reachable Docker daemon to read node facts from: %v", err)
 	}

@@ -1,8 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "The cheapest marketplace offer has no working NVIDIA driver and another is silent about SSH access. Both must be rejected loudly at placement instead of failing mysteriously at launch; the well-attested host wins despite its price.",
-  "classification": "target",
-  "missing_capabilities": ["host_facts"],
+  "summary": "Four listings for one training image that declares the accelerator stack it was built against. The cheapest host states outright that it has no working NVIDIA driver, one states a driver four years older than the image needs, and one is silent about the SSH access this Run's operator will not do without. The host provides the driver and the image provides the CUDA stack, so none of the three is a machine Mercator may improvise on: each is refused at placement, in the record, naming the fact that refused it, rather than discovered by a process dying on capacity already paid for. A machine that stated nothing is refused UNKNOWN_FACT and a machine that stated a no is refused CAPABILITY_MISMATCH, because an operator reading the decision has to know whether to buy a different machine or to go and find out about this one. The well-attested host wins at twice the cheapest price.",
+  "classification": "green",
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
@@ -16,6 +15,7 @@
       {
         "id": "good-host",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 2.0,
         "provisioning": {
           "expected": "4m",
@@ -24,11 +24,13 @@
           "boot": "3m",
           "agent_ready": "36s"
         },
-        "facts": {"ssh": true, "nvidia_driver": true}
+        "facts": {"ssh": true, "nvidia_driver": true},
+        "driver": {"vendor": "nvidia", "version": "550.54.15", "capability": "12.4"}
       },
       {
         "id": "driverless-host",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 1.0,
         "provisioning": {
           "expected": "4m",
@@ -40,8 +42,24 @@
         "facts": {"ssh": true, "nvidia_driver": false}
       },
       {
+        "id": "old-driver-host",
+        "provider": "simcloud",
+        "lane": "reusable",
+        "rate_per_hour_usd": 1.1,
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m",
+          "agent_ready": "36s"
+        },
+        "facts": {"ssh": true, "nvidia_driver": true},
+        "driver": {"vendor": "nvidia", "version": "470.129.06", "capability": "11.4"}
+      },
+      {
         "id": "unattested-host",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 1.2,
         "provisioning": {
           "expected": "4m",
@@ -50,12 +68,18 @@
           "boot": "3m",
           "agent_ready": "36s"
         },
-        "facts": {"nvidia_driver": true}
+        "facts": {"nvidia_driver": true},
+        "driver": {"vendor": "nvidia", "version": "550.54.15", "capability": "12.4"}
       }
     ]
   },
   "request": {
     "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "host": {
+      "facts": ["ssh", "nvidia_driver"],
+      "min_driver_version": "535",
+      "min_driver_capability": "12.0"
+    },
     "expected_runtime": "20m",
     "max_runtime": "1h"
   },
@@ -67,6 +91,13 @@
       "driverless-host": {
         "feasible": false,
         "rejected": [{"code": "CAPABILITY_MISMATCH", "path": "facts.nvidia_driver"}]
+      },
+      "old-driver-host": {
+        "feasible": false,
+        "rejected": [
+          {"code": "CAPABILITY_MISMATCH", "path": "host.driver_version"},
+          {"code": "CAPABILITY_MISMATCH", "path": "host.driver_capability"}
+        ]
       },
       "unattested-host": {
         "feasible": false,

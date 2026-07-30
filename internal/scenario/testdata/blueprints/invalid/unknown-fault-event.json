@@ -55,6 +55,7 @@
     "marketplace": [
       {
         "id": "fresh-4090",
+        "lane": "reusable",
         "provider": "simcloud",
         "rate_per_hour_usd": 2.0,
         "provisioning": {

@@ -1,0 +1,147 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Two listings, one Run, and a machine that arrives and never answers. The cheaper provider allocates the capacity in twenty-four seconds and the host reaches a usable operating system three minutes later, and the node agent on it never opens a session: an image with no agent baked in, a startup script that ran before the network was up, an outbound path something is blocking. Mercator has no session to that machine, so nothing can create a container there and no workload ever begins. Placement cannot know that in advance, so it takes the cheap machine, and the record has to say what followed: this Run's start is unobserved and its application has said nothing, because a start is a moment somebody observed and nobody was ever able to look. Then the patience itself is the point, so this Run is reconciled twice around it. At six minutes, inside the ten the listing says Mercator will wait, the answer still stands: one decision, the silent machine, no start. At twelve minutes, two past the ten, it has to change. A fixture that reconciled only after the deadline could not tell bounded patience from abandoning any machine whose start has not been seen yet, and the second machine here spends four and a half minutes provisioning before an eighteen gigabyte pull, so a control plane that gave up on the first look would strand this Run for ever, moving it off one healthy machine after another. Two decisions about one machine live here and they answer differently, which is the point of stating both. The Run's own cleanup releases: this listing sells reusable capacity, and a workload ending is not a lease ending, so nothing about the end of a Run destroys the host it ran on. What destroys this machine is Mercator giving up on it, and that is a decision about the lease rather than about the workload. Giving up means two things together and the record states both. The capacity is handed back, as a confirmed terminate on the silent machine before the work moves, because a control plane that reruns the work elsewhere and leaves the machine allocated is one an operator pays twice. And the second answer is appended rather than written over the first: it names the decision it stands in for, gives the reason as capacity Mercator reclaimed, and strikes the listing whose machine it just gave back out of the answer that replaces it, so the cheaper listing cannot win the work straight back and strand it again. That reason is its own code rather than the launch failure the tree already has, because a failed launch says nothing was created, and this is a machine that exists and was billed for.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "18GB"
+          }
+        ]
+      }
+    },
+    "marketplace": [
+      {
+        "id": "silent-4090",
+        "machine": "simcloud-4090-a17c",
+        "provider": "simcloud",
+        "lane": "reusable",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m"
+        },
+        "capacity": {
+          "stop": true,
+          "resume": true,
+          "persistent_disk": true,
+          "spot": false,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true,
+          "observe_after_terminate": false
+        },
+        "bootstrap": {
+          "never_enrolls": true,
+          "deadline": "10m"
+        }
+      },
+      {
+        "id": "patient-4090",
+        "machine": "simcloud-4090-b204",
+        "provider": "simcloud",
+        "lane": "reusable",
+        "rate_per_hour_usd": 3.0,
+        "provisioning": {
+          "expected": "4m30s",
+          "p90": "9m",
+          "acquisition": "30s",
+          "boot": "3m30s",
+          "agent_ready": "45s"
+        },
+        "capacity": {
+          "stop": true,
+          "resume": true,
+          "persistent_disk": true,
+          "spot": false,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true,
+          "observe_after_terminate": false
+        }
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "run-stranded",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
+        "expected_runtime": "10m",
+        "max_runtime": "30m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "silent-4090",
+        "disposition": "release",
+        "no_start_observed": true,
+        "decision": {
+          "recorded": 1
+        },
+        "candidates": {
+          "silent-4090": {
+            "feasible": true,
+            "disposition": "provision_fresh_rental"
+          }
+        }
+      }
+    },
+    {
+      "advance": "6m"
+    },
+    {
+      "reconcile": "run-stranded",
+      "expect": {
+        "outcome": "place",
+        "offer": "silent-4090",
+        "no_start_observed": true,
+        "no_ready_reported": true,
+        "decision": {
+          "recorded": 1
+        }
+      }
+    },
+    {
+      "advance": "6m"
+    },
+    {
+      "reconcile": "run-stranded",
+      "expect": {
+        "outcome": "place",
+        "offer": "patient-4090",
+        "no_start_observed": true,
+        "no_ready_reported": true,
+        "reclaimed": {
+          "offer": "silent-4090",
+          "disposition": "terminate"
+        },
+        "decision": {
+          "recorded": 2,
+          "supersedes": 1,
+          "supersedes_reason": "PREVIOUS_CAPACITY_RECLAIMED"
+        },
+        "candidates": {
+          "patient-4090": {
+            "feasible": true,
+            "disposition": "provision_fresh_rental"
+          },
+          "silent-4090": {
+            "feasible": false,
+            "rejected": [
+              {
+                "code": "PREVIOUS_ATTEMPT_CAPACITY_RECLAIMED",
+                "path": "offer_snapshot_id"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

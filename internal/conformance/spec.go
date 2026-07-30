@@ -23,6 +23,10 @@ type Mode string
 const (
 	ModeProbe        Mode = "probe"
 	ModeLaunchCancel Mode = "launch-cancel"
+	// ModeCapacity keeps the bounded CapacityProvider suite against a live
+	// connection. It launches no workload, so it names no image: what it rents is
+	// the machine itself.
+	ModeCapacity Mode = "capacity"
 )
 
 // Trial is one real, billable provider verification. CredentialEnv names the
@@ -44,17 +48,14 @@ type EnvLookup func(string) (string, bool)
 // provider, or creating billable infrastructure.
 func ValidateTrial(trial Trial, lookup EnvLookup) error {
 	trial = normalizeTrial(trial)
-	if !digestReference(trial.Image) {
-		return fmt.Errorf("conformance: image must be a digest-pinned OCI reference")
+	if err := validateWorkload(trial); err != nil {
+		return err
 	}
 	if trial.MaxExpectedCostUSD <= 0 {
 		return fmt.Errorf("conformance: max_expected_cost_usd must be positive")
 	}
 	if trial.Timeout <= 0 {
 		return fmt.Errorf("conformance: timeout must be positive")
-	}
-	if trial.Mode != ModeProbe && trial.Mode != ModeLaunchCancel {
-		return fmt.Errorf("conformance: unsupported mode %q", trial.Mode)
 	}
 	manifest, ok := providers.Manifest(trial.AdapterType)
 	if !ok {
@@ -70,6 +71,27 @@ func ValidateTrial(trial Trial, lookup EnvLookup) error {
 		strings.TrimSpace(trial.Config["host"]) != "" &&
 		strings.TrimSpace(trial.Config["context"]) != "" {
 		return fmt.Errorf("conformance: docker config cannot set both host and context")
+	}
+	return nil
+}
+
+// validateWorkload refuses a trial whose mode and workload disagree. A launch
+// mode without a digest-pinned image cannot say what it ran, and a capacity mode
+// naming an image is asking for a workload nothing here launches: the machine is
+// what a capacity trial rents, and an image on it would be a promise nothing
+// keeps.
+func validateWorkload(trial Trial) error {
+	switch trial.Mode {
+	case ModeProbe, ModeLaunchCancel:
+		if !digestReference(trial.Image) {
+			return fmt.Errorf("conformance: image must be a digest-pinned OCI reference")
+		}
+	case ModeCapacity:
+		if strings.TrimSpace(trial.Image) != "" {
+			return fmt.Errorf("conformance: a capacity trial rents a machine and launches no workload, so it names no image")
+		}
+	default:
+		return fmt.Errorf("conformance: unsupported mode %q", trial.Mode)
 	}
 	return nil
 }

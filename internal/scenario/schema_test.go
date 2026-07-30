@@ -178,6 +178,19 @@ func TestLoadRejectsFixtureMistakes(t *testing.T) {
 			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0, "terms": {"eligible_service_classes": ["urgent"]}}]`,
 			"which Mercator cannot price",
 		},
+		// Capacity handed back is capacity the world declared, and handing it back
+		// means one of the two things Mercator does with a machine. A fixture naming
+		// either wrongly asserts a cleanup the record could never confirm.
+		"a reclaim of capacity the world never had": {
+			`"offer": "rental-a"`,
+			`"offer": "rental-a", "reclaimed": {"offer": "rental-z", "disposition": "terminate"}`,
+			`reclaimed capacity "rental-z" is not in the world`,
+		},
+		"a reclaim that neither releases nor terminates": {
+			`"offer": "rental-a"`,
+			`"offer": "rental-a", "reclaimed": {"offer": "rental-a", "disposition": "forget"}`,
+			"handed back as",
+		},
 		// A publisher selling blocks of no time bills continuously, which a fixture
 		// states by saying nothing.
 		"a billing increment of no time at all": {

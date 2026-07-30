@@ -39,6 +39,7 @@
       {
         "id": "fresh-slow",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 2.0,
         "provisioning": {
           "expected": "30m",
@@ -58,7 +59,7 @@
   "expect": {
     "outcome": "place",
     "offer": "fresh-slow",
-    "disposition": "terminate",
+    "disposition": "release",
     "candidates": {
       "rental-warm": {
         "feasible": false,

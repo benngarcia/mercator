@@ -46,7 +46,7 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 	}
 	log := openOrchestratorLog(t)
 	schedules := rentalschedule.NewMemory(log)
-	orch = New(log, scheduler.New(), provider, WithRentalSchedules(schedules))
+	orch = New(log, scheduler.New(), provider, WithRentalSchedules(schedules), withTestCapacity())
 	createReplacementRun(t, orch, 2)
 
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_replacement"); err != nil {
@@ -201,7 +201,7 @@ func TestAdvanceRunResumesReplacementFromDurableAttemptHistory(t *testing.T) {
 	beforeRestart := newReplacementProvider([]domain.OfferSnapshot{stale, alternate}, map[string]error{stale.ID: capacityUnavailable()})
 	beforeRestart.listOffersErrAfter = 1
 	beforeRestart.listOffersErr = errors.New("catalog temporarily unavailable")
-	orch := New(log, scheduler.New(), beforeRestart)
+	orch := New(log, scheduler.New(), beforeRestart, withTestCapacity())
 	createReplacementRun(t, orch, 2)
 
 	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); !errors.Is(err, ErrOfferQuery) {
@@ -212,7 +212,7 @@ func TestAdvanceRunResumesReplacementFromDurableAttemptHistory(t *testing.T) {
 	}
 
 	afterRestart := newReplacementProvider([]domain.OfferSnapshot{stale, alternate}, nil)
-	orch = New(log, scheduler.New(), afterRestart)
+	orch = New(log, scheduler.New(), afterRestart, withTestCapacity())
 	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); err != nil {
 		t.Fatalf("resume replacement: %v", err)
 	}
@@ -444,7 +444,7 @@ func capacityUnavailable() error {
 
 func newReplacementOrchestrator(t *testing.T, provider Adapter) *Orchestrator {
 	t.Helper()
-	return New(openOrchestratorLog(t), scheduler.New(), provider)
+	return New(openOrchestratorLog(t), scheduler.New(), provider, withTestCapacity())
 }
 
 func createReplacementRun(t *testing.T, orch *Orchestrator, maxAttempts int) {

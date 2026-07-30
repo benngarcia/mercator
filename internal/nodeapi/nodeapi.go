@@ -27,6 +27,7 @@ import (
 // Registry is what this transport needs from the node registry.
 type Registry interface {
 	Enroll(ctx context.Context, request capability.EnrollmentRequest) (capability.Enrollment, error)
+	RenewSession(ctx context.Context, nodeID, sessionToken string) (capability.SessionRenewal, error)
 	OpenSession(ctx context.Context, nodeID, sessionToken string) (*node.Session, error)
 	CloseSession(session *node.Session)
 	RecordEvents(ctx context.Context, nodeID, sessionToken string, events []node.Event) error
@@ -44,6 +45,7 @@ func New(registry Registry) http.Handler {
 	handler := &server{registry: registry, mux: http.NewServeMux()}
 	handler.mux.HandleFunc("POST /v1/node-agent/enroll", handler.enroll)
 	handler.mux.HandleFunc("POST /v1/node-agent/{node}/session", handler.session)
+	handler.mux.HandleFunc("POST /v1/node-agent/{node}/session/renew", handler.renew)
 	handler.mux.HandleFunc("POST /v1/node-agent/{node}/events", handler.events)
 	handler.mux.HandleFunc("POST /v1/node-agent/{node}/results", handler.results)
 	return handler
@@ -86,6 +88,39 @@ func (handler *server) enroll(w http.ResponseWriter, r *http.Request) {
 		SessionExpires: enrollment.SessionExpires.UTC().Format(timeFormat),
 		FencingToken:   enrollment.FencingToken,
 		LeaseExpires:   enrollment.LeaseExpires.UTC().Format(timeFormat),
+	})
+}
+
+// SessionRenewalResponse is a fresh credential for a session that already
+// exists. It carries no lease, because renewing a credential renews no lease:
+// what keeps a node believed alive is its heartbeat, and the two are separate on
+// purpose.
+type SessionRenewalResponse struct {
+	NodeID         string `json:"node_id"`
+	SessionToken   string `json:"session_token"`
+	SessionExpires string `json:"session_expires"`
+	FencingToken   uint64 `json:"fencing_token"`
+}
+
+// renew hands a node still holding a valid credential a later one. It is
+// authenticated by the credential being replaced, which is what keeps the
+// invitation single-use: nothing here reads bootstrap material, so an agent that
+// let its session lapse cannot get back in through this door either.
+func (handler *server) renew(w http.ResponseWriter, r *http.Request) {
+	nodeID, sessionToken, ok := credentials(w, r)
+	if !ok {
+		return
+	}
+	renewal, err := handler.registry.RenewSession(r.Context(), nodeID, sessionToken)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "SESSION_REFUSED", "Session renewal was refused.")
+		return
+	}
+	writeJSON(w, http.StatusOK, SessionRenewalResponse{
+		NodeID:         renewal.NodeID,
+		SessionToken:   renewal.SessionToken,
+		SessionExpires: renewal.SessionExpires.UTC().Format(timeFormat),
+		FencingToken:   renewal.FencingToken,
 	})
 }
 

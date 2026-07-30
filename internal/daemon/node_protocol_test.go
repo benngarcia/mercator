@@ -70,26 +70,44 @@ func TestNodeProtocolIsMountedAndSeparateFromTheOperatorAPI(t *testing.T) {
 
 func startRuntime(t *testing.T) (string, *daemon.Runtime) {
 	t.Helper()
-	return startRuntimeWithLease(t, 0, nil)
+	return startRuntimeWithNodeWindows(t, 0, 0, nil, anonymousEnvironment)
 }
 
-// startRuntimeWithLease answers with the address a client reaches this daemon on
-// and the runtime itself. The runtime is what a case drives the reconcile sweep
-// through: preparation is a controller rather than a request, so nothing an HTTP
-// caller can do makes it happen, and waiting out the production minute would be
-// a test of a ticker.
-func startRuntimeWithLease(t *testing.T, lease time.Duration, prewarm *orchestrator.PrewarmPolicy) (string, *daemon.Runtime) {
+// anonymousEnvironment keeps the daemon off this machine's Docker credentials: a
+// test registry is anonymous, and reading the developer's config.json would make
+// the result depend on who ran the suite.
+func anonymousEnvironment(string) string { return "" }
+
+// startRuntimeWithNodeWindows answers with the address a client reaches this
+// daemon on and the runtime itself. The runtime is what a case drives the
+// reconcile sweep through: preparation is a controller rather than a request, so
+// nothing an HTTP caller can do makes it happen, and waiting out the production
+// minute would be a test of a ticker.
+//
+// The two windows are stated together because they are the two clocks a node
+// lives by and they are independent. The lease is how long this daemon believes a
+// silent machine; the session is how long one credential authenticates it. A case
+// about a machine going quiet shortens the first, and a case about a machine
+// outliving its credential shortens the second.
+// The environment is the caller's, because it is what tells this daemon which
+// registries it holds an account for: the accounts a machine must never be given
+// are read from the same file `docker login` writes, so a case about minting one
+// states that file and every other case states an empty environment.
+func startRuntimeWithNodeWindows(
+	t *testing.T,
+	lease, session time.Duration,
+	prewarm *orchestrator.PrewarmPolicy,
+	getenv func(string) string,
+) (string, *daemon.Runtime) {
 	t.Helper()
 	runtime, err := daemon.New(t.Context(), daemon.Config{
 		SQLiteDSN:     "file:" + filepath.Join(t.TempDir(), "mercator.db"),
 		OperatorToken: "operator-token",
 		MasterKey:     []byte("0123456789abcdef0123456789abcdef"),
 		NodeLease:     lease,
+		NodeSession:   session,
 		Prewarm:       prewarm,
-		// An empty environment keeps the daemon off this machine's Docker
-		// credentials: a test registry is anonymous, and reading the developer's
-		// config.json would make the result depend on who ran the suite.
-		Getenv: func(string) string { return "" },
+		Getenv:        getenv,
 	})
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)

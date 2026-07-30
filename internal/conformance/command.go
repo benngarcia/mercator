@@ -62,12 +62,17 @@ func runCommand(ctx context.Context, args []string, environment map[string]strin
 
 const verifyHelp = `Usage: mercator verify --spec FILE
 
-Launch a real, bounded provider Conformance Trial. The JSON result proves
-provider authorization, placement, probe exit or launch cancellation, and
-terminal cleanup.
+Run a real, bounded provider Conformance Trial. The JSON result proves provider
+authorization, placement, probe exit or launch cancellation, and terminal
+cleanup.
+
+Set mode to "capacity" to run the bounded CapacityProvider suite instead: the
+trial rents machines and gives them back, launches no workload, and names no
+image. Its result reports every promise by name with the Lab rule behind it.
 
 Cloud trials read the credential named by credential_env and require
-MERCATOR_CONFORMANCE_PUBLIC_URL for probe reports.
+MERCATOR_CONFORMANCE_PUBLIC_URL, which probes report to and which every rented
+machine's bootstrap names.
 `
 
 type trialDocument struct {

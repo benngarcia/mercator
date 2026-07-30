@@ -45,12 +45,14 @@ func TestStandingOfferRecordsReleaseDispositionAndInvokesRelease(t *testing.T) {
 	}
 }
 
-// A provisionable offer must record disposition=terminate on the launch intent
-// and the cleanup path must invoke Terminate (not Release), then close the run.
-func TestProvisionableOfferRecordsTerminateDispositionAndInvokesTerminate(t *testing.T) {
+// A one-shot execution Mercator allocated must record disposition=terminate on
+// the launch intent and the cleanup path must invoke Terminate (not Release),
+// then close the run. It is the only capacity whose cleanup destroys anything:
+// the workload was the whole product, so there is no host left over to hand back.
+func TestOneShotOfferRecordsTerminateDispositionAndInvokesTerminate(t *testing.T) {
 	ctx := context.Background()
 	ad := fake.New(
-		fake.WithOffers([]domain.OfferSnapshot{orchProvisionableOffer("off_prov", time.Now().UTC())}),
+		fake.WithOffers([]domain.OfferSnapshot{orchOneShotOffer("off_oneshot", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
 	orch := newTestOrchestrator(t, ad)
@@ -79,9 +81,45 @@ func TestProvisionableOfferRecordsTerminateDispositionAndInvokesTerminate(t *tes
 	}
 }
 
+// A machine Mercator provisions to hold a Rental records disposition=release,
+// because the Run ending is not the lease ending. The machine did not exist
+// before this placement asked for it, and it is still not this Run's to destroy:
+// cleanup takes the workload off it and the lease decides when the host goes.
+//
+// This is the half that reads the lane rather than the kind. Both offers here
+// are provisionable, and the one above is destroyed while this one is not.
+func TestAProvisionedRentalRecordsReleaseAndLeavesItsHostStanding(t *testing.T) {
+	ctx := context.Background()
+	ad := fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{orchProvisionableOffer("off_prov", time.Now().UTC())}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+	)
+	orch := newTestOrchestrator(t, ad)
+	createRun(t, ctx, orch)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+
+	assertRecordedDisposition(t, ctx, orch, "ws_1", "run_1", domain.DispositionRelease)
+	if ad.TerminateCount() != 0 {
+		t.Fatalf("the Run ended and its host was destroyed %d times, and the lease is what decides that", ad.TerminateCount())
+	}
+	if ad.ReleaseCount() != 1 {
+		t.Fatalf("expected the workload released once, got %d", ad.ReleaseCount())
+	}
+	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if record.Disposition != domain.DispositionRelease {
+		t.Fatalf("expected record disposition release, got %q", record.Disposition)
+	}
+}
+
 // The load-bearing invariant: cleanup dispatches on the RECORDED disposition,
 // never re-inferred from live offers. Here the launch records terminate from a
-// provisionable offer and stays running; then ALL offers disappear before
+// one-shot offer and stays running; then ALL offers disappear before
 // cleanup is triggered (via cancel, whose cleanup path never consults offers).
 // Cleanup must still invoke Terminate because that is what was recorded.
 func TestCleanupDispatchesOnRecordedDispositionNotLiveOffers(t *testing.T) {
@@ -89,12 +127,12 @@ func TestCleanupDispatchesOnRecordedDispositionNotLiveOffers(t *testing.T) {
 	base := fake.New(fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))
 	ad := &offerDisappearingAdapter{
 		Adapter: base,
-		offers:  []domain.OfferSnapshot{orchProvisionableOffer("off_prov", time.Now().UTC())},
+		offers:  []domain.OfferSnapshot{orchOneShotOffer("off_oneshot", time.Now().UTC())},
 	}
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	// First advance: decide on the provisionable offer (records terminate) and
+	// First advance: decide on the one-shot offer (records terminate) and
 	// launch (stays running).
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
 		t.Fatalf("first advance: %v", err)

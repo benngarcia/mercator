@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
@@ -374,15 +375,6 @@ type HostSpec struct {
 	Resources        *ResourcesSpec        `json:"resources,omitempty"`
 }
 
-// ExecutionLane reports what this offer becomes once allocated, defaulting to
-// reusable capacity.
-func (spec MarketplaceOfferSpec) ExecutionLane() domain.ExecutionLane {
-	if spec.Lane == "" {
-		return domain.LaneReusable
-	}
-	return spec.Lane
-}
-
 // ArtifactSpec declares one immutable version of content this world knows
 // about. The version ID is its identity, the content digest is what its bytes
 // hash to, and the object store is where the durable copy lives: a host holding
@@ -469,6 +461,17 @@ type ImageSpec struct {
 	// ways a real registry says no, which a scenario needs to be able to tell
 	// apart because an operator acts on them differently.
 	Registry RegistryAnswer `json:"registry,omitempty"`
+	// Private is a registry that serves this image's bytes only to a reader
+	// presenting material for them. It is separate from Registry above because
+	// the two answer different questions: that one is what a resolution says
+	// about the manifest, and this is whether a machine can fetch the content at
+	// all without being handed something first.
+	//
+	// It is stated in the Blueprint because it is a fact about the world rather
+	// than about Mercator. A world where every image is anonymous can never catch
+	// a control plane that mints nothing, because nothing on any machine would
+	// ever notice.
+	Private bool `json:"private,omitempty"`
 }
 
 // diffIDCount is how many of this image's layers state the name a container
@@ -578,6 +581,13 @@ type RentalSpec struct {
 	// are stated here and not on a listing for a machine nobody has allocated.
 	Terms     CapacityTermsSpec `json:"terms,omitzero"`
 	Resources *ResourcesSpec    `json:"resources,omitempty"`
+	// Facts and Driver are what the agent on this machine established about the
+	// substrate under a workload, in the same vocabulary a provider's listing
+	// states them in. A machine already Mercator's is the one that can answer for
+	// itself, which is why an enrolled machine states a driver and a listing for a
+	// machine nobody has allocated states whatever its provider promises.
+	Facts  map[string]bool `json:"facts,omitempty"`
+	Driver *HostDriverSpec `json:"driver,omitempty"`
 	// CapacityConfidence is how sure whoever published this machine's capacity
 	// claim was of it. Omitted means certain, which is what every simulated
 	// provider says about a machine it can see. A fixture states less when the
@@ -791,9 +801,14 @@ type MarketplaceOfferSpec struct {
 	// Lane is what this offer becomes once allocated. "reusable" capacity is
 	// held across Runs through an enrolled node; "ephemeral" is a
 	// provider-native one-shot product that holds nothing afterwards.
-	// Defaulting to reusable keeps a marketplace offer meaning the same thing
-	// it always has in this corpus; a scenario about the one-shot lane says so.
-	Lane           domain.ExecutionLane `json:"lane,omitempty"`
+	//
+	// Every listing states it and there is no default, which is what ADR 0005
+	// requires of the production path for the same reason it is required here:
+	// the lane decides whether the end of a Run destroys the machine under it,
+	// and a fixture that said nothing would be asserting a money decision it
+	// never made. It carried a default until phase 5, and that default was inert
+	// only for as long as cleanup read the offer kind alone.
+	Lane           domain.ExecutionLane `json:"lane"`
 	Region         string               `json:"region,omitempty"`
 	Available      *bool                `json:"available,omitempty"`
 	RatePerHourUSD float64              `json:"rate_per_hour_usd"`
@@ -807,11 +822,185 @@ type MarketplaceOfferSpec struct {
 	// what makes silence and a clean record two different worlds a fixture must be
 	// able to tell apart.
 	Reliability *ReliabilitySpec `json:"reliability,omitempty"`
-	// Facts are the hardware facts providers owe on the offer (SSH root
-	// access, working NVIDIA driver). Omitted map entries are unknown facts;
-	// an offer missing or failing one must be rejected loudly. Target
-	// ontology: no offer field carries these yet.
-	Facts map[string]bool `json:"facts,omitempty"`
+	// Facts are the promises this listing's provider makes about the substrate
+	// under a workload, and Driver is the accelerator driver the machine behind
+	// it runs. Both are tri-state where it matters: an entry omitted from the map
+	// is a fact nobody established, which is a different world from one stated
+	// false, and Placement refuses the two under different codes.
+	Facts  map[string]bool `json:"facts,omitempty"`
+	Driver *HostDriverSpec `json:"driver,omitempty"`
+	// Capacity is what this listing's provider will do with the machine once it
+	// has allocated one, in the shape a CapacityProvider really negotiates rather
+	// than a translation of it: whether it can stop and resume the machine under
+	// one identity, whether a stopped disk survives, whether it sells
+	// interruptible capacity, what it honours when the same provision is asked
+	// twice, whether it can list what this connection owns, and whether a
+	// terminated machine can still be looked at.
+	//
+	// A listing states it because those promises are the whole difference between
+	// capacity Mercator can hold across Runs and capacity it can only destroy, and
+	// no fixture could say which kind a machine came from: every simulated
+	// provider in this corpus was assumed to stop, resume, retain a disk, and
+	// deduplicate, because nothing asked. Omitted is a listing whose provider
+	// negotiated nothing, which is every listing here before phase 5.
+	Capacity *capability.CapacitySupport `json:"capacity,omitempty"`
+	// Bootstrap is what happens between this provider allocating a machine and
+	// Mercator being able to run anything on it.
+	Bootstrap *BootstrapSpec `json:"bootstrap,omitempty"`
+}
+
+// BootstrapSpec is the arrival of a node agent on a fresh machine, said as the
+// two things about it a fixture cannot state anywhere else: how long Mercator
+// goes on expecting it, and whether it ever happens at all. How long it takes
+// when it does happen is the listing's own agent_ready stage, because that is
+// the stage this is the outcome of.
+//
+// It says nothing about the provider's own backstop, the moment it destroys a
+// machine nobody enrolled on whatever Mercator does. Neither simulated world here
+// performs one, and a Blueprint stating an act no world performs is the defect
+// this whole declaration was once refused over: two fixtures saying different
+// things about a provider would compile into the same world.
+//
+// It hangs off a listing rather than off the world because it is a provider's
+// behaviour. A marketplace whose images carry no agent never enrols one, and one
+// whose startup script runs before the network is up enrols one late, and a world
+// that stated this once for the whole fleet could not put two such providers
+// beside each other in a single Blueprint.
+type BootstrapSpec struct {
+	// NeverEnrolls is a machine this provider allocates and boots whose agent
+	// never opens its session. It is stated rather than read out of a missing
+	// agent_ready stage, because silence there already means a stage that costs
+	// nothing, and a bootstrap that costs nothing is a machine ready the instant
+	// it booted. Folded into one field, the failure a real provider bills for
+	// would be indistinguishable from the fastest possible success.
+	NeverEnrolls bool `json:"never_enrolls,omitempty"`
+	// Deadline is how long after the allocation is accepted Mercator goes on
+	// expecting the agent's session before it gives up on the machine. It is
+	// Mercator's own patience rather than a provider fact, and a bootstrap is only
+	// late against a bound somebody named.
+	Deadline *Duration `json:"deadline,omitempty"`
+}
+
+// validateProvisioningStages requires every stage to be stated, including a stage
+// this fixture wants to cost nothing. Zero is a world worth writing down and
+// silence is how the whole of provisioning came to be free: an offer publishing
+// ten minutes of provisioning that the world spent none of put its execution
+// straight into running, so a Run's start was the moment its launch was accepted
+// and the three earliest stages of every launch had no actual at all.
+//
+// The one stage a listing may leave out is the enrolment of an agent it says never
+// enrols, because a stage that never completes has no seconds to state.
+func (spec MarketplaceOfferSpec) validateProvisioningStages() error {
+	stages := map[string]*Duration{
+		"acquisition": spec.Provisioning.Acquisition,
+		"boot":        spec.Provisioning.Boot,
+		"agent_ready": spec.Provisioning.AgentReady,
+	}
+	if spec.Bootstrap != nil && spec.Bootstrap.NeverEnrolls {
+		delete(stages, "agent_ready")
+	}
+	for stage, spent := range stages {
+		if spent == nil {
+			return fmt.Errorf("marketplace offer %q does not say what it spends on %s", spec.ID, stage)
+		}
+		if spent.Duration() < 0 {
+			return fmt.Errorf("marketplace offer %q spends %v on %s", spec.ID, spent.Duration(), stage)
+		}
+	}
+	return nil
+}
+
+// CapacityBootstrap is the patience this listing states, in the shape an offer
+// carries it. A listing that states no bootstrap carries none, and Mercator
+// holds it to its own patience instead.
+func (spec MarketplaceOfferSpec) CapacityBootstrap() *domain.CapacityBootstrap {
+	if spec.Bootstrap == nil || spec.Bootstrap.Deadline == nil {
+		return nil
+	}
+	return &domain.CapacityBootstrap{
+		EnrolmentDeadlineSeconds: spec.Bootstrap.Deadline.Duration().Seconds(),
+	}
+}
+
+// NeverEnrolls reports whether this world allocates and boots the machine and its
+// node agent never opens a session. A listing that says nothing about its
+// bootstrap has an agent that arrives, which is every listing in this corpus
+// before phase 5.
+func (spec MarketplaceOfferSpec) NeverEnrolls() bool {
+	return spec.Bootstrap != nil && spec.Bootstrap.NeverEnrolls
+}
+
+// validateCapacityLifecycle refuses a listing whose account of what its provider
+// does with capacity could not hold. The negotiated set is checked by the contract
+// that owns it, so a Blueprint cannot state a provider Mercator would refuse to
+// build a connection for.
+func (spec MarketplaceOfferSpec) validateCapacityLifecycle() error {
+	if spec.Capacity == nil && spec.Bootstrap == nil {
+		return nil
+	}
+	// A capacity lifecycle and a node agent are the reusable lane, and stating
+	// either on a one-shot execution product is a backend capability.Declare
+	// refuses outright: it stamps every CapacityProvider reusable and refuses one
+	// that also implements EphemeralExecutor, so capacity implies the lane rather
+	// than accompanying a choice of one, and an ephemeral product holds nothing
+	// after its workload exits and has no agent to enrol. Without this the corpus
+	// could describe a one-shot execution that suspends a machine, brings the same
+	// one back, and keeps its disk between Runs, which is the conflation ADR 0005
+	// exists to prevent.
+	if !spec.Lane.Reusable() {
+		return fmt.Errorf(
+			"marketplace offer %q is a %s execution and states a capacity lifecycle: a product Mercator cannot hold between workloads has no machine to stop, resume, or enrol an agent on",
+			spec.ID, spec.Lane,
+		)
+	}
+	if spec.Capacity != nil {
+		if err := spec.Capacity.Validate(); err != nil {
+			return fmt.Errorf("marketplace offer %q: %w", spec.ID, err)
+		}
+		// Every promise in the set is about one machine's identity surviving
+		// something: a stop, a resume, a repeated provision, a terminate. A listing
+		// that makes them and names no machine is a fixture whose capacity lifecycle
+		// could not be recorded against anything, because a listing ID is numbered
+		// afresh on every search.
+		if spec.Machine == "" {
+			return fmt.Errorf(
+				"marketplace offer %q states what its provider does with capacity and names no machine: every promise in that set is about one machine keeping its identity",
+				spec.ID,
+			)
+		}
+	}
+	return spec.Bootstrap.validate(spec)
+}
+
+// validate refuses a bootstrap declaration no world could hold.
+func (spec *BootstrapSpec) validate(offer MarketplaceOfferSpec) error {
+	if spec == nil {
+		return nil
+	}
+	if spec.Deadline != nil && spec.Deadline.Duration() <= 0 {
+		return fmt.Errorf("marketplace offer %q: bootstrap.deadline must be a positive duration", offer.ID)
+	}
+	if !spec.NeverEnrolls {
+		return nil
+	}
+	if offer.Provisioning.AgentReady != nil {
+		return fmt.Errorf(
+			"marketplace offer %q says its agent never enrols and states what enrolling spends there",
+			offer.ID,
+		)
+	}
+	// Mercator's own patience is the only thing that ends such a machine, so the
+	// listing has to name the one it will be judged against. Left silent, the
+	// moment the machine is handed back is Mercator's default, and a fixture about
+	// a stranded machine could not tell the patience it meant to state from the
+	// patience the control plane happens to hold.
+	if spec.Deadline == nil {
+		return fmt.Errorf(
+			"marketplace offer %q says its agent never enrols and names no deadline: a machine nobody gives up on bills for ever",
+			offer.ID,
+		)
+	}
+	return nil
 }
 
 // BillingSpec is how a machine in this world is charged for, beside the rate that
@@ -1077,6 +1266,85 @@ func stated(duration *Duration) time.Duration {
 	return duration.Duration()
 }
 
+// validateHostFacts refuses a machine that states a promise nothing in Mercator
+// knows how to require. The set is closed where a Run declares it too, so a
+// fixture misspelling one would otherwise build a world where a machine states
+// a fact and the Run asking for it is refused UNKNOWN_FACT anyway, and the
+// Blueprint would read as a rule about silence that is really a rule about
+// spelling.
+func validateHostFacts(machine string, facts map[string]bool) error {
+	for name := range facts {
+		if !domain.HostFact(name).Known() {
+			return fmt.Errorf("%s states host fact %q, and Mercator establishes %v", machine, name, domain.KnownHostFacts)
+		}
+	}
+	return nil
+}
+
+// HostDriverSpec is the accelerator driver a fixture says a machine runs: who
+// made it, which version it is, and the highest accelerator capability it
+// supports. It is the host half of the compatibility contract, and a machine
+// that states none is a machine nobody established a driver for rather than a
+// machine with no driver.
+type HostDriverSpec struct {
+	Vendor     string `json:"vendor,omitempty"`
+	Version    string `json:"version,omitempty"`
+	Capability string `json:"capability,omitempty"`
+}
+
+// HostRequirementsSpec is what a fixture's Run declares it needs of the host
+// under it: the promises it will not run without, and the driver its image's
+// own accelerator stack was built against. The floors are strings for the
+// reason the host's own versions are: they are the vendor's numbering, and a
+// fixture that translated them into anything else would be asserting a
+// comparison Mercator does not make.
+type HostRequirementsSpec struct {
+	Facts               []string `json:"facts,omitempty"`
+	MinDriverVersion    string   `json:"min_driver_version,omitempty"`
+	MinDriverCapability string   `json:"min_driver_capability,omitempty"`
+}
+
+// Requirements is this declaration as the workload carries it.
+func (spec *HostRequirementsSpec) Requirements() domain.HostRequirements {
+	if spec == nil {
+		return domain.HostRequirements{}
+	}
+	required := domain.HostRequirements{
+		MinDriverVersion:    spec.MinDriverVersion,
+		MinDriverCapability: spec.MinDriverCapability,
+	}
+	for _, fact := range spec.Facts {
+		required.Facts = append(required.Facts, domain.HostFact(fact))
+	}
+	return required
+}
+
+// PublishedHostFacts is what a machine in either simulated world tells Mercator
+// about the substrate under a workload. Both worlds read it, because a
+// Blueprint that meant one machine in the placement corpus and another in the
+// Lab would be two fixtures wearing one name.
+//
+// A fixture that states nothing publishes nothing, which is the whole point:
+// the corpus is full of machines nobody asked about a driver, and defaulting
+// them to a working one would make every rule about a silence unfalsifiable.
+func PublishedHostFacts(facts map[string]bool, driver *HostDriverSpec) domain.HostFacts {
+	published := domain.HostFacts{}
+	for name, stated := range facts {
+		if published.Attested == nil {
+			published.Attested = map[domain.HostFact]bool{}
+		}
+		published.Attested[domain.HostFact(name)] = stated
+	}
+	if driver != nil {
+		published.Driver = domain.AcceleratorDriver{
+			Vendor:     driver.Vendor,
+			Version:    driver.Version,
+			Capability: driver.Capability,
+		}
+	}
+	return published
+}
+
 // ResourcesSpec describes machine inventory (rentals, marketplace offers) or
 // run requirements (requests). Omitted fields default host-side to a generous
 // GPU-box shape (8 CPUs, 32GB memory, 200GB disk) and request-side to the
@@ -1100,6 +1368,15 @@ type ResourcesSpec struct {
 	// measurement say a whole fleet has nothing to offer.
 	DiskUnmeasured bool     `json:"disk_unmeasured,omitempty"`
 	GPU            *GPUSpec `json:"gpu,omitempty"`
+	// GPUUncounted is a machine whose cards nobody counted, which is the third
+	// state on this side too and not a machine with no cards. An enrolled node
+	// whose vendor tool will not run reports exactly this: every other fact about
+	// the machine, and an accelerator inventory it never took. What the corpus
+	// needs it for is the refusal a GPU Run earns there. Read as a measured zero,
+	// a machine holding eight A100s is struck out RESOURCE_INSUFFICIENT by the
+	// count, the model, and the memory floor alike, which says the fleet can
+	// never run this work when what happened is that nobody looked.
+	GPUUncounted bool `json:"gpu_uncounted,omitempty"`
 }
 
 type GPUSpec struct {
@@ -1166,10 +1443,16 @@ func (spec GPUSpec) validate(owner string) error {
 }
 
 type RequestSpec struct {
-	Image           string         `json:"image"`
-	Resources       *ResourcesSpec `json:"resources,omitempty"`
-	MaxRuntime      *Duration      `json:"max_runtime,omitempty"`
-	ExpectedRuntime *Duration      `json:"expected_runtime,omitempty"`
+	Image     string         `json:"image"`
+	Resources *ResourcesSpec `json:"resources,omitempty"`
+	// Host is what this Run needs of the substrate under it rather than of the
+	// cards on it: the promises it will not run without, and the driver its
+	// image's accelerator stack was built against. Counting cards says nothing
+	// about whether the image can talk to them, which is the whole reason a
+	// mismatch used to be something a launch discovered.
+	Host            *HostRequirementsSpec `json:"host,omitempty"`
+	MaxRuntime      *Duration             `json:"max_runtime,omitempty"`
+	ExpectedRuntime *Duration             `json:"expected_runtime,omitempty"`
 	// ExpectedReady is how long this workload says it takes to become ready for
 	// work once its process is running. It is the only prediction of the
 	// application-ready stage there is, because readiness is the application's own
@@ -1324,7 +1607,9 @@ type ExpectSpec struct {
 	Reasons []string            `json:"reasons,omitempty"`
 	Booking *BookingExpectation `json:"booking,omitempty"`
 	// Disposition asserts the recorded cleanup intent on the launch intent:
-	// "release" for standing rentals, "terminate" for provisioned hosts.
+	// "terminate" for a one-shot execution, which holds nothing once its workload
+	// exits, and "release" for every host that outlives the Run, whether Mercator
+	// borrows a slot on it or holds the lease that decides when it goes.
 	Disposition string `json:"disposition,omitempty"`
 	// StartLatency asserts how long this Run waited between its launch being
 	// accepted and its workload actually beginning, read out of Mercator's own run
@@ -1364,6 +1649,27 @@ type ExpectSpec struct {
 	// rewritten, so a Run answered twice holds two records and a fixture has to be
 	// able to say so.
 	Decision *DecisionExpectation `json:"decision,omitempty"`
+	// Reclaimed asserts that capacity an earlier decision took was handed back
+	// before this decision was recorded. It is what separates reclaiming stranded
+	// capacity from running the work again somewhere else while the provider goes on
+	// billing for the machine nobody could reach: every other fact a re-decision
+	// records is equally true of a control plane that abandons the first machine to
+	// whatever backstop its provider happens to have.
+	Reclaimed *ReclaimExpectation `json:"reclaimed,omitempty"`
+}
+
+// ReclaimExpectation is one piece of capacity Mercator gave back, as the Run's own
+// stream records it: the machine, and what handing it back meant.
+type ReclaimExpectation struct {
+	// Offer is the capacity that was handed back, by the fixture's own ID for it.
+	// A fixture names it rather than saying that some cleanup happened, because a
+	// Run that moved between two machines has two of them to account for.
+	Offer string `json:"offer"`
+	// Disposition is what giving it back meant: a machine Mercator provisioned is
+	// terminated, and a slot in a pool it does not own is released. Stating it is
+	// the point of the assertion on provisioned capacity: releasing a container on
+	// a machine Mercator allocated ends the workload and leaves the bill running.
+	Disposition domain.Disposition `json:"disposition"`
 }
 
 // DecisionExpectation is what the record must say about this Run's chain of
@@ -2407,6 +2713,9 @@ func (w WorldSpec) validate() error {
 		if err := rental.Terms.validate("rental " + rental.ID); err != nil {
 			return err
 		}
+		if err := validateHostFacts("rental "+rental.ID, rental.Facts); err != nil {
+			return err
+		}
 	}
 	rentalsWithSchedules := map[string]bool{}
 	bookingOwners := map[string]string{}
@@ -2467,28 +2776,29 @@ func (w WorldSpec) validate() error {
 		if offer.Provisioning.Expected.Duration() <= 0 {
 			return fmt.Errorf("marketplace offer %q needs a provisioning estimate", offer.ID)
 		}
-		// Every stage is stated, including a stage this fixture wants to cost
-		// nothing. Zero is a world worth writing down and silence is how the whole
-		// of provisioning came to be free: an offer publishing ten minutes of
-		// provisioning that the world spent none of put its execution straight into
-		// running, so a Run's start was the moment its launch was accepted and the
-		// three earliest stages of every launch had no actual at all.
-		for stage, spent := range map[string]*Duration{
-			"acquisition": offer.Provisioning.Acquisition,
-			"boot":        offer.Provisioning.Boot,
-			"agent_ready": offer.Provisioning.AgentReady,
-		} {
-			if spent == nil {
-				return fmt.Errorf("marketplace offer %q does not say what it spends on %s", offer.ID, stage)
-			}
-			if spent.Duration() < 0 {
-				return fmt.Errorf("marketplace offer %q spends %v on %s", offer.ID, spent.Duration(), stage)
-			}
+		// The lane is stated or the Blueprint is refused, exactly as Placement
+		// refuses an offer that states none. The end of a Run destroys a one-shot
+		// product and leaves a leased machine standing, so silence here would let a
+		// fixture assert one of those two answers without ever choosing it.
+		if !offer.Lane.Valid() {
+			return fmt.Errorf(
+				"marketplace offer %q states execution lane %q: a listing says whether the machine it sells outlives the workload, because the end of a Run destroys one lane and hands the other back",
+				offer.ID, offer.Lane,
+			)
+		}
+		if err := offer.validateProvisioningStages(); err != nil {
+			return err
+		}
+		if err := offer.validateCapacityLifecycle(); err != nil {
+			return err
 		}
 		if err := validateReliability("marketplace offer "+offer.ID, offer.Reliability); err != nil {
 			return err
 		}
 		if err := validateInventory("marketplace offer "+offer.ID, offer.Resources); err != nil {
+			return err
+		}
+		if err := validateHostFacts("marketplace offer "+offer.ID, offer.Facts); err != nil {
 			return err
 		}
 	}
@@ -2588,6 +2898,11 @@ func validateInventory(owner string, resources *ResourcesSpec) error {
 	// fixtures in one, and the world would have to pick which half to publish.
 	if resources.DiskUnmeasured && resources.Disk != nil {
 		return fmt.Errorf("%s states a disk and states that nobody measured it", owner)
+	}
+	// The same rule for the cards: a machine that states its cards and states
+	// that nobody counted them is two fixtures in one.
+	if resources.GPUUncounted && resources.GPU != nil {
+		return fmt.Errorf("%s states its cards and states that nobody counted them", owner)
 	}
 	if resources.GPU == nil {
 		return nil
@@ -2835,6 +3150,13 @@ func (w WorldSpec) candidateIDs() map[string]bool {
 	}
 	for _, offer := range w.Marketplace {
 		ids[offer.ID] = true
+		// The machine a listing turns into once Mercator has allocated it and an
+		// agent has opened a session there. It is a candidate a later Run can win in
+		// its own right, under the provider's handle for the machine rather than
+		// under the listing, so a fixture about reuse has to be able to name it.
+		if offer.Machine != "" {
+			ids[offer.Machine] = true
+		}
 	}
 	return ids
 }
@@ -2942,6 +3264,14 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 	if expect.Decision != nil {
 		if err := expect.Decision.validate(); err != nil {
 			return err
+		}
+	}
+	if reclaimed := expect.Reclaimed; reclaimed != nil {
+		if !ids[reclaimed.Offer] {
+			return fmt.Errorf("reclaimed capacity %q is not in the world", reclaimed.Offer)
+		}
+		if !reclaimed.Disposition.Valid() {
+			return fmt.Errorf("capacity is handed back as \"release\" or \"terminate\", got %q", reclaimed.Disposition)
 		}
 	}
 	if booking := expect.Booking; booking != nil {

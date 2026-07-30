@@ -6,6 +6,12 @@
 // and its short-lived enrollment token arrive through the bootstrap the
 // capacity provider delivered, or through the environment for a machine an
 // operator enrolls by hand.
+//
+// The enrollment token is the only credential it is ever given, and it is spent
+// the moment it is redeemed. Everything after that runs on a session credential
+// the agent renews for itself ahead of each lapse, so a machine that has been
+// working for a week is holding material minted this half hour and nothing older.
+// See docs/production/node-agent.md.
 package main
 
 import (
@@ -53,6 +59,11 @@ func run() error {
 			// anything the daemon manages, so they live beside the state this
 			// agent already keeps on the filesystem the operator chose.
 			nodeagent.WithArtifactRoot(filepath.Join(settings.stateDir, "artifacts")),
+			// Where the vendor tool is, for the machines where the bare name will
+			// not find it. An agent that cannot run nvidia-smi reports that nobody
+			// asked this machine about its cards, and on a box that has eight of
+			// them the operator's fix is this flag.
+			nodeagent.WithAcceleratorTool(settings.acceleratorBinary),
 		),
 		nodeagent.NewHTTPTransport(settings.identity.ControlPlaneURL, nil),
 		state,
@@ -72,11 +83,12 @@ func run() error {
 }
 
 type settings struct {
-	identity     nodeagent.Identity
-	stateDir     string
-	dockerBinary string
-	heartbeat    time.Duration
-	level        slog.Level
+	identity          nodeagent.Identity
+	stateDir          string
+	dockerBinary      string
+	acceleratorBinary string
+	heartbeat         time.Duration
+	level             slog.Level
 }
 
 // parse reads the agent's configuration. Every identity field is required and
@@ -91,6 +103,7 @@ func parse() (settings, error) {
 	flag.StringVar(&parsed.identity.EnrollmentToken, "enrollment-token", os.Getenv("MERCATOR_NODE_ENROLLMENT_TOKEN"), "Short-lived, single-use enrollment credential")
 	flag.StringVar(&parsed.stateDir, "state-dir", envOr("MERCATOR_NODE_STATE_DIR", "/var/lib/mercator-node"), "Directory for the agent's durable local state")
 	flag.StringVar(&parsed.dockerBinary, "docker", envOr("MERCATOR_NODE_DOCKER", "docker"), "Docker CLI binary")
+	flag.StringVar(&parsed.acceleratorBinary, "nvidia-smi", envOr("MERCATOR_NODE_NVIDIA_SMI", "nvidia-smi"), "NVIDIA vendor tool, by absolute path where this unit's PATH will not find it")
 	flag.DurationVar(&parsed.heartbeat, "heartbeat", parsed.heartbeat, "How often to report host and inventory facts")
 	verbose := flag.Bool("verbose", false, "Log at debug level")
 	flag.Parse()

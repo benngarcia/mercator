@@ -715,11 +715,16 @@ func TestTheRunStreamRecordsAStartNobodyInferred(t *testing.T) {
 		t.Fatalf("the Run projection carries no start moment, and its container has been running for minutes")
 	}
 	if !record.StartedAt.After(accepted) {
-		t.Fatalf("the Run started at %s and its launch was accepted at %s, and this machine did not exist when the launch was taken",
+		t.Fatalf("the Run started at %s and its launch was accepted at %s, and this machine still had eighteen gigabytes to pull when the launch was taken",
 			record.StartedAt.Format(time.RFC3339Nano), accepted.Format(time.RFC3339Nano))
 	}
-	if latency := record.StartedAt.Sub(accepted).Seconds(); latency < 588 || latency > 589 {
-		t.Fatalf("the recorded start is %.2fs after the launch was accepted, want five minutes of provisioning and 288.64s of image", latency)
+	// The five minutes of provisioning are not in this subtraction, and that is
+	// the point of the lease being its own contract: the machine was allocated,
+	// booted, and enrolled before anything took this launch, and those three
+	// stages have three actuals of their own. What is left between the launch
+	// being accepted and the container starting is the content it still owed.
+	if latency := record.StartedAt.Sub(accepted).Seconds(); latency < 288 || latency > 289 {
+		t.Fatalf("the recorded start is %.2fs after the launch was accepted, want 288.64s of image on a machine that already existed", latency)
 	}
 
 	rows := bundlePredictions(t, execution)
@@ -750,7 +755,7 @@ func TestTheRunStreamRecordsAStartNobodyInferred(t *testing.T) {
 	if start.ActualSource != "run_stream.execution_started" {
 		t.Fatalf("the start actual came from %q, and the only admissible source is a moment somebody observed", start.ActualSource)
 	}
-	if start.ActualSeconds < 588 || start.ActualSeconds > 589 {
+	if start.ActualSeconds < 288 || start.ActualSeconds > 289 {
 		t.Fatalf("the Bundle records a start actual of %.2fs", start.ActualSeconds)
 	}
 	predicted := candidateFor(t, decision, "fresh-cheap").Estimates.StartSeconds.Expected
