@@ -2,25 +2,22 @@
 // each landed; the locality payload lives on the Booking Decision, which the
 // reducer deliberately does not keep ("a copy kept here was a second store of the
 // same facts that nothing rendered"). So this page joins the two: the feed for
-// the skeleton, one decisions query per placed Run for the evidence.
+// the skeleton, the decisions for the evidence.
 //
-// One query per Run rather than one for the Workspace, because that is the API
-// there is. It is bounded by the Runs the projection is already holding, and each
-// is cached and invalidated by the same booking_decided event that drives the
-// feed, so a quiet Workspace issues no traffic.
-//
-// Each Run gets its own component because a hook cannot be called in a loop over
-// a list whose length changes between renders. They report what they derived
-// through an effect rather than during render, so nothing mutates a parent while
-// React is rendering it.
+// The join is one derived atom rather than one hook per Run. A hook cannot be
+// called in a loop over a list whose length changes between renders, and this app
+// forbids React effects (test/architecture/no-direct-react-effects), so the usual
+// workaround of lifting each child's result into parent state is unavailable and
+// would be the wrong shape regardless. An atom that reads other atoms re-derives
+// when any Run's decision changes and synchronises nothing.
 
 import { createRoute } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { LocalityStage } from "@/components/locality";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSession } from "@/hooks/useSession";
-import { useRunDecisions } from "@/lib/api/queries";
+import { useWorkspaceDecisions } from "@/lib/api/queries";
 import { localityOf, type RunLocality } from "@/lib/locality";
 import { useWorkspaceFeed, type Workspace, type WorkspaceRun } from "@/lib/workspace";
 
@@ -35,25 +32,12 @@ function imageNameOf(run: WorkspaceRun): string {
   return short && short.length > 0 ? short : "image";
 }
 
-function PlacedRun({
-  run,
-  report,
-}: {
-  run: WorkspaceRun;
-  report: (runID: string, record: RunLocality | null) => void;
-}) {
-  const decisions = useRunDecisions(run.id);
-  const data = decisions.data ?? null;
-  // Memoised so the effect below fires when the decision changes rather than on
-  // every render, which a freshly derived object would otherwise do for ever.
-  const record = useMemo(
-    () => localityOf(run.id, data, imageNameOf(run)),
-    [run, data],
-  );
-  useEffect(() => {
-    report(run.id, record);
-  }, [report, run.id, record]);
-  return null;
+function machineLabels(workspace: Workspace): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (const rental of Object.values(workspace.rentals)) {
+    labels[rental.id] = rental.id;
+  }
+  return labels;
 }
 
 function LocalityBoard({
@@ -63,42 +47,21 @@ function LocalityBoard({
   runs: readonly WorkspaceRun[];
   labels: Record<string, string>;
 }) {
-  const [derived, setDerived] = useState<Record<string, RunLocality | null>>({});
+  const runIds = useMemo(() => runs.map((run) => run.id), [runs]);
+  const chains = useWorkspaceDecisions(runIds);
 
-  const report = useCallback((runID: string, record: RunLocality | null) => {
-    setDerived((previous) =>
-      previous[runID] === record ? previous : { ...previous, [runID]: record },
-    );
-  }, []);
+  const records = useMemo(() => {
+    const byID = new Map(runs.map((run) => [run.id, run]));
+    return chains
+      .map(({ runId, decisions }) => {
+        const run = byID.get(runId);
+        return run ? localityOf(runId, decisions ?? null, imageNameOf(run)) : null;
+      })
+      .filter((record): record is RunLocality => record !== null)
+      .sort((a, b) => a.runID.localeCompare(b.runID));
+  }, [chains, runs]);
 
-  // A Run that left the projection must leave the scoreboard with it, or a closed
-  // Workspace keeps totalling machines it no longer holds.
-  const present = useMemo(() => new Set(runs.map((run) => run.id)), [runs]);
-  const records = useMemo(
-    () =>
-      Object.entries(derived)
-        .filter(([runID, record]) => record !== null && present.has(runID))
-        .map(([, record]) => record as RunLocality)
-        .sort((a, b) => a.runID.localeCompare(b.runID)),
-    [derived, present],
-  );
-
-  return (
-    <>
-      {runs.map((run) => (
-        <PlacedRun key={run.id} run={run} report={report} />
-      ))}
-      <LocalityStage records={records} machineLabels={labels} />
-    </>
-  );
-}
-
-function machineLabels(workspace: Workspace): Record<string, string> {
-  const labels: Record<string, string> = {};
-  for (const rental of Object.values(workspace.rentals)) {
-    labels[rental.id] = rental.id;
-  }
-  return labels;
+  return <LocalityStage records={records} machineLabels={labels} />;
 }
 
 function LocalityPage() {

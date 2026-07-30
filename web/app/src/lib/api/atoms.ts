@@ -1,4 +1,6 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as Reactivity from "effect/unstable/reactivity/Reactivity";
 
@@ -312,3 +314,39 @@ export type {
   SinkStatus,
   Workspace,
 };
+
+// workspaceLocalityAtom is every placed Run's decision chain in one atom, so a
+// view that needs all of them reads once instead of calling a hook per Run.
+//
+// It exists because a hook cannot be called in a loop over a list whose length
+// changes between renders, and because this app forbids direct React effects
+// (test/architecture/no-direct-react-effects), so the usual workaround of
+// lifting each child's result into parent state through an effect is not
+// available and would be the wrong shape anyway. An atom that reads other atoms
+// is the shape the reactivity layer already has: it re-derives when any Run's
+// decision changes and nothing synchronises anything.
+//
+// The key is the run list itself rather than the Workspace, because the family
+// caches per key and a Workspace whose Runs changed is a different question.
+export const workspaceDecisionsAtom = Atom.family((key: string) => {
+  const { workspaceId, runIds } = JSON.parse(key) as {
+    workspaceId: string;
+    runIds: readonly string[];
+  };
+  return Atom.make((get) =>
+    runIds.map((runId) => ({
+      runId,
+      decisions: Option.getOrUndefined(
+        AsyncResult.value(get.get(runDecisionFamily(workspaceId)(runId))),
+      ),
+    })),
+  );
+});
+
+// workspaceDecisionsKey builds that key. Run IDs are sorted so two renders of the
+// same set ask the same question.
+export const workspaceDecisionsKey = (
+  workspaceId: string,
+  runIds: readonly string[],
+): string =>
+  JSON.stringify({ workspaceId, runIds: [...runIds].sort() });
