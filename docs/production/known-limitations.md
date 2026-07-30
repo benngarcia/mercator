@@ -187,13 +187,15 @@ limits.
 - Shadeform has had no live run since it became a capacity provider. The path is
   proven under its package's httptest fake only
   ([#235](https://github.com/benngarcia/mercator/issues/235)).
-- A Shadeform connection needs an `agent_download_url` an operator hosts, because
-  Mercator's release archives ship no `mercator-node` binary
-  ([#234](https://github.com/benngarcia/mercator/issues/234)), and the control
-  plane needs `MERCATOR_AGENT_VERSION` to say which build that URL serves. Neither
-  has a default: a guessed URL is a paid machine fetching a 404, and a guessed
-  version is a pin nobody chose. A connection or a deployment missing either
-  verifies and lists capacity, and refuses to provision.
+- A Shadeform connection needs an `agent_download_url` an operator hosts, and the
+  control plane needs `MERCATOR_AGENT_VERSION` to say which build that URL serves.
+  The release archives now carry `mercator-node`, so the binary is no longer
+  something to build, but hosting it is still the operator's: the rented machine
+  fetches it from somewhere they control and inside whatever network policy they
+  run, and Mercator cannot guess that URL. Neither setting has a default, because
+  a guessed URL is a paid machine fetching a 404 and a guessed version is a pin
+  nobody chose. A connection or a deployment missing either verifies and lists
+  capacity, and refuses to provision.
 - A provision the provider classified as fatal, such as an authentication failure
   after a key rotation, is asked again on every advance for ever
   ([#236](https://github.com/benngarcia/mercator/issues/236)). The capacity build

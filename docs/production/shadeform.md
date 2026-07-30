@@ -45,14 +45,16 @@ Mercator refuses a stop or a resume at the seam, before any API call, with
    export SHADEFORM_API_KEY=...      # never commit this
    ```
 2. Publish the `mercator-node` binary where a rented machine can fetch it over
-   https. Mercator's release archives do not carry it today
-   ([#234](https://github.com/benngarcia/mercator/issues/234)), so build and host
-   it yourself:
+   https. Every release archive carries one built for that archive's platform, so
+   take it from the release rather than building it, and host it where the rented
+   machine can reach it:
    ```sh
-   GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
-     -o mercator-node ./cmd/mercator-node
-   # upload it to, for example, https://downloads.example.com/mercator-node/$VERSION/linux-amd64
+   tar -xzf mercator_${VERSION}_linux_amd64.tar.gz
+   # upload mercator_${VERSION}_linux_amd64/mercator-node to, for example,
+   # https://downloads.example.com/mercator-node/$VERSION/linux-amd64
    ```
+   Mercator does not host it for you, because the machine has to fetch it from
+   somewhere you control and inside whatever network policy you run.
    The URL you configure must contain `{version}`, which Mercator replaces with
    the agent build the bootstrap pinned.
 3. Tell the control plane which build that URL serves, and restart it:
