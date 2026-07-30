@@ -259,7 +259,7 @@ func prefetchSettlements(effects []EffectRecord) (map[string]time.Time, error) {
 		}
 	}
 	for _, effect := range effects {
-		if effect.Command != EffectCommandAccepted {
+		if effect.Command != EffectCommandAccepted || !settlesPreparation(effect.Operation) {
 			continue
 		}
 		var request struct {
@@ -286,6 +286,22 @@ func prefetchSettlements(effects []EffectRecord) (map[string]time.Time, error) {
 		}
 	}
 	return settled, nil
+}
+
+// settlesPreparation is the three ways a speculative transfer stops, and which
+// operation an effect is decides whether this rule reads it at all. Every other
+// operation the ledger records projects a Request this rule has no reading of, and
+// some project none: a machine allocated under a capacity operation carries its
+// answer in the consequence and nothing in the request. Deciding that after
+// decoding made every such effect a malformed one, so a rule about prewarming
+// reported a JSON error over a provision it has no business reading.
+func settlesPreparation(operation string) bool {
+	switch operation {
+	case OperationImageRetained, OperationArtifactReplicated, OperationNodePrepareAbandoned:
+		return true
+	default:
+		return false
+	}
 }
 
 // admittedPreparationWindows is every stretch during which a Run Mercator had

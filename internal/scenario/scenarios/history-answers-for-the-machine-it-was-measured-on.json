@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Six listings of five machines, two of which this fleet has measured. One marketplace machine is published twice under two ask IDs, and the Run that measured it ran on the first of them: an ask ID is a fresh integer for every search, so a history filed under it would answer for one listing of that machine and be blind to the other. A second machine in the same place was measured too, and it brings its application up five times slower. The third Run asks all six what they will spend on the stage this fleet has actuals for, and every answer names the level it came from: both listings of the measured machine answer at the exact candidate with its own thirty seconds, the second measured machine with its own hundred and fifty, an unmeasured machine in the same region falls to the two samples of that provider and place, an unmeasured machine of that provider elsewhere falls to the provider, and a machine of a provider nobody has ever measured falls to the only prior there is, which is what the Run itself declared. Key the history on the listing and the second ask of the measured machine loses its samples; key it on nothing at all and every machine here answers the same thirty seconds. Both measured machines are asked what they will spend pulling as well, which is the stage a history may not answer: a transfer is this launch's own missing bytes over the path they cross, so the answer is the prior and the rate it was divided by, and a measured launch reaching that stage charges a machine for four hundred megabytes it may already hold. A fourth Run then asks the same fleet about a second image nothing here has ever launched, and every rung has to be silent about it: readiness is the workload's own semantics, so the machine that came up in thirty seconds, its neighbour in that region, and its provider elsewhere all fall to what this Run declared about itself. Carry the content into the narrowest key alone and the two coarse rungs answer this image out of the other one's launches, which is the world every Blueprint holding one image was written in.",
+  "summary": "Six listings of five machines, two of which this fleet has measured. One marketplace machine is published twice under two ask IDs, and the Run that measured it ran on the first of them: an ask ID is a fresh integer for every search, so a history filed under it would answer for one listing of that machine and be blind to the other. A second machine in the same place was measured too, and it brings its application up five times slower. Measuring them buys them, and both measuring Runs state how long their work takes, so each machine is a lease this fleet holds and each is free again by the time the third Run asks. Two things follow that the later steps are then read against. Every listing of a machine Mercator holds stops being capacity to acquire, so both asks for the measured machine and the ask for the large one are refused as unavailable, which is what one machine sold under three names comes to. And each machine takes its own place in the fleet under the provider's handle for it, so the candidate set is eight rather than six. The third Run asks all eight what they will spend on the stage this fleet has actuals for, and every answer names the level it came from: both listings of the measured machine and the machine itself answer at the exact candidate with its own thirty seconds, the second measured machine and its listing with their own hundred and fifty, an unmeasured machine in the same region falls to the two samples of that provider and place, an unmeasured machine of that provider elsewhere falls to the provider, and a machine of a provider nobody has ever measured falls to the only prior there is, which is what the Run itself declared. Key the history on the listing and the second ask of the measured machine loses its samples, and so does the machine behind all three; key it on nothing at all and every machine here answers the same thirty seconds. Both measured listings are asked what they will spend pulling as well, which is the stage a history may not answer: a transfer is this launch's own missing bytes over the path they cross, so the answer is the prior and the rate it was divided by, and a measured launch reaching that stage charges a machine for four hundred megabytes it may already hold. The machine itself owes nothing for that stage and is the case the prior is measured against: it really ran this image, so it really holds the layer, and what it is charged is zero rather than a prediction. It wins on the strength of that. A fourth Run then asks the same fleet about a second image nothing here has ever launched, and every rung has to be silent about it: readiness is the workload's own semantics, so the machine that came up in thirty seconds, its neighbour in that region, and its provider elsewhere all fall to what this Run declared about itself. It wins the large machine, because the machine that answered thirty seconds is now holding the third Run's work. Carry the content into the narrowest key alone and the two coarse rungs answer this image out of the other one's launches, which is the world every Blueprint holding one image was written in.",
   "classification": "green",
   "world": {
     "images": {
@@ -15,9 +15,14 @@
         ]
       }
     },
+    "runtime_models": [
+      {"run": "measures-the-cheap-machine", "candidate": "ask-4417", "minimum": "5m", "maximum": "5m"},
+      {"run": "measures-the-large-machine", "candidate": "ask-2211", "minimum": "5m", "maximum": "5m"}
+    ],
     "marketplace": [
       {
         "id": "ask-4417",
+        "lane": "reusable",
         "machine": "machine-77",
         "provider": "simvast",
         "region": "US-CA",
@@ -28,6 +33,7 @@
       },
       {
         "id": "ask-90218",
+        "lane": "reusable",
         "machine": "machine-77",
         "provider": "simvast",
         "region": "US-CA",
@@ -38,6 +44,7 @@
       },
       {
         "id": "ask-2211",
+        "lane": "reusable",
         "machine": "machine-88",
         "provider": "simvast",
         "region": "US-CA",
@@ -48,6 +55,7 @@
       },
       {
         "id": "ask-3333",
+        "lane": "reusable",
         "machine": "machine-91",
         "provider": "simvast",
         "region": "US-CA",
@@ -58,6 +66,7 @@
       },
       {
         "id": "ask-5555",
+        "lane": "reusable",
         "machine": "machine-92",
         "provider": "simvast",
         "region": "EU-DE",
@@ -68,6 +77,7 @@
       },
       {
         "id": "pod-7777",
+        "lane": "reusable",
         "machine": "machine-93",
         "provider": "simpool",
         "region": "US-CA",
@@ -136,20 +146,41 @@
       },
       "expect": {
         "outcome": "place",
-        "offer": "ask-4417",
+        "offer": "machine-77",
         "candidates": {
+          "machine-77": {
+            "feasible": true,
+            "disposition": "run_now_existing_rental",
+            "stages": {
+              "application_ready": {"seconds": 30, "source": "history", "level": "exact_candidate", "samples": 1},
+              "image_fetch": {"seconds": 0}
+            }
+          },
+          "machine-88": {
+            "feasible": true,
+            "disposition": "run_now_existing_rental",
+            "stages": {
+              "application_ready": {"seconds": 150, "source": "history", "level": "exact_candidate", "samples": 1}
+            }
+          },
           "ask-4417": {
+            "feasible": false,
+            "rejected": [{"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"}],
             "stages": {
               "application_ready": {"seconds": 30, "source": "history", "level": "exact_candidate", "samples": 1},
               "image_fetch": {"level": "prior", "samples": 0, "rate": {"mbps": 500.0, "assumption": "assumed_registry_rate"}}
             }
           },
           "ask-90218": {
+            "feasible": false,
+            "rejected": [{"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"}],
             "stages": {
               "application_ready": {"seconds": 30, "source": "history", "level": "exact_candidate", "samples": 1}
             }
           },
           "ask-2211": {
+            "feasible": false,
+            "rejected": [{"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"}],
             "stages": {
               "application_ready": {"seconds": 150, "source": "history", "level": "exact_candidate", "samples": 1},
               "image_fetch": {"level": "prior", "samples": 0, "rate": {"mbps": 500.0, "assumption": "assumed_registry_rate"}}
@@ -185,14 +216,32 @@
       },
       "expect": {
         "outcome": "place",
-        "offer": "ask-4417",
+        "offer": "machine-88",
         "candidates": {
+          "machine-77": {
+            "feasible": true,
+            "disposition": "queue_existing_rental",
+            "stages": {
+              "application_ready": {"seconds": 300, "source": "workload.expected_ready", "level": "prior", "samples": 0}
+            }
+          },
+          "machine-88": {
+            "feasible": true,
+            "disposition": "run_now_existing_rental",
+            "stages": {
+              "application_ready": {"seconds": 300, "source": "workload.expected_ready", "level": "prior", "samples": 0}
+            }
+          },
           "ask-4417": {
+            "feasible": false,
+            "rejected": [{"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"}],
             "stages": {
               "application_ready": {"seconds": 300, "source": "workload.expected_ready", "level": "prior", "samples": 0}
             }
           },
           "ask-2211": {
+            "feasible": false,
+            "rejected": [{"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"}],
             "stages": {
               "application_ready": {"seconds": 300, "source": "workload.expected_ready", "level": "prior", "samples": 0}
             }

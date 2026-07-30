@@ -15,6 +15,7 @@
       {
         "id": "sells-two-hundred-gigabytes",
         "provider": "simcloud",
+        "lane": "reusable",
         "resources": {"disk": "200GB"},
         "rate_per_hour_usd": 2.0,
         "provisioning": {

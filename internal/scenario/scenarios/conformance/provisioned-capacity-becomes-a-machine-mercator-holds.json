@@ -1,0 +1,74 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One Run, one listing, and the transition the placement corpus can only assert the failure half of: a machine that does not exist becomes a machine Mercator holds. The provider negotiates a capacity lifecycle, allocates the machine in thirty-seven seconds, boots it in four minutes and seven seconds, and its node agent opens a session fifty-one seconds later. Only then is there anything to launch a workload on. What this holds at L1 that no placement fixture can is the Effect Ledger, and the ledger is the only account of what really happened to the machine: an accepted capacity.provision against the Rental Mercator minted, a node.enrolled naming that same Rental and the generation it was invited for, and the provider.launch after both. The order is the whole claim. A launch recorded before the enrolment would be Mercator creating a container through a session it does not have, and an enrolment against a Rental nothing provisioned would be a node the world invented. Nothing is terminated here, because the agent arrived: a machine that becomes executable is not a machine anybody gives back. The listing says Mercator waits eight minutes for that agent, which is deliberately neither Mercator's own fifteen nor a round number the harness holds anywhere: the same Blueprint with never_enrolls set is driven past it, and a machine handed back at eight minutes rather than at fifteen is the only evidence that the patience a provider published reached the offer at all. None of the three stage durations is a multiple of the fifteen seconds these cases reconcile at, and that is deliberate too: a control plane dating a stage from its own look would record 45, 255 and 60, and a fixture whose stages all landed on the poll grid could not tell a measured machine from a measured polling interval.",
+  "seed": "mercator-lab-provisioned-capacity-v1",
+  "world": {
+    "images": {
+      "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "500MB"}
+        ]
+      }
+    },
+    "launch": {
+      "unpack": "30s",
+      "container_start": "20s",
+      "application_ready": "1m"
+    },
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "machine": "simcloud-4090-c331",
+        "provider": "simcloud",
+        "lane": "reusable",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {
+          "expected": "6m",
+          "p90": "10m",
+          "acquisition": "37s",
+          "boot": "4m7s",
+          "agent_ready": "51s"
+        },
+        "capacity": {
+          "stop": true,
+          "resume": true,
+          "persistent_disk": true,
+          "spot": false,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true,
+          "observe_after_terminate": false
+        },
+        "bootstrap": {
+          "deadline": "8m"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "builder",
+        "candidate": "fresh-4090",
+        "minimum": "20m",
+        "maximum": "25m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "builder",
+        "at": "0s",
+        "request": {
+          "image": "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e",
+          "service_class": "opportunistic",
+          "expected_runtime": "20m",
+          "max_runtime": "1h",
+          "expected_ready": "2m"
+        }
+      }
+    ]
+  }
+}

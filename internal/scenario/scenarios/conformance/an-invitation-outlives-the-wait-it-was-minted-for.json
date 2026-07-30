@@ -1,0 +1,74 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One Run and one listing whose machines take a long time to arrive. The operator states what that costs in patience: this connection's bootstrap deadline is forty minutes, because a host from this provider is thirty six minutes from allocation to an agent opening its session, and a control plane that gave up sooner would hand back every machine it ever rented here. That patience is the operator's to state and Mercator has no say in it. What Mercator does have a say in is how long the material it wrote onto the machine stays redeemable, and the two are the same question asked from either end: the invitation is what the host presents when it finally arrives, it is handed the material once when it is created, and nothing can tell it anything else afterwards. An invitation that lapses before Mercator stops waiting is therefore a paid host that boots into a fleet it can never join, presenting a credential the registry will not take, while the Run goes on waiting out the whole of a patience that was never going to end in an enrolment. So the invitation is minted to last exactly as long as the wait it was minted for. Here the agent opens its session at thirty six minutes, inside the forty the operator stated, and the workload runs on the machine.",
+  "seed": "mercator-lab-invitation-outlives-the-wait-v1",
+  "world": {
+    "images": {
+      "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "500MB"}
+        ]
+      }
+    },
+    "launch": {
+      "unpack": "30s",
+      "container_start": "20s",
+      "application_ready": "1m"
+    },
+    "marketplace": [
+      {
+        "id": "slow-to-arrive-4090",
+        "machine": "simcloud-4090-e913",
+        "provider": "simcloud",
+        "lane": "reusable",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {
+          "expected": "36m",
+          "p90": "40m",
+          "acquisition": "1m",
+          "boot": "33m",
+          "agent_ready": "2m"
+        },
+        "capacity": {
+          "stop": false,
+          "resume": false,
+          "persistent_disk": false,
+          "spot": false,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true,
+          "observe_after_terminate": true
+        },
+        "bootstrap": {
+          "deadline": "40m"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "builder",
+        "candidate": "slow-to-arrive-4090",
+        "minimum": "10m",
+        "maximum": "12m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "builder",
+        "at": "0s",
+        "request": {
+          "image": "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e",
+          "service_class": "opportunistic",
+          "expected_runtime": "10m",
+          "max_runtime": "1h",
+          "expected_ready": "2m"
+        }
+      }
+    ]
+  }
+}

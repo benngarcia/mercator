@@ -33,6 +33,7 @@
       {
         "id": "fresh-4090",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 2.5,
         "provisioning": {
           "expected": "5m",
@@ -75,7 +76,7 @@
       "expect": {
         "outcome": "place",
         "offer": "fresh-4090",
-        "disposition": "terminate",
+        "disposition": "release",
         "candidates": {
           "rental-warm": {
             "queue_seconds": 1500,

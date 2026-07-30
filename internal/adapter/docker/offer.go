@@ -69,7 +69,7 @@ func NewOffering(client *CLIClient, id EndpointIdentity, archOverride string) ca
 		id:                id,
 		arch:              archOverride,
 		disk:              &probeFact[int64]{},
-		gpus:              &probeFact[[]domain.AcceleratorInventory]{},
+		gpus:              &probeFact[capability.AcceleratorFacts]{},
 	}
 }
 
@@ -79,20 +79,35 @@ type offeringAdapter struct {
 	id     EndpointIdentity
 	arch   string
 	disk   *probeFact[int64]
-	gpus   *probeFact[[]domain.AcceleratorInventory]
+	gpus   *probeFact[capability.AcceleratorFacts]
 }
 
 func (a offeringAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	now := time.Now().UTC()
 	info := a.probe()
 	diskFree := a.disk.value(a.id.NativeRef, "disk", a.client.DiskFreeBytes, now)
-	// Only a daemon with the NVIDIA runtime can satisfy `--gpus`, so CPU-only
-	// endpoints skip the GPU probe container entirely and advertise none.
-	var accelerators []domain.AcceleratorInventory
-	if info.HasNvidiaRuntime() {
-		accelerators = a.gpus.value(a.id.NativeRef, "gpu", a.client.AcceleratorInventory, now)
+	return []domain.OfferSnapshot{StandingOffer(a.id, a.arch, info, diskFree, a.acceleratorFacts(info, now), now)}, nil
+}
+
+// acceleratorFacts is what this endpoint established about the cards a container
+// started here can be handed, which is three answers rather than two.
+//
+// Only a daemon with the NVIDIA runtime can satisfy `--gpus`, so a daemon that
+// answered and registered no such runtime has established that nothing it starts
+// reaches a card: an empty inventory somebody took, and a stated no rather than a
+// silence. A daemon with the runtime is asked, and what it answers is the report.
+// A daemon Mercator could not reach at all has established nothing, and publishing
+// its silence as an empty inventory would strike a GPU host out of every
+// accelerator placement for being unreachable for one poll.
+func (a offeringAdapter) acceleratorFacts(info HostInfo, now time.Time) capability.AcceleratorFacts {
+	switch {
+	case info.HasNvidiaRuntime():
+		return a.gpus.value(a.id.NativeRef, "gpu", a.client.AcceleratorFacts, now)
+	case info.ID != "":
+		return capability.AcceleratorFacts{Established: true}
+	default:
+		return capability.AcceleratorFacts{}
 	}
-	return []domain.OfferSnapshot{StandingOffer(a.id, a.arch, info, diskFree, accelerators, now)}, nil
 }
 
 // probeFact caches a container-probe measurement per endpoint. Offers are
@@ -101,8 +116,9 @@ func (a offeringAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]do
 // run per placement decision or offers-endpoint poll. Both facts move slowly
 // (free disk drifts, GPU inventory is fixed hardware), so a short TTL keeps
 // the offer honest without container churn. A failed probe caches the zero
-// value: StandingOffer falls back conservatively for disk, and a zero GPU
-// inventory means the offer honestly advertises no accelerators.
+// value: StandingOffer falls back conservatively for disk, and a zero
+// accelerator report is a report that established nothing, which is the answer a
+// probe that could not run has about the hardware.
 type probeFact[T any] struct {
 	mu         sync.Mutex
 	cached     T
@@ -157,10 +173,12 @@ func (a offeringAdapter) probe() HostInfo {
 // more infeasible ("no feasible offers") even on hosts with hundreds of free
 // GiB — bucket's model_training dispatches request >= 20 GiB.
 //
-// accelerators is the container-probed GPU inventory (see
-// CLIClient.AcceleratorInventory); empty means the endpoint advertises none,
-// so GPU-requiring workloads are rejected for it, never mis-scheduled.
-func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, diskFreeBytes int64, accelerators []domain.AcceleratorInventory, now time.Time) domain.OfferSnapshot {
+// accelerators is what the endpoint established about its cards (see
+// offeringAdapter.acceleratorFacts). A report that established nothing is
+// published as the silence it was, so a GPU Run is refused here with the code
+// that says go and look rather than with one that says this machine has no
+// cards.
+func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, diskFreeBytes int64, accelerators capability.AcceleratorFacts, now time.Time) domain.OfferSnapshot {
 	arch := archOverride
 	if arch == "" {
 		arch = info.OCIArch()
@@ -209,8 +227,16 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 			MemoryBytes:        memoryBytes,
 			EphemeralDiskBytes: ephemeralDiskBytes,
 			EphemeralDiskKnown: true,
-			Accelerators:       accelerators,
+			Accelerators:       accelerators.Devices,
+			AcceleratorsKnown:  accelerators.Established,
 		},
+		// What this endpoint established about the substrate under a workload,
+		// carried through the way an enrolled node carries it. The GPU probe is the
+		// only thing here that has looked at a driver, and it looked by running a
+		// container against it, which is the same act a Run's container performs. A
+		// probe that listed the cards has therefore established the driver behind
+		// them, and one that could not run has established nothing.
+		Host: domain.HostFacts{Attested: accelerators.Attestations(), Driver: accelerators.Driver()},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{
 				MaxContainers:              8,
@@ -223,7 +249,7 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 				ListOwned:        true,
 				CancelQueued:     true,
 			},
-			Resources: domain.ResourceCapabilities{GPUVendors: acceleratorVendors(accelerators)},
+			Resources: domain.ResourceCapabilities{GPUVendors: acceleratorVendors(accelerators.Devices)},
 			Network:   domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone},
 			Pricing:   domain.PricingCapabilities{Known: true},
 		},

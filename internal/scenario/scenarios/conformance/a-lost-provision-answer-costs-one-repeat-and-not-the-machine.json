@@ -1,0 +1,81 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One Run, one listing, and a provider that rents the machine and never says so. The create reaches the provider, the machine is allocated and starts booting, and the answer never comes back; the account listing does not name it either, because an answer Mercator cannot get by one route it cannot get by the other, and a machine visible in the listing would make this a slow provider rather than a lost answer. This world therefore reaches that state deliberately rather than waiting for a race: the fault loses the answer to the first provision for this lease and nothing else. The backend resolves the repeat itself, which is what its declared operation_key says and what a real adapter over a provider honouring no key has to do below this seam. So one machine, and the whole point of the case is what that machine is holding. Its bootstrap was written when it was created, it holds nothing else, and it can be told nothing more: Mercator opens no connection to it, so an invitation replaced after it reached the machine is that machine locked out of the fleet it was paid for, presenting material the registry no longer names and having nothing else to try. Provisioning cannot avoid asking, because the material is minted before the provider answers and nothing can know until it does whether an earlier attempt landed a machine. So an identity asked for again answers with what is already out there, the agent on the adopted machine enrols, and the workload runs on it. A control plane that minted a fresh invitation on the repeat would produce exactly the failure that looks like nothing at all: a healthy machine, an accepted allocation, silence where the agent should be, and the whole of the enrolment patience spent on a bill before anything gives up.",
+  "seed": "mercator-lab-lost-provision-answer-v1",
+  "world": {
+    "images": {
+      "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "500MB"}
+        ]
+      }
+    },
+    "launch": {
+      "unpack": "30s",
+      "container_start": "20s",
+      "application_ready": "1m"
+    },
+    "marketplace": [
+      {
+        "id": "unanswering-4090",
+        "machine": "simcloud-4090-d442",
+        "provider": "simcloud",
+        "lane": "reusable",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {
+          "expected": "6m",
+          "p90": "10m",
+          "acquisition": "37s",
+          "boot": "4m7s",
+          "agent_ready": "51s"
+        },
+        "capacity": {
+          "stop": false,
+          "resume": false,
+          "persistent_disk": false,
+          "spot": false,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true,
+          "observe_after_terminate": true
+        },
+        "bootstrap": {
+          "deadline": "8m"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "builder",
+        "candidate": "unanswering-4090",
+        "minimum": "20m",
+        "maximum": "25m"
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "provision-answer-lost",
+      "trigger": {"operation": "capacity.provision", "attempt": 1},
+      "action": "lose_response"
+    }
+  ],
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "builder",
+        "at": "0s",
+        "request": {
+          "image": "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e",
+          "service_class": "opportunistic",
+          "expected_runtime": "20m",
+          "max_runtime": "1h",
+          "expected_ready": "2m"
+        }
+      }
+    ]
+  }
+}

@@ -61,6 +61,17 @@ func (signer *Signer) VerifySession(nodeID string, fencingToken uint64, token st
 	return signer.verify(token, now, "session", nodeID, strconv.FormatUint(fencingToken, 10))
 }
 
+// Expiry is when a credential asked to last until at really stops being
+// accepted. A token carries whole seconds, so the honest answer is the second the
+// credential actually has rather than the fraction it was asked for.
+//
+// It matters because the node is told this moment and renews against it. Told a
+// moment later than its credential's own, an agent renews after the credential
+// died, presents material the signer refuses, and is locked out of a control
+// plane whose machine is still running. Rounding the other way would be a
+// credential outliving what the control plane believes it granted.
+func (signer *Signer) Expiry(at time.Time) time.Time { return at.UTC().Truncate(time.Second) }
+
 // TokenID is the stable identity of one minted token, safe to persist. It is a
 // digest, so recording which invitation was redeemed never stores the
 // credential itself.

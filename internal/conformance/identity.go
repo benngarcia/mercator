@@ -8,7 +8,12 @@ import (
 )
 
 type trialIdentity struct {
-	trialID      string
+	trialID string
+	// suffix is the random half of the trial ID, which is what every identity
+	// this trial mints for itself is named after. A capacity trial creates no
+	// workspace through the API and still has to tag its machines with one, so
+	// what keeps two trials from adopting each other's machines is this.
+	suffix       string
 	workspaceID  string
 	connectionID string
 }
@@ -19,7 +24,7 @@ func newTrialIdentity(adapterType string) (trialIdentity, error) {
 		return trialIdentity{}, err
 	}
 	suffix := strings.TrimPrefix(id, "trial_")
-	return trialIdentity{trialID: id, connectionID: "conn_" + adapterType + "_" + suffix}, nil
+	return trialIdentity{trialID: id, suffix: suffix, connectionID: "conn_" + adapterType + "_" + suffix}, nil
 }
 
 func trialSecrets() (string, []byte, error) {

@@ -21,6 +21,7 @@ type Storage struct {
 	credentials *credential.SQLiteStore
 	workspaces  *workspace.SQLiteCatalog
 	schedules   *RentalScheduleStore
+	rentals     *RentalStore
 	runs        *RunStore
 	nodes       *NodeStore
 	preparation *PreparationClock
@@ -77,6 +78,10 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		_ = log.Close()
 		return nil, err
 	}
+	if err := migrateRentals(ctx, db); err != nil {
+		_ = log.Close()
+		return nil, err
+	}
 	workspaces := workspace.NewSQLiteCatalog(db)
 	credentials, err := credential.NewSQLiteStore(ctx, db)
 	if err != nil {
@@ -86,6 +91,7 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 	storage := &Storage{db: db, log: log, credentials: credentials, workspaces: workspaces}
 	storage.runs = &RunStore{db: db, log: log}
 	storage.schedules = &RentalScheduleStore{db: db, log: log, runs: storage.runs}
+	storage.rentals = &RentalStore{db: db}
 	storage.nodes = &NodeStore{db: db}
 	storage.preparation = &PreparationClock{db: db}
 	if err := storage.purgeDeletedConnectionCredentials(ctx); err != nil {
@@ -113,6 +119,12 @@ func (s *Storage) RentalSchedules() *RentalScheduleStore {
 
 func (s *Storage) Runs() *RunStore {
 	return s.runs
+}
+
+// Rentals is the durable record of the capacity Mercator holds: the leases it
+// has taken and the generations each of them has been through.
+func (s *Storage) Rentals() *RentalStore {
+	return s.rentals
 }
 
 func (s *Storage) Connections(sealer credentialSealer) (*ConnectionRepository, error) {

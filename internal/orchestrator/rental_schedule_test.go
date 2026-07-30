@@ -22,7 +22,7 @@ func TestOrchestratorQueuesSecondRunWithoutLaunchingIt(t *testing.T) {
 	fresh.Pricing.RatePerSecondUSD = 0.001
 	fresh.Provisioning = &domain.Estimate{Expected: 120, P90: 150}
 	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{fresh, warm}), fake.WithNow(func() time.Time { return now }))
-	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }), withTestCapacity())
 
 	createScheduledRun(t, ctx, orch, "run-active")
 	if err := orch.AdvanceRun(ctx, "ws_1", "run-active"); err != nil {
@@ -56,7 +56,7 @@ func TestOrchestratorDispatchesQueuedRunWhenActiveBookingCompletes(t *testing.T)
 		fake.WithOpenObservations(1),
 		fake.WithNow(func() time.Time { return now }),
 	)
-	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }), withTestCapacity())
 
 	createScheduledRun(t, ctx, orch, "run-active")
 	if err := orch.AdvanceRun(ctx, "ws_1", "run-active"); err != nil {
@@ -92,7 +92,7 @@ func TestOrchestratorReleasesQueuedBookingWhenItsRunIsCancelled(t *testing.T) {
 		fake.WithOpenObservations(1),
 		fake.WithNow(func() time.Time { return now }),
 	)
-	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }), withTestCapacity())
 
 	createScheduledRun(t, ctx, orch, "run-active")
 	if err := orch.AdvanceRun(ctx, "ws_1", "run-active"); err != nil {

@@ -3,6 +3,8 @@ package node_test
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +43,149 @@ func TestAnInvitationCannotBeRedeemedTwice(t *testing.T) {
 
 	if !errors.Is(err, node.ErrEnrollmentSpent) {
 		t.Fatalf("second redemption of one invitation = %v, want ErrEnrollmentSpent", err)
+	}
+}
+
+// TestReinvitingAnIdentityNobodyRedeemedKeepsTheMachineHoldingItAlive is the
+// property provisioning rests on. A provider is asked for a machine on every
+// attempt and the material goes onto that machine before anything can know
+// whether an earlier attempt already landed one, so an identity asked for again
+// has to hand back what is already out there rather than invalidating it.
+//
+// The clock moves between the two, and it has to. A token is a signature over
+// the identity and the expiry, so at a frozen clock a fresh mint is byte
+// identical to the one it replaced and this case would pass against a registry
+// that supersedes every time.
+func TestReinvitingAnIdentityNobodyRedeemedKeepsTheMachineHoldingItAlive(t *testing.T) {
+	registry, clock := newRegistry(t)
+	onTheMachine := invite(t, registry)
+	clock.Advance(time.Minute)
+
+	reinvite(t, registry, onTheMachine)
+
+	if _, err := registry.Enroll(context.Background(), enrollmentRequest(onTheMachine)); err != nil {
+		t.Fatalf("the machine the first attempt bootstrapped enrolled with %v, and it holds the only material anything ever gave it", err)
+	}
+}
+
+func TestReinvitingAnIdentityNobodyRedeemedHandsBackTheSameInvitation(t *testing.T) {
+	registry, clock := newRegistry(t)
+	first := invite(t, registry)
+	clock.Advance(time.Minute)
+
+	second := reinvite(t, registry, first)
+
+	if second.EnrollmentToken != first.EnrollmentToken {
+		t.Fatal("an outstanding invitation is what a second attempt must be handed, or two machines hold material only one of them can redeem")
+	}
+}
+
+// TestAnInvitationLastsAsLongAsTheCallerWaits is the coupling between the two
+// halves of one question. A host is handed its material once, when it is
+// created, and nothing can tell it anything afterwards, so an invitation that
+// lapses before the caller stops waiting is a paid machine booting into a fleet
+// it can never join.
+//
+// Forty five minutes is longer than DefaultInvitation on purpose. A provider
+// whose machines take longer to boot than this registry's own default window is
+// exactly the deployment the default silently breaks.
+func TestAnInvitationLastsAsLongAsTheCallerWaits(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
+		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		ShadowPriceUSDPerHour: 1.5,
+		RedeemableThrough:     clock.Now().Add(45 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("invite node: %v", err)
+	}
+	clock.Advance(40 * time.Minute)
+
+	_, err = registry.Enroll(context.Background(), enrollmentRequest(bootstrap))
+
+	if err != nil {
+		t.Fatalf("a machine that arrived inside the wait it was provisioned under enrolled with %v", err)
+	}
+}
+
+// TestAnInvitationThatLapsesInsideTheWaitIsReplaced is the other side of the
+// same rule, and the reason handing back an outstanding invitation is not
+// unconditional. Material with minutes left is written onto a machine that does
+// not exist yet, and it will lapse while that machine is still booting.
+//
+// Replacing it costs the machine already out there nothing. An invitation that
+// closes before the caller gives up cannot end in an enrolment whoever is
+// holding it, so the choice is between one machine locked out and two.
+func TestAnInvitationThatLapsesInsideTheWaitIsReplaced(t *testing.T) {
+	registry, clock := newRegistry(t)
+	shortLived, err := registry.Invite(context.Background(), node.Invitation{
+		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		ShadowPriceUSDPerHour: 1.5,
+		RedeemableThrough:     clock.Now().Add(5 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("invite node: %v", err)
+	}
+
+	replacement, err := registry.Reinvite(context.Background(), testWorkspace, testNode, clock.Now().Add(45*time.Minute))
+	if err != nil {
+		t.Fatalf("reinvite node: %v", err)
+	}
+
+	if replacement.EnrollmentToken == shortLived.EnrollmentToken {
+		t.Fatal("an invitation that lapses inside the wait was handed to a machine that has not been built yet")
+	}
+	clock.Advance(40 * time.Minute)
+	if _, err := registry.Enroll(context.Background(), enrollmentRequest(replacement)); err != nil {
+		t.Fatalf("the replacement must outlast the wait it was minted for, got %v", err)
+	}
+}
+
+// TestAnInvitationNobodyCouldRedeemIsRefused keeps the registry from answering a
+// caller that has already given up. Material redeemable through a moment in the
+// past is not an invitation, and minting one would put a machine on a provider's
+// bill to boot into a refusal.
+func TestAnInvitationNobodyCouldRedeemIsRefused(t *testing.T) {
+	registry, clock := newRegistry(t)
+
+	_, err := registry.Invite(context.Background(), node.Invitation{
+		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		ShadowPriceUSDPerHour: 1.5,
+		RedeemableThrough:     clock.Now().Add(-time.Minute),
+	})
+
+	if err == nil {
+		t.Fatal("an invitation that was already spent when it was minted was handed out")
+	}
+}
+
+func TestAnInvitationWhoseWindowClosedIsReplacedRatherThanHandedBack(t *testing.T) {
+	registry, clock := newRegistry(t)
+	first := invite(t, registry)
+	clock.Advance(node.DefaultInvitation + time.Minute)
+
+	second := reinvite(t, registry, first)
+
+	if second.EnrollmentToken == first.EnrollmentToken {
+		t.Fatal("an invitation nothing can still redeem is worth nothing to hold on to")
+	}
+	if _, err := registry.Enroll(context.Background(), enrollmentRequest(second)); err != nil {
+		t.Fatalf("the replacement invitation must be redeemable, got %v", err)
+	}
+}
+
+// TestARegistryThatWasToldNoAgentBuildPinsNone is what makes the pin a pin. The
+// version is substituted into the download URL an operator hosts the binary at,
+// so a value invented here would have every deployment install whatever is
+// behind one invented name on the day its machine booted, and a provider would
+// accept that as a pinned build.
+func TestARegistryThatWasToldNoAgentBuildPinsNone(t *testing.T) {
+	registry, _ := newRegistry(t)
+
+	bootstrap := invite(t, registry)
+
+	if bootstrap.AgentVersion != "" {
+		t.Fatalf("a deployment that stated no agent build pins %q, and nothing chose it", bootstrap.AgentVersion)
 	}
 }
 
@@ -559,6 +704,243 @@ func TestADrainEndsTheSessionANodeIsHoldingOpen(t *testing.T) {
 	}
 }
 
+// TestRetiringARuntimeEndsTheSessionItIsHoldingOpen is the live half of a
+// generation's end. The record refuses the machine everything else, and this is
+// what stops the connection it already has from carrying one more command down to
+// a host Mercator gave up.
+func TestRetiringARuntimeEndsTheSessionItIsHoldingOpen(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	select {
+	case <-session.Done():
+	default:
+		t.Fatal("a retired runtime was left holding its session open")
+	}
+}
+
+// TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet is the resurrection
+// this rule exists to stop. An agent whose machine is being torn down keeps
+// reporting on the session credential it already has, and a heartbeat is what
+// puts a node back into the one state the registry publishes as capacity. Read as
+// an ordinary report it would undo the retirement every time the agent spoke.
+//
+// The report is still kept. What the machine says about itself is history the
+// registry holds, and only the standing it would confer is withdrawn.
+func TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+	err := registry.RecordEvents(context.Background(), bootstrap.NodeID, enrollment.SessionToken, []node.Event{{
+		ID:         "evt-heartbeat-after-retirement",
+		Kind:       node.EventHeartbeat,
+		ObservedAt: clock.Now(),
+		Facts: &capability.NodeFacts{
+			ObservedAt: clock.Now(),
+			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker"},
+		},
+	}})
+
+	if err != nil {
+		t.Fatalf("a retired runtime reporting its liveness: %v", err)
+	}
+	offers, err := registry.Offers(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("read the offers: %v", err)
+	}
+	if len(offers) != 0 {
+		t.Fatalf("offers = %+v, want a machine Mercator gave up published to nobody", offers)
+	}
+	fleet, err := registry.List(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("list the fleet: %v", err)
+	}
+	if len(fleet) != 1 || fleet[0].State != node.StateRetired {
+		t.Fatalf("fleet = %+v, want the identity still retired after it spoke", fleet)
+	}
+}
+
+// TestARetiredRuntimeOpensNoFurtherSessionOnTheCredentialItHolds is what makes
+// ending the session worth anything. An agent's transport reconnects the instant
+// the connection drops, so a retirement that only closed the session it found
+// would be undone milliseconds later by the same credential, and the fresh
+// session arrives preloaded with every command the previous one never
+// acknowledged: the machine Mercator gave up launches the container anyway.
+func TestARetiredRuntimeOpensNoFurtherSessionOnTheCredentialItHolds(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+	if _, err := registry.LaunchWorkload(context.Background(), launchCommand(bootstrap, enrollment, "op-launch-1")); err != nil {
+		t.Fatalf("launch the workload: %v", err)
+	}
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	_, err := registry.OpenSession(context.Background(), bootstrap.NodeID, enrollment.SessionToken)
+
+	if !errors.Is(err, node.ErrRetired) {
+		t.Fatalf("a retired runtime reconnecting = %v, want ErrRetired", err)
+	}
+}
+
+// TestARetiredRuntimeStillReportsWhatItsContainerDid is the half retirement must
+// not take. A provider reclaims the machine, Mercator ends the generation, and the
+// agent is still alive inside the interruption window when the container exits.
+// The node owns exit codes and there is no second authority on them, so an
+// identity that could not report would leave a Run that finished looking
+// unobserved forever.
+func TestARetiredRuntimeStillReportsWhatItsContainerDid(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	if _, err := registry.LaunchWorkload(context.Background(), launchCommand(bootstrap, enrollment, "op-launch-1")); err != nil {
+		t.Fatalf("launch the workload: %v", err)
+	}
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+	err := registry.RecordEvents(context.Background(), bootstrap.NodeID, enrollment.SessionToken, []node.Event{{
+		ID:         "evt-exited-after-retirement",
+		Kind:       node.EventWorkload,
+		ObservedAt: clock.Now(),
+		Workload: &capability.WorkloadObservation{
+			RunID: "run-1", AttemptID: "attempt-1", Phase: capability.WorkloadPhaseExited,
+			ExitCode: exitCode(0), ObservedAt: clock.Now(),
+		},
+	}})
+
+	if err != nil {
+		t.Fatalf("a retired runtime reporting its container's exit: %v", err)
+	}
+	observation, err := registry.ObserveWorkload(context.Background(), capability.WorkloadRef{
+		NodeRef: nodeRef(bootstrap), RunID: "run-1", AttemptID: "attempt-1",
+	})
+	if err != nil {
+		t.Fatalf("observe the workload: %v", err)
+	}
+	if observation.Phase != capability.WorkloadPhaseExited {
+		t.Fatalf("phase = %q, want the exit the machine reported", observation.Phase)
+	}
+	if observation.ExitCode == nil || *observation.ExitCode != 0 {
+		t.Fatalf("exit code = %v, want the 0 the machine reported", observation.ExitCode)
+	}
+}
+
+// TestARetiredRuntimeSettlesTheCommandItAlreadyApplied is the same rule for the
+// other thing only the machine knows. The stop was dispatched while the
+// generation stood and the agent applied it; the generation ended before the
+// answer landed. Refusing the answer would strand an operation the machine really
+// performed as pending forever, and dispatching it again is refused, so nothing
+// could ever tell the control plane otherwise.
+func TestARetiredRuntimeSettlesTheCommandItAlreadyApplied(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	stop := capability.StopWorkloadCommand{RunID: "run-1", GraceSeconds: 30}
+	stop.NodeRef = nodeRef(bootstrap)
+	stop.OperationID = "op-stop-1"
+	stop.FencingToken = enrollment.FencingToken
+	if _, err := registry.StopWorkload(context.Background(), stop); err != nil {
+		t.Fatalf("stop the workload: %v", err)
+	}
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+	err := registry.RecordResult(context.Background(), bootstrap.NodeID, enrollment.SessionToken, node.Result{
+		OperationID: "op-stop-1", Applied: true, ReportedAt: clock.Now(),
+	})
+
+	if err != nil {
+		t.Fatalf("a retired runtime settling the command it applied: %v", err)
+	}
+	reconciliation, err := registry.Reconcile(context.Background(), nodeRef(bootstrap))
+	if err != nil {
+		t.Fatalf("reconcile the retired identity: %v", err)
+	}
+	if !slices.Contains(reconciliation.AppliedOperationIDs, "op-stop-1") {
+		t.Fatalf("applied = %v, want the stop the machine really performed", reconciliation.AppliedOperationIDs)
+	}
+}
+
+// TestARetiredRuntimeIsAskedForNothingFurther closes the other half. The node
+// reference a caller carries was resolved before the generation ended, and a
+// command appended for a retired identity is durable: it would outlive the
+// decision that issued it and be delivered to whatever next answers on that
+// identity. The identity stays readable, because what it was told and what it
+// reported is what a later reconciliation reads.
+func TestARetiredRuntimeIsAskedForNothingFurther(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	_, launchErr := registry.LaunchWorkload(context.Background(), launchCommand(bootstrap, enrollment, "op-launch-after-retirement"))
+	_, prepareErr := registry.PrepareImage(context.Background(), prepareCommand(bootstrap, enrollment, "op-prepare-after-retirement"))
+
+	if !errors.Is(launchErr, node.ErrRetired) {
+		t.Fatalf("a launch dispatched to a retired runtime = %v, want ErrRetired", launchErr)
+	}
+	if !errors.Is(prepareErr, node.ErrRetired) {
+		t.Fatalf("a prepare dispatched to a retired runtime = %v, want ErrRetired", prepareErr)
+	}
+	if _, err := registry.Reconcile(context.Background(), nodeRef(bootstrap)); err != nil {
+		t.Fatalf("a retired identity is history a reconciliation must still be able to read: %v", err)
+	}
+}
+
+// TestTheRegistryAnswersAboutANodeAndAGenerationTogether holds the one question
+// provisioning asks while a machine is being built: has the agent arrived. The
+// pair is what every act against a machine is addressed to, and answering
+// "enrolled, healthy" about a generation the identity is not on would be
+// answering about a machine that no longer exists.
+//
+// An identity nobody has heard from is not an error. A node invited and never
+// filled is exactly the state provisioning waits in.
+func TestTheRegistryAnswersAboutANodeAndAGenerationTogether(t *testing.T) {
+	registry, _ := newRegistry(t)
+	invite(t, registry)
+
+	invited, err := registry.EnrolledAt(context.Background(), capability.NodeRef{
+		WorkspaceID: testWorkspace, NodeID: testNode, Generation: 1,
+	})
+	if err != nil {
+		t.Fatalf("the generation this node was invited for was refused: %v", err)
+	}
+	if !invited.IsZero() {
+		t.Fatalf("a node nothing has enrolled on reads as though its agent had opened a session at %s", invited)
+	}
+
+	_, err = registry.EnrolledAt(context.Background(), capability.NodeRef{
+		WorkspaceID: testWorkspace, NodeID: testNode, Generation: 2,
+	})
+
+	if err == nil {
+		t.Fatal("a question about a generation this node is not on was answered rather than refused")
+	}
+	if !strings.Contains(err.Error(), "is generation 1, not 2") {
+		t.Fatalf("the refusal does not say which generation the node is on: %v", err)
+	}
+}
+
 // Helpers below keep each case to arrange, act, assert.
 
 const (
@@ -599,11 +981,12 @@ func invite(t *testing.T, registry *node.Registry) capability.NodeBootstrap {
 	return bootstrap
 }
 
-// reinvite issues a fresh invitation for the same identity, which is what a
-// Rental generation restart does when its agent needs to join again.
+// reinvite asks for the invitation this identity is redeemable on, which is what
+// a repeated provision and a Rental generation restart both come back through.
+// It states no deadline, so the registry answers on its own policy.
 func reinvite(t *testing.T, registry *node.Registry, previous capability.NodeBootstrap) capability.NodeBootstrap {
 	t.Helper()
-	bootstrap, err := registry.Reinvite(context.Background(), testWorkspace, previous.NodeID)
+	bootstrap, err := registry.Reinvite(context.Background(), testWorkspace, previous.NodeID, time.Time{})
 	if err != nil {
 		t.Fatalf("reinvite node: %v", err)
 	}
@@ -786,4 +1169,174 @@ func TestAPathANodeMeasuredReachesTheOfferItPrices(t *testing.T) {
 	if registryRate := offers[0].DownloadRate(domain.NetworkScopeRegistry, offers[0].ObservedAt); registryRate.Assumption != domain.AssumptionRegistryRate {
 		t.Fatalf("the offer prices an image pull at %+v, and nothing has measured this node's link to a registry", registryRate)
 	}
+}
+
+// pullSecret and readLocation are the two things a machine may present and the
+// control plane's record must never hold: the password behind a private
+// registry, and a presigned GET, which is a bearer credential written as a URL.
+const (
+	pullSecret   = "registry-password-nobody-may-keep"
+	readLocation = "https://objects.test/bucket/corpus?X-Amz-Signature=deadbeef"
+)
+
+// TestTheRecordOfAPullHoldsWhatWasAuthorisedAndNotTheMaterial is the line
+// between a durable desire and a minted credential. A node command is written
+// down so a machine that was disconnected still receives it, and node_operations
+// is kept for the life of the deployment and pruned by nothing, so material
+// written there outlives its own fifteen minute window by years in a file an
+// operator backs up. What the record holds instead is the bound: which pull was
+// authorised, for whom, and until when, which is presentable to nobody.
+func TestTheRecordOfAPullHoldsWhatWasAuthorisedAndNotTheMaterial(t *testing.T) {
+	store := node.NewMemoryStore()
+	registry, clock := newRegistryOn(t, store)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+
+	if _, err := registry.PrepareImage(context.Background(),
+		privatePullCommand(bootstrap, enrollment, "op-prepare-1", clock.Now())); err != nil {
+		t.Fatalf("prepare the private image: %v", err)
+	}
+
+	delivered := receiveCommand(t, session)
+	if !strings.Contains(string(delivered.Payload), pullSecret) {
+		t.Fatal("the machine was handed a pull it cannot present, so nothing it was told to fetch could be fetched")
+	}
+	recorded := onlyPendingOperation(t, store)
+	if strings.Contains(string(recorded.Payload), pullSecret) {
+		t.Fatalf("the registry password was written into the durable record of the command: %s", recorded.Payload)
+	}
+	if !strings.Contains(string(recorded.Payload), "op-prepare-1") {
+		t.Fatalf("the record states nothing about which pull was authorised: %s", recorded.Payload)
+	}
+}
+
+// TestTheRecordOfAnArtifactFetchHoldsNoSignedRead is the same rule for the other
+// fetch. The durable location the catalog states is a name for content and stays
+// in the record; the signed one beside it is a working read of the object and
+// does not.
+func TestTheRecordOfAnArtifactFetchHoldsNoSignedRead(t *testing.T) {
+	store := node.NewMemoryStore()
+	registry, clock := newRegistryOn(t, store)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+
+	if _, err := registry.PrepareArtifact(context.Background(),
+		artifactFetchCommand(bootstrap, enrollment, "op-fetch-1", clock.Now())); err != nil {
+		t.Fatalf("prepare the Artifact: %v", err)
+	}
+
+	delivered := receiveCommand(t, session)
+	if !strings.Contains(string(delivered.Payload), readLocation) {
+		t.Fatal("the machine was handed no read, so the object store would refuse the fetch it was told to make")
+	}
+	recorded := onlyPendingOperation(t, store)
+	if strings.Contains(string(recorded.Payload), "X-Amz-Signature") {
+		t.Fatalf("a signed read of the object store was written into the durable record: %s", recorded.Payload)
+	}
+	if !strings.Contains(string(recorded.Payload), "objects://corpus/v3") {
+		t.Fatalf("the record states nothing about which version was authorised: %s", recorded.Payload)
+	}
+}
+
+// TestACommandReplayedOnALaterSessionCarriesNoMaterial states what the two cases
+// above cost, so nobody reads them as free. A command is durable and the
+// credential inside it is not, so an agent that was down when the sweep issued
+// one is handed the record rather than the pull. The machine refuses that rather
+// than presenting an empty password to a registry, and the fetch is asked for
+// again; what must never happen is the alternative, which is the material
+// sitting in the database until somebody replays it.
+func TestACommandReplayedOnALaterSessionCarriesNoMaterial(t *testing.T) {
+	store := node.NewMemoryStore()
+	registry, clock := newRegistryOn(t, store)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	first := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+	if _, err := registry.PrepareImage(context.Background(),
+		privatePullCommand(bootstrap, enrollment, "op-prepare-1", clock.Now())); err != nil {
+		t.Fatalf("prepare the private image: %v", err)
+	}
+	receiveCommand(t, first)
+	registry.CloseSession(first)
+
+	second := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+
+	replayed := receiveCommand(t, second)
+	if strings.Contains(string(replayed.Payload), pullSecret) {
+		t.Fatal("a command replayed on a later session carried material the record was supposed not to hold")
+	}
+}
+
+func newRegistryOn(t *testing.T, store node.Store) (*node.Registry, *testClock) {
+	t.Helper()
+	clock := &testClock{now: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)}
+	registry := node.NewRegistry(
+		store,
+		node.NewSigner(node.DeriveKey([]byte("test-master-key"))),
+		"https://mercator.test",
+		node.WithClock(clock.Now),
+	)
+	return registry, clock
+}
+
+func onlyPendingOperation(t *testing.T, store node.Store) node.Operation {
+	t.Helper()
+	pending, err := store.PendingOperations(context.Background(), testWorkspace, testNode)
+	if err != nil {
+		t.Fatalf("read the durable record of what the node was told: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("the record holds %d pending operations, want the one that was dispatched", len(pending))
+	}
+	return pending[0]
+}
+
+func privatePullCommand(
+	bootstrap capability.NodeBootstrap,
+	enrollment capability.Enrollment,
+	operationID string,
+	now time.Time,
+) capability.PrepareImageCommand {
+	command := prepareCommand(bootstrap, enrollment, operationID)
+	command.Reference = "registry.test/analyst@" + command.ManifestDigest
+	command.RegistryCredential = domain.RegistryPull{
+		ContentCredentialScope: domain.ContentCredentialScope{
+			Operation:   operationID,
+			WorkspaceID: testWorkspace,
+			Content:     command.ManifestDigest,
+			ExpiresAt:   now.Add(15 * time.Minute),
+		},
+		Registry: "registry.test",
+		Username: "mercator",
+		Secret:   pullSecret,
+	}
+	return command
+}
+
+func artifactFetchCommand(
+	bootstrap capability.NodeBootstrap,
+	enrollment capability.Enrollment,
+	operationID string,
+	now time.Time,
+) capability.PrepareArtifactCommand {
+	command := capability.PrepareArtifactCommand{
+		ArtifactID:    "artifact:corpus:v3",
+		ContentDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+		Source:        "objects://corpus/v3",
+		SourceCredential: domain.ArtifactRead{
+			ContentCredentialScope: domain.ContentCredentialScope{
+				Operation:   operationID,
+				WorkspaceID: testWorkspace,
+				Content:     "artifact:corpus:v3",
+				ExpiresAt:   now.Add(15 * time.Minute),
+			},
+			Location: readLocation,
+		},
+		SizeBytes: 4096,
+	}
+	command.NodeRef = nodeRef(bootstrap)
+	command.OperationID = operationID
+	command.FencingToken = enrollment.FencingToken
+	return command
 }

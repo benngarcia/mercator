@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -68,7 +69,21 @@ func WithLease(lease time.Duration) Option {
 	return func(registry *Registry) { registry.lease = lease }
 }
 
-// WithAgentVersion pins the node agent build a bootstrap asks for.
+// WithSession sets how long one session credential stays valid. Tests shorten it
+// so a machine outliving its first session is stated rather than waited out: at
+// the production thirty minutes, every case in the tree finishes inside the
+// window and none of them can see what happens after it.
+func WithSession(session time.Duration) Option {
+	return func(registry *Registry) { registry.session = session }
+}
+
+// WithAgentVersion pins the node agent build a bootstrap asks for. There is no
+// default and there deliberately cannot be one: the version is what a capacity
+// provider substitutes into the operator's download URL, so a value invented
+// here would be a pin nobody chose, and every machine ever rented by every
+// deployment would install whatever is behind that same name on the day it
+// booted. Left unstated, a bootstrap names no build and a provider that needs
+// one refuses before a machine is paid for.
 func WithAgentVersion(version string) Option {
 	return func(registry *Registry) { registry.agentVersion = version }
 }
@@ -79,7 +94,6 @@ func NewRegistry(store Store, signer *Signer, controlPlaneURL string, opts ...Op
 		signer:          signer,
 		now:             time.Now,
 		controlPlaneURL: controlPlaneURL,
-		agentVersion:    "dev",
 		lease:           DefaultLease,
 		session:         DefaultSession,
 		invitation:      DefaultInvitation,
@@ -125,6 +139,18 @@ type Invitation struct {
 	// a price to weigh a node against fresh capacity, and a node without one is
 	// refused rather than treated as free.
 	ShadowPriceUSDPerHour float64
+	// RedeemableThrough is the moment the caller stops waiting for this machine.
+	// The invitation lasts exactly that long, because the two are the same
+	// question asked from either end: a host is handed its material once, when it
+	// is created, and nothing can tell it anything afterwards, so material that
+	// lapses first is a paid machine booting into a fleet it can never join, and
+	// material that outlives the wait is a bearer credential still redeemable for
+	// a machine nobody is expecting any more.
+	//
+	// Stated by whoever knows the wait, which is provisioning. An operator
+	// inviting a machine by hand is waiting on a person rather than on a
+	// deadline, and gets DefaultInvitation.
+	RedeemableThrough time.Time
 	// Purchase is the rest of what this machine is bought on: the block of time it
 	// is billed in, the kinds of work its operator holds it for, and the moment it
 	// stops being Mercator's.
@@ -146,7 +172,10 @@ func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (ca
 	if rentalID == "" {
 		rentalID = "rnt_" + registry.identity()
 	}
-	expires := registry.now().UTC().Add(registry.invitation)
+	expires, err := registry.window(invitation.RedeemableThrough)
+	if err != nil {
+		return capability.NodeBootstrap{}, err
+	}
 	token, err := registry.signer.Enrollment(nodeID, rentalID, generation, expires)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
@@ -175,9 +204,73 @@ func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (ca
 	}, nil
 }
 
+// window is how long this invitation stays redeemable: as long as the caller
+// says it is waiting, and DefaultInvitation for a caller that is waiting on
+// nobody in particular.
+//
+// A moment already past is refused rather than minted. Material nothing could
+// ever redeem is not an invitation, and handing one out would put a machine on a
+// provider's bill to boot into a refusal.
+func (registry *Registry) window(redeemableThrough time.Time) (time.Time, error) {
+	now := registry.now().UTC()
+	if redeemableThrough.IsZero() {
+		return registry.signer.Expiry(now.Add(registry.invitation)), nil
+	}
+	if !redeemableThrough.After(now) {
+		return time.Time{}, fmt.Errorf(
+			"node: an invitation redeemable through %s is already spent at %s",
+			redeemableThrough.UTC().Format(time.RFC3339), now.Format(time.RFC3339),
+		)
+	}
+	return registry.signer.Expiry(redeemableThrough.UTC()), nil
+}
+
+// EnrolledAt is when the machine invited under this identity opened its session,
+// and the zero time while none has. It is the one authority on the question: a
+// provider can say a machine is active and an operator can say an image has an
+// agent in it, and neither is a session Mercator can create a container through.
+//
+// It answers with the moment rather than with a yes because the moment is a fact
+// this registry holds and nobody else does. The agent calls Mercator to enrol, so
+// the session is dated when it opens; a caller told only that a node is ready
+// would have to date the arrival from its own next look, and then how long a
+// machine took to become usable would be a property of how often it was asked
+// about.
+//
+// An identity nobody has heard from is not an error. A node invited and never
+// filled is exactly the state provisioning waits in, and reporting it as a
+// failure would make every look at a machine still booting an incident.
+func (registry *Registry) EnrolledAt(ctx context.Context, ref capability.NodeRef) (time.Time, error) {
+	record, err := registry.record(ctx, ref)
+	if errors.Is(err, ErrNotFound) {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	if record.State != StateReady {
+		return time.Time{}, nil
+	}
+	return record.EnrolledAt, nil
+}
+
 // Enroll redeems an invitation for an authenticated session. Identity is not
 // negotiable: the request must name the node and generation the invitation was
 // minted for, and the invitation is spent by redeeming it.
+//
+// Two independent doors refuse a replay, and they refuse it for two different
+// reasons. The signer answers whether this material is this node's invitation and
+// whether its window is still open, which needs nothing durable and holds even
+// against a store that lost the record. The store answers whether this exact
+// invitation has already been redeemed, which holds inside the window, where the
+// signature is still perfectly good. A machine whose session lapsed presents
+// material both of them refuse eventually and only the second refuses at once, so
+// collapsing them would leave a replayed bootstrap accepted for the rest of its
+// window.
+//
+// The way back for a machine with nothing left to present is Reinvite, which is a
+// fresh invitation for the same identity, and never this route being made
+// forgiving.
 func (registry *Registry) Enroll(ctx context.Context, request capability.EnrollmentRequest) (capability.Enrollment, error) {
 	now := registry.now().UTC()
 	record, err := registry.lookupInvited(ctx, request)
@@ -185,7 +278,10 @@ func (registry *Registry) Enroll(ctx context.Context, request capability.Enrollm
 		return capability.Enrollment{}, err
 	}
 	if !registry.signer.VerifyEnrollment(request.NodeID, request.RentalID, request.Generation, request.EnrollmentToken, now) {
-		return capability.Enrollment{}, fmt.Errorf("node: enrollment token is not valid for %q generation %d", request.NodeID, request.Generation)
+		return capability.Enrollment{}, fmt.Errorf(
+			"%w: the material presented for %q generation %d is not this node's invitation or its window has closed",
+			ErrEnrollmentInvalid, request.NodeID, request.Generation,
+		)
 	}
 	enrolled, err := registry.store.Enroll(ctx, record.WorkspaceID, record.ID, Enrollment{
 		EnrollmentTokenID: TokenID(request.EnrollmentToken),
@@ -200,7 +296,7 @@ func (registry *Registry) Enroll(ctx context.Context, request capability.Enrollm
 	// A new enrollment supersedes any open session. Closing it here is what
 	// makes the fencing token meaningful rather than advisory.
 	registry.closeSession(enrolled.WorkspaceID, enrolled.ID)
-	sessionExpires := now.Add(registry.session)
+	sessionExpires := registry.signer.Expiry(now.Add(registry.session))
 	token, err := registry.signer.Session(enrolled.ID, enrolled.FencingToken, sessionExpires)
 	if err != nil {
 		return capability.Enrollment{}, err
@@ -324,12 +420,24 @@ func (registry *Registry) dispatch(
 	if err != nil {
 		return capability.OperationReceipt{}, err
 	}
+	// A retired node is a machine Mercator gave up, and a command appended for it
+	// is durable: it would be delivered to whatever reconnects on that identity
+	// rather than expiring with the decision that issued it. The reference this
+	// call carries was resolved before the generation ended, so this is the only
+	// place the answer can still change.
+	if record.Retired() {
+		return capability.OperationReceipt{}, fmt.Errorf("%w: %q is not asked to %s", ErrRetired, record.ID, kind)
+	}
 	if fencingToken != 0 && fencingToken < record.FencingToken {
 		return capability.OperationReceipt{}, fmt.Errorf("%w: %s carries %d under %d", ErrFenced, kind, fencingToken, record.FencingToken)
 	}
-	payload, err := json.Marshal(command)
+	wire, err := json.Marshal(command)
 	if err != nil {
 		return capability.OperationReceipt{}, fmt.Errorf("node: encode %s: %w", kind, err)
+	}
+	payload, err := json.Marshal(recorded(command))
+	if err != nil {
+		return capability.OperationReceipt{}, fmt.Errorf("node: record %s: %w", kind, err)
 	}
 	now := registry.now().UTC()
 	stored, duplicate, err := registry.store.AppendOperation(ctx, Operation{
@@ -351,8 +459,37 @@ func (registry *Registry) dispatch(
 	// Delivery is best effort on purpose. The command is durable now, so a node
 	// that is disconnected receives it on its next session rather than the work
 	// being lost or the caller blocking on a machine that may never answer.
-	registry.deliver(record.WorkspaceID, record.ID, commandFrom(stored))
+	//
+	// What is delivered is the command as it was issued, and what was recorded a
+	// moment ago is the command without its material. The two encodings are the
+	// whole of why this hands over the wire bytes rather than the stored ones: a
+	// desire is durable and a credential minted for one fetch is not.
+	delivered := commandFrom(stored)
+	delivered.Payload = wire
+	registry.deliver(record.WorkspaceID, record.ID, delivered)
 	return capability.OperationReceipt{OperationID: operationID, AcceptedAt: now}, nil
+}
+
+// materialHolder is a command carrying something a machine may present. Every
+// other command is its own record.
+type materialHolder interface {
+	// WithoutMaterial is this command with every bearer credential taken out and
+	// the bound each was minted under left in. A registry secret and a signed
+	// location are what a holder can spend; the operation, workspace, content and
+	// expiry beside them are the record of what Mercator authorised and are
+	// presentable to nobody.
+	WithoutMaterial() any
+}
+
+// recorded is what the durable record holds of one command. It is a separate
+// encoding rather than a redaction on the way out because node_operations is
+// kept for the life of the deployment and is never pruned: material written
+// there outlives its own window by years, in a file an operator backs up.
+func recorded(command any) any {
+	if holder, ok := command.(materialHolder); ok {
+		return holder.WithoutMaterial()
+	}
+	return command
 }
 
 func commandFrom(operation Operation) Command {
@@ -377,20 +514,42 @@ func (registry *Registry) record(ctx context.Context, ref capability.NodeRef) (R
 	return record, nil
 }
 
-// Reinvite mints a fresh invitation for an identity that already exists. An
-// agent whose machine came back without its session credential, or a Rental
+// Reinvite is the invitation an identity that already exists is redeemable on.
+// An agent whose machine came back without its session credential, or a Rental
 // generation that restarted, joins through this rather than replaying a spent
-// invitation. The existing enrollment stays valid until the new one is
-// redeemed, so a healthy node is never cut off by an invitation nobody uses.
-func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID string) (capability.NodeBootstrap, error) {
+// invitation.
+//
+// An invitation still outstanding is handed back rather than replaced, and that
+// is the whole of what makes this safe to ask for again. Redeeming is an exact
+// match on the token the record names, so minting a fresh one invalidates the
+// one already out there and the machine holding it is a paid host that can no
+// longer enrol. Provisioning asks for this on every attempt, before it can know
+// whether a machine from an earlier attempt exists, so an identity's material
+// has to be stable across attempts for a machine adopted from one of them to be
+// able to join at all.
+//
+// A fresh one is minted only where nothing can still be holding a usable copy of
+// the old one: an invitation already redeemed, which the record clears, one whose
+// window has closed, and one that closes before the caller stops waiting. The
+// last is not a machine given up on: an invitation that lapses inside the wait
+// cannot end in an enrolment whoever is holding it, so replacing it costs the
+// machine already out there nothing and gives the one about to be built material
+// that will still be good when it boots.
+func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID string, redeemableThrough time.Time) (capability.NodeBootstrap, error) {
 	record, err := registry.store.Get(ctx, workspaceID, nodeID)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
 	}
-	if record.State == StateRetired {
+	if record.Retired() {
 		return capability.NodeBootstrap{}, fmt.Errorf("node: %q is retired and cannot be invited again", nodeID)
 	}
-	expires := registry.now().UTC().Add(registry.invitation)
+	if outstanding, held := registry.outstandingInvitation(record, redeemableThrough); held {
+		return outstanding, nil
+	}
+	expires, err := registry.window(redeemableThrough)
+	if err != nil {
+		return capability.NodeBootstrap{}, err
+	}
 	token, err := registry.signer.Enrollment(record.ID, record.RentalID, record.Generation, expires)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
@@ -398,6 +557,40 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 	if err := registry.store.Reinvite(ctx, workspaceID, nodeID, TokenID(token), expires); err != nil {
 		return capability.NodeBootstrap{}, err
 	}
+	return registry.bootstrapFor(record, token), nil
+}
+
+// outstandingInvitation is the invitation this record still names, rebuilt from
+// what the record holds. A token is a signature over the identity, the
+// generation and the expiry, so the one an earlier invitation handed out is
+// derivable rather than kept: what is stored is its digest, and a control plane
+// that stored the credential itself would be holding a bearer secret for the
+// life of the deployment.
+//
+// The digest is checked rather than assumed. A record whose expiry no longer
+// derives the token it names is one this registry cannot reproduce the material
+// for, and the way forward there is a fresh invitation rather than handing a
+// machine a credential the store will refuse.
+//
+// It has to outlast the caller's wait and not merely this moment. Provisioning
+// asks for material before the provider answers, and what it does with the answer
+// is write it onto a machine that has yet to be built, so an invitation with
+// seconds left is one that lapses while that machine is still booting.
+func (registry *Registry) outstandingInvitation(record Record, redeemableThrough time.Time) (capability.NodeBootstrap, bool) {
+	if record.EnrollmentTokenID == "" || !registry.now().UTC().Before(record.EnrollmentExpires) {
+		return capability.NodeBootstrap{}, false
+	}
+	if !redeemableThrough.IsZero() && record.EnrollmentExpires.Before(redeemableThrough.UTC()) {
+		return capability.NodeBootstrap{}, false
+	}
+	token, err := registry.signer.Enrollment(record.ID, record.RentalID, record.Generation, record.EnrollmentExpires)
+	if err != nil || TokenID(token) != record.EnrollmentTokenID {
+		return capability.NodeBootstrap{}, false
+	}
+	return registry.bootstrapFor(record, token), true
+}
+
+func (registry *Registry) bootstrapFor(record Record, token string) capability.NodeBootstrap {
 	return capability.NodeBootstrap{
 		ControlPlaneURL: registry.controlPlaneURL,
 		NodeID:          record.ID,
@@ -405,7 +598,27 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 		Generation:      record.Generation,
 		EnrollmentToken: token,
 		AgentVersion:    registry.agentVersion,
-	}, nil
+	}
+}
+
+// Retire ends this node's working life because the Rental generation it was
+// invited for is over. The identity stays in the fleet as history: what it was
+// told and what it reported is what a later reconciliation reads, and deleting it
+// would leave the machine's last word nowhere.
+//
+// The record is written before the session is ended, in that order. The record is
+// what refuses the machine everything: closing the session only drops the
+// connection it happens to hold, and an agent redials in milliseconds, so a
+// control plane that ended the session and failed to write would hand the same
+// credential a fresh session preloaded with every command the last one never
+// acknowledged. Written first, a control plane that stops in between still offers
+// the machine to nobody and answers its next connection with ErrRetired.
+func (registry *Registry) Retire(ctx context.Context, workspaceID, nodeID string) error {
+	if err := registry.store.Retire(ctx, workspaceID, nodeID); err != nil {
+		return err
+	}
+	registry.closeSession(workspaceID, nodeID)
+	return nil
 }
 
 // WithIdentitySource replaces how the registry mints identities for machines an

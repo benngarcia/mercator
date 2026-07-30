@@ -72,7 +72,20 @@ type InvariantObservation struct {
 	// launched. A rule about the orphan policy reads it rather than the fleet as it
 	// stands, because the interesting case is capacity that is no longer here: a
 	// machine converged without a stated rule leaves nothing behind to ask about.
-	SeededOrphans               map[string]bool
+	SeededOrphans map[string]bool
+	// BootstrapCredentials is every enrollment token this world handed a machine
+	// and what became of it. It is the only thing in an observation that carries
+	// live credential material, and it carries it because the rules about a
+	// bootstrap are asked in its terms: how many machines held it, how many times
+	// it was redeemed, and whether it turns up anywhere in Mercator's own record.
+	// It is built in memory for one evaluation and exported nowhere.
+	BootstrapCredentials []bootstrapCredential
+	// ContentCredentials is every credential this world watched Mercator hand a
+	// machine so it could fetch one image or one Artifact, beside what the command
+	// it arrived on was really for. It carries live material for the reason the
+	// bootstraps do: the rule about it asks whether one fetch's material was ever
+	// presented for another, and only the material itself can answer that.
+	ContentCredentials          []contentCredential
 	ProjectionRebuildEquivalent bool
 }
 
@@ -121,7 +134,23 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.cache_mount_workspace_isolation", check: cacheMountWorkspaceIsolation},
 		invariantRule{id: "safety.projection_rebuild_equivalence", check: projectionRebuildEquivalence},
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
+		invariantRule{
+			id:    "safety.bootstrap_credential_is_short_lived_and_single_use",
+			check: bootstrapCredentialIsShortLivedAndSingleUse,
+		},
+		invariantRule{
+			id:    "safety.content_credentials_are_scoped_and_expiring",
+			check: contentCredentialsAreScopedAndExpiring,
+		},
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
+		invariantRule{id: "safety.reusable_capacity_has_an_enrolled_runtime", check: reusableCapacityHasAnEnrolledRuntime},
+		invariantRule{id: "safety.host_supports_the_image_it_was_given", check: hostSupportsTheImageItWasGiven},
+		invariantRule{id: "safety.a_rental_identity_is_capacity_mercator_holds", check: aRentalIdentityIsCapacityMercatorHolds},
+		invariantRule{id: "safety.enrolment_names_the_generation_it_was_invited_for", check: enrolmentNamesTheGenerationItWasInvitedFor},
+		invariantRule{
+			id:    "safety.a_machine_holds_material_the_control_plane_will_still_accept",
+			check: aMachineHoldsMaterialTheControlPlaneWillStillAccept,
+		},
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
 		invariantRule{id: "safety.transfer_rate_is_attributed", check: transferRateIsAttributed},
 		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},
@@ -144,8 +173,17 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{
 			id:          "liveness.lost_response_reconciliation",
 			assumptions: []string{"the provider preserves operation identity", "provider observation remains available"},
-			bound:       5 * time.Minute,
+			bound:       lostResponseBound,
 			check:       lostResponseReconciliation,
+		},
+		invariantRule{
+			id: "liveness.provisioned_capacity_enrolls_or_is_reclaimed",
+			assumptions: []string{
+				"virtual time advances",
+				"the provider records every allocation it accepted",
+			},
+			bound: provisionedCapacityBound,
+			check: provisionedCapacityEnrolsOrIsReclaimed,
 		},
 		invariantRule{
 			id:          "liveness.stale_lease_expiry",
@@ -802,6 +840,17 @@ func effectMutatesWorld(operation string) bool {
 	case OperationProviderLaunch,
 		OperationProviderRelease,
 		OperationProviderTerminate,
+		// Allocating a machine, suspending it, bringing it back, and destroying it
+		// each change what a provider is holding for Mercator, and each is asked for
+		// under an operation key the provider is expected to honour. The two reads
+		// in the same family, capacity.observe and capacity.list_owned, are
+		// deliberately not here, and neither are the three things this world does on
+		// its own account: capacity.preempted, node.enrolled, and
+		// node.session_renewed.
+		OperationCapacityProvision,
+		OperationCapacityStop,
+		OperationCapacityResume,
+		OperationCapacityTerminate,
 		OperationNodePrepareImage,
 		OperationNodePrepareArtifact,
 		OperationNodePrepareAbandoned,
@@ -1033,6 +1082,212 @@ func ephemeralCapacityNotReused(observation InvariantObservation) error {
 				len(schedule.Bookings),
 			)
 		}
+	}
+	return nil
+}
+
+// reusableCapacityHasAnEnrolledRuntime is the lane split read from the side the
+// machines are on. safety.ephemeral_capacity_not_reused holds that a one-shot
+// product accumulates nothing once its workload exits. This holds the converse:
+// the capacity that does accumulate is capacity Mercator can reach, because every
+// way a machine accumulates anything runs through an agent of Mercator's on it.
+//
+// Each of the four is that agent's own work. An image inventory is what the agent
+// enumerated on its own disk. A cache is a volume the agent attached. A verified
+// Artifact copy is a fetch the agent performed and hashed on arrival. A second
+// Booking is a promise that the next Run will be launched here, and a launch is a
+// command that travels down the node's own outbound session. A machine no agent
+// enrolled on can do none of the four, so a world that shows one doing any of them
+// is a world where Mercator is counting warmth, room, or a queue on a host it has
+// no way to speak to, and the Run that inherits it begins by discovering there is
+// nobody there.
+//
+// What the World Tape seeded is exempt for images and Artifact copies, exactly as
+// safety.locality_provenance exempts it: a machine Mercator borrows a slot on may
+// well already be sitting on the content, and that is a fact about the host rather
+// than something an agent of Mercator's put there. A cache has no such exemption
+// and needs none. A cache exists only where a workload wrote it, so a fixture
+// stating one is stating that Mercator ran something on that machine and the
+// machine kept what it wrote, which is the claim an enrolment stands behind.
+//
+// The queue clause is asked of the enrolments rather than of the fleet as it
+// stands, because a Rental whose machine has gone is the case most worth asking
+// about: the lease and the Bookings waiting on it outlive the offer, and a rule
+// that read the current fleet would fall silent about a queue at the moment the
+// machine holding it stopped being published.
+//
+// Only capacity that keeps what it runs is asked, which is what the name of this
+// rule says and what an earlier revision did not do. A listing and a one-shot
+// host are refused the same three things by safety.locality_provenance, over
+// exactly the same worlds, and that rule names the reason an operator has to act
+// on: the machine does not exist yet, or it holds nothing once its workload
+// exits. Neither has an agent to enrol, so answering first with a violation about
+// an enrolment sent a reader after the one remedy the ephemeral lane must never
+// apply.
+func reusableCapacityHasAnEnrolledRuntime(observation InvariantObservation) error {
+	enrolled, err := enrolledRuntimes(observation.Effects)
+	if err != nil {
+		return err
+	}
+	for _, offer := range observation.World.Offers {
+		if err := accumulationRunsThroughAnAgent(
+			offer,
+			enrolled,
+			observation.SeededLocality[offer.ID],
+			observation.SeededReplicas[offer.ID],
+		); err != nil {
+			return err
+		}
+	}
+	return everyQueueHasAnAgentToDispatchThrough(observation.RentalSchedules, enrolled)
+}
+
+// enrolledRuntime is every machine an agent of Mercator's has opened a session
+// for, and every lease those sessions were invited under. Both are read out of the
+// ledger rather than off the offers, because the ledger is the only account of
+// what really happened on the machine: an offer that claimed an enrolled runtime
+// would be the world agreeing with itself, which is the one thing a rule here may
+// never rest on.
+//
+// The two sets are kept apart because the two clauses ask different questions. An
+// inventory belongs to the machine that enumerated it, and a queue belongs to the
+// lease, and one lease may be invited against a second machine when its first
+// generation ends.
+type enrolledRuntime struct {
+	machines map[string]bool
+	rentals  map[string]bool
+}
+
+func enrolledRuntimes(effects []EffectRecord) (enrolledRuntime, error) {
+	enrolled := enrolledRuntime{machines: map[string]bool{}, rentals: map[string]bool{}}
+	for _, effect := range effects {
+		if effect.Operation != OperationNodeEnrolled || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		var session struct {
+			MachineID string `json:"machine_id"`
+			RentalID  string `json:"rental_id"`
+		}
+		if err := json.Unmarshal(effect.Request, &session); err != nil {
+			return enrolledRuntime{}, fmt.Errorf("decode enrolment %s: %w", effect.ID, err)
+		}
+		// An enrolment that names neither is a record this rule cannot use, and
+		// dropping it quietly is how the rule would weaken without anything saying
+		// so. The listing clause below is keyed on a machine handle being absent,
+		// so one such record read as an enrolment of the empty handle would clear
+		// every listing in the world at once.
+		if session.MachineID == "" || session.RentalID == "" {
+			return enrolledRuntime{}, fmt.Errorf(
+				"enrolment %s opened a session on machine %q under lease %q, and an enrolment names both",
+				effect.ID, session.MachineID, session.RentalID,
+			)
+		}
+		enrolled.machines[session.MachineID] = true
+		enrolled.rentals[session.RentalID] = true
+	}
+	return enrolled, nil
+}
+
+// accumulationRunsThroughAnAgent holds the three clauses about one machine. The
+// machine is named by its own handle rather than by the offer it was published
+// under, because an enrolment is about a machine and an offer is one publication
+// of it.
+//
+// Capacity that keeps nothing is not asked. A listing describes a machine that
+// does not exist yet and a one-shot host holds nothing once its workload exits,
+// so neither has an agent to enrol, and safety.locality_provenance refuses both
+// the same three things while naming the reason that is actually theirs.
+func accumulationRunsThroughAnAgent(
+	offer domain.OfferSnapshot,
+	enrolled enrolledRuntime,
+	seeded, seededCopies map[string]bool,
+) error {
+	if !offer.KeepsWhatItRuns() || enrolled.machines[offer.MachineID] {
+		return nil
+	}
+	for _, digest := range heldDigests(offer.Images) {
+		if seeded[digest] {
+			continue
+		}
+		return fmt.Errorf(
+			"offer %q holds %s, and no agent has enrolled on machine %q, so nothing of Mercator's fetched or enumerated it",
+			offer.ID, digest, offer.MachineID,
+		)
+	}
+	if len(offer.Caches.Mounts) > 0 {
+		return fmt.Errorf(
+			"offer %q holds cache %q for workspace %q, and no agent has enrolled on machine %q, so no workload of Mercator's ever wrote it there",
+			offer.ID, offer.Caches.Mounts[0].Name, offer.Caches.Mounts[0].WorkspaceID, offer.MachineID,
+		)
+	}
+	for _, replica := range offer.Artifacts.Replicas {
+		if seededCopies[replica.ArtifactID] {
+			continue
+		}
+		return fmt.Errorf(
+			"offer %q holds a copy of Artifact %q, and no agent has enrolled on machine %q, so nothing of Mercator's fetched those bytes or checked them",
+			offer.ID, replica.ArtifactID, offer.MachineID,
+		)
+	}
+	return nil
+}
+
+// everyQueueHasAnAgentToDispatchThrough holds the fourth clause. One Booking on a
+// lease is the Run that took the capacity, and the launch path answers for it. A
+// second is Mercator promising a Run it will be started on that machine when the
+// one ahead of it finishes, and the only thing that can start it is a command down
+// the node's own session.
+func everyQueueHasAnAgentToDispatchThrough(schedules map[string]domain.RentalSchedule, enrolled enrolledRuntime) error {
+	for _, rentalID := range slices.Sorted(maps.Keys(schedules)) {
+		schedule := schedules[rentalID]
+		if len(schedule.Bookings) < 2 || enrolled.rentals[rentalID] {
+			continue
+		}
+		return fmt.Errorf(
+			"Rental %q holds %d Bookings and no agent ever enrolled against it, so the Runs waiting there wait for a dispatch nothing can carry",
+			rentalID, len(schedule.Bookings),
+		)
+	}
+	return nil
+}
+
+// aRentalIdentityIsCapacityMercatorHolds is the law on who may carry a lease. A
+// Rental is Mercator's own record of capacity it holds, so the offers that carry
+// one are the machines it holds: standing capacity in the reusable lane, named by
+// the enrolment that put an agent on it. Everything else in a fleet is capacity to
+// acquire or a product that ends with its workload, and neither is a lease.
+//
+// The harm is a queue. A Rental Schedule is keyed by Rental identity, so an offer
+// that publishes one Mercator does not hold gives Placement somewhere to put a
+// Booking and somewhere for the next Run to wait: the second Run queues behind a
+// lease that was never allocated, is promised the first one's finish, and waits
+// for a machine nothing will ever free. That is the defect the production offer
+// route was carrying, in two forms. An adapter stated its own contract id as a
+// rental_id and it survived the reusable lane, and aggregation minted one for any
+// standing offer in that lane, which is OfferKind answering a question it does not
+// answer: Kind says who owns the host, so a marketplace listing of somebody
+// else's idle machine is standing.
+//
+// It is stated over the fleet as published rather than over the Bookings, because
+// the Bookings are downstream of the mistake. A Rental identity on a template for
+// a machine that does not exist yet is wrong when it is published, whether or not
+// a Run happened to land on it in this Blueprint, and a rule that waited for the
+// queue to form would pass every fixture with one Run in it.
+func aRentalIdentityIsCapacityMercatorHolds(observation InvariantObservation) error {
+	for _, offer := range observation.World.Offers {
+		if offer.RentalID == "" || offer.KeepsWhatItRuns() {
+			continue
+		}
+		reason := "is a template for a machine that does not exist yet"
+		if !offer.Lane.Reusable() {
+			reason = "is a one-shot product that holds nothing once its workload exits"
+		}
+		return fmt.Errorf(
+			"offer %q %s, and publishes Rental %q, which is a lease Mercator does not hold and a queue the next Run can wait in",
+			offer.ID,
+			reason,
+			offer.RentalID,
+		)
 	}
 	return nil
 }
@@ -2369,11 +2624,37 @@ func projectionRebuildEquivalence(observation InvariantObservation) error {
 	return nil
 }
 
+// secretsAbsent is the standing guard on what Mercator writes down. It reads the
+// public event log and the Effect Ledger, which together are everything a Run
+// Bundle exports and everything an operator can ask this control plane for.
+//
+// It holds three things, and the first one alone was a rule about vocabulary
+// rather than about secrets. A field called credential, password, or secret is
+// refused, which catches material somebody filed under an honest name. A signed
+// URL is refused wherever it appears, because a presigned read is a bearer
+// credential written as a location: recording the location a node was handed
+// would put a working read of the object store into every export, and the query
+// markers named here belong to no field name in this record. And a bootstrap
+// credential this world minted is refused whatever it is filed under, which is
+// the clause the name half of the rule cannot reach: an enrollment token in a
+// field called enrollment_token passes every name check ever written, because
+// the name is the truthful one.
+//
+// The last clause is stated over the credentials rather than over a shape,
+// because a token has no shape. What makes a string a secret here is that this
+// world handed it to a machine, and the world is the only thing that knows.
 func secretsAbsent(observation InvariantObservation) error {
-	forbidden := [][]byte{
+	forbiddenFields := [][]byte{
 		[]byte(`"credential"`),
 		[]byte(`"password"`),
 		[]byte(`"secret"`),
+	}
+	signedReads := [][]byte{
+		[]byte("x-amz-signature="),
+		[]byte("x-amz-credential="),
+		[]byte("x-goog-signature="),
+		[]byte("&signature="),
+		[]byte("?signature="),
 	}
 	for _, value := range []any{observation.MercatorEvents, observation.Effects} {
 		encoded, err := json.Marshal(value)
@@ -2381,9 +2662,120 @@ func secretsAbsent(observation InvariantObservation) error {
 			return err
 		}
 		lower := bytes.ToLower(encoded)
-		for _, token := range forbidden {
-			if bytes.Contains(lower, token) {
-				return fmt.Errorf("recorded data contains forbidden secret field %s", token)
+		for _, field := range forbiddenFields {
+			if bytes.Contains(lower, field) {
+				return fmt.Errorf("recorded data contains forbidden secret field %s", field)
+			}
+		}
+		for _, marker := range signedReads {
+			if bytes.Contains(lower, marker) {
+				return fmt.Errorf("recorded data contains a signed URL, which is a credential written as a location: %s", marker)
+			}
+		}
+		for _, credential := range observation.BootstrapCredentials {
+			// A credential with no material is a record the rule about bootstraps
+			// refuses on its own. Searching for the empty string here would match
+			// every record ever written, so this rule leaves it to the one that
+			// names the problem.
+			if credential.Token == "" {
+				continue
+			}
+			if bytes.Contains(encoded, []byte(credential.Token)) {
+				return fmt.Errorf(
+					"recorded data contains the enrollment token %s was bootstrapped with, whatever field it is filed under",
+					credential.NodeID,
+				)
+			}
+		}
+		// The material a machine was handed for one fetch is read the same way and
+		// for the same reason. It is caught by the markers above only when it is a
+		// signed URL and the marker happens to be one of the five named there; a
+		// registry secret in a field called anything at all is a string this world
+		// knows it minted and the record has no business carrying.
+		for _, credential := range observation.ContentCredentials {
+			if credential.Material == "" {
+				continue
+			}
+			if bytes.Contains(encoded, []byte(credential.Material)) {
+				return fmt.Errorf(
+					"recorded data contains the material a machine was handed to fetch %s, whatever field it is filed under",
+					credential.Content,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+// bootstrapCredentialIsShortLivedAndSingleUse is the law on the one credential a
+// machine ever receives from outside itself. A bootstrap is how a host that
+// Mercator has never spoken to proves it is the node it claims to be, and it is
+// the whole of what an attacker needs to become that node, so three things hold
+// of every one this world minted.
+//
+// One machine holds it. A credential carried to two accepted allocations is one
+// invitation two hosts can enrol as, and the second is a machine Mercator would
+// then address every command about the first to.
+//
+// It is redeemed once. This is what makes the credential short-lived in the only
+// sense that matters: it stops being usable when it is used, rather than when
+// somebody remembers to expire it. It is counted rather than flagged because the
+// violation is the second redemption, and the store's own spend record and the
+// signer's expiry are the two doors production refuses it at.
+//
+// It is never written down. The event log and the ledger are what a Run Bundle
+// exports and what an operator can read back, so a token in either is a token in
+// every copy of the record forever, long outliving the thirty minutes the
+// invitation is redeemable for.
+//
+// The third clause is deliberately also held by safety.secrets_absent, which
+// reads the same bytes for the same string. They are not the same rule: that one
+// is about everything Mercator may not write and knows nothing about redemption,
+// and this one is about the lifecycle of one credential and would still be the
+// rule that fails if the record were clean and the token were spent twice.
+func bootstrapCredentialIsShortLivedAndSingleUse(observation InvariantObservation) error {
+	for _, credential := range observation.BootstrapCredentials {
+		// A credential with no material is a record this rule cannot use, and
+		// dropping it quietly is how the rule would weaken without anything saying
+		// so: the clause below searches the record for the token, and the empty
+		// string is in every record ever written.
+		if credential.Token == "" {
+			return fmt.Errorf(
+				"the invitation minted for %q generation %d carries no material, and a bootstrap is the material a machine presents",
+				credential.NodeID, credential.Generation,
+			)
+		}
+		if credential.Provisions > 1 {
+			return fmt.Errorf(
+				"the bootstrap minted for %s generation %d was handed to %d machines, and each of them can enrol as that node",
+				credential.NodeID, credential.Generation, credential.Provisions,
+			)
+		}
+		if credential.Redemptions > 1 {
+			return fmt.Errorf(
+				"the bootstrap minted for %s generation %d was redeemed %d times, and an invitation is spent by redeeming it",
+				credential.NodeID, credential.Generation, credential.Redemptions,
+			)
+		}
+	}
+	return recordedCredentials(observation)
+}
+
+// recordedCredentials is the clause about the record, read over the two halves of
+// it Mercator publishes: its own event log, and the ledger of what really crossed
+// into the world.
+func recordedCredentials(observation InvariantObservation) error {
+	for _, value := range []any{observation.MercatorEvents, observation.Effects} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		for _, credential := range observation.BootstrapCredentials {
+			if bytes.Contains(encoded, []byte(credential.Token)) {
+				return fmt.Errorf(
+					"the bootstrap minted for %s generation %d appears in Mercator's own record, which outlives the invitation by the whole life of the record",
+					credential.NodeID, credential.Generation,
+				)
 			}
 		}
 	}
@@ -2414,22 +2806,67 @@ func admittedRunProgress(observation InvariantObservation) error {
 	return nil
 }
 
+// lostResponseBound is how long an answer Mercator never got may stay
+// unreconciled. It is a bound and not an instant because reconciliation is the
+// next sweep's work rather than the failing call's: the deployment's loop
+// records what it could not settle and comes back, and a rule demanding the
+// answer inside the same moment would be a rule that no reconcile loop can keep
+// and that only a control plane asking again in the same breath ever passes.
+const lostResponseBound = 5 * time.Minute
+
 func lostResponseReconciliation(observation InvariantObservation) error {
 	runs := runsByID(observation.Runs)
 	active := map[string]bool{}
 	for _, execution := range observation.World.ActiveExecutions {
 		active[execution.RunID] = true
 	}
+	// A capacity effect is correlated by the lease rather than by the Run, because
+	// the lease is what outlives the decision that took it out. What reconciles a
+	// lost provision is therefore a later answer about that same lease: the
+	// duplicate the repeat got, or the terminate that gave the machine back.
+	settledLease, err := settledLeases(observation.Effects)
+	if err != nil {
+		return err
+	}
 	for _, effect := range observation.Effects {
 		if effect.Response != EffectResponseLost {
 			continue
 		}
 		run := runs[effect.CorrelationID]
-		if !active[effect.CorrelationID] && run.ID == "" {
-			return fmt.Errorf("lost response for %q has neither active consequence nor projected Run", effect.CorrelationID)
+		if active[effect.CorrelationID] || run.ID != "" || settledLease[effect.CorrelationID] {
+			continue
 		}
+		if unreconciled := observation.Now.Sub(effect.At); unreconciled <= lostResponseBound {
+			continue
+		}
+		return fmt.Errorf(
+			"lost response for %q has had neither active consequence nor projected Run for %s",
+			effect.CorrelationID, observation.Now.Sub(effect.At),
+		)
 	}
 	return nil
+}
+
+// settledLeases is every lease the world has answered about since, whether by
+// naming the machine an earlier command allocated or by ending it.
+func settledLeases(effects []EffectRecord) (map[string]bool, error) {
+	settled := map[string]bool{}
+	for _, effect := range effects {
+		if effect.Response == EffectResponseLost || effect.Command == EffectCommandRejected {
+			continue
+		}
+		switch effect.Operation {
+		case OperationCapacityProvision, OperationCapacityTerminate:
+		default:
+			continue
+		}
+		lease, err := capacityLeaseOf(effect)
+		if err != nil {
+			return nil, err
+		}
+		settled[lease.RentalID] = true
+	}
+	return settled, nil
 }
 
 func staleLeaseExpiry(observation InvariantObservation) error {

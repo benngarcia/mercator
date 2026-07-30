@@ -83,6 +83,15 @@ type Record struct {
 	Purchase Purchase `json:"purchase,omitzero"`
 }
 
+// Retired reports whether this node's Rental generation is over. It is the only
+// terminal state, and what it withdraws is standing: this identity enrolls no
+// more, opens no session, renews no lease, is published as capacity to nobody,
+// and is asked to do nothing further. It withdraws nothing the machine says about
+// what it already did, because the node is the only authority on that and a
+// generation that ended while a container was still running is exactly when
+// Mercator most needs to hear it.
+func (record Record) Retired() bool { return record.State == StateRetired }
+
 // Purchase is the sale one enrolled machine sits under, as its operator stated it.
 // It is one type rather than three fields because it is one statement: an operator
 // answering "what am I buying, for whom, and until when" answers all of it at once,

@@ -3,10 +3,14 @@ package nodeagent
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -32,6 +36,17 @@ type DockerRuntime struct {
 	// labelPrefix namespaces the labels the agent stamps on its containers, so
 	// Observe reports Mercator's workloads and nothing else running on the box.
 	labelPrefix string
+	// acceleratorBinary is the vendor tool this node asks about its own cards and
+	// the driver under them. It is the runtime's own configuration for the reason
+	// the daemon binary above is: a test points it at a machine that answers
+	// differently from this one, and nothing else can.
+	acceleratorBinary string
+	// kernelReports is where this node reads the kernel's own report of itself,
+	// which is /proc on the machine and a stand-in in a test. It is what decides
+	// whether a vendor tool that would not answer is a machine with no driver or
+	// an agent that could not see one, and hardware is the one thing a case
+	// cannot arrange.
+	kernelReports string
 	// artifactRoot is where this node keeps immutable Artifact copies. A daemon
 	// has no concept of one, so it is the agent's own durable storage rather
 	// than anything Docker manages. A runtime given none replicates nothing and
@@ -56,11 +71,40 @@ func WithArtifactRoot(root string) RuntimeOption {
 	return func(docker *DockerRuntime) { docker.artifactRoot = root }
 }
 
+// WithAcceleratorTool points this node at the vendor tool it asks about its own
+// cards, by absolute path where the bare name will not resolve.
+//
+// It is operator configuration and not only a test seam. A unit file with a
+// trimmed Environment=PATH, or a distribution that installs the tool somewhere
+// the service PATH does not reach, is a machine whose agent cannot find
+// nvidia-smi by name; on an 8xH100 box that is the difference between a fleet
+// that runs GPU work and one that reports it has none. It is the second reason
+// this exists, the first being that a test can stand in a machine with four
+// A100s or no driver at all, which is the only way the reports this node
+// publishes about hardware can be exercised anywhere but on the hardware.
+func WithAcceleratorTool(binary string) RuntimeOption {
+	return func(docker *DockerRuntime) { docker.acceleratorBinary = binary }
+}
+
+// WithKernelReports points this node at the kernel's own reports about itself,
+// which is /proc everywhere but in a case that has to stand in a machine whose
+// NVIDIA module is loaded or absent.
+func WithKernelReports(root string) RuntimeOption {
+	return func(docker *DockerRuntime) { docker.kernelReports = root }
+}
+
 func NewDockerRuntime(binary string, options ...RuntimeOption) *DockerRuntime {
 	if binary == "" {
 		binary = "docker"
 	}
-	runtime := &DockerRuntime{binary: binary, now: time.Now, labelPrefix: "mercator.", network: newPathMeasurements()}
+	runtime := &DockerRuntime{
+		binary:            binary,
+		acceleratorBinary: "nvidia-smi",
+		kernelReports:     "/proc",
+		now:               time.Now,
+		labelPrefix:       "mercator.",
+		network:           newPathMeasurements(),
+	}
 	for _, option := range options {
 		option(runtime)
 	}
@@ -87,6 +131,11 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 		// content publishes nothing here, and Placement prices that silence with
 		// its own stated assumption rather than mistaking it for a slow link.
 		Network: docker.network.facts(facts.ObservedAt),
+		// What this machine holds and what drives it, which are the three fields
+		// phase 2 declared and nothing wrote. Until something did, every enrolled
+		// GPU machine published an empty accelerator inventory and was struck out
+		// of every accelerator placement it was perfect for.
+		Accelerator: docker.acceleratorFacts(ctx),
 	}
 	if slices.Contains(info.runtimeNames(), "nvidia") {
 		facts.Host.AcceleratorToolkit = "nvidia-container-toolkit"
@@ -111,13 +160,147 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 
 // PrepareImage pulls an image by its exact manifest digest. A tag is never
 // image identity, so the reference the control plane sends is already pinned.
+//
+// It goes to the daemon's own API rather than to the CLI, for one reason: the
+// credential. The CLI reads registry material out of a config file, so pulling a
+// private image through it means writing the material onto the machine and
+// remembering to remove it, and a pull that is killed halfway leaves it there.
+// The API takes it as a header, so the material this node was handed exists in
+// this process's memory for the length of one request and nowhere else. That is
+// what "the machine forgets it afterwards" has to mean on a host an operator
+// rents by the hour.
 func (docker *DockerRuntime) PrepareImage(ctx context.Context, command capability.PrepareImageCommand) error {
-	reference := command.Reference
-	if reference == "" {
+	if command.Reference == "" {
 		return fmt.Errorf("prepare image: no digest-pinned reference to pull")
 	}
-	if _, err := docker.run(ctx, "pull", reference); err != nil {
-		return fmt.Errorf("pull %s: %w", reference, err)
+	if err := docker.authorisedPull(command); err != nil {
+		return fmt.Errorf("pull %s: %w", command.Reference, err)
+	}
+	return docker.pullImage(ctx, command)
+}
+
+// authorisedPull is the machine checking its own material before it presents it.
+// The control plane minted it for one operation, one workspace and one digest,
+// and a node that presented whatever it was handed would make that scope a claim
+// in a comment rather than something either end enforces: the case it catches is
+// a credential for one workspace's private image arriving on a command to pull
+// another's.
+//
+// No credential is not a refusal. An image any anonymous reader can have is
+// minted nothing, and a node that failed here would be unable to pull the public
+// images most workloads run.
+//
+// A bound with no material behind it is a refusal, and a distinct one. It is
+// what a command replayed on a later session carries: the control plane's record
+// of a pull holds what was authorised and never the secret, so an agent
+// reconnecting to a command issued while it was down is handed the record rather
+// than the pull. Presenting it would reach the registry as an empty password and
+// come back in the registry's vocabulary instead of Mercator's.
+func (docker *DockerRuntime) authorisedPull(command capability.PrepareImageCommand) error {
+	credential := command.RegistryCredential
+	if credential.Zero() {
+		return nil
+	}
+	if credential.Secret == "" {
+		return fmt.Errorf(
+			"this node was handed the record of a pull minted for %s rather than the pull itself, so there is nothing to present",
+			credential.Content,
+		)
+	}
+	if err := credential.Authorises(command.OperationID, command.WorkspaceID, command.ManifestDigest, docker.now().UTC()); err != nil {
+		return err
+	}
+	if host := domain.ReferenceRegistry(command.Reference); credential.Registry != host {
+		return fmt.Errorf("this credential is %s's and the reference is served from %s", credential.Registry, host)
+	}
+	return nil
+}
+
+// pullImage asks the daemon for the content, carrying whatever this node was
+// given to prove it may have it. The reference is split the way the API takes
+// it, with the digest as the tag, so what is fetched is the content the control
+// plane named rather than whatever a label points at now.
+func (docker *DockerRuntime) pullImage(ctx context.Context, command capability.PrepareImageCommand) error {
+	endpoint, err := docker.endpoint(ctx)
+	if err != nil {
+		return err
+	}
+	client, base, err := daemonClient(endpoint)
+	if err != nil {
+		return err
+	}
+	repository, digest, _ := strings.Cut(command.Reference, "@")
+	query := url.Values{"fromImage": {repository}}
+	if digest != "" {
+		query.Set("tag", digest)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		base+"/"+contentStoreAPIVersion+"/images/create?"+query.Encode(), nil)
+	if err != nil {
+		return fmt.Errorf("pull %s: %w", command.Reference, err)
+	}
+	if header := registryAuthHeader(command.RegistryCredential); header != "" {
+		request.Header.Set("X-Registry-Auth", header)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("pull %s: %w", command.Reference, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("pull %s: the daemon answered %s: %s", command.Reference, response.Status, strings.TrimSpace(string(body)))
+	}
+	return pullOutcome(response.Body, command.Reference)
+}
+
+// registryAuthHeader is the material as the daemon takes it: one JSON object,
+// base64url encoded, on the request that uses it. It is empty for content that
+// needs none, and an empty header is not sent at all: a daemon given an empty
+// credential answers 500 rather than pulling anonymously.
+func registryAuthHeader(credential domain.RegistryPull) string {
+	if credential.Zero() {
+		return ""
+	}
+	encoded, err := json.Marshal(map[string]string{
+		"username":      credential.Username,
+		"password":      credential.Secret,
+		"serveraddress": credential.Registry,
+	})
+	if err != nil {
+		return ""
+	}
+	return base64.URLEncoding.EncodeToString(encoded)
+}
+
+// pullOutcome reads the daemon's progress stream to its end and answers with
+// what the pull did. The stream has to be drained whatever happens, because the
+// daemon performs the pull while it writes it and a caller that stopped reading
+// would leave the fetch half done.
+//
+// A refused pull arrives inside a successful response. The daemon accepted the
+// request, began answering, and then found it could not have the content, so the
+// failure is a line in the body rather than a status: a node that read the status
+// alone would report every private image it may not read as content it holds.
+func pullOutcome(body io.Reader, reference string) error {
+	decoder := json.NewDecoder(body)
+	var failure string
+	for {
+		var message struct {
+			Error string `json:"error"`
+		}
+		if err := decoder.Decode(&message); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return fmt.Errorf("pull %s: read what the daemon was doing: %w", reference, err)
+		}
+		if message.Error != "" {
+			failure = message.Error
+		}
+	}
+	if failure != "" {
+		return fmt.Errorf("pull %s: %s", reference, failure)
 	}
 	return nil
 }

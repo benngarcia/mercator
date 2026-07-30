@@ -67,6 +67,30 @@ func WithPrewarm(prewarmer Prewarmer, policy PrewarmPolicy, clock PreparationClo
 	}
 }
 
+// ContentCredentials is the control plane's authority to let one machine fetch
+// one piece of content. It is asked here rather than at the Broker because the
+// mint is a control-plane act: Mercator holds the registry account and the
+// object-store key, decides that this machine may have this content now, and
+// hands out material that says so and expires. A seam below this one would be a
+// machine's own runtime deciding what it is allowed to read.
+type ContentCredentials interface {
+	// RegistryPull is the material for one pull of one digest-pinned reference.
+	// Content any anonymous reader can have is minted nothing, which is the
+	// answer rather than an error.
+	RegistryPull(ctx context.Context, operation, workspaceID, reference string) (domain.RegistryPull, error)
+	// ArtifactRead is one read of one durable location, minted as a URL that
+	// expires.
+	ArtifactRead(ctx context.Context, operation, workspaceID, artifactID, location string) (domain.ArtifactRead, error)
+}
+
+// WithContentCredentials gives Mercator the accounts a machine must never hold.
+// Without it nothing is minted and every fetch a node makes is anonymous, which
+// is what every deployment before this had: both fields of the node contract had
+// been declared since phase 2 and populated by nobody.
+func WithContentCredentials(credentials ContentCredentials) Option {
+	return func(o *Orchestrator) { o.contentCredentials = credentials }
+}
+
 // PreparationTriggers is every recorded event after which what Mercator wants
 // prepared may be different: a Booking that named a machine, one that was
 // dispatched and is no longer speculative, a launch a host is now getting ready
@@ -490,9 +514,10 @@ func admittedPreparation(state runState) (string, time.Time, bool) {
 
 // prewarmItems is the content one queued Run will need where it is going: the
 // image its container runs, and the immutable versions it declared reading.
-// Each Artifact carries the durable location the catalog names, which is what a
-// machine reads it from: the control plane mints the read, so no object-store
-// credential of Mercator's is ever on a node.
+// Each item carries what that one machine may present to fetch that one piece of
+// content, minted here and expiring: the registry account and the object-store
+// key stay in the control plane, and a host an operator rents by the hour holds
+// neither.
 func (o *Orchestrator) prewarmItems(ctx context.Context, workspaceID string, placement queuedPlacement) ([]adapter.PrepareItem, error) {
 	item := adapter.PrepareItem{
 		Kind:            adapter.PrepareImage,
@@ -508,6 +533,11 @@ func (o *Orchestrator) prewarmItems(ctx context.Context, workspaceID string, pla
 	}
 	item.Image = containers[0].Image
 	item.Platform = containers[0].Platform
+	pull, err := o.mintPull(ctx, workspaceID, item)
+	if err != nil {
+		return nil, err
+	}
+	item.RegistryCredential = pull
 	items := []adapter.PrepareItem{item}
 	versions, err := o.consumedArtifacts(ctx, workspaceID, placement.workload)
 	if err != nil {
@@ -517,7 +547,7 @@ func (o *Orchestrator) prewarmItems(ctx context.Context, workspaceID string, pla
 		if !version.Durable() {
 			continue
 		}
-		items = append(items, adapter.PrepareItem{
+		artifact := adapter.PrepareItem{
 			Kind:            adapter.PrepareArtifact,
 			OfferSnapshotID: placement.offer.ID,
 			ConnectionID:    placement.offer.ConnectionID,
@@ -528,9 +558,32 @@ func (o *Orchestrator) prewarmItems(ctx context.Context, workspaceID string, pla
 			ContentDigest:   version.ContentDigest,
 			Source:          version.Location,
 			SizeBytes:       version.SizeBytes,
-		})
+		}
+		if artifact.SourceCredential, err = o.mintRead(ctx, workspaceID, artifact); err != nil {
+			return nil, err
+		}
+		items = append(items, artifact)
 	}
 	return items, nil
+}
+
+// mintPull and mintRead name the operation the material is good for by the same
+// identity the desired set names the item by: this machine and this content.
+// That is the identity a node command carries and the one two Runs wanting one
+// image on one host share, so a credential minted for a fetch is spent by that
+// fetch rather than by whichever Run happened to trigger the sweep.
+func (o *Orchestrator) mintPull(ctx context.Context, workspaceID string, item adapter.PrepareItem) (domain.RegistryPull, error) {
+	if o.contentCredentials == nil {
+		return domain.RegistryPull{}, nil
+	}
+	return o.contentCredentials.RegistryPull(ctx, item.Operation(), workspaceID, item.Image)
+}
+
+func (o *Orchestrator) mintRead(ctx context.Context, workspaceID string, item adapter.PrepareItem) (domain.ArtifactRead, error) {
+	if o.contentCredentials == nil {
+		return domain.ArtifactRead{}, nil
+	}
+	return o.contentCredentials.ArtifactRead(ctx, item.Operation(), workspaceID, item.ArtifactID, item.Source)
 }
 
 // alreadyHeld drops content this machine has established it is holding. It is

@@ -83,26 +83,25 @@ type instanceType struct {
 	BootTime          *bootTime         `json:"boot_time,omitempty"`
 }
 
-type envVar struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
-type registryCredentials struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type dockerConfiguration struct {
-	Image               string               `json:"image"`
-	Args                string               `json:"args,omitempty"`
-	Envs                []envVar             `json:"envs,omitempty"`
-	RegistryCredentials *registryCredentials `json:"registry_credentials,omitempty"`
+// scriptConfiguration is the script Shadeform runs on the machine once it is
+// active. It is the only launch configuration this adapter sends, and the whole
+// of what a rented machine is ever told: the bootstrap that installs the pinned
+// node agent and starts it.
+//
+// The docker launch configuration is deliberately not here. It runs one
+// container per machine and reports nothing about it, which is a one-shot
+// execution product; a machine Mercator holds runs successive workloads through
+// its enrolled agent, so a create body naming a workload image would be this
+// adapter deciding what runs on capacity it only rents. It also carried a
+// registry account into every create, which is the long-lived credential on a
+// rented machine this phase forbids.
+type scriptConfiguration struct {
+	Base64Script string `json:"base64_script"`
 }
 
 type launchConfiguration struct {
 	Type                string               `json:"type"`
-	DockerConfiguration *dockerConfiguration `json:"docker_configuration,omitempty"`
+	ScriptConfiguration *scriptConfiguration `json:"script_configuration,omitempty"`
 }
 
 type autoDelete struct {

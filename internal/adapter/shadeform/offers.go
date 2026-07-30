@@ -71,19 +71,26 @@ func buildOffer(t instanceType, region string, available bool, now time.Time) do
 			MemoryBytes:        int64(cfg.MemoryInGB) * gib,
 			EphemeralDiskBytes: int64(cfg.StorageInGB) * gib,
 			EphemeralDiskKnown: true,
-			Accelerators:       accelerators,
+			// A catalog states the cards it sells with the machine, so this
+			// inventory is one somebody took: a listing with no accelerator
+			// entries is a CPU instance type rather than a machine nobody counted.
+			Accelerators:      accelerators,
+			AcceleratorsKnown: true,
 		},
+		// What this listing states is what the machine is, and nothing about what
+		// executing on it would be like. A capacity listing that declared a
+		// container runtime, an idempotent launch or a concurrency limit would be
+		// a provider answering for a runtime it does not run: those are the
+		// enrolled agent's facts, established from the machine itself once an
+		// agent is on it, and they arrive on that node's own offer.
+		//
+		// What Shadeform can promise about the lease it is selling is negotiated
+		// in CapacitySupport instead, where a caller reads it before renting
+		// rather than after placing work.
 		Capabilities: domain.CapabilityProfile{
-			// SupportsEntrypointOverride stays false: the docker launch
-			// configuration has no entrypoint field, so the scheduler must
-			// keep entrypoint-overriding workloads off these offers.
-			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, MaxEnvironmentBytes: 32768},
-			// ProviderTTL: every launch sets auto_delete, so the provider
-			// reclaims the instance even if the whole broker is down.
-			Lifecycle: domain.LifecycleCapabilities{IdempotentLaunch: "launch_key", ListOwned: true, ProviderTTL: true, CancelQueued: true},
 			Resources: domain.ResourceCapabilities{GPUVendors: []string{cfg.GPUManufacturer}},
-			// The docker launch configuration runs with --network=host and the
-			// adapter maps no ports, so no inbound port contract is offered.
+			// A rented machine gets a public address and Mercator opens nothing
+			// inbound on it: every exchange is one the agent opens outbound.
 			Network: domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone, PublicIPv4: true},
 			Pricing: domain.PricingCapabilities{Known: true},
 		},

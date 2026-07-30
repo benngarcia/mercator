@@ -22,7 +22,10 @@ type CapacityProvider interface {
 	// nothing.
 	Verify(ctx context.Context) error
 	ListCapacity(ctx context.Context, query CapacityQuery) ([]domain.OfferSnapshot, error)
-	Provision(ctx context.Context, command ProvisionCommand) (CapacityReceipt, error)
+	// ProvisionCapacity allocates fresh capacity for one Rental. It is named
+	// for the lease like every other act here, because a provider that also
+	// launches workloads has two things it could be asked to provision.
+	ProvisionCapacity(ctx context.Context, command ProvisionCommand) (CapacityReceipt, error)
 	ObserveCapacity(ctx context.Context, ref CapacityRef) (CapacityObservation, error)
 	// StartCapacity resumes stopped capacity. Providers without SupportsResume
 	// return ErrCapabilityUnsupported.
@@ -43,6 +46,33 @@ type CapacityProvider interface {
 // runtime condition to retry, so providers surface it explicitly rather than
 // silently succeeding.
 var ErrCapabilityUnsupported = fmt.Errorf("capability: operation unsupported by this backend")
+
+// ErrCapacityIndeterminate is a provision whose outcome nobody knows: the
+// command reached the provider and the answer did not come back, so a machine
+// may be billing for this lease right now and may not.
+//
+// It is a different answer from a failure and callers act on the difference. A
+// failure allocated nothing and can be asked again; this cannot, because asking
+// again is how one lost answer becomes two machines. What resolves it is reading
+// what the connection owns, which is why ListOwned is what CapacitySupport
+// refuses a provider without server-side idempotency for lacking.
+var ErrCapacityIndeterminate = fmt.Errorf("capability: the outcome of this provision is unknown")
+
+// CapacityOperation is one act a caller can ask of a CapacityProvider. It is
+// named for the act rather than for the method that performs it, because a
+// capability set negotiates a stop and a resume and a caller refused one is
+// being told which promise the provider never made: StartCapacity is how a
+// resume is performed and "start" is not a promise anybody negotiated.
+type CapacityOperation string
+
+const (
+	CapacityProvision CapacityOperation = "provision"
+	CapacityObserve   CapacityOperation = "observe"
+	CapacityStop      CapacityOperation = "stop"
+	CapacityResume    CapacityOperation = "resume"
+	CapacityTerminate CapacityOperation = "terminate"
+	CapacityListOwned CapacityOperation = "list_owned"
+)
 
 // CapacitySupport is one provider's negotiated capability set. Every field is
 // a claim the scheduler and reconciler are entitled to rely on.
@@ -70,6 +100,66 @@ type CapacitySupport struct {
 	// observable. When false, a not-found observation after terminate is
 	// confirmation rather than ambiguity.
 	ObserveAfterTerminate bool `json:"observe_after_terminate"`
+}
+
+// Provision idempotency mechanisms. They are not interchangeable: a provider
+// that deduplicates on a caller-supplied key can be asked for the same machine
+// twice and allocate one, and a provider that honors nothing can only be
+// reconciled by listing what this connection owns.
+const (
+	IdempotentProvisionOperationKey = "operation_key"
+	IdempotentProvisionNone         = "none"
+)
+
+// Claims reports whether this negotiated set promises one operation.
+//
+// Allocating, observing, and destroying capacity are the floor of the contract:
+// a provider that cannot do all three cannot hold a machine for Mercator at all,
+// so there is no field to negotiate them with. Suspending, resuming, and
+// enumerating what this connection owns are promises a provider makes or does
+// not, and a caller that sends one anyway is asking a provider to keep a promise
+// it never made.
+func (support CapacitySupport) Claims(operation CapacityOperation) bool {
+	switch operation {
+	case CapacityProvision, CapacityObserve, CapacityTerminate:
+		return true
+	case CapacityStop:
+		return support.Stop
+	case CapacityResume:
+		return support.Resume
+	case CapacityListOwned:
+		return support.ListOwned
+	default:
+		return false
+	}
+}
+
+// Validate refuses a negotiated set no provider could keep. Every promise here
+// is one the scheduler and the reconciler act on without asking again, so a set
+// that contradicts itself has to be refused where it enters Mercator rather than
+// caught by whichever caller happens to read two of its fields together.
+func (support CapacitySupport) Validate() error {
+	switch support.IdempotentProvision {
+	case IdempotentProvisionOperationKey:
+	case IdempotentProvisionNone:
+		if !support.ListOwned {
+			return fmt.Errorf(
+				"a provider that deduplicates no provision and lists no owned capacity leaks every machine a lost response allocated",
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"%q is not a provision idempotency mechanism; state %q or %q",
+			support.IdempotentProvision, IdempotentProvisionOperationKey, IdempotentProvisionNone,
+		)
+	}
+	if support.Resume && !support.Stop {
+		return fmt.Errorf("a provider that resumes capacity it cannot stop has nothing to resume")
+	}
+	if support.PersistentDisk && !support.Stop {
+		return fmt.Errorf("a disk that survives a stop is a claim about a provider that can stop")
+	}
+	return nil
 }
 
 // CapacityQuery scopes a capacity listing to one workspace and requirement.
@@ -195,6 +285,17 @@ type CapacityObservation struct {
 	NativeRef  string        `json:"native_ref"`
 	State      CapacityState `json:"state"`
 	ObservedAt time.Time     `json:"observed_at"`
+	// StateSince is the provider's own account of when this machine entered the
+	// state it is reporting, and the zero time from a provider that does not date
+	// its transitions.
+	//
+	// It is the difference between measuring a machine and measuring a poll. A
+	// caller that has only ObservedAt knows the stage finished somewhere between
+	// this look and the last one, and writing that interval down as the stage's
+	// duration would publish the caller's own cadence as a property of the
+	// machine. Callers that cannot get this fact record a bound and say so rather
+	// than reporting the interval as a measurement.
+	StateSince time.Time `json:"state_since,omitzero"`
 	// Endpoint is where the machine can be reached, when the provider exposes
 	// one. It is provenance for operators, never a control channel: Mercator
 	// reaches nodes only through their outbound agent session.

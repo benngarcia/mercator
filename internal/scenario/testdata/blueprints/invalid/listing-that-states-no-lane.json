@@ -1,0 +1,31 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "green",
+  "summary": "A marketplace listing that says nothing about what it becomes once allocated. The lane is what decides whether the end of a Run destroys the machine under it or hands the workload back and leaves the host standing, so a Blueprint that stated none would be asserting one of those two answers without ever choosing it. ADR 0005 refuses the same silence in production, where an offer with no lane is infeasible with UNKNOWN_FACT, and it is refused here for the same reason.",
+  "world": {
+    "images": {
+      "app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+        "layers": [
+          {
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": "1GB"
+          }
+        ]
+      }
+    },
+    "marketplace": [
+      {
+        "id": "ask-a",
+        "rate_per_hour_usd": 1.0,
+        "provisioning": {"expected": "5m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"}
+      }
+    ]
+  },
+  "request": {
+    "image": "app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "ask-a"
+  }
+}

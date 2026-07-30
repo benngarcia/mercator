@@ -116,7 +116,7 @@ func TestAWaitPastItsDeadlineIsRefusedBehindTheQueueToo(t *testing.T) {
 	defer cancel()
 	now := time.Now().UTC()
 	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", now)}))
-	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }), withTestCapacity())
 	submitClassed(t, ctx, orch, "run_iterating", domain.ClassExperimental)
 	submitClassed(t, ctx, orch, "run_watched", domain.ClassInteractive)
 	for _, runID := range []string{"run_iterating", "run_watched"} {
@@ -197,7 +197,7 @@ func TestAPlacementDoesNotRestartTheWaitTheQueueOrdersOn(t *testing.T) {
 	defer cancel()
 	now := time.Now().UTC()
 	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", now)}))
-	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }), withTestCapacity())
 	appendWaitPlacedAndWaitedAgain(t, ctx, orch, "run_quiet", domain.ClassBatch, now)
 	submitClassed(t, ctx, orch, "run_fresh", domain.ClassStandard)
 
@@ -365,7 +365,7 @@ func TestAFamilyBurstSubmittedIsStillHeldToItsWidth(t *testing.T) {
 		orchProvisionableOffer("off_one", now),
 		orchProvisionableOffer("off_two", now),
 	}))
-	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }), withTestCapacity())
 	members := []string{"run_a", "run_b"}
 	for _, runID := range members {
 		submitInFamily(t, ctx, orch, runID, sweep)
@@ -426,7 +426,7 @@ func TestAFamilyAtItsWidthHoldsItsOwnMembersBack(t *testing.T) {
 	now := time.Now().UTC()
 	sweep := domain.RunGroup{ID: "sweep", MaxParallel: 1}
 	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", now)}))
-	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }), withTestCapacity())
 	appendMemberPlacedInFamily(t, ctx, orch, "run_first", sweep, now, false)
 	submitInFamily(t, ctx, orch, "run_second", sweep)
 
@@ -460,7 +460,7 @@ func TestAMemberThatGaveItsCapacityBackLeavesRoomForItsFamily(t *testing.T) {
 	now := time.Now().UTC()
 	sweep := domain.RunGroup{ID: "sweep", MaxParallel: 1}
 	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", now)}))
-	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }), withTestCapacity())
 	appendMemberPlacedInFamily(t, ctx, orch, "run_first", sweep, now, true)
 	submitInFamily(t, ctx, orch, "run_second", sweep)
 
@@ -567,7 +567,7 @@ func TestAWaitAFamilyHeldIsNotChargedWhenTheFleetTakesOver(t *testing.T) {
 	now := time.Now().UTC()
 	sweep := domain.RunGroup{ID: "sweep", MaxParallel: 1}
 	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", now)}))
-	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }), withTestCapacity())
 	appendMemberPlacedInFamily(t, ctx, orch, "run_first", sweep, now, true)
 	submitInFamily(t, ctx, orch, "run_second", sweep)
 	appendHeldByItsFamily(t, ctx, orch, "run_second", sweep, now.Add(-70*time.Minute))
@@ -607,7 +607,7 @@ func TestAHeldMemberPastItsDeadlineIsRefusedForItsDeadline(t *testing.T) {
 	now := time.Now().UTC()
 	sweep := domain.RunGroup{ID: "sweep", MaxParallel: 1}
 	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchProvisionableOffer("off_free", now)}))
-	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }), withTestCapacity())
 	submitInFamily(t, ctx, orch, "run_held", sweep)
 	appendHeldByItsFamily(t, ctx, orch, "run_held", sweep, now.Add(-(24*time.Hour + time.Minute)))
 

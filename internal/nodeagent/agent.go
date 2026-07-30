@@ -44,6 +44,11 @@ type Runtime interface {
 // Transport is the agent's outbound connection to the control plane.
 type Transport interface {
 	Enroll(ctx context.Context, request capability.EnrollmentRequest) (capability.Enrollment, error)
+	// RenewSession takes a later credential using the one the agent holds. It is
+	// separate from Enroll because the material is separate: enrolling spends the
+	// single-use invitation the machine was bootstrapped with, and renewing
+	// spends nothing.
+	RenewSession(ctx context.Context, nodeID, sessionToken string) (capability.SessionRenewal, error)
 	// Session opens the command stream. It returns when the connection ends;
 	// the agent reconnects.
 	Session(ctx context.Context, nodeID, sessionToken string, commands chan<- node.Command) error
@@ -73,6 +78,11 @@ type Agent struct {
 
 	heartbeat time.Duration
 	backoff   time.Duration
+	// holding serializes taking a credential. The loop that keeps the lease alive
+	// and the worker performing commands both need one, and two goroutines that
+	// decided independently that the credential was about to lapse would renew
+	// twice and file the second answer over the first.
+	holding sync.Mutex
 }
 
 // Option configures an Agent.
@@ -136,17 +146,17 @@ func (agent *Agent) Run(ctx context.Context) error {
 }
 
 func (agent *Agent) serve(ctx context.Context) error {
-	session, err := agent.session(ctx)
+	session, err := agent.credential(ctx)
 	if err != nil {
 		return err
 	}
 	// Reporting what this machine actually holds is the first thing a
 	// reconnected agent does, so the control plane reconciles against
 	// observations rather than assumptions.
-	if err := agent.reportObservations(ctx, session); err != nil {
+	if err := agent.reportObservations(ctx); err != nil {
 		return err
 	}
-	if err := agent.flushSpool(ctx, session); err != nil {
+	if err := agent.flushSpool(ctx); err != nil {
 		return err
 	}
 
@@ -173,7 +183,7 @@ func (agent *Agent) serve(ctx context.Context) error {
 	working.Add(1)
 	go func() {
 		defer working.Done()
-		agent.work(sessionCtx, session, work)
+		agent.work(sessionCtx, work)
 	}()
 	defer func() {
 		endSession()
@@ -182,7 +192,7 @@ func (agent *Agent) serve(ctx context.Context) error {
 
 	ticker := time.NewTicker(agent.heartbeat)
 	defer ticker.Stop()
-	if err := agent.sendHeartbeat(ctx, session); err != nil {
+	if err := agent.sendHeartbeat(ctx); err != nil {
 		return err
 	}
 	for {
@@ -192,14 +202,14 @@ func (agent *Agent) serve(ctx context.Context) error {
 		case err := <-streamed:
 			return err
 		case <-ticker.C:
-			if err := agent.sendHeartbeat(ctx, session); err != nil {
+			if err := agent.sendHeartbeat(ctx); err != nil {
 				agent.logger.WarnContext(ctx, "heartbeat spooled", "error", err)
 			}
 			// Container lifecycle is the node's own authority, so the agent
 			// watches the runtime rather than waiting for the application to
 			// say something. Without this, an exit would only surface on the
 			// next reconnection.
-			if err := agent.reportObservations(ctx, session); err != nil {
+			if err := agent.reportObservations(ctx); err != nil {
 				agent.logger.WarnContext(ctx, "workload observation spooled", "error", err)
 			}
 		case command := <-commands:
@@ -214,26 +224,74 @@ func (agent *Agent) serve(ctx context.Context) error {
 
 // work performs commands one at a time, off the loop that keeps the node's
 // lease alive.
-func (agent *Agent) work(ctx context.Context, session string, commands <-chan node.Command) {
+func (agent *Agent) work(ctx context.Context, commands <-chan node.Command) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case command := <-commands:
-			agent.apply(ctx, session, command)
+			agent.apply(ctx, command)
 		}
 	}
 }
 
-// session returns a usable session credential, enrolling only when the agent
-// has none. An agent that restarts with its state intact resumes rather than
-// re-enrolling, which is what keeps its fencing token and its applied-operation
-// memory aligned with the control plane.
-func (agent *Agent) session(ctx context.Context) (string, error) {
-	if token, fencing, ok := agent.state.Session(agent.now()); ok {
-		agent.logger.DebugContext(ctx, "resuming node session", "fencing_token", fencing)
+// credential is the session credential to speak to the control plane with right
+// now. It is asked for at each use rather than held for the life of a connection,
+// because a session outlives its credential: a Run can take hours and the
+// credential is good for thirty minutes.
+//
+// Three answers, and which one applies is decided by what the agent holds. A
+// credential with time left is used. A credential about to lapse is renewed,
+// which spends nothing. Nothing at all is enrolled, which spends the invitation
+// this machine was bootstrapped with and can therefore happen exactly once.
+//
+// Renewing early is the whole point. The material an agent would need to enroll
+// again is gone the moment it is first used, so an agent that let its credential
+// lapse would be locked out of a control plane whose machine is still running,
+// and the only thing left to present would be an invitation the store has already
+// spent and the signer refuses on its own.
+func (agent *Agent) credential(ctx context.Context) (string, error) {
+	agent.holding.Lock()
+	defer agent.holding.Unlock()
+	token, expires, held := agent.state.Session()
+	switch {
+	case !held:
+		return agent.enroll(ctx)
+	case agent.now().UTC().Add(agent.renewWithin()).Before(expires):
 		return token, nil
+	default:
+		return agent.renew(ctx, token)
 	}
+}
+
+// renewWithin is how much of a credential's life the agent keeps in hand. Two
+// heartbeats is enough for one renewal to fail and be tried again on the next
+// tick before anything the agent sends could outlive the credential carrying it,
+// and it scales with whatever cadence this agent was configured for rather than
+// with a constant that would be either wasteful or too late depending on it.
+func (agent *Agent) renewWithin() time.Duration { return 2 * agent.heartbeat }
+
+// renew takes a later credential using the one the agent still holds. A refused
+// renewal is an error rather than a fallback to enrolling: the invitation is
+// spent, so replaying it would be refused too, and the honest answer is that this
+// machine needs a fresh invitation.
+func (agent *Agent) renew(ctx context.Context, token string) (string, error) {
+	renewal, err := agent.transport.RenewSession(ctx, agent.identity.NodeID, token)
+	if err != nil {
+		return "", fmt.Errorf("renew node session: %w", err)
+	}
+	if err := agent.state.Renewed(renewal); err != nil {
+		return "", err
+	}
+	agent.logger.DebugContext(ctx, "renewed node session",
+		"node_id", agent.identity.NodeID, "session_expires", renewal.SessionExpires)
+	return renewal.SessionToken, nil
+}
+
+// enroll redeems the invitation this machine was bootstrapped with. An agent that
+// restarts with its state intact never reaches here, which is what keeps its
+// fencing token and its applied-operation memory aligned with the control plane.
+func (agent *Agent) enroll(ctx context.Context) (string, error) {
 	facts, err := agent.runtime.Facts(ctx)
 	if err != nil {
 		return "", fmt.Errorf("read host facts: %w", err)
@@ -258,9 +316,9 @@ func (agent *Agent) session(ctx context.Context) (string, error) {
 // apply performs one command exactly once. An operation the agent has already
 // applied is acknowledged again without touching the runtime, which is what
 // makes a redelivered launch safe.
-func (agent *Agent) apply(ctx context.Context, session string, command node.Command) {
+func (agent *Agent) apply(ctx context.Context, command node.Command) {
 	if command.FencingToken != 0 && command.FencingToken < agent.state.FencingToken() {
-		agent.report(ctx, session, node.Result{
+		agent.report(ctx, node.Result{
 			OperationID: command.OperationID,
 			Applied:     false,
 			Failure:     "command carries a superseded fencing token",
@@ -269,7 +327,7 @@ func (agent *Agent) apply(ctx context.Context, session string, command node.Comm
 		return
 	}
 	if agent.state.Applied(command.OperationID) {
-		agent.report(ctx, session, node.Result{
+		agent.report(ctx, node.Result{
 			OperationID: command.OperationID,
 			Applied:     true,
 			Duplicate:   true,
@@ -296,7 +354,7 @@ func (agent *Agent) apply(ctx context.Context, session string, command node.Comm
 	if failure != nil {
 		result.Failure = failure.Error()
 	}
-	agent.report(ctx, session, result)
+	agent.report(ctx, result)
 }
 
 func (agent *Agent) perform(ctx context.Context, command node.Command) error {
@@ -322,19 +380,24 @@ func decodeAnd[T any](command node.Command, perform func(context.Context, T) err
 	return perform(ctx, typed)
 }
 
-func (agent *Agent) report(ctx context.Context, session string, result node.Result) {
+func (agent *Agent) report(ctx context.Context, result node.Result) {
+	session, err := agent.credential(ctx)
+	if err != nil {
+		agent.logger.WarnContext(ctx, "could not hold a session to report a command result", "operation_id", result.OperationID, "error", err)
+		return
+	}
 	if err := agent.transport.SendResult(ctx, agent.identity.NodeID, session, result); err != nil {
 		agent.logger.WarnContext(ctx, "could not report a command result", "operation_id", result.OperationID, "error", err)
 	}
 }
 
-func (agent *Agent) sendHeartbeat(ctx context.Context, session string) error {
+func (agent *Agent) sendHeartbeat(ctx context.Context) error {
 	facts, err := agent.runtime.Facts(ctx)
 	if err != nil {
 		return fmt.Errorf("read host facts: %w", err)
 	}
 	facts.ObservedAt = agent.now().UTC()
-	return agent.send(ctx, session, node.Event{
+	return agent.send(ctx, node.Event{
 		ID:         agent.state.NextEventID(),
 		NodeID:     agent.identity.NodeID,
 		Kind:       node.EventHeartbeat,
@@ -350,7 +413,7 @@ func (agent *Agent) sendHeartbeat(ctx context.Context, session string) error {
 //
 // Only transitions are sent. Repeating an unchanged phase every tick would
 // bury the record in noise without telling anyone anything new.
-func (agent *Agent) reportObservations(ctx context.Context, session string) error {
+func (agent *Agent) reportObservations(ctx context.Context) error {
 	observations, err := agent.runtime.Observe(ctx)
 	if err != nil {
 		return fmt.Errorf("observe workloads: %w", err)
@@ -359,7 +422,7 @@ func (agent *Agent) reportObservations(ctx context.Context, session string) erro
 		if !agent.state.WorkloadChanged(observation) {
 			continue
 		}
-		if err := agent.send(ctx, session, node.Event{
+		if err := agent.send(ctx, node.Event{
 			ID:         agent.state.NextEventID(),
 			NodeID:     agent.identity.NodeID,
 			Kind:       node.EventWorkload,
@@ -376,17 +439,28 @@ func (agent *Agent) reportObservations(ctx context.Context, session string) erro
 // send delivers one event, spooling it when the control plane is unreachable.
 // A spooled event keeps its ID, so replaying it after a reconnection changes
 // nothing.
-func (agent *Agent) send(ctx context.Context, session string, event node.Event) error {
+// send delivers one event under whatever credential the agent holds at the
+// moment of sending, which is how a report from the middle of a long Run goes out
+// under a credential minted after the session it belongs to opened.
+func (agent *Agent) send(ctx context.Context, event node.Event) error {
+	session, err := agent.credential(ctx)
+	if err != nil {
+		return errors.Join(err, agent.state.Spool(event))
+	}
 	if err := agent.transport.SendEvents(ctx, agent.identity.NodeID, session, []node.Event{event}); err != nil {
 		return errors.Join(err, agent.state.Spool(event))
 	}
 	return nil
 }
 
-func (agent *Agent) flushSpool(ctx context.Context, session string) error {
+func (agent *Agent) flushSpool(ctx context.Context) error {
 	spooled := agent.state.Spooled()
 	if len(spooled) == 0 {
 		return nil
+	}
+	session, err := agent.credential(ctx)
+	if err != nil {
+		return err
 	}
 	if err := agent.transport.SendEvents(ctx, agent.identity.NodeID, session, spooled); err != nil {
 		return err

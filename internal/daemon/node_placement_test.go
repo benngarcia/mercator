@@ -9,17 +9,21 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/daemon"
+	"github.com/benngarcia/mercator/internal/dockertest"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/nodeagent"
 	"github.com/benngarcia/mercator/internal/orchestrator"
@@ -62,6 +66,39 @@ const (
 // provisioned, because the node held the host runtime open between them. On the
 // second Run, Placement records that it reused the Rental rather than creating
 // one.
+// TestInvitingAnIdentityTwiceNamesTheCollisionThroughTheProductionStack is the
+// question provisioning asks on every attempt, put to the deployment rather than
+// to a store double: real SQLite, the real registry, and the real HTTP API.
+//
+// Nothing could know the answer before. The durable store wrapped its driver's
+// constraint failure verbatim, so an identity that already exists came back as
+// an opaque failure and `bootstrapFor` never reached `Reinvite` in any
+// deployment that stores its fleet. A second attempt for a lease failed at the
+// invitation, no capacity was ever recorded as accepted, and the machine an
+// earlier attempt rented billed on with nothing that would come for it.
+//
+// The in-memory store answered correctly the whole time, which is why every test
+// above this one passed.
+func TestInvitingAnIdentityTwiceNamesTheCollisionThroughTheProductionStack(t *testing.T) {
+	fleet := startFleet(t)
+	taken := fleet.invite(t, 2.5)
+
+	var refusal struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	fleet.call(t, http.MethodPost, "/v1/nodes", map[string]any{
+		"workspace_id":              daemon.DefaultWorkspaceID,
+		"node_id":                   taken.NodeID,
+		"rental_id":                 taken.RentalID,
+		"shadow_price_usd_per_hour": 2.5,
+	}, &refusal, http.StatusConflict)
+
+	if refusal.Code != "NODE_EXISTS" {
+		t.Fatalf("inviting %q twice = %q, want the collision named", taken.NodeID, refusal.Code)
+	}
+}
+
 func TestOneEnrolledNodeRunsTwoWorkloadsInSequence(t *testing.T) {
 	fleet := startFleet(t)
 
@@ -191,7 +228,7 @@ func TestANodeHoldsTheImageItRan(t *testing.T) {
 	fleet.completeWorkload(t, runID, 0)
 	fleet.awaitOutcome(t, runID, "succeeded")
 
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return fleet.nodeOffer(t).Images.Holds(trainerIndexDigest)
 	}, "the node never reported holding the image it ran, so a second Run would be priced a pull it does not owe")
 }
@@ -348,7 +385,7 @@ func TestANodeThatGoesQuietStopsBeingOffered(t *testing.T) {
 	// Offers expire on the age of the node's last facts, which is sooner than
 	// the lease, so the catalog stops advertising it without waiting for the
 	// control plane to give up entirely.
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		offers := fleet.offers(t)
 		for _, offer := range offers {
 			if offer.ID == fleet.nodeID && offer.ExpiresAt.After(time.Now().UTC()) {
@@ -388,6 +425,26 @@ type fleet struct {
 	// lease turns every case into a bet on how busy the host running the suite
 	// is. The one case about a machine going quiet states the lease it needs.
 	lease time.Duration
+	// session is how long one of this daemon's node session credentials lasts.
+	// Zero is the production thirty minutes, which is longer than any case here
+	// runs for: the one case about a machine outliving its credential shortens it,
+	// so what happens after the lapse is stated rather than waited out.
+	session time.Duration
+	// renewals counts the session renewals this fleet's agents really performed,
+	// tallied off the wire rather than off anything an agent says about itself. It
+	// is the evidence that a machine past its first credential renewed instead of
+	// re-enrolling, and it is a count because the interesting claim is the second
+	// one.
+	renewals atomic.Int64
+	// enrolments counts the invitations this fleet's agents really redeemed,
+	// tallied off the same wire. One machine joins the fleet once, so a second one
+	// is an agent that answered a lapsed credential by replaying material the
+	// registry already spent.
+	enrolments atomic.Int64
+	// bootstrapToken is the credential this fleet's first machine was handed. It
+	// is kept so a case can search the operator's record for it, and it is the one
+	// string in this harness that must never turn up anywhere else.
+	bootstrapToken string
 	// soldOn is what an operator states this fleet's machine is bought on beyond its
 	// price: the block of time it is billed in, the classes it is held for, and the
 	// moment it stops being Mercator's. Empty is a machine bought in no increments,
@@ -396,7 +453,18 @@ type fleet struct {
 	soldOn map[string]any
 	// prewarm is what this fleet's control plane is allowed to have in flight for
 	// work it has not admitted. Nil is the production default.
-	prewarm   *orchestrator.PrewarmPolicy
+	prewarm *orchestrator.PrewarmPolicy
+	// registryAccount is the username and secret an operator logged in to this
+	// fleet's registry with, if any. Empty is a deployment holding no account,
+	// which is what every case about where a Run lands has: the fleet's registry
+	// serves anyone.
+	registryAccount [2]string
+	// budget is how long every wait on this fleet gets, and it belongs to the
+	// fleet because what a wait is really on is the runtime its agent drives. The
+	// same awaitOffer is a scripted answer from memory in most cases here and this
+	// host's whole Docker inventory in the live ones, so a budget chosen at the
+	// call site states it for the wrong one of them.
+	budget    time.Duration
 	stop      context.CancelFunc
 	submitted int
 }
@@ -413,16 +481,52 @@ func reporting(disk capability.DiskFacts) fleetOption {
 	return func(f *fleet) { f.runtime.disk = disk }
 }
 
+// counting is what this fleet's machine established about its own cards, which
+// is the fixture a case about an accelerator refusal is written in.
+func counting(cards capability.AcceleratorFacts) fleetOption {
+	return func(f *fleet) { f.runtime.accelerator = cards }
+}
+
 // leasedFor is how long this fleet's daemon keeps trusting a silent node, which
 // is what a case about a machine going quiet is measured in.
 func leasedFor(lease time.Duration) fleetOption {
 	return func(f *fleet) { f.lease = lease }
 }
 
-// runningOn hands the agent a real container runtime instead of the scripted
-// one, at a heartbeat a machine can keep up with: reading a whole daemon's
-// image inventory fifty times a second is a load test of Docker rather than a
-// case about Mercator.
+// renewingEvery is how long one session credential lasts on this fleet's daemon.
+// It is what a case about a machine that goes on working past its first
+// credential is measured in, because at the production thirty minutes every case
+// in this package finishes inside the window and none of them can see the lapse.
+//
+// Shortening the window is not enough on its own, and skipping the rest of this
+// is how the case passed on a 24 core build host and failed the first time it
+// ever met CI. An agent renews once its credential is within two heartbeats of
+// lapsing, so the heartbeat is what decides how much of the window it has to get
+// the renewal in. Against this package's twenty millisecond heartbeat that is
+// forty milliseconds of slack on a two second window, and forty milliseconds is
+// inside what a garbage collection pause or a busy two core runner costs. The
+// agent does not renew late when it loses that race. It lapses, and a lapsed
+// credential is refused SESSION_REFUSED, and the invitation it would need to
+// join again was spent when it enrolled, so the machine is locked out for good
+// and the count this case waits on never moves again.
+//
+// Tying the heartbeat to the window makes the slack a stated fraction of the
+// window, a quarter of it, rather than whatever the default heartbeat left over.
+// Reproduced before the change by freezing the process across the lapse with
+// SIGSTOP: three runs in three failed at 10.02s with SESSION_REFUSED, which is
+// the failure CI reported at 10.05s.
+//
+// The budget goes with it, because from here a wait on this fleet is a wait on
+// real session windows elapsing, which is the one thing scriptedBudget says it
+// is not measuring.
+func renewingEvery(session time.Duration) fleetOption {
+	return func(f *fleet) {
+		f.session = session
+		f.heartbeat = session / 8
+		f.budget = 8 * session
+	}
+}
+
 // keepingAClockAhead makes this fleet's machine read a wall clock ahead of the
 // control plane's, which is what a host with a skewed clock is. Every moment it
 // states, its container's start and its own read alike, comes off that clock.
@@ -444,11 +548,64 @@ func preparingAt(policy orchestrator.PrewarmPolicy) fleetOption {
 	return func(f *fleet) { f.prewarm = &policy }
 }
 
+// runningOn hands the agent a real container runtime instead of the scripted one.
 func runningOn(runtime nodeagent.Runtime) fleetOption {
-	return func(f *fleet) {
-		f.agentRuntime = runtime
-		f.heartbeat = 250 * time.Millisecond
+	return func(f *fleet) { f.drivesRealDocker(runtime) }
+}
+
+// loggedInTo is the operator having run `docker login` against this fleet's own
+// registry before starting the daemon. It is the whole of what configuring a
+// registry account is: the control plane reads the accounts a machine must never
+// hold out of the same file the CLI writes, so a case about minting a pull says
+// this and says nothing else.
+func loggedInTo(username, secret string) fleetOption {
+	return func(f *fleet) { f.registryAccount = [2]string{username, secret} }
+}
+
+// environment is what this fleet's daemon reads its configuration from. It is
+// empty unless a case stated an account, so every other case keeps the daemon
+// off whoever ran the suite's own Docker credentials.
+func (f *fleet) environment(t *testing.T, registry string) func(string) string {
+	t.Helper()
+	if f.registryAccount == [2]string{} {
+		return anonymousEnvironment
 	}
+	directory := t.TempDir()
+	config := fmt.Sprintf(`{"auths":{%q:{"username":%q,"password":%q}}}`,
+		registry, f.registryAccount[0], f.registryAccount[1])
+	if err := os.WriteFile(filepath.Join(directory, "config.json"), []byte(config), 0o600); err != nil {
+		t.Fatalf("write the registry account this operator logged in with: %v", err)
+	}
+	return func(name string) string {
+		if name == "DOCKER_CONFIG" {
+			return directory
+		}
+		return ""
+	}
+}
+
+// drivesRealDocker points this fleet's agent at a container daemon this host
+// really runs, and states the two things that follow from it.
+//
+// The heartbeat is one this machine can answer. A heartbeat is a whole host facts
+// read: docker info, the daemon's image list, one description per image on it, and
+// the cache volumes, and on this workstation, which holds twenty five images, that
+// costs 0.8 to 1.1 seconds idle and 1.1 to 1.6 under the tree's other Docker
+// suites. Asking for it four times a second, as this did, leaves the agent's one
+// heartbeat loop permanently behind: the loop reports a container's exit only after
+// the facts read it is sharing a tick with returns, so an interval shorter than the
+// read starves the very report the live case is waiting for. It was measured
+// starving for forty five seconds under `go test ./...`, which is one of the ways
+// mercator#212 goes red. Five seconds is several times the read and still an order
+// of magnitude quicker than production's twenty.
+//
+// The budget is the live one, because from here on every wait on this fleet covers
+// work this host performs rather than work the harness scripts, starting with the
+// enrolment wait that stands between startFleet and its first offer.
+func (f *fleet) drivesRealDocker(runtime nodeagent.Runtime) {
+	f.agentRuntime = runtime
+	f.heartbeat = 5 * time.Second
+	f.budget = liveDockerBudget
 }
 
 func startFleet(t *testing.T, options ...fleetOption) *fleet {
@@ -470,14 +627,17 @@ func startFleet(t *testing.T, options ...fleetOption) *fleet {
 		}),
 		heartbeat: 20 * time.Millisecond,
 		lease:     30 * time.Second,
+		budget:    scriptedBudget,
 	}
 	harness.agentRuntime = harness.runtime
 	for _, option := range options {
 		option(harness)
 	}
-	harness.address, harness.control = startRuntimeWithLease(t, harness.lease, harness.prewarm)
+	harness.address, harness.control = startRuntimeWithNodeWindows(
+		t, harness.lease, harness.session, harness.prewarm, harness.environment(t, registry))
 	bootstrap := harness.invite(t, 1.25)
 	harness.nodeID = bootstrap.NodeID
+	harness.bootstrapToken = bootstrap.EnrollmentToken
 	harness.stop = harness.startAgent(t, bootstrap, harness.agentRuntime)
 	harness.awaitOffer(t, harness.nodeID)
 	return harness
@@ -513,7 +673,7 @@ func (f *fleet) enrollAnother(t *testing.T, priceUSDPerHour float64) machine {
 // have said so rather than for the command that asked for it.
 func (f *fleet) awaitOccupied(t *testing.T, nodeID string) {
 	t.Helper()
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		for _, offer := range f.offers(t) {
 			if offer.ID == nodeID {
 				return !offer.Capacity.Available
@@ -528,7 +688,7 @@ func (f *fleet) awaitOccupied(t *testing.T, nodeID string) {
 // heartbeat lands.
 func (f *fleet) awaitOffer(t *testing.T, nodeID string) {
 	t.Helper()
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		for _, offer := range f.offers(t) {
 			if offer.ID == nodeID {
 				return true
@@ -585,7 +745,7 @@ func (f *fleet) startAgent(t *testing.T, bootstrap capability.NodeBootstrap, run
 			AgentVersion:    "test",
 		},
 		runtime,
-		nodeagent.NewHTTPTransport(bootstrap.ControlPlaneURL, nil),
+		nodeagent.NewHTTPTransport(bootstrap.ControlPlaneURL, f.countingClient()),
 		state,
 		nodeagent.WithHeartbeat(f.heartbeat),
 		nodeagent.WithReconnectBackoff(5*time.Millisecond),
@@ -597,6 +757,33 @@ func (f *fleet) startAgent(t *testing.T, bootstrap capability.NodeBootstrap, run
 }
 
 func (f *fleet) stopAgent() { f.stop() }
+
+// countingClient is the agent's real HTTP client with a tally on it. Nothing
+// about the exchange changes: the agent builds its own requests, the daemon
+// answers them, and this counts the ones that renewed a session as they cross the
+// wire. A count taken anywhere else would be the agent being asked to report on
+// itself.
+func (f *fleet) countingClient() *http.Client {
+	return &http.Client{Transport: countingRoundTripper{fleet: f, next: http.DefaultTransport}}
+}
+
+type countingRoundTripper struct {
+	fleet *fleet
+	next  http.RoundTripper
+}
+
+func (counter countingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := counter.next.RoundTrip(request)
+	if err == nil && response.StatusCode == http.StatusOK {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/session/renew"):
+			counter.fleet.renewals.Add(1)
+		case strings.HasSuffix(request.URL.Path, "/node-agent/enroll"):
+			counter.fleet.enrolments.Add(1)
+		}
+	}
+	return response, err
+}
 
 func (f *fleet) submitRun(t *testing.T) string {
 	t.Helper()
@@ -646,6 +833,50 @@ func (f *fleet) submitRunUnderBudget(t *testing.T, usd float64) string {
 	})
 }
 
+// submitRunNeedingACard submits a Run that will not run without an accelerator.
+// It names the vendor and no model, because what the case is about is a machine
+// whose cards reach a placement at all: a requirement naming this workstation's
+// own card would be asking the fleet to confirm a string the same fleet
+// published.
+func (f *fleet) submitRunNeedingACard(t *testing.T) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		resources := revision["spec"].(map[string]any)["resources"].(map[string]any)
+		resources["accelerators"] = []map[string]any{{"vendor": "nvidia", "count": 1}}
+		resources["host"] = map[string]any{"facts": []string{"nvidia_driver"}}
+		return revision
+	})
+}
+
+// submitRunNeedingCards submits a Run pinned to a number of cards and nothing
+// else, which is how every GPU Run is written. It states no host fact on
+// purpose: the driver attestation is a second question, and a Run that asks it
+// reaches a different rule from the one that counts inventory.
+func (f *fleet) submitRunNeedingCards(t *testing.T, count int) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		resources := revision["spec"].(map[string]any)["resources"].(map[string]any)
+		resources["accelerators"] = []map[string]any{{"vendor": "nvidia", "count": count}}
+		return revision
+	})
+}
+
+// submitRunNeedingDriver submits a Run whose image declares the driver its own
+// accelerator stack was built against. The host provides the driver and the
+// image provides the stack, so this is the workload half of a compatibility
+// contract Mercator decides before it pays for a machine.
+func (f *fleet) submitRunNeedingDriver(t *testing.T, version string) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		resources := revision["spec"].(map[string]any)["resources"].(map[string]any)
+		resources["host"] = map[string]any{"min_driver_version": version}
+		return revision
+	})
+}
+
 // submitRunInFamily submits a Run that belongs to a family of work and states how
 // wide that family may run. Every member states the width, because a group is a
 // label the work carries rather than an object an operator registers first.
@@ -687,7 +918,7 @@ func (f *fleet) completeWorkload(t *testing.T, runID string, exitCode int) {
 	t.Helper()
 	f.runtime.awaitLaunch(t, runID)
 	f.runtime.exit(runID, exitCode)
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		var refreshed struct {
 			Run struct {
 				Outcome string `json:"outcome"`
@@ -706,7 +937,7 @@ func (f *fleet) awaitOutcome(t *testing.T, runID, want string) {
 			Closed  bool   `json:"closed"`
 		} `json:"run"`
 	}
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		f.call(t, http.MethodGet, "/v1/runs/"+runID+"?workspace_id="+daemon.DefaultWorkspaceID, nil, &run, http.StatusOK)
 		return run.Run.Outcome == want
 	}, fmt.Sprintf("Run %s never reached outcome %q (last outcome %q)", runID, want, run.Run.Outcome))
@@ -723,7 +954,7 @@ func (f *fleet) awaitAdmission(t *testing.T, runID string) {
 			Phase string `json:"phase"`
 		} `json:"run"`
 	}
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
 		return response.Run.Phase != "queued"
 	}, "Run "+runID+" was never admitted after the capacity it was waiting for came back")
@@ -738,7 +969,7 @@ func (f *fleet) awaitStartMoment(t *testing.T, runID string) time.Time {
 			StartedAt *time.Time `json:"started_at"`
 		} `json:"run"`
 	}
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		// The refresh is an advance, which is what asks the node what its container
 		// is doing. Waiting for the minute reconcile sweep instead would make this a
 		// case about the sweep's cadence.
@@ -983,6 +1214,12 @@ type offerSnapshot struct {
 	Lane      string                   `json:"lane"`
 	ExpiresAt time.Time                `json:"expires_at"`
 	Resources domain.ResourceInventory `json:"resources"`
+	// Host is what this machine established about the substrate under a
+	// workload: the promises it makes and the accelerator driver it runs. It is
+	// read off the catalog because that is where Placement reads it, and because
+	// an offer that carried the node's cards and dropped its driver would be a
+	// projection nothing downstream could catch.
+	Host      domain.HostFacts         `json:"host"`
 	Images    domain.ImageInventory    `json:"images"`
 	Artifacts domain.ArtifactInventory `json:"artifacts"`
 	Capacity  domain.CapacityEvidence  `json:"capacity"`
@@ -1089,9 +1326,36 @@ func (f *fleet) call(t *testing.T, method, path string, body, into any, wantStat
 	}
 }
 
-func waitFor(t *testing.T, satisfied func() bool, message string) {
+// scriptedBudget is how long a wait on the harness's own script gets. Nothing
+// behind one leaves this process, so ten seconds is a wedged machine rather than
+// a busy one.
+const scriptedBudget = 10 * time.Second
+
+// liveDockerBudget is how long a wait on this host's own Docker daemon gets.
+// Behind one are docker info, a whole daemon's image inventory described an image
+// at a time, a registry pull, and containers created, run and reaped, and how long
+// that takes is how busy this host is. A deadline that decides whether the suite is
+// green by how busy the host is measures the host: the live listing case enrols in
+// half a second on an idle workstation, in five under this tree's other Docker
+// suites, and failed at ten with twenty four cores spinning.
+//
+// It does not make a live case immune to the whole tree running at once, and it was
+// not meant to: several suites drive this host's one Docker daemon, which is
+// mercator#212.
+const liveDockerBudget = time.Minute
+
+// waitFor waits on this fleet's machine inside the budget its runtime earns.
+func (f *fleet) waitFor(t *testing.T, satisfied func() bool, message string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	waitWithin(t, f.budget, satisfied, message)
+}
+
+func waitWithin(t *testing.T, budget time.Duration, satisfied func() bool, message string) {
+	t.Helper()
+	if budget <= 0 {
+		t.Fatal("a wait with no budget: this fleet was built without saying what its waits are on")
+	}
+	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
 		if satisfied() {
 			return
@@ -1129,6 +1393,12 @@ type scriptedRuntime struct {
 	// prepared is every image the control plane asked this machine to fetch for
 	// work it had not admitted here.
 	prepared []string
+	// preparations is the command each of those arrived with, kept whole so a
+	// case can ask what this machine was actually handed to fetch with. A
+	// runtime that recorded only the digest cannot tell a control plane that
+	// mints from one that populates the field with nothing, which is the state
+	// every deployment was in while the Lab said otherwise.
+	preparations map[string]capability.PrepareImageCommand
 	// refusePulls is content this machine cannot fetch, by manifest digest. It is
 	// removed the first time it is asked for, so the second ask for the same
 	// content succeeds: a failed pull leaves nothing behind and a machine that
@@ -1145,6 +1415,12 @@ type scriptedRuntime struct {
 	// leaves the two cases an operator most needs told apart, a full machine
 	// and an unmeasurable one, unreachable from any fixture.
 	disk capability.DiskFacts
+	// accelerator is what this machine's agent established about its cards and
+	// the driver under them. A runtime that could only answer one way leaves the
+	// two cases apart from a GPU box unreachable from any fixture: a machine that
+	// counted its cards and found none, and a machine whose vendor tool would not
+	// run, which publish the same empty list and earn different refusals.
+	accelerator capability.AcceleratorFacts
 	// clockAhead is how far this machine's clock runs ahead of the control plane's.
 	// It moves both moments this runtime states, because a host with a skewed clock
 	// reads its container's start and its own wall clock off the same clock: two
@@ -1160,6 +1436,7 @@ func newScriptedRuntime(unpacks map[string][]string) *scriptedRuntime {
 		platforms:    map[string]domain.Platform{},
 		observations: map[string]capability.WorkloadObservation{},
 		launches:     map[string]capability.LaunchWorkloadCommand{},
+		preparations: map[string]capability.PrepareImageCommand{},
 		refusePulls:  map[string]bool{},
 		disk:         capability.DiskFacts{Known: true, TotalBytes: 500 << 30, FreeBytes: 400 << 30},
 	}
@@ -1263,6 +1540,7 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 			CPUMillis:        8000,
 			MemoryBytes:      32 << 30,
 			Disk:             runtime.disk,
+			Accelerator:      runtime.accelerator,
 		},
 		Images: images,
 	}, nil
@@ -1276,6 +1554,7 @@ func (runtime *scriptedRuntime) PrepareImage(_ context.Context, command capabili
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	runtime.prepared = append(runtime.prepared, command.ManifestDigest)
+	runtime.preparations[command.ManifestDigest] = command
 	if runtime.refusePulls[command.ManifestDigest] {
 		delete(runtime.refusePulls, command.ManifestDigest)
 		return fmt.Errorf("pull failed: registry unreachable")
@@ -1297,6 +1576,14 @@ func (runtime *scriptedRuntime) preparedImages() []string {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	return slices.Clone(runtime.prepared)
+}
+
+// pullOf is what this machine was handed to fetch one image with, which is the
+// only place a case can read whether the control plane minted anything at all.
+func (runtime *scriptedRuntime) pullOf(digest string) domain.RegistryPull {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.preparations[digest].RegistryCredential
 }
 
 func (runtime *scriptedRuntime) LaunchWorkload(_ context.Context, command capability.LaunchWorkloadCommand) error {
@@ -1399,7 +1686,7 @@ func (runtime *scriptedRuntime) launchedRuns() []string {
 
 func (runtime *scriptedRuntime) awaitLaunch(t *testing.T, runID string) {
 	t.Helper()
-	waitFor(t, func() bool {
+	waitWithin(t, scriptedBudget, func() bool {
 		runtime.mu.Lock()
 		defer runtime.mu.Unlock()
 		_, launched := runtime.observations[runID]
@@ -1471,7 +1758,7 @@ func TestPlacementPricesAWarmNodeFromTheResolvedManifest(t *testing.T) {
 	first := fleet.submitRun(t)
 	fleet.completeWorkload(t, first, 0)
 	fleet.awaitOutcome(t, first, "succeeded")
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return len(fleet.nodeOffer(t).Images.LayerDiffIDs) == 2
 	}, "the node never reported the layers it unpacked")
 
@@ -1510,7 +1797,7 @@ func TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds(t *testing.T) {
 	first := fleet.submitRun(t)
 	fleet.completeWorkload(t, first, 0)
 	fleet.awaitOutcome(t, first, "succeeded")
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return fleet.nodeOffer(t).Images.Holds(trainerIndexDigest)
 	}, "the node never reported holding the image it ran")
 
@@ -1534,7 +1821,7 @@ func TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds(t *testing.T) {
 func TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked(t *testing.T) {
 	fleet := startFleet(t)
 	fleet.runtime.holdUnassembled(trainerIndexDigest, domain.Platform{OS: "linux", Architecture: "amd64"})
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return fleet.nodeOffer(t).Images.Pulled(trainerIndexDigest)
 	}, "the node never reported the image it fetched and never assembled")
 	if fleet.nodeOffer(t).Images.Holds(trainerIndexDigest) {
@@ -1576,7 +1863,7 @@ func TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked(t *testing.T) {
 func TestPlacementRecordsWhatANodeCouldNotSayAsSilence(t *testing.T) {
 	fleet := startFleet(t)
 	fleet.runtime.holdUndescribed(trainerIndexDigest)
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return fleet.nodeOffer(t).Images.Undescribed(trainerIndexDigest)
 	}, "the node never reported the image it could not account for")
 
@@ -1608,7 +1895,7 @@ func TestPlacementChargesTheWholePullForAnotherPlatformsBuild(t *testing.T) {
 	fleet := startFleet(t)
 	fleet.runtime.hold(trainerIndexDigest, domain.Platform{OS: "linux", Architecture: "arm64"},
 		[]string{trainerArmBaseDiffID, trainerArmTopDiffID})
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return slices.Contains(fleet.nodeOffer(t).Images.LayerDiffIDs, trainerArmBaseDiffID)
 	}, "the node never reported the build an operator put on it")
 	if fleet.nodeOffer(t).Images.Holds(trainerIndexDigest) {
@@ -1748,6 +2035,46 @@ func TestANodeThatCannotMeasureItsDiskWinsNoPlacement(t *testing.T) {
 	}
 	if code := refusal.Candidates[0].Rejections[0].Code; code != "UNKNOWN_FACT" {
 		t.Fatalf("a machine that never measured its disk was refused with %q", code)
+	}
+}
+
+// TestANodeWhoseCardsNobodyCountedIsRefusedAsASilence is the same third answer
+// the disk cases above are about, on the half of the report every GPU Run is
+// actually written against.
+//
+// A Run declares resources.accelerators with a count, a model, or a memory
+// floor. Only a Run that separately declares facts: ["nvidia_driver"] ever
+// reaches the machine's attestation, and no GPU Run is written that way, so an
+// agent that could not run its vendor tool published an empty inventory that the
+// count alone read as a measured zero: the machine holding eight A100s was
+// struck out RESOURCE_INSUFFICIENT, which says this fleet can never run the work
+// and sends its operator to buy a machine that is already in the rack.
+//
+// The two answers are told apart by the flag beside the list and by nothing
+// else, which is why both halves are asserted here: a machine that counted and
+// found none says so, and is refused for the shortfall it measured.
+func TestANodeWhoseCardsNobodyCountedIsRefusedAsASilence(t *testing.T) {
+	uncounted := startFleet(t)
+	counted := startFleet(t, counting(capability.AcceleratorFacts{Established: true}))
+
+	silent := uncounted.nodeOffer(t).Resources
+	if len(silent.Accelerators) != 0 || silent.AcceleratorsKnown {
+		t.Fatalf("a node whose agent never counted its cards offered %+v, known=%v", silent.Accelerators, silent.AcceleratorsKnown)
+	}
+	if measured := counted.nodeOffer(t).Resources; !measured.AcceleratorsKnown {
+		t.Fatal("a node that counted its cards and found none published an inventory nobody took")
+	}
+
+	unknown := uncounted.submitRunNeedingCards(t, 8)
+	uncounted.queueWaitingFor(t, unknown, domain.DeferredCapacityUnstated)
+	if candidate := uncounted.decision(t, unknown).candidate(t, uncounted.nodeID); candidate.Feasible || !refusedAs(candidate, "UNKNOWN_FACT") {
+		t.Fatalf("a Run needing eight cards was weighed against a machine nobody counted as %+v", candidate)
+	}
+
+	insufficient := counted.submitRunNeedingCards(t, 8)
+	counted.queueForWantOfCapacity(t, insufficient)
+	if candidate := counted.decision(t, insufficient).candidate(t, counted.nodeID); candidate.Feasible || !refusedAs(candidate, "RESOURCE_INSUFFICIENT") {
+		t.Fatalf("a Run needing eight cards was weighed against a machine that counted none as %+v", candidate)
 	}
 }
 
@@ -1926,10 +2253,130 @@ func TestTheFleetListingReportsTheRoomThisMachineReallyHas(t *testing.T) {
 	}
 }
 
+// TestThisMachinesCardsReachAPlacementAndAnOutgrownDriverDoesNot is the whole
+// compatibility contract against the hardware under this suite, through the real
+// agent, the real daemon, the real node registry, and the real Placement.
+//
+// The first half is the blocker this slice existed to clear. node.Registry
+// publishes the agent's accelerator inventory straight onto the offer, and
+// nothing wrote that inventory, so every enrolled GPU machine advertised zero
+// cards and was struck out of every accelerator placement with
+// RESOURCE_INSUFFICIENT. What is asserted is the machine's own answer: the cards
+// this host really holds, the driver it really runs, and a Run that needs a card
+// landing here rather than being told the fleet has none.
+//
+// The second half is the refusal. The image declares a driver newer than this
+// machine runs, and the host provides the driver: no amount of provisioning
+// changes it, and Mercator must not answer by installing a stack onto somebody's
+// host. So it is refused in the Booking Decision, naming the driver, and the
+// node is never asked to launch it.
+func TestThisMachinesCardsReachAPlacementAndAnOutgrownDriverDoesNot(t *testing.T) {
+	docker := requireDockerBinary(t)
+	smi, driver := requireNvidiaDriverOn(t, docker)
+	fleet := startFleet(t, runningOn(nodeagent.NewDockerRuntime(docker, nodeagent.WithAcceleratorTool(smi))))
+
+	offer := fleet.nodeOffer(t)
+
+	if offer.Host.Driver.Version != driver {
+		t.Fatalf("the node offers driver %q, and nvidia-smi on this machine says %q", offer.Host.Driver.Version, driver)
+	}
+	if !offer.Host.Attested[domain.HostFactNvidiaDriver] {
+		t.Fatalf("a machine running driver %q attested %+v", driver, offer.Host.Attested)
+	}
+	if offer.Resources.AcceleratorCount() < 1 {
+		t.Fatalf("this machine holds cards and offers %+v", offer.Resources.Accelerators)
+	}
+	// The unit a memory floor is written in. A caller copies memory_min_bytes out
+	// of a marketplace listing, which publishes the capacity the card is sold
+	// with, and this machine measures the framebuffer left after the driver's
+	// reserved region: this workstation's card is sold as 32GB and measures
+	// 32607MiB. Published raw, the same physical card clears the floor while a
+	// provider rents it and is struck out RESOURCE_INSUFFICIENT the moment
+	// Mercator enrolls it, which is the silent strike-out this slice exists to
+	// remove, on the lane phase 5 is about. Whole gibibytes is asserted rather
+	// than a number, because naming one would go stale the next time this host's
+	// card changes and no card ships with a fraction of a gibibyte.
+	for _, card := range offer.Resources.Accelerators {
+		if card.MemoryBytes%(1<<30) != 0 {
+			t.Fatalf("this machine offers %s with %d bytes, which is not the whole gibibytes a listing publishes the same card in", card.Model, card.MemoryBytes)
+		}
+	}
+	t.Logf("this node offers %d card(s) on driver %s supporting CUDA %s: %+v",
+		offer.Resources.AcceleratorCount(), offer.Host.Driver.Version, offer.Host.Driver.Capability, offer.Resources.Accelerators)
+
+	placed := fleet.submitRunNeedingACard(t)
+	fleet.advance(t, placed)
+	if selected := fleet.decision(t, placed).SelectedOfferSnapshotID; selected != fleet.nodeID {
+		t.Fatalf("a Run needing a card was placed on %q, and this machine's cards are on node %q", selected, fleet.nodeID)
+	}
+
+	outgrown := fleet.submitRunNeedingDriver(t, outgrows(driver))
+	fleet.queueForWantOfCapacity(t, outgrown)
+	candidate := fleet.decision(t, outgrown).candidate(t, fleet.nodeID)
+	if candidate.Feasible || !refusedAs(candidate, "CAPABILITY_MISMATCH") {
+		t.Fatalf("a Run needing a driver newer than %s was weighed as %+v", driver, candidate)
+	}
+	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, outgrown) {
+		t.Fatalf("the node was asked to launch %q on a driver its image outgrew: %v", outgrown, launched)
+	}
+}
+
+// requireNvidiaDriverOn is this machine answering for itself before a case
+// asserts anything about it: the daemon's nvidia runtime, so a container here
+// could be handed the cards at all, and the driver under them. Both halves of
+// the case need a real driver, because without one there is no inventory to
+// reach a placement and no version for an image to outgrow, which is a machine
+// this case has nothing to say about rather than a failure.
+//
+// It resolves the vendor tool to an absolute path and hands it back, for the
+// reason the Docker client is resolved before the fleet starts: these cases
+// clear PATH so the daemon seeds no local connection, and an agent looking up
+// nvidia-smi by name inside that fleet would find nothing and report a
+// workstation with no driver.
+func requireNvidiaDriverOn(t *testing.T, docker string) (smi, driver string) {
+	t.Helper()
+	if output, err := exec.Command(docker, "info", "--format", "{{json .Runtimes}}").Output(); err != nil {
+		t.Fatalf("ask the daemon which runtimes it has: %v", err)
+	} else if !strings.Contains(string(output), "nvidia") {
+		t.Skipf("this daemon has no nvidia runtime to hand a container the cards: %s", output)
+	}
+	smi, err := exec.LookPath("nvidia-smi")
+	if err != nil {
+		t.Skipf("this machine has no NVIDIA vendor tool to ask: %v", err)
+	}
+	output, err := exec.Command(smi, "--version").Output()
+	if err != nil {
+		t.Skipf("this machine has no working NVIDIA driver: %v", err)
+	}
+	for line := range strings.SplitSeq(string(output), "\n") {
+		name, value, split := strings.Cut(line, ":")
+		if split && strings.EqualFold(strings.TrimSpace(name), "DRIVER version") {
+			return smi, strings.TrimSpace(value)
+		}
+	}
+	t.Fatalf("nvidia-smi --version names no driver:\n%s", output)
+	return "", ""
+}
+
+// outgrows is a driver one major version past whatever this machine runs, so the
+// case states a floor no machine here can meet without hard-coding a number that
+// would go stale the next time somebody updates the host.
+func outgrows(driver string) string {
+	major, _, _ := strings.Cut(driver, ".")
+	number, err := strconv.Atoi(major)
+	if err != nil {
+		return "999999"
+	}
+	return strconv.Itoa(number + 1)
+}
+
 // requireDockerBinary resolves Docker before the fleet clears PATH, and skips
-// where there is no daemon to answer.
+// where there is no daemon to answer. Holding the daemon is what makes the live
+// budgets here mean what they say: a wait measured against four other suites
+// working the same machine is measuring them.
 func requireDockerBinary(t *testing.T) string {
 	t.Helper()
+	dockertest.Exclusive(t)
 	binary, err := exec.LookPath("docker")
 	if err != nil {
 		t.Skipf("no Docker client on this machine: %v", err)

@@ -45,6 +45,9 @@ rebuilt from the event log.
   decision audit, sink cursors, and logs.
 - [security-model.md](security-model.md): trust boundaries and verified
   non-observability claims.
+- [node-agent.md](node-agent.md): what credentials a node agent holds, how long
+  each is good for, how a session is renewed, and what to do about a machine that
+  is locked out.
 - [human-eval-checklist.md](human-eval-checklist.md): concrete acceptance
   checklist for V1 evaluation.
 - [known-limitations.md](known-limitations.md): residual risks and GA docs gaps.

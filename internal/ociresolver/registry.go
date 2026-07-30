@@ -541,9 +541,26 @@ func isRegistryHost(component string) bool {
 // on the placement path is a decision to make deliberately rather than by
 // accident. A registry with no entry is anonymous, which is the truth.
 func DockerConfigCredentials(path string) (CredentialFunc, error) {
+	byHost, err := dockerConfigAuths(path, dockerConfigHost)
+	if err != nil {
+		return nil, err
+	}
+	return func(registryHost string) BasicAuth { return byHost[registryHost] }, nil
+}
+
+// DockerConfigAccounts reads the same file, keyed the way an image reference
+// names a registry rather than the way the resolver connects to one. The two
+// vocabularies differ for Docker Hub alone: a reference says docker.io and the
+// registry answering it is registry-1.docker.io, and material minted for a pull
+// is matched against the reference.
+func DockerConfigAccounts(path string) (map[string]BasicAuth, error) {
+	return dockerConfigAuths(path, referenceHost)
+}
+
+func dockerConfigAuths(path string, host func(string) string) (map[string]BasicAuth, error) {
 	body, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return func(string) BasicAuth { return BasicAuth{} }, nil
+		return map[string]BasicAuth{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("ociresolver: read %s: %w", path, err)
@@ -559,12 +576,12 @@ func DockerConfigCredentials(path string) (CredentialFunc, error) {
 		return nil, fmt.Errorf("ociresolver: decode %s: %w", path, err)
 	}
 	byHost := make(map[string]BasicAuth, len(config.Auths))
-	for host, entry := range config.Auths {
+	for key, entry := range config.Auths {
 		credentials := BasicAuth{Username: entry.Username, Password: entry.Password}
 		if entry.Auth != "" {
 			decoded, decodeErr := base64.StdEncoding.DecodeString(entry.Auth)
 			if decodeErr != nil {
-				return nil, fmt.Errorf("ociresolver: decode the credential for %s in %s: %w", host, path, decodeErr)
+				return nil, fmt.Errorf("ociresolver: decode the credential for %s in %s: %w", key, path, decodeErr)
 			}
 			username, password, _ := strings.Cut(string(decoded), ":")
 			credentials = BasicAuth{Username: username, Password: password}
@@ -572,9 +589,19 @@ func DockerConfigCredentials(path string) (CredentialFunc, error) {
 		if credentials.Username == "" {
 			continue
 		}
-		byHost[dockerConfigHost(host)] = credentials
+		byHost[host(key)] = credentials
 	}
-	return func(registryHost string) BasicAuth { return byHost[registryHost] }, nil
+	return byHost, nil
+}
+
+// referenceHost is the same key written the way domain.ReferenceRegistry writes
+// it, which is what a minted pull states and what the node checks the pull
+// against before presenting it.
+func referenceHost(key string) string {
+	if host := dockerConfigHost(key); host != "registry-1.docker.io" {
+		return host
+	}
+	return "docker.io"
 }
 
 // dockerConfigHost normalizes the key `docker login` writes into the host the

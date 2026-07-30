@@ -28,6 +28,7 @@ type Evidence struct {
 	DurationSecs   float64           `json:"duration_seconds"`
 	Offer          OfferEvidence     `json:"offer"`
 	Run            RunEvidence       `json:"run"`
+	Promises       []PromiseEvidence `json:"promises,omitempty"`
 	Inventory      InventoryEvidence `json:"inventory"`
 	Failure        *TrialFailure     `json:"failure,omitempty"`
 	CleanupFailure *TrialFailure     `json:"cleanup_failure,omitempty"`
@@ -70,6 +71,28 @@ type RunEvidence struct {
 	// safety.decisions_are_never_rewritten adjudicates the chain in the Lab.
 	BookingDecisions []domain.BookingDecision `json:"booking_decisions,omitempty"`
 }
+
+// PromiseEvidence is what one promise of the CapacityProvider contract found.
+// It names the Lab rule it is the higher-fidelity half of, so evidence from a
+// live provider can be read against the rule the Lab holds over the same fact.
+type PromiseEvidence struct {
+	Name    string  `json:"name"`
+	Rule    string  `json:"rule"`
+	Outcome Promise `json:"outcome"`
+	Detail  string  `json:"detail,omitempty"`
+}
+
+// Promise is what became of one promise. Out of reach is neither kept nor
+// broken: a provider that enumerates nothing it owns is not breaking the
+// contract by having no listing, and reporting the case green would claim to
+// have read one.
+type Promise string
+
+const (
+	PromiseKept       Promise = "kept"
+	PromiseBroken     Promise = "broken"
+	PromiseOutOfReach Promise = "out_of_reach"
+)
 
 type InventoryEvidence struct {
 	Owned int `json:"owned"`

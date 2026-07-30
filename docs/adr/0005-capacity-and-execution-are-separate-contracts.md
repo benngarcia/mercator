@@ -55,11 +55,103 @@ lane instead of standing for every backend Mercator has.
 ### A lane is evidence, not a claim
 
 `capability.Declare` derives a backend's lane from the contracts it actually
-satisfies. Capacity plus a node runtime is the reusable lane. Anything else is
-ephemeral. Capacity without a node runtime is refused outright, because nothing
-could execute a second workload on it. A backend implementing both `NodeRuntime`
-and `EphemeralExecutor` is refused, because that claims one backend both
-controls and does not control its host runtime.
+satisfies. A `CapacityProvider` allocates and holds machines, which is capacity
+that outlives the workload run on it, so that is the reusable lane. An
+`EphemeralExecutor` sells one execution that holds nothing afterwards, which is
+the ephemeral one. A backend implementing both `NodeRuntime` and
+`EphemeralExecutor` is refused, because that claims one backend both controls and
+does not control its host runtime.
+
+A backend implementing both `CapacityProvider` and `EphemeralExecutor` is
+refused as well. One lane is stamped on every offer a connection publishes, so a
+connection answering both `ListCapacity` and `ListOffers` would publish machines
+and one-shot executions under one word, and nothing downstream could say which of
+the two an offer came from. A provider that sells both is two connections.
+
+There is no second condition on the reusable lane, and an earlier revision of
+this ADR had one that did not work. It required a `NodeRuntime`, first on the
+same Go value, which no provider adapter can be, and then anywhere in the
+deployment, which every deployment has: `daemon.New` always builds a node
+registry, so the check was satisfied by a registry object existing rather than by
+an agent existing, and it refused nothing while licensing a Rental identity for
+machines Mercator had not allocated. Whether a workload can run on one machine is
+that machine's own fact, and the agent enrolled on it is what establishes it.
+That is a per-machine claim and the reason it is made where offers are published
+rather than where a lane is declared.
+
+### A lane is not a licence to place work
+
+The offers Placement chooses among are the enrolled nodes' own, published by the
+node registry from the enrollment: the Rental the invitation named, the price the
+operator configured, and the host, image inventory, artifact copies, caches and
+disk the agent itself reported.
+
+Three of the offer's capability facts are not the agent's report, and this ADR
+overstated them until it was corrected. `container.max_containers`,
+`capacity.available` and the digest-ref, entrypoint-override and
+`idempotent_launch: operation_id` promises are read from `Registry.NodeSupport`,
+which is a static literal describing the agent Mercator ships. Nothing carries
+`capability.NodeSupport` across the enrolment, so a third-party `NodeRuntime`
+running Podman with room for four workloads would still publish one Docker slot
+and a digest-ref promise nobody established:
+[#202](https://github.com/benngarcia/mercator/issues/202) puts the set on the
+enrolment and reads the node's own answer.
+
+A capacity connection publishes no candidate. What `ListCapacity` returns is
+capacity to acquire, and acting on that selection means provisioning a Rental and
+bootstrapping an agent onto it, which
+[#200](https://github.com/benngarcia/mercator/issues/200) builds.
+
+Publishing it before then had no correct outcome: stated as completely as
+a provider honestly can, the offer is struck out of every placement with
+`UNKNOWN_FACT container.max_containers` and pollutes every decision record with a
+candidate that can never be feasible; stated with the container facts filled in,
+Placement selects it, records `disposition:run_now_existing_rental` for a machine
+nobody rented, and the launch fails because the offer's `NativeRef` resolves to no
+enrolled node. A machine that does have an agent on it is published by the
+registry already, so publishing the provider's copy beside it counted one host
+twice under two Rental identities.
+
+Nothing asks it, either, and the census says so. `Backend.ListOffers` answers with
+a `Publication` carrying either the offers or the reason nobody asked for any, and
+aggregation records the second in `excluded_connections` beside the de-authorised
+connections. Counting it among `connections_queried` stated that a provider had
+been consulted about a Run when no request had left Mercator, which is the one
+confusion the census exists to prevent: a fleet that published nothing and a fleet
+nobody asked are different facts, and Placement reads an empty answer as the
+strongest thing a fleet can say about an ask. `ListCapacity` therefore has no
+caller on the placement path, and its first one is #200. Calling it anyway so a
+broken provider could fail the collection closed was rejected: a connection with no
+candidate to contribute cannot change a placement, so failing every Run in the
+workspace over it would replace an inaccurate census with a worse outage. A revoked
+credential is caught by `Verify` at authorize time and by provisioning in #200.
+
+### A Rental identity is Mercator's to mint
+
+`StampLane` clears whatever `rental_id` an adapter stated, in every lane. A
+Rental is Mercator's own lease record, and the offers that carry one are the
+enrolled nodes', minted from the invitation. An adapter populating the field from
+its instance type or its contract id would otherwise publish a Rental Mercator
+does not hold on the public offer route, and a Booking bound to it would let a
+second Run queue behind a lease that never existed.
+
+Aggregation mints none either. It used to mint one for a standing offer in the
+reusable lane, which is `OfferKind` answering a question it does not answer:
+Kind says who owns the host, so a marketplace listing of somebody else's idle
+machine is standing, and a Booking bound to it accumulated Warmth and a queue
+against capacity nobody had allocated.
+
+That deletion is held by construction rather than by a test of its own, and a
+review round found the plan claiming otherwise. No connection can put a reusable
+offer into that loop at all: a capacity connection publishes none, and every other
+declaration is ephemeral, so the branch was unreachable and restoring it verbatim
+broke nothing. What is asserted instead, in `internal/broker`
+`TestNoAdapterListingBringsALeaseIntoPlacement`, is the construction itself, that
+every candidate an adapter published arrives in the ephemeral lane, beside the
+falsifiable half: an adapter's stated `rental_id` does not survive aggregation. The
+corpus states the same rule over the fleet in the Lab invariant
+`safety.a_rental_identity_is_capacity_mercator_holds`, which fails when either
+simulated world publishes a lease on a machine it does not hold.
 
 `domain.ExecutionLane` carries the answer onto every offer. It is orthogonal to
 `OfferKind`: Kind says who owns the host, Lane says whether a second workload
@@ -67,9 +159,9 @@ can run there. A standing Docker host with an enrolled node and a provisioned VM
 with an enrolled node are both reusable; a provider-native one-shot container is
 ephemeral however it was allocated.
 
-The Broker stamps the lane during aggregation from the negotiated Declaration
-and clears the Rental identity from offers that cannot become Rentals. An
-adapter never states its own lane on an offer.
+`Backend.ListOffers` stamps the lane from the negotiated Declaration where the
+offers cross out of the adapter, and clears the `rental_id` in the same pass. An
+adapter never states its own lane on an offer, and never its own Rental identity.
 
 ### Placement acts on the lane
 
@@ -93,11 +185,22 @@ Docker, RunPod, Shadeform, and Vast all declare ephemeral, because that is what
 they do today: each launch creates capacity for one workload and destroys it
 afterwards.
 
-Docker joins the reusable lane when a node agent enrolls on the host. Shadeform
-and Vast join it when they provision capacity an agent enrolls on, which is
-phases 2 and 5 of #155. `internal/providers` has a standing test that fails the
-moment a backend claims reuse without a `NodeRuntime`, so promotion is a
-deliberate act rather than a drift.
+Docker joins the reusable lane when a node agent enrolls on the host. The machine
+is then published by the node registry, and, if an operator also holds a docker
+connection pointing at that same host, by the docker connection as well: nothing
+correlates the two, and it is the node ID against the Docker daemon ID with no
+shared machine identity to deduplicate on. On this workstation both entries appear
+on `/v1/offers` for one physical host, the reusable one priced at the operator's
+shadow price with room for one workload and the ephemeral one free with room for
+eight, so the free copy wins every cost-based ranking and can hold eight
+containers on a machine whose runtime declares one.
+[#201](https://github.com/benngarcia/mercator/issues/201) is that defect, with the
+reproduction. It is not the capacity lane: a provider listing publishes nothing
+today, so the second copy is the local docker connection. Shadeform and Vast declare the reusable lane when they implement
+`CapacityProvider`, which is phase 5 of #155, and the machines they allocate
+become placement candidates when an agent enrolls on one. `internal/providers` has
+a standing test that fails the moment a backend claims reuse while allocating no
+capacity to reuse, so promotion is a deliberate act rather than a drift.
 
 ## Consequences
 
@@ -153,6 +256,13 @@ one-shot pod and a durable VM are both "provisionable".
 Letting adapters stamp their own lane onto offers would have made the lane a
 claim again. Declaration happens once, at the Broker, from the contracts the
 implementation satisfies.
+
+Having a `CapacityProvider` state the container runtime, idempotent launch and
+free capacity of the machines it lists, so its offers could be placed on today,
+would cross the authority boundary this ADR draws: the provider owns allocation
+and provider facts, and the node owns inventory and container lifecycle. A
+provider does not run the container runtime it would be asserting, and on a
+machine with no agent there is none to assert.
 
 Defaulting an unstated lane to ephemeral would have been safe but silent.
 Placement rejects the offer instead, so a producer that forgets is a loud

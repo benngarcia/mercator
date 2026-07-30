@@ -4,18 +4,18 @@ import (
 	"context"
 	"testing"
 
-	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
-func TestListOffersMapsCatalogTriplesToOffers(t *testing.T) {
+func TestListCapacityMapsCatalogTriplesToOffers(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
 	a := newTestAdapter(t, fake, nil)
 
-	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	offers, err := a.ListCapacity(context.Background(), capability.CapacityQuery{WorkspaceID: "ws_1"})
 	if err != nil {
-		t.Fatalf("list offers: %v", err)
+		t.Fatalf("list capacity: %v", err)
 	}
 	// Both regions this type is listed in, and the one with no stock says so
 	// rather than being left out. An answer filtered on availability makes a
@@ -52,10 +52,14 @@ func TestListOffersMapsCatalogTriplesToOffers(t *testing.T) {
 		t.Errorf("provisioning from boot_time = %+v", o.Provisioning)
 	}
 	if o.Capabilities.Network.Inbound != domain.InboundNetworkNone {
-		t.Errorf("no ports are mapped; inbound must be none, got %q", o.Capabilities.Network.Inbound)
+		t.Errorf("Mercator opens nothing inbound on a machine it rents, got %q", o.Capabilities.Network.Inbound)
 	}
-	if !o.Capabilities.Lifecycle.ProviderTTL {
-		t.Error("auto_delete is set on every launch; ProviderTTL must be advertised")
+	// What a listing states is the machine, never what executing on it would be
+	// like: a container runtime, an idempotent launch and a concurrency limit are
+	// the enrolled agent's facts and arrive on that node's own offer. What this
+	// provider promises about the lease is negotiated in CapacitySupport.
+	if o.Capabilities.Lifecycle != (domain.LifecycleCapabilities{}) || o.Capabilities.Container != (domain.ContainerCapabilities{}) {
+		t.Errorf("a capacity listing states execution semantics it cannot know: %+v", o.Capabilities)
 	}
 	if o.Images.Known {
 		t.Errorf("a fresh instance cannot enumerate what it holds; its inventory must be silent, got %+v", o.Images)
@@ -63,15 +67,12 @@ func TestListOffersMapsCatalogTriplesToOffers(t *testing.T) {
 	if !o.ExpiresAt.After(o.ObservedAt) {
 		t.Errorf("offer must expire after observation: %+v", o)
 	}
-	if o.Capabilities.Container.SupportsEntrypointOverride {
-		t.Error("the docker launch configuration has no entrypoint field; the offer must not advertise entrypoint override")
-	}
 	if o.Platform.OS != "linux" || o.Platform.Architecture != "amd64" {
 		t.Errorf("platform = %+v", o.Platform)
 	}
 }
 
-func TestListOffersMarksGraceHostsAsARM64(t *testing.T) {
+func TestListCapacityMarksGraceHostsAsARM64(t *testing.T) {
 	gh200 := vmType()
 	gh200.ShadeInstanceType = "GH200"
 	gh200.Configuration.GPUType = "GH200"
@@ -79,16 +80,16 @@ func TestListOffersMarksGraceHostsAsARM64(t *testing.T) {
 	fake.types = []instanceType{gh200}
 	a := newTestAdapter(t, fake, nil)
 
-	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{})
+	offers, err := a.ListCapacity(context.Background(), capability.CapacityQuery{})
 	if err != nil {
-		t.Fatalf("list offers: %v", err)
+		t.Fatalf("list capacity: %v", err)
 	}
 	if len(offers) != 2 || offers[0].Platform.Architecture != "arm64" {
 		t.Fatalf("GH200 (Grace superchip) hosts are ARM; advertising amd64 places images that die at exec: %+v", offers)
 	}
 }
 
-func TestListOffersExcludesNonVMDeploymentTypes(t *testing.T) {
+func TestListCapacityExcludesNonVMDeploymentTypes(t *testing.T) {
 	container := vmType()
 	container.DeploymentType = "container"
 	container.ShadeInstanceType = "A6000_container"
@@ -99,41 +100,41 @@ func TestListOffersExcludesNonVMDeploymentTypes(t *testing.T) {
 	fake.types = []instanceType{vmType(), container, baremetal}
 	a := newTestAdapter(t, fake, nil)
 
-	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{})
+	offers, err := a.ListCapacity(context.Background(), capability.CapacityQuery{})
 	if err != nil {
-		t.Fatalf("list offers: %v", err)
+		t.Fatalf("list capacity: %v", err)
 	}
 	if len(offers) != 2 || offers[0].NativeRef != "hyperstack/canada-1/A6000" {
 		t.Fatalf("container/baremetal inventory must be excluded, got %+v", offers)
 	}
 }
 
-func TestListOffersFiltersToAllowedClouds(t *testing.T) {
+func TestListCapacityFiltersToAllowedClouds(t *testing.T) {
 	lambda := vmType()
 	lambda.Cloud = "lambdalabs"
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType(), lambda}
 	a := newTestAdapter(t, fake, map[string]string{"allowed_clouds": "LambdaLabs"})
 
-	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{})
+	offers, err := a.ListCapacity(context.Background(), capability.CapacityQuery{})
 	if err != nil {
-		t.Fatalf("list offers: %v", err)
+		t.Fatalf("list capacity: %v", err)
 	}
 	if len(offers) != 2 || offers[0].NativeRef != "lambdalabs/canada-1/A6000" {
 		t.Fatalf("allowed_clouds must filter offers (case-insensitively), got %+v", offers)
 	}
 }
 
-func TestListOffersOmitsAcceleratorsForGPUlessTypes(t *testing.T) {
+func TestListCapacityOmitsAcceleratorsForGPUlessTypes(t *testing.T) {
 	cpu := vmType()
 	cpu.Configuration.NumGPUs = 0
 	fake := newFakeShadeform()
 	fake.types = []instanceType{cpu}
 	a := newTestAdapter(t, fake, nil)
 
-	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{})
+	offers, err := a.ListCapacity(context.Background(), capability.CapacityQuery{})
 	if err != nil {
-		t.Fatalf("list offers: %v", err)
+		t.Fatalf("list capacity: %v", err)
 	}
 	if len(offers) != 2 || len(offers[0].Resources.Accelerators) != 0 {
 		t.Fatalf("gpu-less type must advertise no accelerators, got %+v", offers)
@@ -155,9 +156,9 @@ func TestOneRegionNameInTwoCloudsIsTwoPlaces(t *testing.T) {
 	fake.types = []instanceType{hyperstack, crusoe}
 	a := newTestAdapter(t, fake, nil)
 
-	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	offers, err := a.ListCapacity(context.Background(), capability.CapacityQuery{WorkspaceID: "ws_1"})
 	if err != nil {
-		t.Fatalf("list offers: %v", err)
+		t.Fatalf("list capacity: %v", err)
 	}
 
 	if len(offers) != 2 {
@@ -168,7 +169,7 @@ func TestOneRegionNameInTwoCloudsIsTwoPlaces(t *testing.T) {
 	if first.ProviderAndRegion(false) == second.ProviderAndRegion(false) {
 		t.Fatalf("two clouds naming one region share the place %q", first.ProviderAndRegion(false))
 	}
-	if first.ProviderAndRegion(false) != "lane=ephemeral;provider=shadeform;region=hyperstack/us-east-1" {
+	if first.ProviderAndRegion(false) != "lane=reusable;provider=shadeform;region=hyperstack/us-east-1" {
 		t.Fatalf("the place this offer recurs in is %q", first.ProviderAndRegion(false))
 	}
 	if first.InstanceType != "A6000" {
@@ -181,10 +182,10 @@ func TestOneRegionNameInTwoCloudsIsTwoPlaces(t *testing.T) {
 // out of the adapter does not name its own provider yet.
 func aggregated(offer domain.OfferSnapshot) domain.OfferSnapshot {
 	offer.AdapterType = "shadeform"
-	// And the lane from the Declaration this backend negotiated, which is ephemeral
-	// until a Shadeform machine is proven to enroll an agent. Capacity nobody
-	// classified has no key at any level, so an unstamped offer would make every
-	// assertion below one about the empty string.
-	offer.Lane = domain.LaneEphemeral
+	// And the lane from the Declaration this backend negotiated, which is reusable:
+	// what Shadeform sells is a machine that outlives the workloads run on it.
+	// Capacity nobody classified has no key at any level, so an unstamped offer
+	// would make every assertion below one about the empty string.
+	offer.Lane = domain.LaneReusable
 	return offer
 }

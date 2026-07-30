@@ -1,12 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Capacity provisioned for the first Run is still there when the second arrives, because an enrolled node agent holds the host runtime open. The second Run reuses that machine and its layers instead of provisioning a second one. Mercator can already do this on a node an operator enrolled by hand; what is missing is provisioned capacity arriving with an agent already on it, and a Rental Schedule that survives the first Run.",
-  "classification": "target",
-  "missing_capabilities": [
-    "node_bootstrap",
-    "execution_warms_capacity",
-    "rental_schedule"
-  ],
+  "summary": "Capacity provisioned for the first Run is still there when the second arrives, because an enrolled node agent holds the host runtime open. The second Run reuses that machine and its layers instead of provisioning a second one. The listing names the machine it becomes and states what its provider negotiated over it: this one stops and resumes a machine under one identity, keeps its disk while it is stopped, deduplicates a repeated provision on the operation key, and can list what Mercator owns there. The first Run is what makes any of that possible, and its disposition says so: it releases its workload rather than terminating its host, because the machine it built is a lease with its own lifecycle and a Run ending is not that lease ending. A first Run that terminated would leave the second one nothing to find, whatever the listing negotiated. What the two Runs win is two different things wearing two different names, which is the whole point of the second half. The first Run wins reusable-4090, a listing, and the listing names the one machine it sells. The second wins simcloud-4090-0f31, the machine that listing turned into, which publishes standing reusable capacity under the provider's own handle for it from the moment its agent opens a session. Both are weighed and the listing is refused twice over, because a listing of a machine Mercator already leases is not capacity to acquire: buying it a second time would be buying one host twice. The world says so on the offer's own capacity evidence rather than by withdrawing it, so the decision records having seen it, and Mercator says so again by naming the machine, because those are two different refusals. The provider's answer is that the capacity is spent right now, which is a wait that ends when whoever is spending it stops. Mercator's is that it is spending it itself, on a machine standing in this same fleet under its own name, and nothing is going to hand that back: the listing can never become this Run's placement, and the machine beside it is the only candidate whose answer about room means anything. Reuse is therefore a decision about two named candidates rather than an arithmetic identity, and what the second Run wins is a machine rather than a product. The first Run has to really finish for any of it to be true, which is why this fixture states how long its work takes and then reconciles it past that: a machine still holding a workload is a machine the second Run queues behind. The second Run's own disposition is deliberately not the evidence of reuse: both lanes of that Run release now, so what says it reused the machine is the offer it won, the candidate disposition, and the two stages costing nothing.",
+  "classification": "green",
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
@@ -25,6 +20,7 @@
     "marketplace": [
       {
         "id": "reusable-4090",
+        "machine": "simcloud-4090-0f31",
         "provider": "simcloud",
         "lane": "reusable",
         "rate_per_hour_usd": 2.0,
@@ -34,7 +30,28 @@
           "acquisition": "24s",
           "boot": "3m",
           "agent_ready": "36s"
+        },
+        "capacity": {
+          "stop": true,
+          "resume": true,
+          "persistent_disk": true,
+          "spot": false,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true,
+          "observe_after_terminate": false
+        },
+        "bootstrap": {
+          "deadline": "10m"
         }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "run-first",
+        "candidate": "reusable-4090",
+        "minimum": "10m",
+        "maximum": "10m"
       }
     ]
   },
@@ -49,7 +66,7 @@
       "expect": {
         "outcome": "place",
         "offer": "reusable-4090",
-        "disposition": "terminate",
+        "disposition": "release",
         "candidates": {
           "reusable-4090": {
             "feasible": true,
@@ -59,7 +76,25 @@
       }
     },
     {
-      "advance": "15m"
+      "advance": "5m"
+    },
+    {
+      "reconcile": "run-first",
+      "expect": {
+        "outcome": "place",
+        "offer": "reusable-4090"
+      }
+    },
+    {
+      "advance": "25m"
+    },
+    {
+      "reconcile": "run-first",
+      "expect": {
+        "outcome": "place",
+        "offer": "reusable-4090",
+        "start_latency_seconds": {"at_least": 288, "at_most": 289}
+      }
     },
     {
       "submit": "run-second",
@@ -70,19 +105,26 @@
       },
       "expect": {
         "outcome": "place",
-        "offer": "reusable-4090",
+        "offer": "simcloud-4090-0f31",
         "disposition": "release",
         "reasons": [
           "REUSE_EXISTING_RENTAL"
         ],
         "candidates": {
-          "reusable-4090": {
+          "simcloud-4090-0f31": {
             "feasible": true,
             "disposition": "run_now_existing_rental",
             "stages": {
               "boot": {"seconds": 0},
               "image_fetch": {"seconds": 0}
             }
+          },
+          "reusable-4090": {
+            "feasible": false,
+            "rejected": [
+              {"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"},
+              {"code": "CAPACITY_ALREADY_HELD", "path": "machine_id"}
+            ]
           }
         }
       }

@@ -5,6 +5,7 @@
 // nav items carry a lucide glyph + label.
 
 import {
+  Database,
   GitBranch,
   LayoutDashboard,
   PlugZap,
@@ -25,6 +26,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { to: "/canvas", label: "Workspace", icon: LayoutDashboard },
+  { to: "/locality", label: "Locality", icon: Database },
   { to: "/runs", label: "Runs", icon: ScrollText },
   { to: "/offers", label: "Offers", icon: Tags },
   { to: "/connections", label: "Connections", icon: PlugZap },

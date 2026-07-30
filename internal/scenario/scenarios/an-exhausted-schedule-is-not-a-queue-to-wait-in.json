@@ -1,0 +1,60 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "The only machine in the fleet is held by a Booking whose enforced 45 minutes ran out 5 minutes ago, and it is the whole fleet: nothing else is published, so the Run that arrives has one candidate and it is struck out for a schedule that can promise no start. What the record then says about the wait is the claim. An exhausted schedule projects zero, which is the same number an idle Rental reports, so a refusal counted as capacity that comes back when the work spending it finishes would put this Run in a queue behind a Booking that already overran, name that Booking's Run as work ahead of it, and date the wait at nothing. Mercator says the opposite: no machine here could hold this Run once what it is spending comes back, so the wait is one for capacity to be added, nothing is in front of it, and no other Run has to be ordered behind it. The two answers differ on every field an operator reads, which is why the refusal states which of the two it is where the check is made rather than leaving it to be inferred from the code.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-overrun",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-overrun",
+        "version": 1,
+        "running": {
+          "booking": "booking-active",
+          "run": "run-active",
+          "remaining_max_runtime": "45m",
+          "completes_after": "90m"
+        }
+      }
+    ]
+  },
+  "timeline": [
+    {"advance": "50m"},
+    {
+      "submit": "arrives-behind-the-overrun",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_CAPACITY_FITS",
+          "behind": [],
+          "queued_seconds": 0,
+          "projected_wait_seconds": 0,
+          "fleet": {
+            "weighed": 1,
+            "could_hold": 0,
+            "unstated": 0
+          }
+        }
+      }
+    }
+  ]
+}

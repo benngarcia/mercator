@@ -28,11 +28,16 @@ type SchedulingInput struct {
 	// identically, so an operator reading a Run that nothing matched could not
 	// tell a marketplace selling no machine of that shape from a workspace whose
 	// providers were never asked.
-	Collection               domain.CollectionReport
-	Schedules                map[string]domain.RentalSchedule
-	ExcludedOfferSnapshotIDs []string
-	ModelVersion             string
-	EvaluatedAt              time.Time
+	Collection domain.CollectionReport
+	Schedules  map[string]domain.RentalSchedule
+	// Excluded is what earlier attempts on this Run proved about offers this
+	// evaluation can still see, each carrying what it proved. A bare list of IDs
+	// could only ever say "an earlier attempt refused this", which reads a machine
+	// somebody else was using and a machine Mercator allocated and destroyed as
+	// one fact.
+	Excluded     []domain.OfferExclusion
+	ModelVersion string
+	EvaluatedAt  time.Time
 	// Image is the content every candidate is being asked to run. It travels
 	// with the request because it is a property of the image: an offer that
 	// restated it could disagree with the others about the same image.
@@ -305,17 +310,8 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	var violations []domain.Violation
 	workload := input.Workload
 	container := workload.Spec.Containers[0]
-	if slices.Contains(input.ExcludedOfferSnapshotIDs, offer.ID) {
-		violations = append(violations, domain.Violation{
-			Code:     "PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE",
-			Path:     "offer_snapshot_id",
-			Required: "offer not rejected by an earlier attempt",
-			Offered:  offer.ID,
-			Message:  "Offer was rejected as unavailable by an earlier launch attempt.",
-			// What this machine refused was a launch, and what it said was that it
-			// had nothing to run it on. That is capacity somebody else is spending.
-			EndedByWaiting: true,
-		})
+	if exclusion, struck := domain.ExcludedOffer(input.Excluded, offer.ID); struck {
+		violations = append(violations, exclusion.Reason.Violation(offer.ID))
 	}
 	if !offer.Lane.Valid() {
 		violations = append(violations, domain.Violation{
@@ -341,8 +337,33 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	if !offer.Capacity.Available && !queueable(input, offer) {
 		violations = append(violations, domain.Violation{Code: "CAPACITY_UNAVAILABLE", Path: "capacity.available", Required: true, Offered: false, Message: "Offer capacity evidence says the capacity is not currently available.", EndedByWaiting: true})
 	}
+	// A listing of a machine this fleet already holds is capacity already
+	// acquired, and buying it again would buy one host twice. It does not end by
+	// waiting: nothing hands the machine back, and whether this Run can ever run
+	// there is the machine's own answer beside it. See domain.HolderOfMachine.
+	if holder, held := domain.HolderOfMachine(input.Offers, offer); held {
+		violations = append(violations, domain.Violation{Code: "CAPACITY_ALREADY_HELD", Path: "machine_id", Required: "a machine this fleet does not already hold", Offered: offer.MachineID, Message: "Offer sells a machine this fleet already holds under Rental " + holder + "."})
+	}
 	if schedule, ok := input.Schedules[offer.RentalID]; ok && len(schedule.Bookings) >= domain.RentalScheduleQueueCapacity+1 {
 		violations = append(violations, domain.Violation{Code: "QUEUE_CAPACITY_EXCEEDED", Path: "rental_schedule.bookings", Required: domain.RentalScheduleQueueCapacity + 1, Offered: len(schedule.Bookings), Message: "Rental Schedule has no open Booking position.", EndedByWaiting: true})
+	}
+	// A Rental whose Booking is past the runtime Mercator enforces can promise no
+	// start behind it, and domain.RentalSchedule refuses the reservation outright.
+	// It is asked here as well as of the offer's own availability, because the two
+	// answers come from different authorities and can disagree: a machine that says
+	// it is free while Mercator still holds an open Booking on it was selected and
+	// then failed to reserve, which ended the whole placement rather than striking
+	// out one candidate.
+	//
+	// It does not end by waiting, and the message says why: this schedule cannot
+	// promise a start at all, which is not the claim that the capacity comes back
+	// when the work spending it finishes. Every projection off an exhausted
+	// schedule reads zero, so a refusal counted as a wait would put this Run behind
+	// a Booking that already overran, name its Run as work ahead, and defer with a
+	// projected wait of nothing. That is the head-of-line block domain.Violation
+	// names as the reason the flag is false by default.
+	if schedule, ok := input.Schedules[offer.RentalID]; ok && offer.KeepsWhatItRuns() && schedule.Exhausted(input.EvaluatedAt) {
+		violations = append(violations, domain.Violation{Code: "RENTAL_SCHEDULE_EXHAUSTED", Path: "rental_schedule.bookings", Required: 0, Offered: schedule.Bookings[0].OverrunSeconds(input.EvaluatedAt), Message: "Rental Schedule cannot promise a start behind a Booking past the runtime Mercator enforces."})
 	}
 	if !offer.Capabilities.Container.SupportsDigestRefs {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.supports_digest_refs", Required: true, Offered: false, Message: "Offer must support digest-pinned images."})
@@ -387,7 +408,33 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 			Message:  "Offer has less room left than the Run reserved plus the content it would have to land here.",
 		})
 	}
-	if !acceleratorRequirementsSatisfied(workload.Spec.Resources.Accelerators, offer) {
+	// What the host under this workload has to be, as opposed to how many cards
+	// it counts. The host provides the driver and the image provides the
+	// accelerator stack that talks to it, so an image built against a newer
+	// driver than the machine runs is refused here rather than discovered by a
+	// process dying on capacity Mercator already paid for. A machine that stated
+	// nothing is refused too, and separately, because a silence is not a machine
+	// that said no.
+	violations = append(violations, offer.Host.Violations(workload.Spec.Resources.Host)...)
+	// The cards themselves, asked the way the disk is asked. A machine that never
+	// counted its cards is refused too, and not for the same thing: sending a Run
+	// pinned to eight A100s to a machine nobody counted is a launch nobody can
+	// promise, so the refusal stands, but it names an inventory nobody took rather
+	// than a shortfall somebody measured. Read as a shortfall it said the fleet
+	// can never run this work on the strength of one nvidia-smi that would not
+	// run, which is the answer the driver fact above already stopped giving and
+	// the answer every count, model, and memory floor still got.
+	switch {
+	case requiresAccelerators(workload.Spec.Resources.Accelerators) && !offer.Resources.AcceleratorsKnown:
+		violations = append(violations, domain.Violation{
+			Code:     "UNKNOWN_FACT",
+			Path:     "resources.accelerators",
+			Required: workload.Spec.Resources.Accelerators,
+			Offered:  "unknown",
+			Message:  "Offer does not say what accelerators this machine holds.",
+			Unstated: true,
+		})
+	case !acceleratorRequirementsSatisfied(workload.Spec.Resources.Accelerators, offer):
 		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.accelerators", Required: workload.Spec.Resources.Accelerators, Offered: offer.Resources.Accelerators, Message: "Offer has insufficient accelerator inventory."})
 	}
 	if requiresPublicInbound(container) && offer.Capabilities.Network.Inbound != domain.InboundNetworkPublicPort {
@@ -1290,6 +1337,16 @@ func downloadFloorViolations(now time.Time, req domain.NetworkDownloadRequiremen
 func requiresPublicInbound(container domain.ContainerSpec) bool {
 	return slices.ContainsFunc(container.Ports, func(port domain.PortSpec) bool {
 		return port.Exposure == domain.PortExposurePublic
+	})
+}
+
+// requiresAccelerators reports whether this workload asked for a card at all. A
+// Run that asked for none is placed on a machine that counted none and on a
+// machine that counted nothing alike, the same way a Run with no disk floor is
+// placed on a machine whose statfs failed.
+func requiresAccelerators(requirements []domain.AcceleratorRequirement) bool {
+	return slices.ContainsFunc(requirements, func(requirement domain.AcceleratorRequirement) bool {
+		return requirement.Count > 0
 	})
 }
 

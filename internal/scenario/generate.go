@@ -231,8 +231,14 @@ func (generator *blueprintGenerator) marketplace(count int) []MarketplaceOfferSp
 		boot := Duration(time.Duration(15+generator.draw("market/"+id+"/boot", 121)) * time.Second)
 		agentReady := Duration(time.Duration(5+generator.draw("market/"+id+"/agent", 31)) * time.Second)
 		offers[index] = MarketplaceOfferSpec{
-			ID:             id,
-			Provider:       "generated-cloud",
+			ID:       id,
+			Provider: "generated-cloud",
+			// Generated listings sell reusable capacity, because a generated world
+			// exists to stress placement over a fleet and the reusable lane is the
+			// one a later Run can be placed back onto. The one-shot lane is a
+			// hand-written fixture's claim, since what it is worth saying about is
+			// that nothing survives, which no generated arrival plan asks.
+			Lane:           domain.LaneReusable,
 			Region:         regions[generator.draw("market/"+id+"/region", uint64(len(regions)))],
 			Available:      &available,
 			RatePerHourUSD: generator.price("market/"+id+"/price", 100, 600),

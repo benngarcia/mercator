@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
+	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/janitor"
@@ -37,7 +40,18 @@ type controlPlane struct {
 	// prewarm is what this world's Blueprint allows the control plane to have in
 	// flight for work it has not admitted. A Blueprint that states none turns
 	// preparation off, which is every fixture written before it existed.
-	prewarm       orchestrator.PrewarmPolicy
+	prewarm orchestrator.PrewarmPolicy
+	// credentials is the accounts this Mercator holds and never hands out: the
+	// registries its private images live at, and the object store its Artifacts
+	// are durable in. It survives a restart because it is the deployment's
+	// configuration rather than anything this execution produced.
+	credentials *credential.Mint
+	// nodes is Mercator's own node registry, the real one, with this world
+	// watching what leaves it. Provisioning is only an act if the identity it
+	// mints is one a machine can really redeem, so an invitation handed back,
+	// spent twice, claimed for the wrong generation, or presented after its
+	// window closed behaves here exactly as it does in production.
+	nodes         *labRegistry
 	restarts      uint64
 	faultPosition eventlog.GlobalPosition
 }
@@ -90,6 +104,8 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		SeededReplicas:              facts.SeededReplicas,
 		Prewarm:                     facts.Prewarm,
 		SeededOrphans:               facts.SeededOrphans,
+		BootstrapCredentials:        facts.BootstrapCredentials,
+		ContentCredentials:          facts.ContentCredentials,
 		ProjectionRebuildEquivalent: reflect.DeepEqual(runs, rebuiltRuns),
 	}, nil
 }
@@ -196,13 +212,19 @@ func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error)
 	if err != nil {
 		return closeWith(err)
 	}
-	runtime := &controlPlane{
-		storage:    storage,
-		world:      world,
-		workspaces: workspaces,
-		prewarm:    prewarmPolicy(tape.InitialWorld.Prewarm),
-		janitor:    janitor.New(world, janitor.WithEventLog(storage.EventLog())),
+	mint, err := labMint(tape, world.nowTime)
+	if err != nil {
+		return closeWith(err)
 	}
+	runtime := &controlPlane{
+		storage:     storage,
+		world:       world,
+		workspaces:  workspaces,
+		prewarm:     prewarmPolicy(tape.InitialWorld.Prewarm),
+		credentials: mint,
+		janitor:     janitor.New(world, janitor.WithEventLog(storage.EventLog())),
+	}
+	runtime.nodes = newLabRegistry(storage.Nodes(), world)
 	runtime.restartOrchestrator()
 	return runtime, nil
 }
@@ -240,6 +262,42 @@ func (runtime *controlPlane) handleRunArrival(ctx context.Context, event WorldEv
 	}
 	_, err := runtime.orchestrator.Prewarm(ctx)
 	return err
+}
+
+// labMint is the accounts this Mercator holds so a machine never has to. It is
+// derived from the Blueprint because the Blueprint is the deployment: a world
+// with a private image is a world whose operator gave Mercator an account at
+// that registry, and a world with Artifacts is one with somewhere durable to
+// keep them.
+//
+// An account is held for every registry a private image is served from and for
+// no other. A Mercator that held one everywhere could never be caught minting
+// material for content that needed none, which is its own way of putting an
+// account on a machine.
+func labMint(tape WorldTape, now func() time.Time) (*credential.Mint, error) {
+	registries := map[string]credential.RegistryAccount{}
+	for reference, image := range tape.InitialWorld.Images {
+		if !image.Private {
+			continue
+		}
+		host := domain.ReferenceRegistry(reference)
+		registries[host] = credential.RegistryAccount{
+			Registry: host,
+			Username: "mercator-lab",
+			Secret:   DeterministicID(tape.Seed, "registry-account", host),
+		}
+	}
+	return credential.NewMint(credential.MintConfig{
+		Registries: slices.Collect(maps.Values(registries)),
+		ObjectStore: &credential.ObjectStoreAccount{
+			Endpoint:  "https://objects.lab.mercator.test",
+			Bucket:    "mercator-lab",
+			Region:    "lab",
+			AccessKey: "lab-object-store",
+			Secret:    DeterministicID(tape.Seed, "object-store-account", "mercator-lab"),
+		},
+		Now: now,
+	})
 }
 
 // prewarmPolicy is the Blueprint's bounds as the control plane's own restraint.
@@ -312,19 +370,26 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 	}); err != nil {
 		return fmt.Errorf("create Lab Run %q: %w", arrival.Name, err)
 	}
-	if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil {
-		if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
-			return fmt.Errorf("advance Lab Run %q: %w", arrival.Name, err)
-		}
-		if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil {
-			return fmt.Errorf("reconcile ambiguous Lab Run %q: %w", arrival.Name, err)
-		}
+	if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil && !indeterminate(err) {
+		return fmt.Errorf("advance Lab Run %q: %w", arrival.Name, err)
 	}
 	return nil
 }
 
+// indeterminate is an external command whose outcome nobody knows: the launch or
+// the provision reached the world and the answer did not come back. It is the one
+// error a control plane answers by asking again, because what it asks the second
+// time is what it is holding rather than for the thing again.
+func indeterminate(err error) bool {
+	return errors.Is(err, adapter.ErrLaunchIndeterminate) || errors.Is(err, capability.ErrCapacityIndeterminate)
+}
+
 func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 	runtime.world.setNow(now)
+	if err := runtime.deliverEnrolments(ctx); err != nil {
+		return err
+	}
+	runtime.renewSessions()
 	if err := runtime.deliverReadiness(ctx); err != nil {
 		return err
 	}
@@ -352,6 +417,21 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 // that is what application readiness is: the workload is the only authority, and
 // routing it through the provider seam would make a running process and a serving
 // one the same fact again.
+// deliverEnrolments is the agents in this world opening their sessions. It runs
+// before the Runs are advanced, for the reason readiness does: an agent that has
+// arrived is a fact about a machine the same sweep then reasons over, and a
+// registry that only learned of one when somebody asked would make the answer a
+// property of how often Mercator asks.
+func (runtime *controlPlane) deliverEnrolments(ctx context.Context) error {
+	return runtime.world.deliverEnrolments(ctx, runtime.nodes)
+}
+
+// renewSessions is the agents that are already here keeping the sessions they
+// opened. It runs beside the enrolments for the same reason and in the same
+// sweep, and after them because a machine that has just arrived holds a fresh
+// credential and has nothing to renew.
+func (runtime *controlPlane) renewSessions() { runtime.world.renewSessions() }
+
 func (runtime *controlPlane) deliverReadiness(ctx context.Context) error {
 	for _, report := range runtime.world.dueReadinessReports() {
 		ready, err := orchestrator.NewApplicationReadyReport(report.ReadyAt)
@@ -365,21 +445,25 @@ func (runtime *controlPlane) deliverReadiness(ctx context.Context) error {
 	return nil
 }
 
-// advanceWorkspace drives one tenant's open Runs. An ambiguous launch is
-// reconciled by advancing again, which is what a control plane does with a
-// response it never got.
+// advanceWorkspace drives one tenant's open Runs. An ambiguous launch and an
+// ambiguous provision end the sweep for that Run and are settled by the next
+// one, which is what the deployment's reconcile loop does: it records what it
+// could not settle and comes back to ask what Mercator is holding rather than
+// asking for the thing again.
+//
+// It matters that the next sweep is a later moment. A world that asked again
+// inside the same instant would be a control plane whose two attempts cannot be
+// told apart, and a bootstrap signs the moment it stops being redeemable, so the
+// second mint would come out byte for byte the first and no Blueprint could ever
+// show what a repeat costs the machine already holding one.
 func (runtime *controlPlane) advanceWorkspace(ctx context.Context, workspace string) error {
-	_, err := runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
-	if errors.Is(err, adapter.ErrLaunchIndeterminate) {
-		_, err = runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
-	}
-	if err != nil {
+	if _, err := runtime.orchestrator.AdvanceOpenRuns(ctx, workspace); err != nil && !indeterminate(err) {
 		return err
 	}
 	// The orphan sweep is last because what capacity Mercator holds live work for
 	// is whatever the Runs just settled into, so a sweep that ran first would find
 	// a machine orphaned that a Run was about to be launched on.
-	_, err = runtime.janitor.Sweep(ctx, workspace)
+	_, err := runtime.janitor.Sweep(ctx, workspace)
 	return err
 }
 
@@ -402,8 +486,17 @@ func (runtime *controlPlane) restartOrchestrator() {
 		orchestrator.WithImageManifests(runtime.world),
 		orchestrator.WithArtifactCatalog(runtime.world),
 		orchestrator.WithPrewarm(runtime.world, runtime.prewarm, runtime.storage.Preparation()),
+		// The accounts a machine must never hold. Without this every fetch a node
+		// in this world made would be anonymous, and a rule about what a machine is
+		// handed would have nothing to read.
+		orchestrator.WithContentCredentials(runtime.credentials),
 		orchestrator.WithRentalSchedules(runtime.storage.RentalSchedules()),
 		orchestrator.WithRunProjection(runtime.storage.Runs()),
+		// Placement choosing to provision is an act, and these are the seams it
+		// acts through: the lease that allocates a machine, and the registry that
+		// says which node it will be and whether an agent ever arrived.
+		orchestrator.WithCapacity(runtime.world),
+		orchestrator.WithInviter(runtime.nodes),
 	)
 }
 

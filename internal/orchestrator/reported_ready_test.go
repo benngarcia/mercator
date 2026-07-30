@@ -118,7 +118,7 @@ func runningRun(t *testing.T) (*Orchestrator, time.Time) {
 		fake.WithPublishedStart(0),
 		fake.WithNow(now),
 	)
-	orch := New(openOrchestratorLog(t), scheduler.New(), ad, WithClock(now))
+	orch := New(openOrchestratorLog(t), scheduler.New(), ad, WithClock(now), withTestCapacity())
 	createRun(t, ctx, orch)
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)

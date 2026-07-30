@@ -47,6 +47,33 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		}
 	})
 
+	// Provisioning asks for an identity again on every attempt, because nothing
+	// can know whether an earlier attempt landed a machine until the provider
+	// answers. So the second invitation of one identity is a routine question
+	// with one right answer, and a store that reported it as an opaque failure
+	// would strand every Rental whose first attempt was ambiguous.
+	t.Run("inviting an identity that already exists names the collision", func(t *testing.T) {
+		store := invited(t, newStore)
+
+		err := store.Invite(context.Background(), inviteRecord())
+
+		if !errors.Is(err, node.ErrIdentityExists) {
+			t.Fatalf("inviting %q twice = %v, want ErrIdentityExists", nodeID, err)
+		}
+	})
+
+	t.Run("an identity taken in one workspace is not free in another", func(t *testing.T) {
+		store := invited(t, newStore)
+		elsewhere := inviteRecord()
+		elsewhere.WorkspaceID = "ws_other"
+
+		err := store.Invite(context.Background(), elsewhere)
+
+		if !errors.Is(err, node.ErrIdentityExists) {
+			t.Fatalf("inviting %q into a second workspace = %v, want ErrIdentityExists", nodeID, err)
+		}
+	})
+
 	t.Run("an identity resolves without knowing its workspace", func(t *testing.T) {
 		store := invited(t, newStore)
 
@@ -304,6 +331,83 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		}
 	})
 
+	// The three cases below are one promise read from three sides: the generation
+	// this identity was invited for is over, so nothing brings the machine back
+	// into the fleet. It is the promise the Rental lifecycle rests on, because
+	// ending a generation is how Mercator gives a machine up and the record is the
+	// only thing that stops the agent on it being answered as though it had not.
+	t.Run("a retired node can never enroll again", func(t *testing.T) {
+		store := invited(t, newStore)
+		mustEnroll(t, store, "token-1")
+		if err := store.Reinvite(context.Background(), workspaceID, nodeID, "token-2", start.Add(time.Hour)); err != nil {
+			t.Fatalf("reinvite: %v", err)
+		}
+		if err := store.Retire(context.Background(), workspaceID, nodeID); err != nil {
+			t.Fatalf("retire node: %v", err)
+		}
+
+		_, err := store.Enroll(context.Background(), workspaceID, nodeID, enrollment("token-2"))
+
+		if !errors.Is(err, node.ErrRetired) {
+			t.Fatalf("enrolling a retired node = %v, want ErrRetired", err)
+		}
+		record, err := store.Get(context.Background(), workspaceID, nodeID)
+		if err != nil {
+			t.Fatalf("get retired node: %v", err)
+		}
+		if record.State != node.StateRetired {
+			t.Fatalf("state = %q, want %q", record.State, node.StateRetired)
+		}
+	})
+
+	t.Run("a retired node renews no lease with its next heartbeat", func(t *testing.T) {
+		store := invited(t, newStore)
+		mustEnroll(t, store, "token-1")
+		if err := store.Retire(context.Background(), workspaceID, nodeID); err != nil {
+			t.Fatalf("retire node: %v", err)
+		}
+
+		_, err := store.Heartbeat(context.Background(), workspaceID, nodeID, capability.NodeFacts{
+			ObservedAt: start.Add(time.Minute),
+			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker"},
+		}, start.Add(2*time.Hour))
+
+		if !errors.Is(err, node.ErrRetired) {
+			t.Fatalf("heartbeat from a retired node = %v, want ErrRetired", err)
+		}
+		record, err := store.Get(context.Background(), workspaceID, nodeID)
+		if err != nil {
+			t.Fatalf("get retired node: %v", err)
+		}
+		if record.State != node.StateRetired {
+			t.Fatalf("state = %q, want the node to stay %q", record.State, node.StateRetired)
+		}
+	})
+
+	t.Run("retiring a retired node changes nothing", func(t *testing.T) {
+		store := invited(t, newStore)
+		mustEnroll(t, store, "token-1")
+		if err := store.Retire(context.Background(), workspaceID, nodeID); err != nil {
+			t.Fatalf("retire node: %v", err)
+		}
+
+		err := store.Retire(context.Background(), workspaceID, nodeID)
+
+		if err != nil {
+			t.Fatalf("retiring a retired node = %v, want a generation's end to be repeatable", err)
+		}
+	})
+
+	t.Run("an identity nobody invited cannot be retired", func(t *testing.T) {
+		store := newStore(t)
+
+		err := store.Retire(context.Background(), workspaceID, "nod_missing")
+
+		if !errors.Is(err, node.ErrNotFound) {
+			t.Fatalf("retiring an unknown identity = %v, want ErrNotFound", err)
+		}
+	})
+
 	t.Run("an unknown node is not found rather than empty", func(t *testing.T) {
 		store := newStore(t)
 
@@ -318,7 +422,14 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 func invited(t *testing.T, newStore NewStore) node.Store {
 	t.Helper()
 	store := newStore(t)
-	if err := store.Invite(context.Background(), node.Record{
+	if err := store.Invite(context.Background(), inviteRecord()); err != nil {
+		t.Fatalf("invite node: %v", err)
+	}
+	return store
+}
+
+func inviteRecord() node.Record {
+	return node.Record{
 		ID:                nodeID,
 		WorkspaceID:       workspaceID,
 		RentalID:          rentalID,
@@ -326,10 +437,7 @@ func invited(t *testing.T, newStore NewStore) node.Store {
 		State:             node.StateEnrolling,
 		EnrollmentTokenID: "token-1",
 		EnrollmentExpires: start.Add(time.Hour),
-	}); err != nil {
-		t.Fatalf("invite node: %v", err)
 	}
-	return store
 }
 
 func mustEnroll(t *testing.T, store node.Store, tokenID string) node.Record {

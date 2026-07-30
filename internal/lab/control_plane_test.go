@@ -149,8 +149,14 @@ func TestEventFaultRestartsTheControlPlaneDeterministically(t *testing.T) {
 		}
 	}()
 
-	if _, err := execution.Drive(context.Background(), Step()); err != nil {
-		t.Fatalf("drive first arrival: %v", err)
+	// Driven past provisioning rather than one step, because the launch is no
+	// longer the first thing that happens to a Run placed on capacity that does
+	// not exist yet: the machine is allocated, boots, and enrols first, and a
+	// fault triggered on the launch fires when the launch happens.
+	for range 3 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive to the launch: %v", err)
+		}
 	}
 
 	if execution.runtime.restarts != 1 {

@@ -1,0 +1,12 @@
+{
+  "adapter_type": "shadeform",
+  "credential_env": "SHADEFORM_API_KEY",
+  "config": {
+    "agent_download_url": "https://downloads.example.com/mercator-node/{version}/linux-amd64",
+    "allowed_clouds": "hyperstack",
+    "max_lifetime_hours": "1"
+  },
+  "mode": "capacity",
+  "max_expected_cost_usd": 2.0,
+  "timeout": "20m"
+}

@@ -34,6 +34,7 @@
       {
         "id": "fresh-4090",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 2.5,
         "provisioning": {
           "expected": "5m",
@@ -57,11 +58,14 @@
       "expect": {
         "outcome": "place",
         "offer": "fresh-4090",
-        "disposition": "terminate",
+        "disposition": "release",
         "candidates": {
           "rental-warm": {
             "feasible": false,
-            "rejected": [{"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"}],
+            "rejected": [
+              {"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"},
+              {"code": "RENTAL_SCHEDULE_EXHAUSTED", "path": "rental_schedule.bookings"}
+            ],
             "queue_seconds": 0,
             "rental_schedule": {
               "version": 1,

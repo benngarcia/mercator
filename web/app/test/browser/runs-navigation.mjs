@@ -180,10 +180,20 @@ async function runsScopeCancelledCreate(page) {
       .count(),
     1,
   );
-  assert.equal(
-    await trigger.evaluate((element) => element === document.activeElement),
-    true,
-  );
+  // Closing the dialog hands focus back to the Create run control, and what this
+  // asserts is that keyboard focus is back there, not that React kept the same
+  // DOM node. The previous form compared node identity against a handle taken
+  // before the dialog opened, and sampled document.activeElement the instant
+  // waitForURL resolved, so it lost two races at once: the hand-back happens
+  // after the URL returns, and the Workspace event feed refetching useRuns
+  // re-renders the header, replacing the button element. It failed four runs in
+  // six on a 24 core host while passing in CI. Asking for the focused button by
+  // its accessible name, through the same waitFor idiom as every other wait in
+  // this file, is what the claim was always about.
+  await page
+    .getByRole("button", { name: "Create run", exact: true })
+    .and(page.locator(":focus"))
+    .waitFor();
 }
 
 async function minimalImageRunCreated(page) {
@@ -322,6 +332,7 @@ recordBrowserFailures(page);
 try {
   await localSessionSurvivesReload(page);
   await runsScopeCancelledCreate(page);
+  const runsListURL = page.url();
   await page
     .getByRole("button", { name: "Create run", exact: true })
     .first()
@@ -330,6 +341,12 @@ try {
     path: path.join(outputDirectory, "create-run-image.png"),
   });
   await page.keyboard.press("Escape");
+  // Dismissing the sheet goes back through the router's history, which settles
+  // after the key press returns. minimalImageRunCreated opens by reading
+  // page.url() as the address it later expects goBack to return to, so without
+  // this wait it can capture "?action=create" and then wait out its full timeout
+  // for a URL the app is never going to show again.
+  await page.waitForURL(runsListURL);
   await minimalImageRunCreated(page);
   await page.screenshot({
     path: path.join(outputDirectory, "runs-navigation.png"),

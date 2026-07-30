@@ -137,13 +137,34 @@ type Machine struct {
 	// lease bound. An expired machine stops being offered, standing in for
 	// janitor termination until the rental lifecycle exists.
 	LeaseExpiresAt time.Time
-	// ProvisionSpend is what this world takes to turn a listing into a machine
-	// that can run a container: acquisition, boot, and agent enrollment together.
-	// It is deliberately not the estimate the offer publishes, which is a claim
-	// the scheduler predicts from; a world that spent its own published
-	// expectation would make that expectation right by construction. Standing
-	// capacity spends none of it, because the machine is already there.
-	ProvisionSpend time.Duration
+	// AcquisitionSpend, BootSpend, and AgentReadySpend are what this world takes
+	// to turn a listing into a machine Mercator can execute on: the provider
+	// allocating it, it reaching a usable operating system, and a node agent on it
+	// opening a session. They are three rather than one because they are answered
+	// by three different authorities and fail three different ways, and because a
+	// control plane that measures them has to have something to measure.
+	//
+	// They are deliberately not the estimate the offer publishes, which is a claim
+	// the scheduler predicts from; a world that spent its own published expectation
+	// would make that expectation right by construction. Standing capacity spends
+	// none of them, because the machine is already there.
+	AcquisitionSpend time.Duration
+	BootSpend        time.Duration
+	AgentReadySpend  time.Duration
+	// NeverEnrolls is a machine this world allocates and boots whose node agent
+	// never opens its session: an image with no agent in it, a startup script that
+	// ran before the network was up, an outbound path something blocks. Mercator
+	// has no session to it, so nothing can create a container there and no workload
+	// launched here ever begins.
+	//
+	// Provisioning does not complete on such a machine, which is why this is a
+	// separate fact from a ProvisionSpend of any length. A stage that never
+	// finishes has no seconds to state, and stating none would make the failure a
+	// provider bills for the fastest possible success.
+	//
+	// It is refused on capacity Mercator keeps, which is where the claim that such
+	// a machine fetches nothing lives: see AddMachine.
+	NeverEnrolls bool
 	// UnpackSpend is what this machine takes to turn content on its disk into a
 	// layer chain a container can start on, and ContainerStartSpend is what its
 	// runtime takes to create the container and hold a process in it. Both are
@@ -225,13 +246,12 @@ func (m *Machine) startExecution(image string, layers []Layer, caches []domain.C
 			bytes += layer.Bytes
 		}
 	}
-	// Nothing can be fetched onto a machine that does not exist yet, so the world
-	// spends acquisition, boot, and agent enrollment before the pull begins. Bytes
-	// that land are then applied, and only then does a runtime hand back a
-	// process: a launch is a waterfall, and a stage that costs nothing here is a
-	// stage no prediction of it could ever be measured against.
-	readyAt := now.Add(m.ProvisionSpend)
-	startsAt := readyAt.
+	// The machine exists by the time anything is launched on it: acquisition,
+	// boot, and the agent's arrival are spent under the capacity lease, before
+	// this. Bytes that land are then applied, and only then does a runtime hand
+	// back a process: a launch is a waterfall, and a stage that costs nothing here
+	// is a stage no prediction of it could ever be measured against.
+	startsAt := now.
 		Add(transferDuration(bytes, m.linkMbps(domain.NetworkScopeRegistry))).
 		Add(m.assemblySpend(bytes, layers)).
 		Add(m.ContainerStartSpend)
@@ -541,6 +561,17 @@ type World struct {
 	// the moment a process began and the only thing an observation can report it
 	// from once it has arrived.
 	startsAt map[string]time.Time
+	// endsAt is when each launch's workload stops running, keyed by launch key. It
+	// is world truth and the only thing an observation can report an exit from: a
+	// workload that is still running is one this world holds no end for.
+	//
+	// A launch is entered here only where the Blueprint said how long its work
+	// takes. How long a workload runs is a fact about the workload, and a world
+	// that invented one would be answering a question nobody asked it.
+	endsAt map[string]time.Time
+	// runtimes is how long one Run's work really takes on one candidate, keyed by
+	// the Run and the capacity it was placed on. See DefineRuntime.
+	runtimes map[string]time.Duration
 	// readyAt is when each workload here really begins serving, which is what makes
 	// a report due. The moment the report carries is the same one read on its host's
 	// clock, and for one machine in this corpus those are not the same moment.
@@ -566,6 +597,13 @@ type World struct {
 	// when it is handed over: a report re-delivered on every look would tell
 	// Mercator the same thing forever.
 	readiness map[string]ReadinessReport
+	// allocations is every machine this world holds under the capacity lease,
+	// keyed by the Rental it was allocated for. See capacity.go.
+	allocations map[string]*allocation
+	// Enroller is the control plane's node registry as the agents in this world
+	// reach it. A world without one has no registry to enrol against, so its
+	// machines are allocated and never become executable.
+	Enroller Enroller
 }
 
 // ReadinessReport is one workload telling Mercator it can do work, with the
@@ -587,9 +625,12 @@ func NewWorld(clock *Clock, options ...Option) *World {
 		artifacts:    map[string]domain.ArtifactVersion{},
 		machines:     map[string]*Machine{},
 		startsAt:     map[string]time.Time{},
+		endsAt:       map[string]time.Time{},
+		runtimes:     map[string]time.Duration{},
 		readyAt:      map[string]time.Time{},
 		statedStarts: map[string]time.Time{},
 		readiness:    map[string]ReadinessReport{},
+		allocations:  map[string]*allocation{},
 	}
 }
 
@@ -615,6 +656,21 @@ func (w *World) DefineArtifact(version domain.ArtifactVersion) {
 	w.artifacts[version.ID] = version
 }
 
+// DefineRuntime states how long one Run's work really takes on one candidate.
+// It is the only way a workload in this world ever finishes: a Run nobody stated
+// a runtime for runs for as long as the scenario lasts, which is what a placement
+// world has always done and what a fixture that says nothing about runtimes was
+// written against.
+//
+// It is keyed by the capacity the Run was placed on because that is what the
+// Blueprint names, and because how long work takes is a property of the machine
+// it runs on as much as of the work.
+func (w *World) DefineRuntime(runID, offerID string, runtime time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.runtimes[runID+"@"+offerID] = runtime
+}
+
 // ArtifactVersion is the object store answering what one version is. A name it
 // never heard of, and a name belonging to another workspace, both come back
 // zero, which is not durable: Artifacts are never shared across workspaces, and
@@ -634,7 +690,13 @@ func (w *World) ArtifactVersion(_ context.Context, workspaceID, artifactID strin
 // that exists and lends out a slot. The caller states the kind and the lane,
 // because that pair is what the capacity is; the world only refuses a claim it
 // would then have to correct, and grants Rental identity to the capacity that
-// earns it, exactly as capability.StampLane does in production.
+// earns it.
+//
+// The identity is this world's own, the way internal/node.Registry.offer's is in
+// production: a machine that carries a Rental is one an agent enrolled on, and the
+// identity comes from the invitation that named the Rental. It is not
+// capability.StampLane, which is the adapter seam and clears the field in every
+// lane, because nothing that crosses it is a machine Mercator holds.
 func (w *World) AddMachine(m *Machine) error {
 	if m == nil || m.Offer.ID == "" {
 		return fmt.Errorf("fake: machine requires an offer with an ID")
@@ -648,14 +710,39 @@ func (w *World) AddMachine(m *Machine) error {
 			m.Offer.ID, resident, m.Offer.Resources.EphemeralDiskBytes,
 		)
 	}
+	// Capacity Mercator keeps is a machine it holds through an enrolled agent, so a
+	// machine whose agent never opens a session can never be any. Refusing the pair
+	// here is what makes the rest of this world's account of a stranded machine
+	// true: content is recorded only for capacity that keeps what it runs, so a
+	// machine nothing enrols on holds nothing without a second rule saying so, and
+	// there is no state in which one asks whether a stranded machine got warm.
+	if m.NeverEnrolls && m.Offer.KeepsWhatItRuns() {
+		return fmt.Errorf(
+			"fake: machine %q states an agent that never enrols and capacity Mercator keeps, and it holds capacity through that agent",
+			m.Offer.ID,
+		)
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	m.Offer.RentalID = ""
-	if m.Offer.KeepsWhatItRuns() {
-		m.Offer.RentalID = m.Offer.ID
-	}
+	m.Offer.RentalID = rentalIdentity(m.Offer)
 	w.machines[m.Offer.ID] = m
 	return nil
+}
+
+// rentalIdentity is the lease a machine is held under. Capacity that keeps
+// nothing carries none, whatever it claimed. Capacity Mercator keeps carries the
+// lease the invitation named where the machine came from a provision and states
+// one, and the fixture's own ID for capacity a Blueprint declared as a lease,
+// which is the only name such a machine was ever given.
+func rentalIdentity(offer domain.OfferSnapshot) string {
+	switch {
+	case !offer.KeepsWhatItRuns():
+		return ""
+	case offer.RentalID != "":
+		return offer.RentalID
+	default:
+		return offer.ID
+	}
 }
 
 // Machine returns the registered machine by offer ID, for scenario scripts that
@@ -680,7 +767,7 @@ func (w *World) ListOffers(_ context.Context, request adapter.OfferRequest) ([]d
 		if machine.leaseExpiredAt(now) {
 			continue
 		}
-		offer := w.machineOffer(machine, now)
+		offer := w.sold(w.machineOffer(machine, now))
 		// A marketplace listing is a search result, so this world answers the shape
 		// it was asked about. Capacity Mercator holds is listed whole and refused in
 		// the record. See domain.OfferSnapshot.PublishedTo.
@@ -727,16 +814,25 @@ func (w *World) Launch(ctx context.Context, request adapter.LaunchRequest) (adap
 func (w *World) recordExecution(request adapter.LaunchRequest) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	machine, exists := w.machines[request.SelectedOfferSnapshotID]
+	machine, exists := w.executionHost(request)
 	if !exists {
 		return
 	}
 	now := w.clock.Now()
 	machine.settle(now)
+	if machine.NeverEnrolls {
+		// Nothing can create a container on a machine Mercator has no session to, so
+		// this launch has no start moment to record and no readiness to follow it.
+		// The launch was accepted and the provider is billing; the record says the
+		// start was never observed, which is what makes a stranded machine a
+		// different world from one whose container starts instantly.
+		return
+	}
 	startsAt := machine.startExecution(
 		request.Image, w.images[request.Image].Layers, declaredCaches(request), now,
 	)
 	w.startsAt[request.LaunchKey] = startsAt
+	w.finishExecution(machine, request, startsAt)
 	// What the machine will say when asked, which is the moment above read on its
 	// own clock. World truth stays above: this world knows when the container
 	// really began, and the host reporting it does not know its clock is wrong.
@@ -758,6 +854,30 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 		// reporting it does not know its host's clock is wrong.
 		ReadyAt: readyAt.Add(machine.ClockAhead),
 	}
+}
+
+// finishExecution is the workload this launch started coming to an end, where
+// the Blueprint said how long its work takes. Until then the machine is holding
+// it: capacity Mercator keeps advertises itself occupied while a workload of its
+// own is running there, because Mercator holds a Booking on it for exactly that
+// long and an offer that said the machine was free would contradict its own
+// Rental Schedule.
+//
+// A launch whose runtime nobody stated ends nowhere and holds nothing, which is
+// what this world has always done with one.
+func (w *World) finishExecution(machine *Machine, request adapter.LaunchRequest, startsAt time.Time) {
+	runtime, stated := w.runtimes[request.RunID+"@"+request.SelectedOfferSnapshotID]
+	if !stated {
+		return
+	}
+	endsAt := startsAt.Add(runtime)
+	w.endsAt[request.LaunchKey] = endsAt
+	if !machine.Offer.KeepsWhatItRuns() {
+		return
+	}
+	machine.BusyUntil = endsAt
+	machine.ExpectedBusyUntil = endsAt
+	machine.FreesAt = endsAt
 }
 
 // DueReadinessReports is every workload here that has become ready and has not
@@ -804,7 +924,25 @@ func (w *World) Observe(ctx context.Context, request adapter.ObserveRequest) (ad
 	// arrived here and not there.
 	stated := w.statedStarts[request.LaunchKey]
 	observation.StartedAt = &stated
-	return observation, nil
+	return w.exited(observation), nil
+}
+
+// exited is this world reporting a workload that has finished. The phase the
+// embedded adapter holds says a container was accepted and never that its
+// process ended, so the exit is the world's own answer and comes from the moment
+// the workload's work was done.
+//
+// A launch whose runtime nobody stated has no such moment and is reported exactly
+// as before: still running, for as long as the scenario lasts.
+func (w *World) exited(observation adapter.ExternalObservation) adapter.ExternalObservation {
+	endsAt, ends := w.endsAt[observation.LaunchKey]
+	if !ends || w.clock.Now().Before(endsAt) {
+		return observation
+	}
+	code := 0
+	observation.Phase = adapter.ExternalPhaseSucceeded
+	observation.ExitCode = &code
+	return observation
 }
 
 // declaredCaches is the mutable state this launch asks its host to attach, named

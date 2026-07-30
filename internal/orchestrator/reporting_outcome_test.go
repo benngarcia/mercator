@@ -15,12 +15,12 @@ import (
 
 func intPtr(v int) *int { return &v }
 
-// runningProvisionableRun drives a fresh run to RUNNING on a provisionable
+// runningOneShotRun drives a fresh run to RUNNING on a one-shot
 // (terminate-disposition) offer and returns the orchestrator + fake adapter.
-func runningProvisionableRun(t *testing.T, ctx context.Context) (*Orchestrator, *fake.Adapter) {
+func runningOneShotRun(t *testing.T, ctx context.Context) (*Orchestrator, *fake.Adapter) {
 	t.Helper()
 	ad := fake.New(
-		fake.WithOffers([]domain.OfferSnapshot{orchProvisionableOffer("off_prov", time.Now().UTC())}),
+		fake.WithOffers([]domain.OfferSnapshot{orchOneShotOffer("off_oneshot", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
 	)
 	orch := newTestOrchestrator(t, ad)
@@ -33,7 +33,7 @@ func runningProvisionableRun(t *testing.T, ctx context.Context) (*Orchestrator, 
 
 func TestExitReportZeroRecordsSucceededAndTerminates(t *testing.T) {
 	ctx := context.Background()
-	orch, ad := runningProvisionableRun(t, ctx)
+	orch, ad := runningOneShotRun(t, ctx)
 
 	if err := orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(0))); err != nil {
 		t.Fatalf("record report: %v", err)
@@ -59,7 +59,7 @@ func TestExitReportZeroRecordsSucceededAndTerminates(t *testing.T) {
 
 func TestExitReportNonzeroRecordsFailed(t *testing.T) {
 	ctx := context.Background()
-	orch, ad := runningProvisionableRun(t, ctx)
+	orch, ad := runningOneShotRun(t, ctx)
 
 	if err := orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(2))); err != nil {
 		t.Fatalf("record report: %v", err)
@@ -81,7 +81,7 @@ func TestExitReportNonzeroRecordsFailed(t *testing.T) {
 
 func TestProgressReportDoesNotFinalize(t *testing.T) {
 	ctx := context.Background()
-	orch, ad := runningProvisionableRun(t, ctx)
+	orch, ad := runningOneShotRun(t, ctx)
 
 	if err := orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "progress", []byte(`{"pct":50}`), nil)); err != nil {
 		t.Fatalf("record report: %v", err)
@@ -100,7 +100,7 @@ func TestProgressReportDoesNotFinalize(t *testing.T) {
 
 func TestFirstTerminalFactDeterminesOutcome(t *testing.T) {
 	ctx := context.Background()
-	orch, ad := runningProvisionableRun(t, ctx)
+	orch, ad := runningOneShotRun(t, ctx)
 
 	if err := orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(0))); err != nil {
 		t.Fatalf("record report: %v", err)
@@ -121,7 +121,7 @@ func TestFirstTerminalFactDeterminesOutcome(t *testing.T) {
 func TestCleanupFailureIsDurableBlockedEvidenceAndRefreshRetries(t *testing.T) {
 	ctx := context.Background()
 	base := fake.New(
-		fake.WithOffers([]domain.OfferSnapshot{orchProvisionableOffer("off_cleanup_failure", time.Now().UTC())}),
+		fake.WithOffers([]domain.OfferSnapshot{orchOneShotOffer("off_cleanup_failure", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
 	)
 	ad := &terminateFailsOnceAdapter{Adapter: base}
@@ -188,7 +188,7 @@ func TestExitReportAfterRunClosedIsNoop(t *testing.T) {
 	ctx := context.Background()
 	// Drive a run to terminal via the normal succeeded path first.
 	ad := fake.New(
-		fake.WithOffers([]domain.OfferSnapshot{orchProvisionableOffer("off_prov", time.Now().UTC())}),
+		fake.WithOffers([]domain.OfferSnapshot{orchOneShotOffer("off_oneshot", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
 	orch := newTestOrchestrator(t, ad)

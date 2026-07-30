@@ -111,6 +111,7 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 	}
 	violations = append(violations, validateArtifactRequirements(rev.Spec.Artifacts)...)
 	violations = append(violations, validateCacheRequirements(rev.Spec.Caches)...)
+	violations = append(violations, validateHostRequirements(rev.Spec.Resources.Host)...)
 	for i, port := range container.Ports {
 		if port.ContainerPort <= 0 || port.ContainerPort > 65535 {
 			violations = append(violations, Violation{
@@ -128,6 +129,43 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 			violations = append(violations, Violation{
 				Code: "CAPABILITY_MISMATCH", Path: "spec.network.inbound", Required: InboundNetworkPublicPort, Offered: rev.Spec.Network.Inbound,
 				Message: "Public port exposure requires public inbound network capability.",
+			})
+		}
+	}
+	return violations
+}
+
+// validateHostRequirements refuses a workload that asks its host for something
+// no machine can answer. A fact outside the closed set is matched by nothing, so
+// a Run declaring one would be refused everywhere with UNKNOWN_FACT and read as
+// a fleet that cannot serve it; a driver floor Mercator cannot order is the same
+// silence one step further in. Both are the caller's typo, and they are caught
+// where the Run enters rather than in every Booking Decision it goes on to spoil.
+func validateHostRequirements(required HostRequirements) []Violation {
+	var violations []Violation
+	for index, fact := range required.Facts {
+		if fact.Known() {
+			continue
+		}
+		violations = append(violations, Violation{
+			Code:     "UNKNOWN_HOST_FACT",
+			Path:     fmt.Sprintf("spec.resources.host.facts[%d]", index),
+			Required: KnownHostFacts,
+			Offered:  fact,
+			Message:  "Nothing in Mercator establishes this host fact, so no machine could ever state it.",
+		})
+	}
+	for _, floor := range []struct{ path, version string }{
+		{"spec.resources.host.min_driver_version", required.MinDriverVersion},
+		{"spec.resources.host.min_driver_capability", required.MinDriverCapability},
+	} {
+		if floor.version == "" {
+			continue
+		}
+		if _, comparable := CompareDottedVersions(floor.version, floor.version); !comparable {
+			violations = append(violations, Violation{
+				Code: "MALFORMED_VERSION", Path: floor.path, Required: "dotted numeric version", Offered: floor.version,
+				Message: "A driver floor Mercator cannot order against a host's own version refuses every machine in the fleet.",
 			})
 		}
 	}

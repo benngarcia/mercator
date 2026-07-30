@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/janitor"
@@ -725,8 +726,8 @@ func TestIntegrationOneDaemonReachedTwoWaysIsOneMachine(t *testing.T) {
 	if relabelled.ID != info.ID {
 		t.Fatalf("one daemon named two machines, %q and %q", info.ID, relabelled.ID)
 	}
-	direct := StandingOffer(DeriveIdentity("", ""), "", info, 0, nil, now)
-	labelled := StandingOffer(DeriveIdentity("", viaContext.Context), "", relabelled, 0, nil, now)
+	direct := StandingOffer(DeriveIdentity("", ""), "", info, 0, capability.AcceleratorFacts{}, now)
+	labelled := StandingOffer(DeriveIdentity("", viaContext.Context), "", relabelled, 0, capability.AcceleratorFacts{}, now)
 	if direct.ID == labelled.ID {
 		t.Fatalf("this case is about two listings of one machine; both are %q", direct.ID)
 	}

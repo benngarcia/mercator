@@ -62,7 +62,7 @@ type OfferAggregation struct {
 
 type fanoutResult[T any] struct {
 	connection connection.Record
-	items      []T
+	value      T
 	err        error
 }
 
@@ -74,7 +74,7 @@ type fanoutResult[T any] struct {
 func fanOut[T any](
 	ctx context.Context,
 	connections []connection.Record,
-	query func(context.Context, connection.Record) ([]T, error),
+	query func(context.Context, connection.Record) (T, error),
 ) ([]fanoutResult[T], []string) {
 	results := make(chan fanoutResult[T], len(connections))
 	excluded := []string{}
@@ -85,8 +85,8 @@ func fanOut[T any](
 			continue
 		}
 		group.Go(func() {
-			items, err := query(ctx, record)
-			results <- fanoutResult[T]{connection: record, items: items, err: err}
+			value, err := query(ctx, record)
+			results <- fanoutResult[T]{connection: record, value: value, err: err}
 		})
 	}
 	group.Wait()
