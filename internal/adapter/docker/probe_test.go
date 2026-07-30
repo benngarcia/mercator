@@ -20,10 +20,13 @@ func TestNormalizeArchMapsDockerArchToOCI(t *testing.T) {
 
 func TestParseDockerInfoExtractsHostFacts(t *testing.T) {
 	// Shape emitted by `docker info --format '{{json .}}'`.
-	raw := []byte(`{"Architecture":"aarch64","OSType":"linux","NCPU":10,"MemTotal":8222068736,"ServerVersion":"29.4.0","Name":"orbstack"}`)
+	raw := []byte(`{"ID":"7a9d0c1e-2b34-4f56-8a90-1b2c3d4e5f60","Architecture":"aarch64","OSType":"linux","NCPU":10,"MemTotal":8222068736,"ServerVersion":"29.4.0","Name":"orbstack"}`)
 	info, err := parseDockerInfo(raw)
 	if err != nil {
 		t.Fatalf("parseDockerInfo: %v", err)
+	}
+	if info.ID != "7a9d0c1e-2b34-4f56-8a90-1b2c3d4e5f60" {
+		t.Errorf("ID = %q, want the daemon's own identifier", info.ID)
 	}
 	if info.Architecture != "aarch64" {
 		t.Errorf("Architecture = %q, want aarch64", info.Architecture)

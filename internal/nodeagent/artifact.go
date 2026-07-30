@@ -116,11 +116,27 @@ func (docker *DockerRuntime) fetchArtifact(ctx context.Context, command capabili
 	}
 	defer func() { _ = os.Remove(partial.Name()) }()
 	sum := sha256.New()
+	startedAt := docker.now()
 	size, err := io.Copy(io.MultiWriter(partial, sum), response.Body)
 	if err != nil {
 		_ = partial.Close()
 		return "", 0, fmt.Errorf("read Artifact %s from the object store: %w", command.ArtifactID, err)
 	}
+	// This read is the measurement. The bytes and the seconds are both here, at
+	// the one moment anything in this system holds both, so the node offers what
+	// it just did as evidence about the path it crossed rather than leaving
+	// Placement to assume a rate for the next Run that reads from the same store.
+	// The window is the copy, which is the bytes crossing the path and landing on
+	// this disk, hashed as they pass because one read does both jobs here. It is
+	// published under ArtifactCopySource for that reason: on a machine whose disk
+	// is slower than its link this reading is the disk, and the name has to say so,
+	// because what is asked of the number is how fast content reaches this host and
+	// landing is part of reaching it. What the window leaves out is the request and
+	// however long the store took before it started answering: that is latency, and
+	// a rate computed over it would report a fast path as a slow one on every small
+	// read.
+	finishedAt := docker.now()
+	docker.network.record(domain.NetworkScopeObjectStore, size, finishedAt.Sub(startedAt), finishedAt)
 	if err := partial.Close(); err != nil {
 		return "", 0, fmt.Errorf("prepare Artifact %s: %w", command.ArtifactID, err)
 	}

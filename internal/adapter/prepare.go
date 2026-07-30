@@ -78,6 +78,16 @@ func (item PrepareItem) Content() string {
 	return item.ArtifactID
 }
 
+// Identity is one item of a desired set: the machine and the content together.
+// It is what an answer about a single item has to name, because the same content
+// is routinely wanted on several machines at once and each of them answers for
+// itself. One host turning a fetch away says nothing about the host that took
+// the same content on, and an answer naming content alone cannot tell the two
+// apart.
+func (item PrepareItem) Identity() string {
+	return item.OfferSnapshotID + "/" + item.Content()
+}
+
 // PrepareRequest is the whole of what Mercator wants prepared right now, for
 // one workspace. Anything a host is preparing that is absent from Wanted is
 // preparation Mercator has stopped asking for, and a machine that keeps going
@@ -91,10 +101,11 @@ type PrepareRequest struct {
 }
 
 // PrepareReceipt is what the far side did with a desired set: what it took on,
-// what it stopped, and what it cannot do at all. Unsupported is stated rather
-// than silently dropped, because a machine that cannot prepare is a machine
-// whose next Run pays the whole fetch, and an operator reading a decision
-// should not have to infer that from a missing effect.
+// what it stopped, what it turned away, and what it cannot do at all.
+// Unsupported is stated rather than silently dropped, because a machine that
+// cannot prepare is a machine whose next Run pays the whole fetch, and an
+// operator reading a decision should not have to infer that from a missing
+// effect.
 type PrepareReceipt struct {
 	OperationKey string
 	AcceptedAt   time.Time
@@ -102,4 +113,12 @@ type PrepareReceipt struct {
 	Started      []string
 	Abandoned    []string
 	Unsupported  []string
+	// Refused is the items the holder turned away and could take on later, each
+	// named by PrepareItem.Identity: the machine and the content, because one
+	// machine refusing content says nothing about the machine beside it that took
+	// the same content on. It is a third answer rather than a shade of either of
+	// the others: a machine that cannot be prepared at all is Unsupported forever,
+	// and content a machine took on is on its way, while this is content nothing
+	// is fetching and nothing is stopping Mercator from asking for again.
+	Refused []string
 }

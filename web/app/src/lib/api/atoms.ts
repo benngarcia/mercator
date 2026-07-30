@@ -116,12 +116,15 @@ const runEventsFamily = Atom.family((workspaceId: string) =>
 export const runEventsAtom = (workspaceId: string, runId: string) =>
   runEventsFamily(workspaceId)(runId);
 
+// runDecisionFamily reads the whole chain of decisions recorded for one Run,
+// oldest first. A decision is appended and never rewritten, so the answer that
+// stands is the last entry and the ones before it are what it replaced.
 const runDecisionFamily = Atom.family((workspaceId: string) =>
   Atom.family((runId: string) =>
     resource(
       resourceKey.runDecision(workspaceId, runId),
       endpoints.getRunDecision(runId, { workspaceId }).pipe(
-        Effect.map((response) => response.decision),
+        Effect.map((response) => response.decisions),
         Effect.catchIf(
           (error) => error.notFound,
           () => Effect.succeed(null),
@@ -131,7 +134,7 @@ const runDecisionFamily = Atom.family((workspaceId: string) =>
   ),
 );
 
-export const runDecisionAtom = (workspaceId: string, runId: string) =>
+export const runDecisionsAtom = (workspaceId: string, runId: string) =>
   runDecisionFamily(workspaceId)(runId);
 
 export const offersAtom = Atom.family((workspaceId: string) =>

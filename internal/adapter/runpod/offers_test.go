@@ -125,3 +125,78 @@ func TestStockAvailable(t *testing.T) {
 		}
 	}
 }
+
+// TestACatalogListingStatesNoConfidenceInItsCapacity is what this adapter may say
+// on its provider's behalf. RunPod's catalog says a GPU type is in stock, which is
+// what the offer carries; it publishes nothing about how sure of that it is, and a
+// listing that may be gone by launch asserted as certain is a claim nobody made.
+// An enrolled node states full confidence because Mercator observed the machine
+// itself. What would state one here is a measurement of how often provisioning
+// this listing succeeds, which nothing collects yet.
+func TestACatalogListingStatesNoConfidenceInItsCapacity(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	gpus := []gpuType{
+		{ID: "NVIDIA RTX A2000", DisplayName: "RTX A2000", MemoryInGb: 6, SecurePrice: pricePtr(0.12), SecureStockStatus: "High"},
+	}
+
+	offers := buildOffers(gpus, []string{"NVIDIA RTX A2000"}, 1, 75, false, now)
+
+	if len(offers) != 1 {
+		t.Fatalf("expected one offer, got %d", len(offers))
+	}
+	capacity := offers[0].Capacity
+	if !capacity.Available {
+		t.Errorf("the catalog says this type is in stock and the offer says %+v", capacity)
+	}
+	if capacity.Confidence != 0 {
+		t.Errorf("the offer states confidence %v in a listing whose publisher stated none", capacity.Confidence)
+	}
+}
+
+// TestOneProductInTwoCloudsIsTwoCandidates is why this adapter states an instance
+// type. The product RunPod sells is a GPU type inside a cloud tier, and the two
+// tiers are two products: a secure-cloud A2000 and a community A2000 are different
+// machines at different prices with different behaviour, so a launch history that
+// merged them would predict one from the other. Nothing else on the offer tells
+// them apart, because this catalog publishes no geography at all.
+func TestOneProductInTwoCloudsIsTwoCandidates(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	gpus := []gpuType{{
+		ID: "NVIDIA RTX A2000", DisplayName: "RTX A2000", MemoryInGb: 6,
+		SecurePrice: pricePtr(0.12), SecureStockStatus: "High",
+		CommunityPrice: pricePtr(0.08), CommunityStockStatus: "Low",
+	}}
+
+	offers := buildOffers(gpus, []string{"NVIDIA RTX A2000"}, 1, 20, true, now)
+
+	if len(offers) != 2 {
+		t.Fatalf("expected one offer per cloud, got %d: %+v", len(offers), offers)
+	}
+	secure := domain.CandidateIdentityOf(aggregated(offers[0]), "sha256:image")
+	community := domain.CandidateIdentityOf(aggregated(offers[1]), "sha256:image")
+	if secure.Candidate(true) == community.Candidate(true) {
+		t.Fatalf("two cloud tiers share the key %q", secure.Candidate(true))
+	}
+	if secure.InstanceType != "SECURE/NVIDIA RTX A2000" {
+		t.Fatalf("the product this offer recurs as is %q", secure.InstanceType)
+	}
+	// A tier is not a place. Recording it as one would file a history about where
+	// a machine is under a word about who may reach it, so the ladder here has no
+	// region rung and says so.
+	if secure.ProviderAndRegion(false) != "" {
+		t.Fatalf("a catalog naming no datacenter published the region %q", secure.ProviderAndRegion(false))
+	}
+}
+
+// aggregated is the offer as a scheduler receives it: the Broker stamps the
+// adapter type from the connection the offer arrived through, so an offer straight
+// out of buildOffers does not name its own provider yet.
+func aggregated(offer domain.OfferSnapshot) domain.OfferSnapshot {
+	offer.AdapterType = "runpod"
+	// And the lane from the Declaration this backend negotiated, which is ephemeral
+	// because a pod holds nothing once its workload exits. Capacity nobody classified
+	// has no key at any level, so an unstamped offer would make every assertion here
+	// one about the empty string.
+	offer.Lane = domain.LaneEphemeral
+	return offer
+}

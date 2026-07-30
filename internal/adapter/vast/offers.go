@@ -23,20 +23,42 @@ const secureVerification = "verified"
 // its certified-datacenter offering (datacenter=true), and machine
 // verification must be "verified" on top. Community/peer capacity
 // (datacenter=false or unverified machines) is never queried.
+//
+// What it asks for is what the fleet is asked, and the whole control plane reads
+// the answer as an answer about the shape. An empty result has to mean this
+// marketplace sells no machine of that shape, because that is the meaning
+// admission gives it: a Run nothing matched is waiting for capacity to be added
+// and is exempted from holding the queue, so a search that answered with nothing
+// for a reason of its own drops work out of the ordering it belongs in.
+//
+// Two filters used to break that. Asking for machines nobody is on turned every
+// sold-out moment into a fleet that does not sell the shape, which on Vast is
+// most moments: it is a marketplace, so a popular card is rented. Machines that
+// are rented are searched for and published as capacity that is not available,
+// which is how every other occupied machine in this tree is published, and the
+// scheduler already refuses those as a wait rather than as an impossibility.
+// The order puts the free ones first so the limit still spends itself on
+// capacity a Run can have today.
+//
+// Asking for exactly the accelerator count broke it the other way. Vast sells
+// asks against partitions of a machine and the partitions are powers of two, so
+// a Run wanting three cards matched nothing in a market abundantly selling two,
+// four and eight. It asks for at least what the Run needs now, and the ask
+// publishes its true card count and its true price, so a bigger partition is
+// ranked on what it actually costs rather than quietly excluded.
 func secureOfferQuery(gpuNames []string, gpuCount, diskGB, limit int) map[string]any {
 	q := map[string]any{
 		"verified":   map[string]any{"eq": true},
 		"datacenter": map[string]any{"eq": true},
 		"external":   map[string]any{"eq": false},
 		"rentable":   map[string]any{"eq": true},
-		"rented":     map[string]any{"eq": false},
-		"num_gpus":   map[string]any{"eq": gpuCount},
+		"num_gpus":   map[string]any{"gte": gpuCount},
 		"disk_space": map[string]any{"gte": float64(diskGB)},
 		"type":       "ondemand",
 		// allocated_storage sizes the disk the offer is priced for, so
 		// dph_total already includes the disk we will request at launch.
 		"allocated_storage": float64(diskGB),
-		"order":             []any{[]any{"dph_total", "asc"}},
+		"order":             []any{[]any{"rented", "asc"}, []any{"dph_total", "asc"}},
 		"limit":             limit,
 	}
 	if len(gpuNames) > 0 {
@@ -53,13 +75,27 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 		if o.Verification != secureVerification {
 			continue
 		}
-		if o.DPHTotal == nil || o.NumGPUs != gpuCount {
+		if o.DPHTotal == nil || o.NumGPUs < gpuCount {
 			continue
 		}
 		vendor := gpuVendor(o.GPUArch)
 		snapshots = append(snapshots, domain.OfferSnapshot{
-			ID:         "off_vast_" + strconv.FormatInt(o.ID, 10),
-			Kind:       domain.OfferKindProvisionable,
+			ID:   "off_vast_" + strconv.FormatInt(o.ID, 10),
+			Kind: domain.OfferKindProvisionable,
+			// The ask ID above is a fresh integer for every search of the same
+			// machine, so it is the one field a launch history must never be filed
+			// under. The machine behind it is not: Vast sells asks against hardware
+			// somebody already owns and publishes that owner's machine ID on every
+			// ask, so this is the handle that comes back tomorrow and it is what a
+			// history about this candidate is filed under. An ask publishing none
+			// falls to the place and the card below, which is all that recurs about
+			// a listing whose machine nobody named.
+			MachineID: machineHandle(o.MachineID),
+			// Where the machine is, which is the level a candidate nobody has
+			// measured falls to. Vast sells asks rather than named instance types and
+			// so states no InstanceType at all; the accelerator inventory below
+			// states the product.
+			Region:     o.Geolocation,
 			NativeRef:  strconv.FormatInt(o.ID, 10),
 			ObservedAt: now,
 			ExpiresAt:  now.Add(5 * time.Minute),
@@ -68,6 +104,7 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 				CPUMillis:          int64(o.CPUCoresEffective * 1000),
 				MemoryBytes:        int64(o.CPURAMMb) * mib,
 				EphemeralDiskBytes: int64(diskGB) * gib,
+				EphemeralDiskKnown: true,
 				Accelerators: []domain.AcceleratorInventory{{
 					Vendor:         vendor,
 					Model:          o.GPUName,
@@ -91,14 +128,24 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 				GranularitySeconds: 1,
 				Known:              true,
 			},
-			// reliability2 is Vast's empirical machine uptime score in [0,1];
-			// its complement is the chance the host drops out mid-run, which is
-			// what the scheduler prices via InterruptionPenaltyUSD.
-			Reliability: domain.ReliabilityEvidence{
-				InterruptionRate: clamp01(1 - o.Reliability),
-				Confidence:       1,
-			},
-			Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+			// What Vast has measured about this machine, and only that. The decision
+			// records it and nothing prices it: what an interruption costs is a
+			// probability times a predicted start, and the flat weight this comment
+			// used to name was deleted for being an invented exchange rate.
+			Reliability: interruptionHistory(o.Reliability),
+			// A catalog listing says this machine type can be had, and an ask
+			// somebody is already on says the opposite about this one. Vast
+			// publishes that per ask, so it is carried through rather than
+			// filtered out: a machine that exists and is busy is a wait, and an
+			// ask that was never returned is a shape nobody sells, and admission
+			// orders the queue on the difference.
+			//
+			// Its publisher states no confidence in either, and neither does
+			// Mercator on their behalf: capacity that may be gone by launch,
+			// asserted certain, is a claim nobody made. What would state it here
+			// is a measurement of how often provisioning this listing actually
+			// succeeds, which nothing collects yet.
+			Capacity: domain.CapacityEvidence{Available: !o.Rented},
 			// Vast pulls the image on the rented host; cache state is unknown
 			// but the fact must be KNOWN or the scheduler rejects the offer.
 			// A fresh instance reports nothing about what it holds, so its inventory
@@ -107,6 +154,38 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 		})
 	}
 	return snapshots
+}
+
+// interruptionHistory is what Vast publishes about how a machine behaves.
+// reliability2 is its empirical uptime score in [0,1] and its complement is the
+// chance the host drops out mid-run, so this history states one rate and not two:
+// Vast measures nothing about how often a machine refuses to start, and a zero
+// stated at full confidence for that is a claim its publisher never made.
+//
+// An ask that reports no score at all publishes no history. Silence decoded as a
+// score of zero says this machine drops every run and is certain of it, which is
+// the worst answer in the catalog invented out of a missing field.
+func interruptionHistory(uptimeScore *float64) domain.ReliabilityEvidence {
+	if uptimeScore == nil {
+		return domain.ReliabilityEvidence{}
+	}
+	return domain.ReliabilityEvidence{
+		Interruptions: domain.StatedRate{Rate: clamp01(1 - *uptimeScore), Confidence: 1},
+	}
+}
+
+// machineHandle is Vast's own name for the hardware behind an ask, as a handle
+// or as nothing at all.
+//
+// An ask that publishes no machine ID publishes none, and it says so rather than
+// being filed under the zero its JSON leaves behind: every unattributed ask in
+// the catalog would share that name, and a history under it would answer out of
+// a hundred strangers' machines while claiming to be about this exact candidate.
+func machineHandle(machineID int64) string {
+	if machineID <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(machineID, 10)
 }
 
 // gpuVendor maps Vast's gpu_arch ("nvidia", "amd") onto the inventory vendor

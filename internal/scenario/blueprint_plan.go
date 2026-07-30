@@ -37,8 +37,7 @@ type RunCancellationSpec struct {
 }
 
 type RunArrivalSpec struct {
-	Name  string `json:"name"`
-	Group string `json:"group,omitempty"`
+	Name string `json:"name"`
 	// Workspace is the label of the tenant this Run belongs to. Empty means the
 	// Blueprint's default workspace, which is where a single-tenant fixture puts
 	// everything. It is a label rather than an ID because each backend mints its
@@ -51,7 +50,6 @@ type RunArrivalSpec struct {
 
 type RunFamilySpec struct {
 	NamePrefix string      `json:"name_prefix"`
-	Group      string      `json:"group,omitempty"`
 	Workspace  string      `json:"workspace,omitempty"`
 	At         Duration    `json:"at"`
 	Interval   Duration    `json:"interval"`
@@ -184,7 +182,23 @@ func (plan ArrivalPlan) validate(world WorldSpec) error {
 			)
 		}
 	}
+	if err := plan.validateOrphanAttribution(world, names); err != nil {
+		return err
+	}
 	return plan.validateCancellations(runs)
+}
+
+// validateOrphanAttribution refuses orphaned capacity attributed to work this
+// Blueprint never declares. The point of an attributed orphan is that Mercator can
+// account for it out of its own record, and a name no Run answers to would state
+// the adoptable shape and produce the other one.
+func (plan ArrivalPlan) validateOrphanAttribution(world WorldSpec, names map[string]bool) error {
+	for _, orphan := range world.Orphans {
+		if orphan.Run != "" && !names[orphan.Run] {
+			return fmt.Errorf("orphaned capacity %q is attributed to unknown Run %q", orphan.ID, orphan.Run)
+		}
+	}
+	return nil
 }
 
 // validateCancellations refuses a withdrawal that names work this plan never
@@ -252,7 +266,6 @@ func expandRunFamily(family RunFamilySpec, burst bool) ([]RunArrivalSpec, error)
 		}
 		runs[index] = RunArrivalSpec{
 			Name:      fmt.Sprintf("%s-%03d", family.NamePrefix, index+1),
-			Group:     family.Group,
 			Workspace: family.Workspace,
 			At:        Duration(at),
 			Request:   family.Request,

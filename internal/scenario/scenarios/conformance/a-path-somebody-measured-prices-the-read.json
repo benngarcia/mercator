@@ -1,0 +1,57 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The Lab half of a-fast-machine-far-from-the-data-loses, in the world that actually moves the bytes. Two Rentals hold the whole image at one price, one on a measured 4 Gbps path to the object store and the other on 200 Mbps, and one Run reads a 40GB dataset that is already durable. Placement prices the read off each machine's own published path and takes the near one, and then this world really spends eighty seconds reading forty gigabytes onto it. Both halves come from the one declaration in paths: the world crosses the path at the rate it states and the machine publishes that same rate to Mercator, so the prediction and the actual are the same number for a reason rather than by construction. Dropping the world's reading of paths leaves the read costing 640 seconds whatever the fixture declared, and dropping Mercator's leaves the placement on whichever machine sorts first. The losing machine holds a ten minute idle lease, so this world retires it while the Run it lost is still running: a decision is taken at one moment and judged at a later one, and a rule about what a rate was measured by has to be able to read what a machine published after the machine is gone.",
+  "seed": "mercator-lab-measured-path-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-near-the-data",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-far-from-the-data",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5,
+        "idle_lease_expires_in": "10m"
+      }
+    ],
+    "paths": [
+      {"from": "rental-near-the-data", "to": "objects.example", "scope": "object_store", "p10_mbps": 4000, "confidence": 0.9},
+      {"from": "rental-far-from-the-data", "to": "objects.example", "scope": "object_store", "p10_mbps": 200, "confidence": 0.9},
+      {"from": "rental-far-from-the-data", "to": "registry.example", "scope": "registry", "p10_mbps": 10000, "confidence": 0.9}
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "reader",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "service_class": "standard",
+          "expected_runtime": "20m",
+          "max_runtime": "1h",
+          "consumes_artifacts": ["artifact:imagenet:v2.41"]
+        }
+      }
+    ]
+  }
+}

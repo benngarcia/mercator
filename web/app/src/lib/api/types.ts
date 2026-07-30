@@ -22,7 +22,7 @@ export type NetworkScope = NetworkDownloadRequirement["scope"];
 export type NetworkRequirements = ContractSchemas["NetworkRequirements"];
 export type InboundNetworkMode = NetworkRequirements["inbound"];
 export type PlacementPolicy = ContractSchemas["PlacementPolicy"];
-export type PlacementObjective = PlacementPolicy["objective"];
+export type ServiceClass = PlacementPolicy["service_class"];
 export type ExecutionPolicy = ContractSchemas["ExecutionPolicy"];
 export type WorkloadSpec = ContractSchemas["WorkloadSpec"];
 export type WorkloadRevision = ContractSchemas["WorkloadRevision"];
@@ -45,6 +45,7 @@ export type Estimate = ContractSchemas["Estimate"];
 export type ImageInventory = ContractSchemas["ImageInventory"];
 export type CapacityEvidence = ContractSchemas["CapacityEvidence"];
 export type ReliabilityEvidence = ContractSchemas["ReliabilityEvidence"];
+export type StatedRate = ContractSchemas["StatedRate"];
 export type OfferSnapshot = ContractSchemas["OfferSnapshot"];
 export type OfferKind = OfferSnapshot["kind"];
 

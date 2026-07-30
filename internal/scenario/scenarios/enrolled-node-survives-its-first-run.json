@@ -30,7 +30,10 @@
         "rate_per_hour_usd": 2.0,
         "provisioning": {
           "expected": "4m",
-          "p90": "8m"
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m",
+          "agent_ready": "36s"
         }
       }
     ]
@@ -76,8 +79,10 @@
           "reusable-4090": {
             "feasible": true,
             "disposition": "run_now_existing_rental",
-            "provision_seconds": 0,
-            "pull_seconds": 0
+            "stages": {
+              "boot": {"seconds": 0},
+              "image_fetch": {"seconds": 0}
+            }
           }
         }
       }

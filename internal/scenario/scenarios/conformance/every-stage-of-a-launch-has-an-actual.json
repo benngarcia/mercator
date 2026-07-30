@@ -1,0 +1,59 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The same waterfall as a-launch-is-eight-stages, driven through the real orchestrator, event log, Run projection, and Run Bundle. A machine that does not exist yet publishes ten minutes of provisioning and this world spends them over three stages, then moves 500MB of image, applies it, and asks a container runtime for a process. Four minutes after that process begins, the application reports that it can do work, which is a fact nothing on the machine could have stated. What this holds at L1 that the placement corpus cannot is the record: the Effect Ledger carries what the launch spent on each of the eight stages, the Booking Decision carries what Mercator predicted each of them would cost, and the Bundle carries the two beside each other. Both numbers exist for every stage and no stage's two numbers come from the same place, which is what makes the file a calibration record rather than a restatement of one model's arithmetic.",
+  "seed": "mercator-lab-launch-stages-v1",
+  "world": {
+    "images": {
+      "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "500MB"}
+        ]
+      }
+    },
+    "launch": {
+      "unpack": "30s",
+      "container_start": "20s",
+      "application_ready": "4m"
+    },
+    "marketplace": [
+      {
+        "id": "fresh-cheap",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 1.0,
+        "provisioning": {
+          "expected": "10m",
+          "p90": "15m",
+          "acquisition": "2m",
+          "boot": "6m",
+          "agent_ready": "2m"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "server",
+        "candidate": "fresh-cheap",
+        "minimum": "50m",
+        "maximum": "55m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "server",
+        "at": "0s",
+        "request": {
+          "image": "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e",
+          "service_class": "opportunistic",
+          "expected_runtime": "50m",
+          "max_runtime": "2h",
+          "expected_ready": "2m"
+        }
+      }
+    ]
+  }
+}

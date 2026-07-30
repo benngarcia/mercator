@@ -25,11 +25,19 @@ package domain
 // seconds could not tell a machine that was passed over from one that had
 // nowhere to put the work.
 type DiskDemand struct {
-	// FreeBytes is the room the offer says this machine has left. A machine
-	// that could not measure its disk offers none, which is the same silence
-	// every other unmeasured fact states, and it costs placements rather than
-	// enrollment.
+	// FreeBytes is the room the offer says this machine has left.
 	FreeBytes int64 `json:"free_bytes"`
+	// FreeBytesKnown is whether anybody measured that room. A machine that could
+	// not measure its disk offers no answer, which is the same silence every
+	// other unmeasured fact here states, and it costs placements rather than
+	// enrollment.
+	//
+	// The two travel together because together they are the whole answer. A
+	// reader who saw only a zero could not tell a full disk from a machine that
+	// never looked, and the fleet's own account of a wait turns on exactly that
+	// difference: no room is a machine that can never hold this Run, no answer
+	// is a machine nobody has heard from about it.
+	FreeBytesKnown bool `json:"free_bytes_known"`
 	// ReservedBytes is the ephemeral disk the workload declared it needs. It is
 	// room for what the Run itself writes, so it is asked for beside the
 	// content rather than out of it: a Run admitted on a fifty gigabyte floor
@@ -59,6 +67,10 @@ func (demand DiskDemand) RequiredBytes() int64 {
 // Fits reports whether this machine has the room the Run needs. It is asked of
 // established bytes only, so a host nobody could enumerate is never refused for
 // content it may well be holding already.
+//
+// It is asked only of a machine that measured its room. A machine that did not
+// answers no question about room at all, and Fits on its behalf would be this
+// type inventing the answer it exists to keep honest.
 func (demand DiskDemand) Fits() bool {
 	return demand.RequiredBytes() <= demand.FreeBytes
 }

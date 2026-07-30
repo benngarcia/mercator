@@ -11,6 +11,11 @@
     {"id":"off_stale","connection_id":"conn_1","native_ref":"cloud/region/A6000","rate":0.0001},
     {"id":"off_alternate","connection_id":"conn_2","native_ref":"cloud/region/L40S","rate":0.0002}
   ],
+  "two_refusals_then_a_machine": [
+    {"id":"off_refuses_first","connection_id":"conn_1","native_ref":"cloud/region/A6000","rate":0.0001},
+    {"id":"off_refuses_next","connection_id":"conn_2","native_ref":"cloud/region/L40S","rate":0.0002},
+    {"id":"off_takes_the_work","connection_id":"conn_3","native_ref":"cloud/region/H100","rate":0.0003}
+  ],
   "single_stale": [
     {"id":"off_stale","connection_id":"conn_1","native_ref":"cloud/region/A6000","rate":0.0001}
   ],

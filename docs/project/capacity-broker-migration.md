@@ -1008,7 +1008,8 @@ complete because it works against a live provider.
     there is nothing to read the refusal off at the daemon layer and
     `TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout` reads it from the
     daemon's own answer instead. That is its own gap in the explanation record
-    and is not fixed here.
+    and is not fixed here. It is fixed by the appended-decision entry below, and
+    that daemon case reads the recorded refusal now.
 - [x] 2026-07-25: Answer the review of the disk commit. Two reviewers falsified
   eight things, and three of them were one cause: `DiskDemand.Eviction` priced a
   remedy that cannot work. Deleting a layer this Run needs frees exactly as many
@@ -1088,7 +1089,8 @@ complete because it works against a live provider.
     nowhere for its own image and every generated world had nothing placeable in
     it. A Run that finds no feasible offer still records no Booking Decision, so
     the corpus states the double spend as a placement onto the machine with room
-    rather than as a world with none; that gap is older than this slice.
+    rather than as a world with none; that gap is older than this slice, and the
+    appended-decision entry below closes it.
 - [x] 2026-07-25: Say in the fleet listing what is known about a node's disk,
   and answer the review of it. A node that established no room wins no placement
   that declares a floor, which every Run does, so the listing showed a ready
@@ -1241,15 +1243,1396 @@ complete because it works against a live provider.
     no longer names is a pull that runs to completion there. The Lab world models
     it because a provider seam can, and the node's half is
     [#170](https://github.com/benngarcia/mercator/issues/170). A refused
-    preparation is terminal: the operation store dedupes on the identity with no
-    regard for its state, so a node whose pull failed answers Duplicate for that
-    content from then on and the desired set is never restated either, which
-    defeats the node agent's own intent to retry. Reproduced under "the rate bound
-    under review" below and owed a slice, because reissuing a refusal changes what
-    an operation identity promises and the Lab world cannot yet refuse a fetch.
+    preparation was terminal in two places and one of them is repaired. The
+    operation store deduped on the identity with no regard for its state, so a
+    node whose pull failed answered Duplicate for that content from then on and
+    defeated the node agent's own intent to retry; that half is repaired under
+    "replanning by explicit policy" below, and a second ask now reaches the
+    runtime when one is issued. The control plane's half is not repaired. It
+    reissues on `PrepareReceipt.Refused`, and no production prepare lane fills
+    that field: `broker.Prepare` answers Started or Duplicate, a node settles a
+    refusal asynchronously over the node protocol, and nothing in the prewarm
+    controller subscribes to that, so what triggers a second ask on the only
+    production lane there is remains a change to the desired set. Only the Lab
+    world produces the synchronous refusal the controller reads.
     Nothing in production implements `orchestrator.ArtifactCatalog`, so no
     production Run declares an Artifact and the Artifact half of the desired set is
     exercised at L1 and against a real object store rather than end to end.
+- [x] 2026-07-26: Make the class of work a Run is the thing that prices waiting,
+  and turn on the score terms that were multiplied by zero. `ServiceClass`
+  replaces `PlacementObjective` outright, with no shim and no derived objective,
+  and it carries the exchange rates the score is finally computed over.
+  - An objective named a quantity to minimise and never what a second of it was
+    worth, which is why the ranking had to honour it separately: `ScoreWeights`
+    was a struct nothing populated, so `StartLatencyUSDPerSecond`,
+    `CompletionLatencyUSDPerSecond` and `UncertaintyPenaltyUSD` were multiplied by
+    zero in production and only the balanced objective's one default ever fired.
+    A class states the rate, so cost and waiting become one comparable quantity
+    and there is one ranking rule for every class: least dollars, then earliest
+    ready, then the offer ID. `domain.ServiceClass.Weights` is the declaration and
+    `domain.ScoreWeights.ScoreUSD` is the whole arithmetic, said once and read by
+    the scheduler, the Lab's reference model, and the rule below.
+  - Every class states a multiple of one number. `domain.WaitingUSDPerSecond` is
+    what a second of waiting costs the machine doing the waiting, 1.80 USD an
+    hour, and interactive prices it at twenty times that to the start, standard at
+    exactly that to the start, experimental at twice it to the finish, batch at a
+    fifth of it to the finish, and opportunistic at nothing, which is what makes
+    opportunistic the one class ranked on price alone. One rate to argue with
+    rather than five, and each class measures waiting to the moment that matters
+    to it.
+  - The two uncertainty definitions are collapsed before either fires.
+    `scheduler.uncertaintyPenalty` counted the capacity and reliability
+    confidences a candidate was given; `lab.referenceUncertainty` counted those
+    plus a full point for an unenumerated image inventory and another for unknown
+    pricing. They agreed on every decision only because both were multiplied by
+    zero, and the first Run scored at a nonzero rate would have made them disagree
+    about every machine Mercator borrows a slot on. The extra points are deleted
+    as double counting: unknown inventory is already priced twice, once as the
+    whole content that might have to arrive and once as the cap on the confidence
+    of the seconds that takes. What is left is the shortfall of the answers the
+    candidate itself was scored on, stated the same way in both models.
+  - The score is reproducible from the record. `BookingDecision.Weights` is the
+    rate every candidate was scored at, and `CandidateDecision.Confidences` is
+    every answer the uncertainty term counted, so a reader re-derives ScoreUSD
+    instead of trusting it. `safety.score_is_reproducible_from_the_record` is the
+    Lab invariant, and what it forbids is a term whose input is nowhere in the
+    record: that is exactly how the two definitions drifted unnoticed, one of them
+    reading facts off an offer no decision carried.
+  - The refusal is loud. `POST /v1/runs` with a class Mercator cannot price is
+    refused `400 SERVICE_CLASS_UNKNOWN` at the door, and Placement refuses to rank
+    such a Run at all, because both used to fall through a `default:` that ranked
+    on price and recorded a reason naming a class nothing declared: a caller would
+    have learned their word was ignored from the bill.
+  - History is migrated rather than shimmed. The sqlite migration renames
+    `objective` to `service_class` in the requested workload, public and private,
+    and in the policy each Booking Decision was taken under, mapping cheapest to
+    batch, balanced to standard, fastest_start to interactive, and
+    fastest_completion to experimental. Nothing maps to opportunistic, because no
+    objective could say waiting is free. It refuses to run while any stream
+    carrying the old field is still open, and refuses an objective it has no class
+    for rather than guessing one. It also writes onto each old decision the weights
+    it was actually scored at, which were nearly all zero, so the whole log is
+    reproducible and not merely the part written since a class carried a rate.
+  - While the six wire surfaces were open, `launch_ephemeral` went into the
+    `CandidateDecision.disposition` enum in `openapi.json` and into the
+    hand-written Effect `Schema.Literals` in `contracts.ts`. It had been missing
+    from both since the lane split, so the console could not decode a Booking
+    Decision on the whole ephemeral lane, and two exhaustive switches over the
+    disposition rendered nothing for it.
+  - Judgment calls. The class declares the exchange rates and nothing else yet.
+    Priority, aging, group parallelism, backfill eligibility, interruption
+    permission, and the queue-on-warm preference have no reader anywhere in this
+    tree, and a declared field nothing consumes is the defect this plan has
+    deleted five times: each becomes a field in the slice that prices it. Maximum
+    queue delay and maximum cost are deliberately not restated on the class, because
+    `PlacementPolicy.MaxP90StartSeconds` and `MaxExpectedCostUSD` are those bounds
+    and are enforced today; a second copy would be two authorities for one refusal.
+    The two reliability terms are left unpriced and deleted from `ScoreWeights`
+    rather than kept at zero: they come back as expected redo cost, which is
+    probability times a predicted start, so a flat penalty invented for them now
+    would be the unmeasured constant this plan keeps deleting. The uncertainty
+    penalty is derived from each class's own waiting rate over
+    `domain.UncertaintySeconds` rather than being a second invented number per
+    class. And every fixture that equalises price so locality decides now states
+    the class whose rate preserves that intent, because `running-fills-a-cache`
+    turns on less than half a cent.
+- [x] 2026-07-26: Seed the Bookings a placement world starts with, and let five
+  queue fixtures state the answer. A Blueprint that said a Rental was busy stated
+  it twice and only one of the two reached Mercator: the world knew the machine
+  was occupied, and the Broker's Rental Schedule store was empty, so Placement
+  had nothing to queue behind and struck every busy Rental out as
+  CAPACITY_UNAVAILABLE. The fast placement harness now seeds each declared
+  schedule through `domain.RentalSchedule.Reserve`, so a fixture can only state a
+  schedule Mercator could have reached, and completes the seeded Booking through
+  `Complete` at the moment the world frees the machine, because the Bookings a
+  world starts with belong to Runs no event log ever saw and nothing else would
+  ever report them ending. Two more gaps sat behind that one and neither was
+  fixture construction. Every Booking Decision recorded the wait and never what
+  the wait was read from, so each candidate on a Rental with Bookings now carries
+  the schedule as the decision read it, version and all: a schedule moves, and
+  the seconds alone are unretraceable afterwards. And fixtures name Bookings
+  while Mercator hashes them, so the runner resolves a fixture's names to the
+  identities Mercator minted rather than asking production to accept a name from
+  a world. `busy-rental-worth-waiting`, `queued-run-makes-fresh-capacity-win`,
+  `multiple-runs-schedule-in-order`, `full-schedule-forces-fresh-capacity`, and
+  `dataset-gravity-worth-waiting` are green.
+  - Judgment calls. No Lab invariant: seeding a schedule is fixture construction,
+    and the laws that police queueing already exist and now read seeded schedules
+    at L0 too. `busy-rental-not-worth-waiting` and `running-fills-a-cache` were
+    green while asserting the absence of this capability, with their busy Rental
+    refused rather than priced; both now assert the wait, which is the same
+    placement for the honest reason. `full-schedule-forces-fresh-capacity` asked
+    for SCHEDULE_FULL at `rental_schedule.queued`, a field a Rental Schedule does
+    not have, and now asserts the QUEUE_CAPACITY_EXCEEDED that Mercator emits at
+    the path it emits it on. Two fixtures priced the warm Rental a nickel an hour
+    above capacity that provisions in five minutes, which the balanced objective
+    decides on the price gap and not on the wait, so both now price their
+    machines identically and let the queue decide, which is what each is about.
+  - What is left. `queued-booking-deadline-expiry` keeps exactly one declaration,
+    `schedule_advancement`. Its Booking is queued with a latest start six minutes
+    out while the Booking ahead of it runs for thirty, and at seven minutes
+    nothing expires it. The survey's suspicion that the declaration was stale
+    because `dispatchQueuedBooking` exists is wrong: dispatch is what happens when
+    a Booking's turn arrives, and expiry is what happens when its turn does not.
+    A fixture can seed only the running Booking's end, because when a waiting one
+    finishes depends on when it starts and the world models one busy window per
+    machine; a queue that drains further than one Booking is held at L1 by
+    `a-queue-drains-as-it-runs`.
+- [x] 2026-07-26: Answer the review of the service-class commit. Two reviewers
+  falsified seven claims on it, five of them distinct once the duplicates are
+  folded together, and all five reproduced.
+  - The class was refused at the door that stores a revision. `CreateRevision`
+    validated the raw body while run intake normalised first, so one body got two
+    answers: `POST /v1/runs` filled an omitted class with standard and returned
+    202, and `POST /v1/workloads/{id}/revisions` refused the same omission 400
+    `SERVICE_CLASS_UNKNOWN`, which the parent commit had accepted and which
+    openapi's own PlacementPolicy says defaults to standard. The door also stored
+    what it validated, which is why a revision could be recorded with no class at
+    all and served back as `service_class:""`. It normalises before validating now,
+    which is the order `NormalizeWorkloadRevision` documents, and the validator
+    says why its class check is deliberately not read as an effective value the
+    way the runtime bound above it is.
+  - The migration missed the objective site that repriced work.
+    `compute.workload.revision_created.v1` stores the whole revision at
+    `$.revision.spec.placement.objective` on the workload stream, and nothing
+    decodes `objective` any more, so an unmigrated revision read back with no class
+    and the next Run created from it was normalised to standard: a caller who
+    stored `fastest_completion` was scored at a tenth of experimental's rate with
+    nothing in the record saying so, and the two doors disagreed about one history.
+    Every site now names the stream it lives on, because the open-Run refusal is
+    about Runs in flight: a workload stream never closes, so listing the new site
+    without that distinction would have refused every database that has a workload.
+    The completeness assertion scanned the same three paths the migration writes,
+    which is a tautology; it scans the whole payload for the word now, and the case
+    reads the migrated revision back through `workload.GetRevision`.
+  - A fact its own publisher disowned was the cheapest answer in the fleet. A
+    published `NetworkFact` with confidence zero had its speed used to predict a
+    duration and its zero dropped from the record, because zero means nobody said,
+    so a host publishing 5 Gbps it disowned was charged 3.7 seconds for a 2GB image
+    and no doubt at all, outranking the host that published 750 Mbps and stood
+    behind it, while the host that published nothing was charged the most of the
+    three. `domain.NetworkFact.Answers` is the one rule both readers of a fact ask,
+    and expiry moved into it because it was the same question asked twice. The hard
+    half mattered more: a Run's `MinP10Mbps` floor with `AllowUnknown` false was
+    cleared by any fact naming a big enough number, its publisher's confidence
+    unread. `PathSpec` carries a stated confidence so a Blueprint can state the
+    machine that disowns its own number, and the fast harness implements paths at
+    all: it dropped them silently, so a fixture could declare a measured throughput
+    and be scored against the standing assumption.
+  - A machine nobody priced was scored as free. Both models predicted zero dollars
+    for an offer with `Pricing.Known` false, so a Run with `allow_unknown_pricing`
+    took the unquoted machine over a quoted one every time, sixty seconds slower to
+    start, and `internal/node/offers.go` is written to publish exactly that offer
+    for a node with no configured shadow price. The absence is stated as the source
+    of the cost estimate, `domain.CostUnpriced`, and `CandidateDecision.Priced`
+    reads it off the record; `Preferred` asks it before it compares dollars, so an
+    unpriced candidate ranks behind every priced one and is taken when the
+    alternative is not running, which is what the policy asked for. A budget is the
+    same absence read as a bound: `max_expected_cost_usd` was cleared by a
+    candidate reporting zero dollars, and is refused `COST_LIMIT_EXCEEDED` with
+    "unpriced" as what was offered. No cost confidence is invented, because a
+    provider quotes a rate and publishes no confidence in it, and the reference
+    model's deleted point for unknown pricing is not restored: a full point of
+    interactive doubt is 0.60 USD against a real price of 0.72, so it never fixed
+    the mispricing it was charged for. The answer is that there is no number.
+  - Three marketplace adapters asserted full confidence in a capacity claim their
+    provider never put a number on. A catalog listing says a machine type is in
+    stock and says nothing about how sure of that it is, so the offers state
+    availability and no confidence, which is what an absent entry has always meant.
+    No score changes: an unstated confidence and a stated certainty are both worth
+    zero points of doubt. The enrolled node and the probed local daemon keep full
+    confidence and say why, because that capacity is Mercator's own observation.
+  - What was rejected. The reviewers wanted a doubt constant for a marketplace
+    capacity claim so the uncertainty term's capacity dimension could fire. A flat
+    0.7 for a listing is the unmeasured number this plan keeps deleting, and the
+    real answer is a measurement: how often provisioning a listing actually
+    succeeds is the slice that prices it. Until then the live sources of doubt are
+    the transfer confidences, which is the honest state of the term. The claim that
+    the `rental-doubted` fixture rests on a value nothing emits is also wrong for
+    the corpus: `internal/adapter/fake` publishes what the Blueprint's
+    `capacity_confidence` states, which is how a simulated external behaviour is
+    supposed to reach Mercator.
+  - Three live cases could not be evaluated on the amd64 Linux host this review ran
+    on, and two reported it as a defect in Mercator. Docker Hub is rate limiting
+    anonymous reads from it, and `requireDockerHubReachable` asked whether `/v2/`
+    answers, which it does: the token is issued and every manifest is then answered
+    429. The guard asks whether the registry will serve this machine now. The
+    private-registry case needed nothing off this host and reuses a copy already on
+    disk, which is what content addressing means. The live Docker adapter case
+    hardcoded `linux/arm64`, the laptop it was written on, so on this host the
+    daemon reported every local image missing and went to the registry for a build
+    it would never run. And the node disk fact was compared to a fresh read for
+    exact equality, which fails whenever anything else writes to the same
+    filesystem; it is held to the filesystem now rather than to the instant.
+- [x] 2026-07-26: Answer the second review of the service-class commit. Two
+  reviewers falsified five things, four of them distinct, and all four
+  reproduced. Three were the same shape once more: a rule stated in one place and
+  contradicted at the place that answers.
+  - A disowned fact bought its publisher less than silence in the half that
+    decides feasibility. `downloadRequirementSatisfied` consulted `AllowUnknown`
+    only when an offer published no download facts at all, so an offer whose fact
+    its own publisher disowned, or whose fact had expired, was struck out
+    `NETWORK_FACT_UNSATISFIED` while an offer publishing nothing was feasible and
+    selected. `len(facts) == 0` is the wrong test for "nobody answered":
+    `NetworkFact.Answers` skips a disowned fact inside the loop that the empty
+    check has already decided instead of. There are two ways to miss a floor and
+    the record now keeps them apart. A candidate whose fact answers and falls
+    below the floor was measured too slow and the decision states the speed it
+    published; a candidate nobody answered for measured nothing, and AllowUnknown
+    is what decides. `NetworkFacts.DownloadP10` is the one rule for which
+    published fact answers a question about a link, so the bound and the transfer
+    prediction read one measurement rather than two facts that happen to travel
+    together.
+  - No Blueprint could state a download floor, which is why nothing caught it.
+    `RequestSpec.download` is the vocabulary, following `max_start_latency`, and
+    `WorkloadForRun` carries it so both simulators read one translation.
+    `a-floor-refuses-a-measurement-and-not-a-silence` is the L0 fixture and
+    `a-link-nobody-measured-is-not-a-slow-link` is the same claim at L1. The
+    reference model still refuses a world with a network requirement, which is
+    honest rather than convenient: teaching it this rule by calling the same
+    domain method production calls would make the two models agree by
+    construction, which is the "asking the scheduler to confirm its own
+    arithmetic" this plan has rejected twice.
+  - The record priced an absent price at zero and nothing said which rule ranked
+    it. `ScoreUSD` sums the cost estimate, which is zero dollars with source
+    `unpriced`, so the unquoted machine scored 0.0005 against the selected
+    machine's 0.3338, `CandidateTable.tsx` sorted feasible candidates by that
+    number ascending, and an operator reading the Run saw the machine the
+    placement refused ranked first as the cheapest in the fleet. The decision now
+    records `PRICED_BEFORE_UNPRICED` when a priced candidate was taken over a
+    feasible unquoted one and `UNPRICED_LAST_RESORT` when the Run landed on a
+    machine nobody quoted, which is the standard `ServiceClass.SelectionReason`
+    set. `web/app/src/lib/placement.ts` is the domain's own ranking in the view of
+    it, asked before any dollars are compared, and a score with no price in it
+    reads as one rather than as a total.
+  - The revision door published secrets. `workload.CreateRevision` marshalled the
+    whole revision into a public event with no private copy, so an environment
+    value, which is where a caller puts a token, reached every console reader of
+    the workspace over the SSE feed, while `POST /v1/runs` has reduced the same
+    value to `{"kind":"literal"}` for as long as it has had a private payload.
+    `domain.WorkloadRevision.Public` is now the single redaction both doors write
+    through, so a field added to a workload spec cannot reach one public payload
+    and not the other, and the event's private payload is the whole revision,
+    which is the copy a Run is created from.
+    `migrateStoredRevisionSecrets` rewrites the history through that same
+    function, because history is what a console reader reads.
+  - Both Lab world statements the previous review's Blueprints rest on were
+    unfalsifiable. Stamping certainty on a fixture's path measurement again, or
+    publishing the default priced offer for a Rental a fixture says nobody quoted,
+    each left the whole tree green: only `internal/scenario/sim.go` was held to
+    either rule, by two L0 fixtures. `a-link-nobody-measured-is-not-a-slow-link`
+    and `an-unquoted-machine-is-the-last-resort` are the two executions those
+    statements are now falsifiable through, which is development rule step 6 for
+    two capabilities that shipped without it.
+  - Judgment calls. An unpriced candidate's score keeps its number rather than
+    becoming absent. The convention this plan chose for a missing price is the
+    number beside a source that says nobody quoted it, and a second convention for
+    the same absence is the drift `capability.LocalityState` and
+    `capability.ArtifactLocality` were deleted for; what was wrong was that
+    nothing said the number omits a price, and the two reason codes and the
+    console ordering say it. The disowned publisher under `AllowUnknown` false is
+    refused `UNKNOWN_FACT` with "unknown" offered rather than
+    `NETWORK_FACT_UNSATISFIED`, because that machine measured nothing rather than
+    measuring too slow.
+- [x] 2026-07-26: Let a decision state the risk it was taken under, and hold the
+  two models to every candidate. Phase 4 prices reliability, and there was
+  nothing to price it from: `domain.ReliabilityEvidence` had exactly one writer
+  in the tree, `internal/adapter/vast`, no Blueprint could state a machine that
+  refuses to start, and no decision recorded either rate. So the whole risk half
+  of the goal rested on a fact no fixture could construct and no record could
+  show.
+  - `RentalSpec.reliability` is the Blueprint vocabulary, in the terms the one
+    production publisher states: how often this machine refuses to start, how
+    often it drops what it is running, and how much its publisher stands behind
+    the history. Both simulated worlds publish it, so the fact travels the way it
+    travels in production, from the provider onto the offer.
+  - `CandidateDecision.Reliability` is the record. Recording it is not deferred
+    along with pricing it, because the doubt about that history already reaches
+    the score: `Confidences` has carried a `reliability` entry since the two
+    uncertainty definitions were collapsed, so a candidate could be charged a
+    tenth of a point with no sign anywhere of which answer the doubt was about,
+    and a score is only re-derivable from the record if every answer it doubts is
+    in it.
+  - Neither rate is priced. Expected redo cost is a probability times a predicted
+    start, nothing here predicts either yet, and a flat penalty invented for them
+    now would be the unmeasured constant this plan keeps deleting, which is why
+    the two reliability weights were deleted from `ScoreWeights` rather than kept
+    at zero. `a-machine-that-fails-to-start-says-so` states that gap rather than
+    hiding it: two machines whose only difference is that one refuses two starts
+    in five score to the same dollar, so the placement falls through to the offer
+    ID and the flaky machine takes the Run. Price a refusal and the fixture fails,
+    which is the point of writing it down.
+  - The oracle law is per candidate now.
+    `TestSmallWorldReferenceSolverAgreesWithProductionOnEveryCandidate` compares
+    every stage of both models' predictions, their quantiles and confidences,
+    the dollars, the doubt, and the risk each recorded, where it used to compare
+    feasible sets and winners. Every drift this corpus has found was too small to
+    move a winner when it landed: two definitions of uncertainty agreed on every
+    placement for a phase because both were multiplied by zero. Restoring the
+    reference model's extra point for an unenumerated inventory fails it twice
+    per candidate, on the doubt and on the dollars; having the reference model
+    throw away either quantile the provider published fails it on
+    `provision_seconds` and on both starts derived from it; dropping the risk from
+    the production record fails it on what the two models recorded. The small
+    world's provisionable offer now states its own p50 and p90, because with only
+    an expectation stated there neither model could be caught inventing a spread,
+    which is a defect this plan has already had to fix once in the scheduler.
+  - Judgment calls. The rates go on `RentalSpec` and not on
+    `MarketplaceOfferSpec`, because a fixture that states a history no candidate
+    in the corpus is scored against is a declared field nothing consumes; a
+    marketplace offer publishes one the same way in the slice that needs it. A
+    clean measured record and no measurement at all stay two worlds: silence
+    states no rate to read and no confidence to doubt, so the corpus asserts the
+    steady machine's zeros as a published fact rather than deriving them from an
+    absence. The Blueprint's expectations for the two rates are exact rather than
+    bounded, because a published fact that arrives changed arrived from somewhere
+    else.
+
+- [x] 2026-07-26: Make a start a moment somebody observed, and let the world spend
+  acquisition, boot, and agent enrollment. Decision V2 says predicted start
+  latency is calibrated against `started - accepted`, and nothing in the tree
+  could perform that subtraction: `adapter.ExternalObservation` carried no start
+  timestamp, `capability.WorkloadObservation.StartedAt` was written by the
+  contract and read by nobody, and the Lab computed `execution.StartedAt` and
+  reported it through no seam. Nothing can learn a stage duration until the stage
+  has an actual.
+  - `ExternalObservation.StartedAt` is what the thing holding the workload says
+    about when its process began. It is not `ObservedAt`, which is when Mercator
+    looked, and it is not the accepted moment, which is when the machine started
+    getting ready. The node's Docker runtime reads `State.StartedAt`, which is a
+    second read because `docker ps` carries it in no format, asked once for the
+    whole list; the Docker adapter reads it off inspect; RunPod reports
+    `lastStartedAt` and Vast reports `start_date`. Shadeform reports none and says
+    why: `created_at` is when the instance was asked for, so publishing it as a
+    workload's start would fold a whole acquisition and boot into the runtime.
+  - `compute.run.execution_started.v1` is the moment on the run stream, written
+    once per attempt from the first observation that carries one and cleared with
+    the launch when a new attempt begins. It is its own event because it is a
+    different fact from a phase: every provider in this tree reports running from
+    the moment it accepts, so a phase says only that Mercator asked.
+    `domain.RunRecord.StartedAt` is the read model and the public contract, absent
+    until something observed one.
+  - A Booking's runtime is measured from the container's own start where the
+    holder reported one. It used the moment Mercator polled, which is the same
+    defect one layer over: both runtimes a Booking declares are bounds on a
+    container. Where nobody reported a start it still falls back to the
+    observation, because a schedule needs a clock to project from and the last
+    thing Mercator can prove is the honest choice there; nothing derives the Run's
+    recorded start that way.
+  - Three of the eight launch stages cost zero time, because a provisionable
+    offer's provisioning was a published claim the world never spent: Launch put
+    an execution straight into running. `ProvisioningSpec` states each stage and
+    both simulated worlds spend them, so a pull and an Artifact read begin when
+    there is a machine to land on. The stages are stated separately from
+    `expected` and `p90` rather than derived from them, because a world that spent
+    its provider's own expectation would make that expectation right by
+    construction, and each is a pointer because a stage a fixture did not mention
+    and one it says costs nothing are different sentences.
+  - The Run Bundle holds two predicted-versus-actual records per Run.
+    `start_latency_seconds` is read entirely out of Mercator's own event log:
+    predicted from the selected candidate's start estimate, actual from the
+    accepted moment on the launch receipt to the start moment on the run stream. A
+    Run whose holder reported no start gets the row with the prediction and no
+    actual, sourced `start_not_observed`, because a zero there would teach a
+    calibration that every start is instant.
+  - `safety.start_is_observed_not_inferred` is the Lab invariant. Every start
+    moment the run stream records must be one an observation of that Run reported,
+    must not be later than the look that carried it, and must not be dropped when
+    a holder did report one. The three clauses read independent halves of the
+    record, so none is satisfied by Mercator agreeing with itself: deriving the
+    record from the accepted moment leaves the observation saying otherwise, and
+    fails six Lab executions.
+  - `a-start-is-a-moment-somebody-observed` is the L0 fixture and
+    `conformance/a-node-reports-when-the-container-really-started` is the same
+    claim at L1. `ExpectSpec.start_latency_seconds` is the vocabulary that makes
+    either statable, with `no_start_observed` as the other sentence. Shortening
+    the world's boot to zero fails the L0 fixture with "want at least 588, got
+    348.64"; deriving the moment from acceptance fails it with "got 0".
+  - `TestTheNodeReportsWhenTheContainerStarted` is the live half, run against
+    Docker Engine 29.6.2 on amd64 Linux with the containerd snapshotter: a
+    container launched through the production runtime, its start moment read back
+    and compared against an independent `docker inspect
+    {{.State.StartedAt}}`. `TestANodeReportsTheMomentItsContainerReallyStarted` is
+    the end-to-end seam over the public API, against a scripted runtime rather than
+    a live daemon, and it is the fourth defect found at
+    `broker.observeOnNode` after Artifacts, `NodeFacts.Artifacts`, and cache
+    mounts: deleting the one line that carries the moment leaves the Run with no
+    start and every other test green.
+  - The console reads the moment instead of inventing it twice. `runningAt` was
+    stamped from the Booking Decision's own event time, which for a provisioned
+    machine is before that machine existed, and again from every observation, so a
+    reconnecting console reported a long-running workload as newly started.
+  - Judgment calls. A Run with no start moment is not an invariant violation:
+    acquisition and boot have no production observation until phase 5 bootstraps
+    an agent on provisioned capacity, and the record states the stage absent
+    rather than estimated. The existing fixtures state stages summing to the
+    expectation their provider published, because a machine that took as long as
+    it was said to take is a legitimate world and each of those fixtures is about
+    something else. And the whole slice was built beside a concurrent session in
+    the same worktree; the reliability entry above landed from that session and
+    the two changes are separate commits.
+- [x] 2026-07-26: Answer the review of the risk-history commit. Two reviewers
+  refuted parts of it, and the central one reproduced immediately: the term that
+  commit relied on to justify recording a published history ran backwards.
+  - The score doubts only the answers the score reads. `Confidences` carried a
+    `reliability` entry, `Uncertainty` charges `1 - value` for a confidence strictly
+    between zero and one, and nothing anywhere prices either rate. So the only thing
+    a published history could do to a placement was penalise the provider that
+    published one: a machine measured and never seen to fail carried a tenth of a
+    point at 0.03 USD and lost the Run to an identical machine nobody had measured,
+    while a machine whose provider was certain it refuses every start carried no
+    doubt at all and won. Adding a third Rental with no history to
+    `a-machine-that-fails-to-start-says-so` demonstrated it, at 0.333833 USD against
+    the two measured machines' 0.336833. The entry above defended recording the rates
+    with "the doubt about this history already reaches the score"; what reached the
+    score was a charge for having answered, which is the inverse of modelling the
+    unknown as uncertainty. Both models drop the entry, `Uncertainty` states the rule
+    that produced the inversion, and the history is recorded, unpriced, and undoubted,
+    for the reason the cache warmth beside it is recorded: it is the account of what
+    was known when the placement was taken, and a fact no record carries is one the
+    slice that prices it cannot be held to.
+  - The machine nobody measured is now in both fixtures, at L0 and at L1, which is
+    what makes the rule falsifiable rather than merely stated. All three candidates
+    score to the same dollar and carry no doubt, so restoring the reliability
+    confidence to either model separates the two measured machines from the silent one
+    by 0.003 USD and fails the Blueprint on the doubt, the score, and the winner, and
+    fails `TestARefusalToStartIsRecordedAndNotPricedAtL1` on the doubt.
+  - A rate nobody measured is absent rather than zero. `ReliabilityEvidence` held two
+    rates under one confidence, so the only production publisher of it recorded
+    `start_failure_rate: 0` at `confidence: 1` for every Vast candidate in the fleet:
+    Vast measures an uptime score and nothing about refused starts, and the record
+    said its publisher had measured this machine and never seen it refuse one. That
+    is the claim `internal/scenario/schema.go` already refuses to let a fixture make.
+    Each rate is now a `domain.StatedRate` that stands on its own measurement, and the
+    confidence beside it is what says the measurement happened, which is the reading a
+    disowned network measurement already gets in this tree. `RentalSpec.reliability`
+    states each rate or omits it, a history that states no rate at all is refused at
+    load by `reliability-history-without-a-rate.json`, and the offer field is
+    `omitzero` so an unmeasured machine publishes no history on the wire rather than an
+    empty one.
+  - Vast's `reliability2` is a pointer, for the reason `dph_total` beside it is. The
+    field was a bare float64, so an ask that omitted or nulled it decoded as an uptime
+    score of zero and Mercator published "drops every run, certain" on the publisher's
+    behalf: the worst answer in the catalog, invented out of a missing field.
+    `buildOffers` had no test over its reliability output at all; two now cover the
+    measured ask and the silent one, and mutating `interruptionHistory` to state a
+    start failure rate or to read silence as zero fails both.
+- [x] 2026-07-26: Answer the review of the ephemeral start-moment commit. Two
+  reviewers refuted parts of it, and what sat under the three new adapter cases was
+  a production rule missing rather than three fixtures merely being wrong.
+  - Mercator files only a start moment it can defend, and
+    `adapter.ExternalObservation.ObservedStart` is where the two things that
+    disqualify one are stated, so the rule holds for the reusable lane and all three
+    ephemeral adapters at once instead of three times in three adapters. A moment
+    later than the read that carried it is a clock Mercator does not share: a host an
+    hour ahead published a start an hour in the future, `execution_started` recorded
+    it, the Run Bundle filed a start latency an hour too large as a measurement, and
+    `safety.start_is_observed_not_inferred` then failed the execution for a moment
+    Mercator only passed through. A moment carried by a phase saying the work has not
+    begun is the claim every provider makes from the moment it accepts: RunPod
+    publishes `lastStartedAt` while the image is still landing, which is exactly why
+    an address is what makes a pod running here, and leaving the moment outside that
+    distrust bought the phase gate nothing. The observation still carries what the
+    holder said either way; only what Mercator adopts is refused.
+  - The Lab rule reads observations through that same law, which makes the clause
+    about a moment ahead of its read reachable and the refusal not a violation. The
+    clause was dead: deleting it left the whole tree green, because neither simulated
+    world can publish a start that has not arrived.
+    `TestEveryClauseOfTheStartRuleCanFail` drives all three clauses,
+    `TestAStartClaimMercatorRefusedIsNotAViolation` is the world the second loop would
+    otherwise blame Mercator for, and the fake provider gained the one knob that can
+    state either: it publishes the moment it gave a container a process, dated on its
+    own clock, and publishes nothing by default.
+  - The local Docker lane measured every start latency as a negative number. The
+    receipt's accepted moment was Mercator's clock after `docker start` returned,
+    which is later than the start the same daemon reports, and on a launch resolved as
+    a duplicate it was later by the whole retry gap: the container was made and given
+    a process by the first attempt, and only the acceptance was re-dated. It is now
+    the moment the daemon made the container, on the daemon's own clock, so both
+    moments in the subtraction come from one clock. A start earlier than its own
+    acceptance is not subtracted at all: the Run Bundle row names the pair it could
+    not measure with `start_before_launch_accepted` rather than filing a negative
+    wait.
+  - `docker inspect` moments are parsed loudly. Both were read with the error
+    dropped, so a daemon that renamed the field or stated the moment in another form
+    reported the epoch, the whole lane published no start, and every start-latency row
+    degraded to unobserved with nothing failing. The mapping is
+    `containerFromInspect` over one payload, its cases read a capture this host's
+    Engine 29.6.2 actually printed, and the live integration case compares the
+    observed start and the accepted moment against an independent `docker inspect`.
+    Deleting the parse fails a case offline and fails the live case.
+  - Both caught fixtures were wrong about the record they pinned. The Vast case dated
+    an instance's start half a day after the read that carried it and passed, because
+    the adapter under test read the wall clock. The RunPod case pinned a start on a
+    pod with no address, which this adapter reports as queued, so it canonized an
+    observation saying a workload had begun and had not begun at once. Both pin the
+    read moment now and assert the order, and the queued pod with a start already
+    published is its own case.
+  - Judgment calls. The refused claim is dropped silently rather than raised: the
+    observation event still records what the provider said, so nothing is hidden, and
+    failing a Run because its host keeps a skewed clock would take capacity out of
+    service over a stage nobody can measure. No World Tape vocabulary states provider
+    clock skew, so the production rule is held by the seam cases and the Lab rule by
+    hand-built records rather than by a Blueprint; a fixture that states a host's
+    clock offset belongs with the slice that gives the simulated worlds one. And this
+    pass ran beside a concurrent session in the same worktree: its Lab half landed
+    inside that session's commit `6858429` rather than in a commit of its own.
+- [x] 2026-07-26: Make a launch a waterfall of eight predicted stages, each with
+  an actual of its own. The record carried four quantities, and one of them,
+  `domain.LaunchSeconds`, stood for agent enrollment, container creation, and
+  application readiness together. A single number covering three stages cannot be
+  calibrated: an actual for it is the sum of three durations with three causes, and
+  measuring any one of them could not replace it. Five of the eight stages the phase
+  goal names had no prediction, and three of them cost no time in either simulated
+  world, so a prediction of any of them was measured against nothing.
+  - `domain.LaunchStage` names the eight in the order a launch goes through them and
+    `domain.LaunchStageEstimates` carries one distribution each, read through one
+    ordered list so a stage cannot reach the record without reaching the bundle, the
+    invariant, the reference model, and the console with it.
+  - A published provisioning claim is read as a claim about boot, because that is
+    what its only publisher in this tree calls it: Shadeform states a min and max
+    `boot_in_sec` for an instance type and nothing else about getting one.
+    Acquisition and agent enrollment are published by nobody, so they are predicted
+    as nothing and the record says whose silence that was, `unpublished` for capacity
+    that has to be allocated and `machine_exists` for capacity already running
+    Mercator's runtime. A share of the published claim would attribute a provider's
+    boot window to stages the provider never mentioned, and a prior of Mercator's
+    would be a number invented for every listing in every catalog. The consequence is
+    a machine prediction short of the truth by whatever acquisition and enrollment
+    really take, which the per-stage record now shows: the L1 fixture predicts zero
+    acquisition against an actual of two minutes.
+  - Application readiness is predicted from the workload's own declaration and from
+    nothing else. Readiness is the application's semantics, so no machine fact and no
+    provider claim predicts it, and a Run that declares none is predicted none rather
+    than charged a prior. It is deliberately not part of `StartSeconds`, because the
+    actual a start is calibrated against is the container's own start moment and
+    readiness is a later one.
+  - The image answer becomes two stages over two resources, a fetch across a link and
+    an assembly of bytes already on the disk. Confidence is stated per stage, so a
+    host with nothing to fetch is certain about the fetch and doubtful about the
+    assembly it still owes, where one answer used to carry the lower of the two.
+  - `WorldSpec.launch` is what a launch costs after its content arrives: `unpack`,
+    `container_start`, and `application_ready`, each a stated duration rather than
+    arithmetic over a rate, because a world computing what the predictor computes
+    would make every prediction right by construction. Both simulated worlds spend
+    them, and the launch effect's consequence carries what each of the eight stages
+    really took. That ledger is the only source of six of those actuals: Mercator can
+    observe a container starting and an application reporting ready, and nothing in
+    production tells it when a machine finished booting.
+  - Application readiness is a typed report. `compute.run.reported.v1` with type
+    `ready` requires `data.ready_at` and reduces into `domain.RunRecord.ReadyAt`. The
+    moment is the application's own rather than the moment Mercator appended the
+    event, which is the defect the observed start moment was fixed for one stage over.
+    The conformance probe was already sending a `ready` report, with a scenario name
+    and no moment, and nothing in the tree read it: that is the untyped callback this
+    slice is about. Both simulated worlds deliver readiness as an inbound call,
+    because routing it through the provider seam would make a running process and a
+    serving one the same fact again.
+  - `predictions.jsonl` carries a row per stage beside the runtime and start-latency
+    aggregates, and `safety.prediction_is_recorded_against_its_actual` is the Lab
+    invariant: for every launch the Effect Ledger accepted, every stage the world
+    spent has both halves in the record, and no stage the world spent is one the
+    record cannot name. The two halves are read from independent places, which is what
+    stops the rule being satisfied by the predictor agreeing with itself. It is
+    deliberately not stated as accuracy: how close a prediction lands is a calibration
+    metric, and a rule of that shape would fail on a fixture whose world is simply
+    slow, which several of these fixtures are on purpose.
+  - A Blueprint states stages by name in one map, replacing `provision_seconds`,
+    `pull_seconds`, `pull_source`, `pull_confidence`, and `artifact_seconds`. A stage
+    cannot be added to the record without a way to state it, and a fixture asserts
+    seconds, source, and confidence together because zero seconds means two opposite
+    things. `a-launch-is-eight-stages` is the placement fixture and
+    `conformance/every-stage-of-a-launch-has-an-actual` the same claim at L1.
+  - Judgment calls. The world spends unpack on any launch that had bytes to fetch or
+    content it holds unassembled, while the scheduler charges assembly only for
+    content a host already fetched: the two are meant to differ, and a fetch whose
+    assembly the model folds into the transfer rate is a gap the per-stage record now
+    shows rather than hides. An Artifact stage for a Run that reads nothing names that
+    silence, `workload_reads_nothing`, because an empty source is what the new rule
+    reads as a stage nobody predicted. And the slice's own statement that five stages
+    take zero time was written before the observed-start slice landed: three did, and
+    the three are the ones this commit makes cost time.
+
+- [x] 2026-07-26: Answer the second review of the start-moment commit. Two reviewers
+  refuted parts of it, and the blocking one was a law with two readers where only one
+  of them asked.
+  - `bookingStartedAt` adopted any moment that was not nil, in the same append forty
+    lines below the one that refuses a moment Mercator cannot defend. So an ephemeral
+    host an hour ahead had its start correctly kept off the run stream and stamped
+    straight onto the Booking's runtime clock: `RemainingMaxSeconds` stayed positive
+    for an extra hour, `OverrunSeconds` read zero for the whole real runtime,
+    `Expired` never fired, and the schedule reported the machine busy while the
+    container burned paid capacity. `ExternalObservation.EstablishedStart` replaces
+    `ObservedStart` and returns the moment with the answer, so there is nothing left
+    for a caller to adopt on its own.
+  - The clause about a moment ahead of its read was structurally unreachable on the
+    reusable lane, because the node supplied both moments it compares: its runtime
+    stamps ObservedAt from its own wall clock and reads State.StartedAt off the same
+    daemon, and the Broker copied both through. Two moments from one foreign clock
+    agree with each other whatever that clock reads.
+    `capability.WorkloadObservation.ReceivedAt` is when the control plane accepted the
+    report, stamped where a node's report enters the control plane and never by the
+    node, and the Broker reads it as the observation's read moment. It is at or after
+    the node's own look in real time, so a start dated ahead of it is a start ahead of
+    Mercator, which is the only comparison available without a shared clock. A stored
+    report with no receipt moment is refused loudly.
+  - Neither ephemeral provider could establish the moment it was publishing. RunPod
+    stamps `lastStartedAt` when it places a pod, minutes before the image has landed,
+    and the value does not move when the process begins: a pod placed at 11:00:05 and
+    running at 11:04:10 filed five seconds as a measured start latency. Vast's
+    `start_date` is when it started the instance's contract. The phase gate postpones
+    adopting a stale moment rather than correcting it, and a failed pull reaches EXITED
+    still carrying it, which `Exited()` accepts. Both adapters publish no start moment
+    now, which is what Shadeform already did and said why. The Vast half is a judgment
+    call from the same argument rather than from a captured transcript: the cost of
+    being wrong that way is one stage recorded as unobserved, and the cost the other
+    way is every start latency on that lane filed as a measurement of nothing.
+  - The reusable lane still read `State.StartedAt` with the parse error dropped, which
+    is the silent degradation the Docker adapter had just been corrected for, in the
+    one lane that will measure a start latency after phase 2. A runtime whose compat
+    inspect prints Go's default time form reported every container with no start.
+    `parseStartMoment` now answers three things rather than two: a line that names no
+    container is a container pruned between the two calls and is skipped, the epoch is
+    a container that never ran, and any other form fails the read. The Docker adapter's
+    own guard on `Created` had no case that could break it, which matters more than the
+    half that did, because `Launch` returns that moment as the launch's acceptance and
+    `invalidLaunchReceipt` wedges every reduce of the stream without one.
+  - The Lab rule stopped delegating. It had been changed to call the production
+    predicate it exists to constrain, so deleting the clause about a moment ahead of
+    its read left the rule agreeing with the mutation, which is the shape
+    `safety.locality_is_never_infeasibility` was corrected for two entries earlier.
+    The rule states the three clauses itself, and it reads the Rental Schedule now: a
+    Booking's clock must be a start one of that Run's observations established or the
+    read that carried one of them. That clause is the one no rule in the corpus had,
+    which is how the blocking defect stayed green.
+  - The corpus can state the world. `RentalSpec.clock_ahead` makes a host read the
+    moment it states off its own clock while both simulated worlds keep the truth on
+    Mercator's, which no fixture could say before, so the law was held only by
+    hand-built records. `a-clock-nobody-shares-is-not-a-start` is the placement fixture
+    and `conformance/a-clock-nobody-shares-measures-nothing` drives the same world
+    through the real orchestrator, event log, schedule, and Run Bundle, where the
+    start-latency row reads `start_not_observed`. Publishing the truth instead of the
+    machine's own reading fails the conformance case at 20 seconds.
+  - `TestANodeWithASkewedClockDoesNotSetMercatorsOwn` is the production half, against
+    the real daemon, the real node protocol, and a machine whose clock runs an hour
+    ahead. Its workload declares a one second bound and does not exit: copying the
+    node's own read moment through records a start an hour in Mercator's future, and
+    adopting any non-nil moment for the Booking leaves 3509 seconds of enforced runtime
+    on a container already past its bound, so the daemon queues an arriving Run behind
+    work that will never finish. Every scripted runtime in that file dated both moments
+    from the control plane's clock, which is why nothing there could see either defect.
+  - The record of the previous pass was wrong about what it could prove. At 588b66f
+    the test trees of internal/lab, internal/orchestrator, internal/scheduler, and
+    internal/daemon did not compile and the Blueprint corpus did not load, because
+    6858429 replaced the `CandidateEstimates` stage fields without updating four test
+    packages and 22 fixtures. `go build ./...` passed and `go vet ./...` did not, so
+    every case that entry named as holding was runnable only in a concurrent session's
+    uncommitted working tree. b8bca95 was the last commit that vetted clean, and the
+    tree of record was green again at 33707f6. The entry recorded the pass as complete
+    while naming the concurrent session, which is the part to not repeat: a commit that
+    cannot run its own evidence is not evidence, whoever else is in the worktree.
+  - Judgment calls. `EstablishedStart` still accepts a terminal phase, because a
+    container observed only after it exited has a real start moment from a runtime that
+    owns its lifecycle, and refusing exited phases would throw away every fast
+    workload's measurement to compensate for a provider publishing the wrong field.
+    The fix for that belongs where the wrong field is read. A node whose clock runs
+    behind still hands over a start earlier than the truth; nothing here can detect it,
+    and the start-latency row already names the pair it could not subtract. And the
+    Booking clock's fallback reaches the Lab world only as the positive case, because
+    that provider says running from the moment it accepts, so the first observation
+    carries no start at all: the lane where a start arrives with the first running
+    observation is the reusable one, and that is where the fleet case drives it.
+- [x] 2026-07-26: Answer the review of the launch-waterfall commit. Two reviewers
+  refuted parts of it. Six of the seven findings were real and are fixed at the
+  source; the seventh is rejected below with the reason.
+  - The readiness moment had no law. It was adopted from the workload verbatim: no
+    bound against Mercator's clock, no relation to the container it is about, and no
+    rule about which of two reports stands, so a report could file a readiness three
+    and a half years in the future for a Run whose container nothing had observed
+    starting, and a second report moved it backwards. That is the same foreign-clock
+    defect `EstablishedStart` was written for one stage earlier, and it was not
+    carried over. `runReportedData.establishedReady` refuses a moment later than the
+    read that carried it and a moment before the recorded start, the ordering is
+    checked at both events because the two moments come from two authorities and the
+    workload's arrives first as often as not, and the first defensible moment stands.
+    The report stays in the log whatever the rule answers.
+  - Nothing could state the world where it fires, in three separate places. Both
+    simulated worlds stated readiness on Mercator's clock even for the one machine
+    whose clock is not Mercator's, so no fixture could produce an indefensible
+    readiness; the corpus asserted readiness by reading the report rather than the
+    record, so `no_ready_reported` meant no workload spoke rather than Mercator
+    refused; and no invariant read readiness at all.
+    `safety.readiness_is_reported_not_inferred` is the start rule over the last stage,
+    four clauses written out rather than delegated, and `Session.RunRecord` makes the
+    corpus assert what Mercator adopted. `a-clock-nobody-shares-is-not-a-start` now
+    states that the readiness off the same wrong clock is refused too.
+  - `ImageManifest.StartWork` charged a transfer and no assembly for bytes a host
+    does not hold, so `imageStage` took its zero-bytes path and recorded the assembly
+    as zero seconds at confidence 1.0. A Rental about to pull 18GB stated at full
+    confidence that it owed no assembly, while the host beside it holding those same
+    bytes unassembled was charged the 72 seconds, and both worlds contradict it: each
+    spends its unpack whenever a launch fetched anything. A layer that has to arrive
+    has to be applied, so a layer nothing holds owes both. Two consequences beyond the
+    record were the reason to fix it at the source: a fetching candidate now carries
+    half a point of doubt for the link and half for the unpack rate, which is the same
+    point an enrolled machine that answered and holds nothing carries, and
+    `max_p90_start_seconds` is enforced against a number that includes the assembly
+    rather than structurally omitting it. `unpacked-is-not-the-same-as-pulled` states
+    the whole rule in one world.
+  - The per-stage fixture vocabulary was unvalidated. `LaunchStageEstimates` answers
+    about an unknown stage with a zero `Estimate` from no source, so a misspelled key
+    asserted zero seconds against a stage that does not exist and passed green, taking
+    the assertion the fixture was written for with it: replacing this corpus's own
+    600-second boot claim with the record's JSON key `boot_seconds` left the tree
+    green. The key is `domain.LaunchStage` now and the same validation that checks
+    artifact and cache vocabulary checks it against the eight.
+  - `safety.prediction_is_recorded_against_its_actual` read the set of accepted
+    launches off the stage durations those launches reported, so a launch that
+    reported none was not a launch as far as the law was concerned. Deleting the
+    world's stage accounting left the canonical execution green with all its
+    invariants passing. The waterfall records which Runs had a launch accepted
+    separately from which reported a duration, and the Bundle names the difference:
+    `launch_reported_no_actual` rather than a measured zero.
+  - Both worlds modelled only the happy path of readiness. Every started execution
+    reported ready, and a fixture that declared no readiness spend got a report at the
+    same instant its container started, so thirty Blueprints asserted by default that
+    a running process is a serving one and the failure mode the stage exists to expose
+    was unstatable. `application_never_ready` states it, the ledger says which stages
+    a launch reached rather than leaving it to be read off a missing number, and
+    `a-running-process-is-not-a-serving-one` plus
+    `conformance/a-workload-that-never-becomes-ready` hold it at both levels.
+  - Rejected: that an omitted `application_ready` should mean the world says nothing
+    about readiness. Omission already means something in that block. Every other stage
+    reads a missing duration as a world that spends nothing on it, which is how a
+    Rental spends no acquisition and no boot, and a readiness of zero is a legitimate
+    world where a process serves the instant it exists. Reading one field's silence as
+    absence and its siblings' silence as zero would make a fixture's own sentence
+    undecidable, and it would leave eight-stage completeness unstatable. What was
+    missing was a way to say the opposite thing, which is what
+    `application_never_ready` is.
+  - The live-evidence list for the previous pass named
+    `TestANodeReportsTheMomentItsContainerReallyStarted`, which runs against a
+    scripted runtime with `PATH` emptied so no Docker is reachable, and would pass with
+    the daemon uninstalled. The correction is in the phase 4 verification section
+    beside the claim.
+  - Judgment calls. The refused readiness is dropped rather than raised, for the same
+    reason the refused start is: the report still records what the workload said, and
+    failing a Run because its host keeps a skewed clock would take capacity out of
+    service over a stage nobody can measure. Readiness gets no event of its own like
+    `compute.run.execution_started.v1`, because the report is already an event and the
+    adopted moment is a projection of it, so the invariant reads the projection. And
+    this pass again ran beside a concurrent session in the same worktree, which had the
+    tree non-compiling for stretches of it; every command below was run against a
+    `git archive` of the commit under test with only this pass's files overlaid, so the
+    evidence is the tree of record rather than a shared working directory.
+
+- [x] 2026-07-26: Price a transfer from the bytes that are missing and the
+  throughput of the path they cross. Every Artifact read in the fleet cost the same
+  seconds on every machine, because both halves of the arithmetic read one constant
+  per scope: reading forty gigabytes was 640 seconds beside the object store and 640
+  seconds across the country from it, and no fact anybody published could change
+  either number, because `domain.NetworkScope` had no object-store scope for a host
+  to speak about that path with.
+  - `NetworkScopeObjectStore` is the scope, and `OfferSnapshot.DownloadRate` answers
+    per path where `RegistryDownload` answered for one. `LinkSpeed` carries where its
+    number came from, exactly one of a measurement or a named assumption, so a reader
+    can tell a machine Mercator measured from one it guessed about. The three
+    assumptions are named constants, so a record says `assumed_object_store_rate`
+    rather than 500.
+  - `CandidateDecision.TransferRates` records the rate every stage that had bytes to
+    move was priced at, with the bytes beside it. The seconds are bytes over a rate,
+    the bytes were already explained by the locality evidence, and the rate was the
+    half no reader could retrace. A stage with nothing to move records nothing,
+    because there was no transfer to have priced.
+  - Both simulated worlds spend the Blueprint's own declared path rate instead of a
+    constant, and read it from the declaration rather than from the fact the offer
+    publishes. That distinction is the point: how fast a path is and how much its
+    publisher stands behind having measured it are different statements, so a fixture
+    can state a path a host disowned and the world still crosses it at the speed the
+    fixture said. `PathSpecs.LinkMbps` and `PathSpecs.PublishedFacts` are the one
+    place each answer is derived, so one declaration cannot mean two transfer models.
+  - An enrolled node measures the path it just crossed. `capability.HostFacts.Network`
+    was declared in phase 2 and written by nothing, so the field the offer projection
+    already carried and Placement already read had no producer. `PrepareArtifact`
+    times its own copy and publishes the slowest reading it has seen as a p10, which
+    is the pessimistic quantile every reader here asks for. Only the object-store path
+    is measured: the daemon pulls images and reports neither the bytes nor the
+    duration, so a registry rate derived from anything available would be an inference
+    dressed as a measurement.
+  - `safety.transfer_rate_is_attributed` is the Lab rule, and it is
+    `safety.locality_provenance` for the other half of the arithmetic. Every transfer
+    a decision recorded names the measurement or the assumption it was priced from,
+    exactly one of the two, and a rate presented as measured has to be a number some
+    host or path fact actually reported at that scope, one its own publisher still
+    stands behind. It is stated over what the decision recorded rather than over the
+    arithmetic: a rule that recomputed the seconds would be a second implementation of
+    the predictor agreeing with the first.
+  - Judgment calls. `AssumedUnpackMBps` became `AssumedUnpackMbps`, the same 250 MB/s
+    restated as 2000 Mbps, so one unit and one arithmetic price every stage and one
+    record holds every rate a candidate was priced at; assembly stays a rate of its
+    own, because a machine on a slow link with fast disks is a real machine. Each
+    simulated world keeps its own unmeasured constant, deliberately the same figure as
+    the scheduler's assumption, because an unmeasured path is the one case where both
+    halves are guessing about one thing; what separates prediction from actual is a
+    fixture declaring a path. `MeasuredLinkConfidence` is a stated 0.9 rather than a
+    function of the sample count, which would be an estimator this slice has not
+    measured. And the two halves are two Blueprints rather than one, because a
+    Blueprint carries exactly one of a placement fixture or an arrival plan and the
+    Lab compiles only the second: `a-fast-machine-far-from-the-data-loses` at L0 and
+    `conformance/a-path-somebody-measured-prices-the-read` at L1, over one world.
+
+- [x] 2026-07-26: Answer the review of the measured transfer path. Two reviewers
+  refuted parts of it. Three of the four findings were real and are fixed at the
+  source; the fourth is half real, fixed as far as it goes, and rejected below where
+  it does not.
+  - A node's slowest reading could never retire. `pathMeasurements` kept a running
+    floor and re-dated it on every later transfer, so the slowest reading a machine
+    ever took was republished as a current p10 forever, stamped with the moment some
+    other transfer finished. A node that read once at 100 Mbps while a container
+    shared its link, and then read at a gigabit every half hour for twelve hours,
+    published 100 Mbps observed at midnight, and the only exits were a full hour of
+    moving nothing or restarting the agent. The commit message claimed the opposite
+    property. Readings are kept one by one now and the fact is the slowest of the ones
+    still standing, which is what retires the slow one: each reading serves its own
+    hour and leaves the window whatever the node does afterwards, so a floor nothing
+    can date is no longer what gets published. The date this entry then gave the fact
+    was wrong, and the entry below corrects it.
+  - `safety.transfer_rate_is_attributed` judged a historical decision against the
+    current fleet. Its second clause read World Truth's offer list, so a machine
+    legitimately gone by check time turned a correct placement into a reported safety
+    violation, in the exact words the rule exists to say about a prediction that
+    invented a measurement. The world writes down what it publishes now,
+    `publishOfferFacts` keeps it after the machine is retired, and the rule asks it as
+    of the decision's own `EvaluatedAt`. The second instance of the same defect was in
+    the declaration: a fixture's path was stamped valid for a day from the world's
+    start while offers are observed now, so any execution driven past twenty four
+    hours watched every declared path go silent and flipped every measured rate
+    already in its log into the same false violation. A declared path is a standing
+    statement of the world, and a fixture that wants silence states a confidence of
+    zero.
+  - Nothing in the corpus held the two halves of the transfer model apart. The Lab
+    world reads a Blueprint's declaration rather than the fact the machine published,
+    and every fixture that declared a path declared one its host stands behind, so
+    replacing the world's reading with a read of Mercator's own input left the whole
+    suite green. `conformance/a-path-a-host-disowned-is-still-the-path` is the case
+    that can tell them apart: the machine states no confidence in its own 200 Mbps
+    path, Mercator prices the read from its fleet-wide assumption at 640 seconds, and
+    this world spends the sixteen hundred the path really costs. That closed the Lab
+    world, and this entry read as though it closed both. The fake adapter was still
+    substitutable, and the entry below closes it.
+  - What a node publishes is not the link, and now says so. The reading is timed over
+    `io.Copy`, so it is the bytes crossing the path, landing on the disk, and being
+    hashed on the way past; it is published as `node_artifact_copy` and
+    `NetworkScopeObjectStore` states that a p10 over it is delivery. What is rejected
+    is the reading of that as a false refusal. A machine on a ten gigabit path whose
+    Artifact disk delivers four cannot serve a Run that states a floor of eight, so
+    refusing it is the right answer and admitting it was the unmeasured guess this
+    slice replaced. That semantics was settled here and constrained by nothing, since
+    every download floor in the tree was over a registry; the entry below gives it a
+    case at both fidelities. The rest of the finding stands: both readers of the fact
+    ask how fast content reaches this host, and landing is part of reaching it. The
+    expressibility half goes with it: a fixture's `p10_mbps` is that delivery rate,
+    which is why one declaration is enough, and a host that publishes something other
+    than what it delivers is stated through the confidence it puts on its own number.
+
+- [x] 2026-07-26: Close the transfer-path slice on the two halves it left open: what
+  the corpus says about a machine nobody measured, and what an admitted assumption is
+  allowed to be worth. The measured half was held at L0 and L1 and the fallback was
+  held by unit tests over the domain rate and by one conformance world about a host
+  that disowned its own reading, so no Blueprint said that silence about a path is
+  priced rather than refused. And `safety.transfer_rate_is_attributed` was a rule about
+  provenance only, which left the shortest route to the outcome it exists to stop
+  wide open.
+  - `rental-nobody-measured-the-path-of` is the third machine in
+    `a-fast-machine-far-from-the-data-loses`. It declares no path at all, which is the
+    silence itself rather than a rate stated at zero confidence, and it is charged the
+    stated prior over forty gigabytes at `assumed_object_store_rate` with the estimate
+    capped at what a guess is worth. What it pins is two constants,
+    `DefaultObjectStoreDownloadMbps` and `AssumedLinkConfidence`. This entry also
+    claimed it made the determinism claim falsifiable at L0, and the entry below
+    corrects that: it contributes nothing under that break.
+  - The rule's third clause is that an unmeasured transfer is worth at most
+    `domain.AssumedLinkConfidence`, asked of the rate and of the stage estimate it
+    produced. Naming the assumption truthfully and then stating the duration at full
+    confidence satisfied both existing clauses and bought exactly the ranking a
+    fabricated measurement buys, by the route a prediction slice is likelier to take:
+    raising a confidence reads as tuning a constant rather than as inventing a source.
+    Both halves are asked because they are two mistakes. The rate is what the next
+    caller divides by; the estimate is what this decision's own uncertainty term
+    already charged doubt from.
+  - Deferred, and the reason is the runtime rather than the plan. A node still cannot
+    measure its own unpack rate. `PrepareImage` is `docker pull`, which interleaves
+    downloading and extracting per layer and reports neither the compressed bytes nor
+    a phase duration, so any rate derived from it would be a measurement of fetch plus
+    unpack published under the name of a measurement of unpack. That is the same
+    inference this tree already refuses for the registry path, and `AssumedUnpackMbps`
+    stays the stated assumption until something can separate the two. Adding a
+    per-offer unpack fact with no producer was rejected for the reason the last review
+    gave: `capability.HostFacts.Network` sat declared and unwritten since phase 2, and
+    a reader with no writer is the defect, not the fix.
+
+- [x] 2026-07-26: Answer the second review of the measured transfer path. Two
+  reviewers refuted four things about the entry above. All four were real, three in
+  the production code and one in what this document claimed.
+  - Dating a node's published p10 by its slowest reading made the same fact fail the
+    freshness bound it exists to serve. A node that read at 100 Mbps at noon and at a
+    gigabit every minute until one o'clock published a measurement dated noon with
+    sixty samples under it, so a Run stating `max_measurement_age_seconds` of ten
+    minutes read the machine as having published nothing about its link and struck it
+    out on a floor its last fifty-nine reads cleared twenty times over. One fact is a
+    quantile over a window and never one transfer, which is what `SampleCount` has
+    always said, so what dates it is the moment its evidence ends. The value is still
+    the slowest reading standing, the slow reading still retires because each reading
+    serves its own hour, and the fact now expires with the newest reading, which is
+    the moment the window would empty. Expiry and collection are one statement
+    instead of a constant chosen twice.
+  - One published fact was read at two moments. `OfferSnapshot.DownloadRate` priced
+    the transfer as of the offer's observation and `NetworkDownloadRequirement.Answer`
+    decided the Run's floor as of the decision, so a fact its publisher stopped
+    standing behind in between was both things at once: the record refused the
+    candidate because nobody had published a download p10 for its link and priced its
+    pull at 750 Mbps measured by that same publisher. `safety.transfer_rate_is_attributed`
+    then reported a decision taken by the scheduler's own documented rule as a
+    fabricated measurement. The moment is the caller's now and every caller passes the
+    decision's, which is the only one the Booking Decision carries and the honest
+    question anyway. A Run's `max_measurement_age` stays with the floor alone, because
+    it is that Run's policy about what it will be placed on rather than a statement
+    about the fact, and a reading one Run refuses is still the best evidence Mercator
+    holds about how long the transfer takes.
+  - The fake adapter's transfer model was still Mercator's own input. Replacing
+    `simLinkMbps` with a read of the facts the offer publishes left all thirty-six
+    regression Blueprints green, verified on this host, and the two fixtures that
+    declare a disowned path moved their image bytes at the 500 Mbps fleet assumption
+    rather than the 5000 they state. `a-world-crosses-the-path-its-host-disowned` is
+    the fixture that notices: one Rental holding nothing, an 18GB image, and a four
+    gigabit registry path the machine disowns, so Mercator prices the pull at 288
+    seconds and this world spends the thirty-six the path really costs. The start it
+    asserts is the world's own moment, and under the substitution the Run starts 288
+    seconds in.
+  - The delivery semantics the last entry settled had no executable case. Every
+    download floor in the tree was over a registry, so what a Run asking about its own
+    dataset receives was decided by a rule no fixture could reach, and the corpus
+    could not state `max_measurement_age` at all.
+    `a-floor-on-reading-the-data-is-a-floor-on-delivery` states both: three Rentals
+    holding one image at one price, one delivering ten gigabits, one delivering four,
+    and one delivering ten that measured a week ago. A Run needing eight refuses the
+    four and names the four, refuses the week-old reading and says nobody answered,
+    and takes the third. `PathSpec.measured_ago` is what lets one world hold a machine
+    that measured lately beside one that did not; it states no expiry and adds none,
+    because how old a reading a Run will act on is the Run's policy rather than the
+    path's. `TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers` is the same
+    claim against a real node and a real object store: two Artifacts replicated out of
+    MinIO on this host's daemon, a p10 over the two transfers, and a Run refused the
+    floor above what the machine delivered and served the floor below it. The node
+    measured 12426.40 Mbps of delivery, and dropping the floor comparison admits it to
+    a Run asking for twice that.
+
+- [x] 2026-07-26: Answer a launch stage from what earlier launches of the same
+  candidate really spent, at a declared level of a hierarchy. `internal/prediction`
+  files every measured launch under `domain.CandidateIdentity` and answers a stage
+  from the narrowest level holding samples: this exact candidate, this provider in
+  this region, this provider, then the prior the rest of the tree already computed.
+  Every stage estimate records the level, the sample count, and the key the samples
+  were read under, so an answer that cannot be audited cannot be written.
+  `SchedulingInput.LatencyEstimates` is deleted rather than kept beside it: it was
+  keyed by offer snapshot ID, nothing ever wrote it, and a start latency replayed onto
+  a machine whose locality has changed is the wrong number for a stated reason.
+  - Vast's `machine_id` reaches the offer. It was decoded and read by nothing, so a
+    catalog of other people's hardware keyed a region full of identical 4090s as one
+    candidate and served each host's launches back as evidence about the others.
+  - One stage has an actual today. Readiness is bounded by two moments Mercator
+    observes from independent authorities; the other seven happen inside one observed
+    interval and stay predicted from published claims and stated constants, named on
+    the record as the prior they are.
+  - A Blueprint can now state the machine behind a marketplace listing and the
+    readiness of one machine rather than of the whole world, which is what lets a
+    fixture publish one machine under two ask IDs and make the levels answer
+    different seconds.
+- [x] 2026-07-26: Answer the third review of the transfer path. Two reviewers refuted
+  four things about the entry two above. Three were real and one was two claims, one
+  of which is refuted below.
+  - The slice's central claim was false in the production code its fixture certified.
+    A candidate's established start counted every second an inventory could account
+    bytes for, whatever divided them, so a machine that enumerated its copies
+    perfectly and has never measured its path to the object store was charged the
+    fleet-wide prior over forty gigabytes and struck out `LATENCY_SLO_EXCEEDED`. The
+    fixture could not notice because it declares no start bound, and
+    `safety.locality_is_never_infeasibility` could not either, because it measured
+    silence purely in unknown-locality bytes and returned zero here. Established now
+    means both halves of a duration are somebody's: content an inventory answered
+    about, crossing a path some machine published a reading of. Nothing to move is
+    still nothing to wait for at any rate, and a machine that measured its own link
+    and is slow on it is still refusable, which is what a bound is for.
+    `a-start-bound-refuses-only-what-it-can-prove` states it at L0 and
+    `TestAStartBoundRefusesOnlyThePathThisNodeMeasured` states it against a real node
+    reading real content out of MinIO on this host's daemon.
+    `silence-is-not-infeasibility` now publishes a registry reading for the Rental it
+    strikes out, at exactly the rate Mercator would have assumed about it, so the
+    seconds are unchanged and what the fixture turns on is that a machine said them.
+  - The Lab rule reads the transfer rates a decision recorded as well as its
+    localities, and charges a stage priced from an assumption its whole price. A stage
+    that suffered both silences is counted once at the larger share.
+  - The third clause of `safety.transfer_rate_is_attributed` capped the stage
+    estimate's confidence and not `CandidateDecision.Confidences`, which is what
+    `Uncertainty` reads and what the score charges doubt from. The two are built
+    separately, so stating an assumed read as certain in the list while leaving the
+    estimate honest passed the whole `internal/lab` package. The clause now asks all
+    three readings, and `domain.LaunchStage.ConfidenceAnswer` replaces the three
+    strings that spelled the mapping out independently in the scheduler, the reference
+    model, and the rule.
+  - The claim that the third machine made the determinism claim falsifiable at L0 was
+    false and the same commit said so two paragraphs later. Verified on this host:
+    with `DownloadRate` stripped of its fact read, the fixture reports eleven failures
+    and none of them is `rental-nobody-measured-the-path-of`, and the placement fell to
+    `rental-far-from-the-data` before that machine existed. The entry above is
+    corrected in place.
+  - Refuted. A measured path and an unmeasured one were said to be compared as if they
+    were the same statistic, so a host that publishes an honest slow reading is gated
+    out where an identical silent host is admitted. The gating half is the rule
+    directly above and is deliberate: a bound refuses what is known and never what is
+    guessed, and a machine that measured 200 Mbps is known. The statistic half is
+    consistent as stated: `DownloadRate` is documented as the pessimistic quantile and
+    the standing prior answers that same question, so both reach `LinkSpeed.Mbps` as a
+    p10 and nothing in the tree treats them as different statistics. What is open is
+    calibration, not correctness: nothing has yet measured whether 500 Mbps is a
+    pessimistic prior or an optimistic one, and a host whose true p10 is under it is
+    ranked worse for having published it. That is a fleet-wide repricing to be made
+    against measurements the calibration slice will hold, and the counterweight to it
+    is already charging. `scheduler.Evaluate` sets `Weights` from the Run's class and
+    `ServiceClass.Weights` prices doubt at sixty seconds of that class's own waiting
+    rate, so a standard Run pays 0.03 USD for every point of confidence shortfall a
+    candidate carries, and an unmeasured link is half a point of it on every stage it
+    priced. Whether 0.03 is the right price is the same open calibration question as
+    the 500.
+
+- [x] 2026-07-26: Answer the fourth review of the transfer path. Two findings, both
+  real, and both in this document rather than in the code it describes.
+  - The entry above rested twice on the uncertainty term being dead, and this same
+    document records the slice that turned it on. `scheduler.Evaluate` has set
+    `Weights` from the Run's class since the service class landed, and
+    `ServiceClass.Weights` prices doubt at sixty seconds of the class's own waiting
+    rate. Verified here by zeroing `UncertaintyPenaltyUSD` alone: four green
+    Blueprints fail on their recorded scores, `uncertainty-is-priced-once`,
+    `the-service-class-decides-what-wins`, `a-published-risk-history-ranks-nothing`
+    and `a-disowned-fact-is-not-an-answer`, and so does the Lab law that reproduces a
+    score from the record. Both sentences are corrected in place. The three earlier
+    mentions of terms multiplied by zero are histories of what the class replaced and
+    are left alone.
+  - `silence-is-not-infeasibility` claimed both halves of the struck-out Rental's five
+    minutes were somebody's measurement. A fifth of them is assembly, priced over
+    `AssumedUnpackMbps`, which `UnpackRate` stamps as an assumption because nothing in
+    the fleet measures a host's storage, so `establishedOverAMeasuredPath` takes every
+    unpack second out of what a bound may refuse. Measured here: the Rental is charged
+    289.14 seconds of fetch over its published 500 Mbps and 72.16 of assembly over the
+    constant, and its established p90 start is 434.71 against a whole prediction of
+    542.95. The fixture passed at three minutes on the fetch half alone.
+  - That is the rule working rather than the bug the entry above reports fixing, so
+    the code is unchanged. Refusing a Run's only capacity for seconds derived from a
+    constant of Mercator's own is exactly what the slice stopped doing for registry
+    links, and assembly is that same guess made about every machine at once. The
+    candidate still pays those seconds in the score, so it never outranks a machine
+    that will really be faster, and the decision records `START_SLO_UNVERIFIED` rather
+    than a promise. `stagePredictor` already puts a measured launch into both halves,
+    so the stage becomes refusable the moment anything has watched it.
+  - What was missing is that nothing said so. The Blueprint gained a second Run at
+    seven and a half minutes, where the measured fetch is inside the bound and the
+    whole prediction is not, asserting the Rental feasible, the placement
+    `START_SLO_UNVERIFIED`, the fetch rate as a measurement and the unpack rate as
+    `assumed_unpack_rate`. Two breaks fail it, each of which strikes the Rental out on
+    a constant of Mercator's own: stating the unpack rate as a measurement, and making
+    `establishedOverAMeasuredPath` return what it was given, which is what the tree
+    did before the slice above.
+  - Open, and named rather than fixed. No hard start bound can act on assembly for a
+    candidate the fleet has never watched, whatever the image size, so a Run whose
+    start budget is mostly unpacking is admitted unverified rather than refused. The
+    answer is a measured unpack rate, which is a node slice and a calibration
+    question, not a constant promoted to a measurement here.
+- [x] 2026-07-26: Stop answering a transfer from a launch history. Two reviewers
+  refuted the transfer-path repair above at its own trigger. Four of five findings
+  were real, and the central one is that the repair had fixed the wrong half.
+  - The estimator was the lying half. `stages.Answered` replaced a transfer's
+    prediction with what measured launches of the candidate spent, with no regard to
+    what this launch has to move, so a machine holding a verified copy of the whole
+    forty gigabyte dataset was charged 920 seconds and refused `LATENCY_SLO_EXCEEDED`
+    at `Offered 937.25` against a bound of 180, with `Locality:hot FetchBytes:0` in the
+    same record. The image side is the same defect: a host reporting every layer was
+    charged the pull it had already performed. A transfer is a byte count over a
+    throughput and the byte count belongs to the launch, so `image_fetch`, `unpack` and
+    `artifact_fetch` are filed under no key at all and the rate the entry above deleted
+    comes back. Nothing measured is lost, because what recurs about a transfer is the
+    throughput, and an enrolled node already publishes that as a fact with a validity
+    window.
+  - `safety.locality_is_never_infeasibility` was failing a lawful refusal at the same
+    trigger, because `pricedSilenceSeconds` multiplies a share of bytes by seconds
+    those bytes did not produce. It needs no clause of its own once no transfer's
+    seconds arrive from anywhere else, and the Lab refuses the answer outright instead,
+    in `safety.prediction_states_its_provenance`, so no other law has to ask first
+    whether the seconds it reads are a transfer's seconds.
+  - The rate law was silent by omission about the transfers a decision recorded no rate
+    for at all, which is a cheaper way out than inventing a measurement.
+    `everyTransferNamesItsRate` reads the seconds instead of a byte count, and fails on
+    each of the three stages on its own.
+  - The corpus can catch the change that brings it back.
+    `history-answers-for-the-machine-it-was-measured-on` asks its two measured machines
+    what they will spend pulling, and the answer is the prior with the throughput it was
+    divided by. It cannot fail on this tree, because nothing in a Lab world produces a
+    timed transfer; it fails the day `Launch.Observations` emits one and the estimator
+    files it, which is exactly the regression review named.
+  - The disk conformance case released half a gigabyte inside its own measured window,
+    by removing an interrupted run's leftover container after taking the reading it
+    compares against. Reproduced here as `fell by 0 bytes` with the node correct both
+    times.
+  - `Registry.draining` and the `OpenSession` refusal it gates were asked for by
+    nothing, and both are the difference between a fifteen second shutdown and a clean
+    one. Two cases at the registry now fail without them.
+  - Open, and named rather than fixed. A transfer becomes learnable again when the key
+    names what a transfer is, the bytes this launch is missing and the path they cross,
+    which is the slice where a node reports the stages it performs. Until then a timed
+    fetch is filed nowhere rather than filed wrong.
+- [x] 2026-07-26: Answer the second review of the risk-history commit. Two reviewers
+  refuted seven claims on it, five of which the first review of that commit had
+  already fixed and which reproduce nowhere in this tree. The two that survive are
+  both about the same thing: a rule the code obeys and nothing enforces, and a rate
+  the corpus can state and no world can produce.
+  - What a score may doubt is a law now. The reliability entry was removed from both
+    models' confidences, and the rule that removal rests on was left stated in three
+    comments and pinned by two fixtures, which is the exact shape the defect survived
+    a phase in. `domain.ScoredAnswers` declares the questions the score reads an
+    answer to, which is the capacity claim and the eight stages of a launch, and
+    `safety.doubt_only_the_answers_the_score_reads` holds every recorded decision to
+    it. What it forbids can only ever run one way: a stated confidence is charged and
+    a silence is not, so doubt about an answer the score never reads penalises the
+    publisher that measured its machine, leaves alone the publisher that said nothing,
+    leaves alone the publisher certain its machine refuses every start, and ranks the
+    machine nobody measured above all three. `safety.score_is_reproducible_from_the_record`
+    could never see it, because both models charged the same doubt and the score
+    reproduced from the record exactly. Restoring the entry to the production scheduler
+    fails the L1 execution through the new rule, naming the candidate, the tenth of a
+    point, and the answer it was about.
+  - The corpus can produce a refused start now. `RequestSpec.max_pre_start_attempts`
+    is the missing vocabulary: the API has carried the bound since launches could
+    fail, no Blueprint could state it, so every Run in this corpus was normalised to
+    one attempt and closed the moment any machine turned it away. A Run placed again
+    on other capacity is the whole consequence a refusal has, and the term that will
+    price a published refusal rate is a probability times the start of exactly that
+    redo, so the successor slice had no world to be falsified in.
+  - `a-published-rate-is-not-what-a-machine-does` is that world at L1. Two listings
+    at one price and one warmth. The Run takes the machine whose provider measured it
+    and never saw it refuse a start, because the histories rank nothing and the offer
+    ID decides, and the world refuses that launch through the fault the corpus has
+    always had for a provider that rejects a command. Mercator strikes the machine out
+    with `PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE` and places the Run on the listing
+    whose provider published the worse record, where it runs and succeeds. Both
+    decisions record both histories unchanged, which is the second claim: a rate is
+    what a provider measured and published, Mercator measures nothing about machines
+    on its providers' behalf, and a refusal that really happened moves neither number.
+    Three breaks fail it: removing the fault, removing the attempt bound, and stopping
+    the Lab world publishing the history at all.
+  - Rejected, with evidence. Five findings describe the tree as it was at that commit
+    and not as it is. The reliability confidence left `scheduler.confidences` and
+    `lab.referenceConfidences` in "Doubt only the answers the score reads"; the
+    vocabulary moved from `RentalSpec` to `MarketplaceOfferSpec`, where the one
+    production publisher actually attaches it, in "Make a launch eight predicted
+    stages"; `ReliabilityEvidence` became two independently stated rates and
+    `vast.interruptionHistory` stopped inventing a start failure rate at full
+    confidence, with `reliability2` a pointer so a silent ask publishes no history,
+    in "State a rate somebody measured". A sixth is refuted outright: the Lab world
+    has been able to refuse a launch since the fault vocabulary existed, through
+    `provider.launch` and `reject_command`, and `provider-rejection-single-run` is a
+    Blueprint in the corpus that does it.
+  - Open, and named rather than fixed. No world can interrupt work it is already
+    running. `ExternalPhaseFailed` is terminal in the orchestrator, so an interrupted
+    Run would close failed rather than be placed again, and there is no interruption
+    policy for a fixture to be about: what a published interruption rate costs cannot
+    be stated until Mercator decides what it does when a machine drops a running
+    workload. Simulating one now would state a world the control plane has no answer
+    for.
+- [x] 2026-07-26: Stop the advance loop the queue left spinning. Admission turned a
+  Run no candidate would take from an error into a deferral, and `stepAdmit`
+  reported that placement had moved the Run whatever placement did. A deferral the
+  record already carries appends nothing, so `AdvanceRun` re-derived the same state
+  and deferred again without end: one submission to a control plane with no capacity
+  burned a core inside its own HTTP request, held that Run's lock for as long as the
+  caller waited, and never answered. It reproduced on this workstation as
+  `TestANodeThatCannotMeasureItsDiskWinsNoPlacement` timing out at ten minutes with
+  `internal/daemon` failing the whole suite, and it is a production hang rather than
+  a test one: the stack is `CreateRun` through `Intake` to the same loop.
+  - `stepPlace` reports whether the Run moved. A placement that selected nothing has
+    not moved it: admission has queued it and the next tick asks again. Retry
+    exhaustion still reports progress, because closing a Run is a transition the loop
+    has to reduce.
+  - `TestARunNothingCanTakeWaitsInsteadOfSpinning` holds it, and the bound is what
+    states the claim. The fixed loop answers in milliseconds; the broken one only
+    stops when the deadline kills the query it is in the middle of, which is what
+    makes the case a failure rather than a hang. Reverting the fix fails it with
+    `advance a Run nothing can take: orchestrator: read the launch history: context
+    deadline exceeded`.
+  - Two daemon cases asserted the contract admission replaced. `refuseToPlace`
+    expected 502 from a refresh, and a Run nothing can take is now queued with the
+    reason on the Run itself, so `queueForWantOfCapacity` reads the phase and
+    `NO_FEASIBLE_OFFER` off the daemon's own answer. That is a stronger assertion
+    than the status code was: 502 said only that something had failed.
+  - Judgment call. The loop and the two stale cases belong to the admission slice,
+    which has no entry in this log and left `internal/scenario` changes uncommitted in
+    the worktree. They are recorded here because they were found while verifying the
+    launch waterfall, and a branch whose suite cannot finish cannot verify anything.
+    The uncommitted scenario work was left exactly as it was found.
+  - Refuted, and repaired in the entry below. Two reviewers showed that the claim held
+    only for a workspace with one Run in it, that the queue it ratified stalls a fleet
+    with room for other work, and that the corpus could state none of it.
+
+- [x] 2026-07-26: Make a wait admission records answerable and passable. Two reviewers
+  refuted the entry above. Each defect is one the record could have been read for and
+  nothing read it, and each is fixed at the stage that produces it.
+  - The command a deferral was appended under was named after the reason alone, so it
+    was spent on the first Run that reason applied to. The second time admission said
+    the same thing about a changed queue, the append replayed that key with a different
+    request hash, the event log refused it as an idempotency conflict, and `AdvanceRun`
+    returned that error to every caller for as long as the state held: the refresh
+    answered 502, the reconcile sweep logged it every tick, `stepAdmit` never reached
+    `stepPlace`, and the Run's own record stayed frozen at the stale answer. Recording
+    the nth admission decision about a Run is a distinct command from recording the
+    (n-1)th, so the key now carries the number the event ID already did.
+  - The queue ordered each Run against every wait worth more than its own and never
+    asked whether the work in front of it was waiting for anything that can arrive, so
+    one Run asking for more room than any machine in the fleet has emptied the fleet.
+    A Run refused by every candidate is now recorded in one of two waits.
+    `NO_FEASIBLE_OFFER` is a wait for capacity to come free, and the record points at
+    what holds it. `NO_CAPACITY_FITS` is a wait for capacity to be added, where every
+    machine the fleet published was weighed against this Run and none of them holds a
+    queue it could be waiting on. Work behind the first waits for the same machine.
+    Work behind the second is only stopped by it, and it is admitted past it.
+  - A fleet that published nothing at all is the first wait and not the second. Nothing
+    was weighed, so nothing has been established about what would hold the Run, and the
+    order the classes declare is what should decide the first machine to arrive.
+  - The two waits are separate reasons rather than a flag beside one reason. It is what
+    an operator acts on, "add capacity" against "wait", it is what the queue reads, and
+    the existing suppression already appends a fact when the reason changes. The flip
+    is also what makes the rule self-correcting: a machine that is both occupied and
+    too small holds the queue only while the record can project when it comes free.
+  - `BEHIND_HIGHER_CLASS` is now `BEHIND_HIGHER_PRIORITY`. The ordering was always on
+    effective priority, so a Run held behind older work of its own class was told it
+    was behind a higher class, which is not what the record said.
+  - The deadline is now asked of every wait rather than only of the wait Placement
+    causes. A Run held behind work that outranks it was told to wait again every tick
+    for ever, past the moment its own class says the answer stopped being worth having,
+    and the queue in front of it was the one thing that could keep it there. An
+    interactive Run behind an experimental one is where the aging curves cross, and
+    that is the case the new test states it against.
+  - The executable specification now constrains all of it, which is what the reviewers
+    found missing. `internal/scenario` can state a `defer` and a `refuse` outcome with
+    the reason, the whole set of work the Run waits behind, its effective priority, and
+    how long it has waited. `an-impossible-ask-holds-no-queue` and
+    `a-queue-restates-what-it-waits-behind` are green regression Blueprints, and
+    `conformance/an-impossible-ask-empties-no-fleet` drives the same world through the
+    real control plane in the Lab.
+  - `TestAnImpossibleAskLeavesThisFleetRunning` is the same claim through the public
+    API against the daemon's own fleet, and the order is what makes it: the impossible
+    Run is submitted first, so it is the older wait and outranks every later arrival of
+    its own class. The existing case submits them the other way round and never had a
+    wait for a later Run to be ordered behind.
+  - `safety.nothing_waits_behind_an_impossible_ask` is the law: Mercator never tells a
+    Run it waits behind a Run the record already said no machine in the fleet can take.
+    It is replayed out of the public log, it has its deliberate failing case in the
+    registry, and reverting the queue fix fails the conformance execution on it.
+  - `safety.service_class_admission_order` had to be amended rather than left alone,
+    which is the Lab refusing the fix until the law was stated properly. It forbade
+    admitting the Run that fits while the impossible Run outranked it, and
+    `liveness.aging_prevents_starvation` forbids leaving that machine idle, so the two
+    laws contradicted each other on exactly this world. The ordering is over Runs
+    waiting for capacity, and a Run waiting for capacity to be added is not in that
+    queue.
+  - Judgment call. The corpus entry lands with the repair rather than before it. This
+    is a refutation response to a committed slice, and a Blueprint committed first
+    would have been a red commit stating a law the branch did not hold yet. Every claim
+    here has a case that fails without its fix, verified one at a time: the changed
+    wait as an idempotency conflict, the impossible ask as an idle machine beside a Run
+    that fits it, the deadline as a Run still queued ten minutes past it, and the
+    suppression as two identical facts over two advances.
+  - Still open, and deliberately not smuggled in here. A Run nothing in the fleet can
+    hold stays queued past its class's maximum queue delay until its deadline refuses
+    it, and `liveness.aging_prevents_starvation` calls that starvation on any execution
+    that observes it inside that window. What admission should do at that bound is a
+    decision about refusal policy rather than about the queue's order, and it needs its
+    own slice.
+  - Refuted, and repaired in the entry below. Three of the claims here held only for a
+    fleet of one machine, which is the only shape anything recorded in this entry ever
+    built. Both waits were classified by asking whether any candidate carried a Rental
+    Schedule, so the exemption switched off for the whole workspace as soon as anything
+    was running anywhere in it; the "self-correcting" bullet has the defect backwards, a
+    machine that is both occupied and too small holds the queue for exactly as long as
+    it is occupied; and the law could fail only on the ordering step, because it decided
+    which Runs the ordering exempts with the same predicate the production code did.
+
+- [x] 2026-07-26: Classify a wait from what the fleet refused. Two reviewers refuted the
+  entry above. The queue read the two waits off a proxy for what each machine is doing,
+  and every fixture in the slice weighed the fitting Run against an idle fleet, which is
+  the one state in which that proxy agrees with what the machines actually said.
+  - `NO_CAPACITY_FITS` was assigned when no candidate carried a Rental Schedule, and
+    `scheduler.scheduleEvidence` attaches one to every candidate whose Rental holds a
+    Booking whether that candidate is feasible or not. So one machine busy anywhere in
+    the workspace recorded every unplaceable Run as a wait for capacity to come free,
+    which keeps the queue, and a Run that fitted an untouched machine was ordered behind
+    an ask nothing in the fleet can satisfy until that ask's four hour deadline cleared
+    it. Because the classification is re-derived every tick, a continuously busy machine
+    kept the exemption switched off for the whole fleet.
+  - A refusal now states where it is made whether waiting ends it. Capacity the offer
+    says is spent, a Rental Schedule with no open Booking position, and an offer an
+    earlier launch attempt found unavailable are capacity somebody is spending and it
+    comes back. Everything else refused for what the machine is or for what nobody
+    published. `domain.CandidateDecision.CouldHoldOnceFree` is the question the queue
+    asks of one machine, and the two waits are the answer summed over the fleet.
+  - Room is deliberately a refusal waiting does not end, which is a judgment call.
+    Nothing in this tree collects garbage, Mercator observes no other tenant's content
+    and commands no removal of it, so a machine short of room is short of room until
+    somebody adds a disk. It is also the safe direction: a refusal wrongly said to end
+    on its own makes later arrivals wait behind a Run the machine may never take, and a
+    refusal wrongly said to be permanent only stops that Run from holding the queue,
+    where its class bound and its deadline still govern how long it waits. When a
+    runtime reclaims space, what it reclaims will be a fact `Violation.EndedByWaiting`
+    can be set from.
+  - Everything a wait says is now answered over the machines that could hold the Run
+    once free. What it waits behind, because naming work on a machine that will refuse
+    it again tells an operator to wait for nothing. And the projected wait, which is
+    what the deadline rule reads: a Run needing 900GB of a 200GB machine inherited the
+    six hours somebody else declared as a max runtime on it, and was closed
+    `DEADLINE_UNREACHABLE` at its first pass with zero seconds queued, while the
+    identical submission against the identical idle machine was queued and kept for four
+    hours. `a-wait-nobody-can-end-is-not-a-missed-deadline` is that case.
+  - Only Placement may set what a Run is waiting for. A Run held behind work that
+    outranks it weighed no machine at all, so that deferral leaves what the fleet last
+    said standing. Otherwise the exemption undid itself: an impossible ask holds no
+    queue, so it is itself ordered behind the first Run that outranks it, and reading
+    that ordering as an answer about capacity put the ask back in front of the fleet it
+    can never use. `a-wait-the-queue-caused-says-nothing-about-capacity` states it.
+  - A deferral records the fleet it was measured against: how many machines were weighed
+    and how many of them could have held the Run. The reason alone cannot be checked
+    against anything, and a Blueprint can now state both.
+  - `safety.nothing_waits_behind_an_impossible_ask` is stated over that evidence rather
+    than over the reason, which is what the second reviewer's mutation showed it had to
+    be. Deleting the `NO_CAPACITY_FITS` branch reinstated the fleet-emptying defect in
+    full and every one of the thirty-six laws passed, because the law computed
+    impossibility with the same predicate the production code decided the queue with.
+    It now fails by name on exactly that mutation. `safety.service_class_admission_order`
+    reads the same evidence, so the two laws cannot disagree about which Runs are in the
+    queue.
+  - The corpus states the busy fleet at every level.
+    `a-busy-fleet-holds-no-impossible-ask` is the reviewer's own world: two machines,
+    one working for another 45 minutes, and the 50GB Run takes the idle one.
+    `conformance/an-impossible-ask-empties-no-fleet` is two machines with one of them
+    five hours into work of its own, and it now asserts that the Run that fits was never
+    told to wait at all. `TestAnImpossibleAskLeavesABusyFleetRunning` is the same claim
+    through the public API against a node that is already running something.
+  - Every claim has a case that fails without its fix, verified one at a time by
+    mutating the production code and running the fixture: the classification as three
+    green Blueprints and the daemon case, the deadline as a Run refused at its first
+    pass, the ordering clause as a record naming the impossible ask, and the law as a
+    named invariant failure at L1.
+  - Still open, unchanged by this repair. A Run nothing in the fleet can hold stays
+    queued past its class's maximum queue delay until its deadline refuses it, and
+    `liveness.aging_prevents_starvation` calls that starvation on any execution that
+    observes it inside that window.
+
 - [x] 2026-07-25: Answer the second review of the prewarming commit. Two
   reviewers refuted four things and every one of them held: an image's
   preparation content was the empty string whenever nobody pinned the image, the
@@ -1484,6 +2867,992 @@ complete because it works against a live provider.
   identity. Placement rejects an unstated lane, refuses to queue behind one-shot
   capacity, and records `launch_ephemeral`. All four backends declare ephemeral,
   which is what they do today.
+- [x] 2026-07-26: Append a decision rather than replacing one, and record the
+  decision a Run that found nothing was never given. A Booking Decision now names
+  what it supersedes and why, its identity is derived from its own recorded
+  content, and Placement weighing the whole fleet and placing the Run nowhere is a
+  fact in the record instead of a number thrown away.
+  - The audit hole this closes is one the plan disclosed twice and left open both
+    times, under the disk slice and again under its corpus judgment calls: a Run
+    that found no feasible offer recorded no Booking Decision at all. Its whole
+    account of itself was a reason code and two counts, so no candidate, no
+    rejection and no schedule the wait was projected from survived anywhere, and
+    every rule the rest of this phase needs reads decisions that were written.
+    `safety.locality_is_never_infeasibility` had nothing to read on the one kind of
+    Run whose refusal is the point.
+  - The refusal is recorded with the deferral it caused, in one commit, and is
+    suppressed with it. A Run waiting an hour against an unchanged fleet would
+    otherwise write sixty decisions nobody asked a different question of, and what
+    an operator needs is the evidence from the moment the answer last changed. A Run
+    held behind work that outranks it records none, because nothing weighed a
+    machine on its behalf and the queue is the whole of what happened to it.
+  - A re-decision names its predecessor and gives a reason a reader can check
+    against the Run's own stream: `PREVIOUS_LAUNCH_FAILED` where the machine the
+    last decision chose refused to start the work, and
+    `PREVIOUS_DECISION_SELECTED_NOTHING` where the last decision placed the Run
+    nowhere and the fleet was asked again. Those are the only two ways Mercator
+    decides twice about one Run, and both are facts already in the log, which is why
+    the reason is read off the state rather than passed down by the caller.
+  - Supersession is an input to the evaluation and part of the identity hash rather
+    than a field stamped on afterwards. Two answers about one unchanged fleet at one
+    instant are different decisions exactly because the second replaces the first,
+    and an identity that ignored that would give them one ID and one event ID, so
+    the second append would collide with the first inside a stream.
+  - `domain.BookingDecision.Identity` derives the ID from the record: the Run, the
+    revision, the moment, the model, the candidates, what was chosen, and what this
+    answer replaces. The Booking is deliberately outside it, because a Booking's own
+    identity is derived from the decision ID and a dispatched Booking carries a
+    state its decision never claimed.
+  - `safety.decisions_are_never_rewritten` and `safety.decision_is_reproducible` are
+    the two new laws, and they are the pair. One ID means one decision, and every
+    answer after the first names the record immediately before it and gives a
+    reason; and re-deriving an ID from the content the record carries yields the ID
+    the record carries. Without the second the first is defeatable by editing a
+    decision and its ID together, which is a chain of consistent-looking records
+    assembled after the fact.
+  - `GetBookingDecision` becomes `GetBookingDecisions`, the API answers with the
+    whole chain oldest first, and callers that want the current answer take its end
+    where a reader can see them doing it. The console keeps the chain in its own
+    projection and lists it under the decision that stands: holding one decision per
+    Run meant a re-placement erased the answer it replaced, and the refusal a queued
+    Run is waiting on vanished the moment anything else was decided. Conformance
+    evidence carries the chain for the same reason.
+  - The Run projection asks whether anything was chosen rather than whether anything
+    was decided. A queued Run has a decision now, and reading the presence of one as
+    placement reported every queued Run as requested again.
+  - `a-changed-decision-names-the-one-it-replaces` (green) is the corpus half: a
+    Rental whose schedule is full refuses the only Run in the world, the refusal is
+    recorded, six minutes later the running Booking finishes and a position opens,
+    and the answer that replaces the refusal names it. The re-decision is caused by
+    the fleet changing rather than by a machine refusing a launch, because a refused
+    launch is a fault and a placement fixture has none.
+  - The launch-failure half is stated at L1 by
+    `TestAReplacementNamesTheDecisionItReplaces` over
+    `a-published-rate-is-not-what-a-machine-does`, where the fleet does not change at
+    all and the machine refuses the start. Both answers survive with distinct
+    identities, and the one that no longer stands is the only record that the Run was
+    sent to the machine with the clean history first.
+  - `TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout` reads the refusal off the
+    decision route now, through the real daemon and a real enrolled node, rather than
+    off the daemon's own answer with the struck-out machine asserted one layer down.
+    That is the disclosure above closed at the layer it was disclosed at.
+  - Every claim has a case that fails without its fix, verified one at a time.
+    Dropping the supersession fails `safety.decisions_are_never_rewritten` by name on
+    the real launch-failure re-placement and fails the corpus Blueprint on both the
+    predecessor and the reason. Editing a recorded decision in place fails
+    `safety.decision_is_reproducible` on the canonical execution. Naming the wrong
+    reason for a refused launch fails the L1 case. Dropping the recorded refusal
+    answers `404 DECISION_NOT_FOUND` from the decision route in the daemon case and
+    leaves `an-impossible-ask-empties-no-fleet` with a Run nothing could place and no
+    decision to be explained from.
+  - Judgment calls. The corpus names a superseded decision by position and the runner
+    resolves the ID off the record there, because Mercator hashes decision IDs and a
+    fixture predicting one would be asserting the hash rather than the chain; the
+    predecessor is then checked by identity, since naming a decision is the claim. The
+    chain is required to be linear, each answer naming the record immediately before
+    it, because a chain that skips a link is one a reader cannot walk and they are
+    back to taking the last entry.
+
+- [x] 2026-07-26: Answer the second review of the appended-decision commit. Two
+  reviewers refuted five things in it, one blocking. All five were real, and the
+  blocking one is a workspace-emptying stall the exemption two entries above this one
+  was supposed to have removed.
+  - A fleet that publishes nothing an ask matches was recorded as
+    `NO_FEASIBLE_OFFER`, a wait for capacity to come free, which is the one wait the
+    queue makes every other Run respect. So the strongest impossible ask there is was
+    the only one nothing exempted. An offer query is a search on the shape asked for,
+    which `internal/adapter/vast` builds out of `req.Resources`, so a Run asking for
+    eight GPUs nobody sells gets zero offers, zero candidates, and a wait that keeps
+    the queue, ages past standard work in about eleven minutes and past interactive in
+    thirty, and holds every other Run in the workspace for as long as its own class
+    allows. Twenty four hours for batch. The fleet meanwhile goes on selling exactly
+    what the work behind it asked for. The state never self-corrects, because the
+    reason and the empty `Behind` list are unchanged on every later tick and the
+    deferral is therefore recorded once.
+  - The root cause is the shape of the record rather than either reading of it. The
+    deferral carried the fleet's answer as two loose integers, and their zero value
+    meant two opposite things: a fleet that published nothing an ask matches weighed
+    no machines, and so did a wait the queue caused on its own account. Neither side
+    could tell them apart and each guessed differently. Production guessed from the
+    reason code. The Lab guessed from the counts, keeping whatever was previously
+    established whenever nothing was weighed, so it could not see the zero-offer ask
+    at all and the corpus could never go red on the stall; and on a zero-weighed
+    answer following a `NO_CAPACITY_FITS` one the two guesses contradicted each other
+    in the other direction, with the Lab failing a history production wrote on purpose.
+  - So the answer is typed where it is created. `domain.AdmissionDeferral.Fleet` is a
+    `*FleetAnswer` that is absent when the fleet was never asked,
+    `AdmissionDeferral.HoldsNoQueue` is the one rule both sides read off it, and the
+    reason code is derived from that rule rather than decided beside it. A fleet that
+    published nothing an ask matches is `NO_CAPACITY_FITS`, which is what it always
+    meant. A Blueprint states the answer as `"fleet": {"weighed": n, "could_hold": m}`
+    or as `"fleet": {"absent": true}`, and asking for two zeroes is no longer a way to
+    say either.
+  - `safety.nothing_waits_behind_an_impossible_ask` is a law about the ordering now,
+    which is what its name says, and it reads the same rule production orders the
+    queue on. Its previous claim to be independent of that rule was worth less than it
+    looked: what it was independent of was the reason code, and the price was a second
+    reading of the evidence that disagreed in both directions at once.
+  - `an-ask-nothing-matches-holds-no-queue` is the new claim, red before and green
+    after: the patient ask waits, twelve minutes promote it past the class that arrives
+    next, and the Run that arrives is not ordered behind an ask nothing in the fleet
+    even matches.
+  - `a-queue-restates-what-it-waits-behind` used an empty fleet as a convenient way to
+    get three Runs queued, so every ordering it asserted was one that should not have
+    existed. It has a machine with every Booking position taken now, so the work behind
+    really is waiting for the same machine, and the two orchestrator cases that made
+    the same assumption get a machine whose own capacity evidence says it is busy. That
+    is a better fixture for each of their subjects.
+  - The deferral suppression claimed to fire on an unchanged fleet and compared two
+    labels. A Run waiting on `NO_CAPACITY_FITS` has an empty `Behind` list by
+    construction and a reason that does not move, so exactly one decision is ever
+    recorded for such a Run however the fleet changes underneath it. That is an audit
+    hole and a blind spot: every law about Placement is stated over recorded decisions,
+    so a machine that arrives while a Run waits and is struck out for unknown locality
+    is named in a decision nothing ever appended, and
+    `safety.locality_is_never_infeasibility` reads recorded decisions. Suppression now
+    compares `domain.BookingDecision.FleetVerdict`, the machines weighed and what each
+    was refused for. The numbers beside them are left out deliberately: a projected
+    start a minute nearer than it was is the same answer about the same fleet, and
+    comparing a decision whole would record one on every tick of the sweep.
+    `a-fleet-that-changed-is-recorded-again` states it through an idle lease that runs
+    out under a waiting Run.
+  - The chain claim was unconstrained at every production read path. Three one-line
+    reversions each left the tree green: collapsing `GetBookingDecisions` to its last
+    entry, truncating the decision route's response, and having the console reducer
+    keep only the newest decision. The Lab corpus and the launch-failure case both read
+    `booking_decided` events straight out of the log, and the only conformance
+    assertion on the chain required exactly one entry.
+    `TestTheChainAReaderGetsHoldsEveryAnswer` reads the chain of three a Run gets when
+    two machines refuse it in turn, and `TestTheDecisionRouteAnswersWithTheWholeChain`
+    reads the same thing over HTTP through the real daemon.
+  - The console had a second defect under the same claim. Its live event schema dropped
+    `supersedes` and `supersedes_reason` on decode, and `DecisionPanel` reads both, so
+    a supersession only ever rendered for a page that had refetched the chain over
+    REST. A console watching a Run be re-placed showed two answers with nothing saying
+    that either replaced anything.
+  - The conformance evidence keeps the whole chain and no longer claims a length it
+    cannot produce. A trial asks for one launch on one machine and states
+    `MaxPreStartAttempts` of 1, so its chain has one entry by construction. A claim
+    stated where it cannot be reached is the defect, and it is held at the two layers
+    above instead.
+  - `safety.decisions_are_never_rewritten` had four clauses and one deliberate failing
+    case, which drives the clause that returns first.
+    `TestEveryClauseOfTheSupersessionRuleCanFail` shows each of the four failing on the
+    one record it exists to catch, including the linearity the entry above states by
+    name: nothing in the tree produced a chain longer than two, and two is the length
+    at which a chain that skips a link and a chain that does not are the same chain.
+    This is the treatment `TestEveryClauseOfTheCandidateIdentityRuleCanFail` already
+    exists for, and the multi-clause law was added without it.
+  - Every claim has a case that fails without its fix, each verified by mutating the
+    production code and running the case: the classification as a red Blueprint on the
+    zero-offer ask, the suppression as a red Blueprint on a fleet one machine smaller,
+    the chain at both read paths as the reviewers' own reversions, and each of the three
+    supersession clauses as the reviewer's own mutation.
+  - Judgment calls. Exempting a zero-weighed ask costs the one thing the old reading
+    bought: while a fleet publishes nothing to anybody, class ordering is not enforced,
+    so the first machine to arrive can go to whichever Run the sweep reaches first
+    rather than to the one worth most. That is worth paying. Telling a Run it waits
+    behind another when no machine exists is a queue an operator cannot act on, the
+    ordering is restored the moment anything is published that either Run could use,
+    and the alternative is a workspace held for a day by one ask for a shape nobody
+    sells. `FleetVerdict` leaving out the estimates is the same kind of call in the
+    other direction: it still suppresses a candidate whose refusals are unchanged and
+    whose established start moved, which is a far narrower hole than sixty decisions an
+    hour, and every change the laws read is a change to a refusal.
+
+- [x] 2026-07-26: Answer the third review of the appended-decision commit. Two
+  reviewers refuted eight things in it, one blocking. Seven were real. All seven
+  were the same mistake in different places: a record claiming more than the
+  evidence under it could support.
+  - The blocking one is what an empty offer answer means. The whole classification
+    rests on the premise that a search returning nothing has said the fleet sells no
+    machine of that shape, and neither marketplace adapter in the tree published an
+    answer that could carry it. `internal/adapter/vast` filtered on machines nobody
+    is on, so every sold-out moment answered exactly as a shape Vast does not sell,
+    and on a marketplace a popular card is rented most of the time: a Run against a
+    sold-out market lost its place in the queue, and the first machine to come free
+    went to whichever Run the sweep reached first. Shadeform filtered on
+    availability twice over, in the query and per region, on the phase 5 conformance
+    provider. Both search for the machines now and publish the ones somebody else is
+    on as capacity that is not available, which is how every other occupied machine
+    in this tree is published and which the scheduler already refuses as a wait
+    rather than as an impossibility. Vast orders the free ones first so the limit
+    still spends itself on capacity a Run can have today.
+  - Vast also asked for exactly the accelerator count, and it sells asks against
+    power-of-two partitions of a machine, so a Run wanting three cards matched
+    nothing in a market abundantly selling two, four and eight. It asks for at least
+    what the Run needs. The ask publishes its true card count and its true price, so
+    a larger partition is ranked on what it costs rather than excluded from the
+    fleet's answer, which is the same fix as the one above: the search may not decide
+    on the fleet's behalf that a machine is not for sale.
+  - A node that could not measure its disk published the zero its failed
+    measurement left behind. `capability.DiskFacts` carries `Known` precisely so a
+    machine that could not look is distinguishable from a machine with no room, and
+    the offer threw that half away. Every Run carries a disk floor, so every Run in
+    that workspace was refused, every refusal read as a machine that can never hold
+    the work, and the whole workspace was recorded as work no capacity can ever take
+    and lost its queue ordering until a heartbeat happened to succeed. The offer
+    states both halves now, and a machine that answered nothing is a third answer
+    in the fleet's own account of a wait: `FleetAnswer.Unstated`, reason
+    `CAPACITY_UNSTATED`, which holds the queue because the machine may be able to
+    take the Run the moment it speaks. Placement still refuses it, because landing
+    content on a disk nobody measured is a launch nobody can promise.
+  - The queue exemption was a standing claim. `HoldsNoQueue` kept whatever was last
+    established whenever a deferral carried no fleet answer, and a deferral the queue
+    caused carries none by construction, so a Run outranked by a steady stream of
+    arrivals never asked the fleet again and its exemption outlived every machine
+    that arrived afterwards. Work of its own class that arrived later overtook it.
+    Only the latest answer may make the claim now. Losing it on a queue-caused wait
+    costs nothing that was not already lost: a Run only fails to renew it while
+    something outranks it, and whatever it would have held up is held up by that work
+    anyway.
+  - The suppression rewrite did not close the blind spot it was written for. Its
+    justification was that every change the laws read is a change to a refusal, and
+    the law it named reads no refusal at all: what a machine holds is priced rather
+    than refused, on purpose, so a candidate whose image locality went from known to
+    a silence produced a byte-identical list of refusals against the same bound on
+    the same path, the decision was suppressed, and
+    `safety.locality_is_never_infeasibility` reads recorded decisions. `FleetVerdict`
+    is now what each machine was struck out for, what it was found holding, and what
+    every answer it published was scored at. The numbers are still left out, because
+    they move on their own.
+  - A present `FleetAnswer` asserted the fleet was asked and the record could not
+    support it. `CollectionReport.ConnectionsQueried` was derived from the offers, so
+    a connection that answered with nothing and a connection nobody contacted
+    produced the same empty list, and `ExcludedConnections` existed for exactly that
+    distinction and was written nowhere. The console renders all three lists, so the
+    fabrication was operator-facing. The census travels with the offers now, because
+    it cannot be derived from them: `broker.fanOut` names every connection it
+    skipped, and the orchestrator reads placement capacity through `CollectOffers`.
+  - `an-ask-nothing-matches-holds-no-queue` could not model the failure it claimed,
+    because neither simulated world read the requested shape. Both answer it now for
+    marketplace listings, and only for those: a listing is a search result and a real
+    search filters it, while capacity Mercator holds is listed whole and refused in
+    the record, which is the difference between a catalog and a fleet. The Blueprint
+    publishes a 200GB machine, answers a 900GB ask with nothing, and its second Run
+    is placed, which is the stall the case exists for.
+    `a-machine-that-could-not-look-is-not-a-machine-with-no-room` is the disk silence
+    at the same level, which no fixture could state before.
+  - `safety.a_silence_is_not_an_answer_about_capacity` recounts every recorded wait
+    off the decision it was read off, the way `silenceWasTakenBackOut` recomputes what
+    a candidate was charged. A scheduler that miscounts its own evidence agrees with
+    itself perfectly, and only a reading taken from the record's other half catches
+    it.
+  - Partly upheld: the console. The defect the last entry recorded was not
+    producible. `DecisionPanel` is only ever fed by `useRunDecisions`, which resolves
+    the chain over REST through a contract that already carried the supersession, so
+    no page could show two live answers. The projection the fix was aimed at,
+    `Workspace.runs[].decisions`, was written by the reducer and read by no
+    component, so it is deleted: it was a second store of facts the Run's own page
+    already reads. The reviewer's replacement claim does not hold.
+    `resourceKey.runDecision` is invalidated on `booking_decided` in
+    `Workspace.invalidateMessage` and has been since the canvas became the console
+    entry point.
+  - Rejected: that `a-fleet-that-changed-is-recorded-again` is unreliable on this
+    host. It was reported failing once at `20d3bb0` on amd64 Linux and could not be
+    reproduced in more than five hundred further executions here, single and heavily
+    parallel, on the case alone, across the whole corpus, and across the four packages
+    together. The harness is
+    single threaded on a scripted clock, the event log is read in global-position
+    order rather than by timestamp, and the only way the reported failure can occur is
+    for the second evaluation to have seen two machines, which requires the world
+    clock not to have advanced past the idle lease. Nothing on that path reads a real
+    clock. The candidates the reviewer named are both ruled out: the in-memory SQLite
+    log is opened under a fresh name per session, and the `occurred_at` fallback
+    cannot reorder a scan that orders by position. Left open with the evidence rather
+    than papered over with a retry.
+  - Judgment calls. `domain.ResourceInventory` states whether a disk was measured
+    rather than leaving it to be inferred from the bytes, so a publisher that sold a
+    disk says so and a publisher that forgets is refused loudly. A double that states
+    its own offers states its own census, because Go resolves an embedded method
+    against the embedded value and a census inherited from the fake adapter answers
+    about offers the double does not publish; that bit immediately in ten
+    orchestrator cases and a green Blueprint, which is the right way for it to bite.
+    A Vast launch is refused by name when its ask has been taken since the decision,
+    rather than being attempted and failing at the provider, because the search no
+    longer excludes those asks and a create Vast refuses would reach the record as a
+    provider failure instead of as somebody getting there first.
+  - Every claim has a case that fails without its fix, each verified by mutating the
+    production code and running the case: the locality flip as a domain case on
+    `FleetVerdict`, the disk silence as a red Blueprint four ways over, the shape
+    filter and the zero-offer exemption as the two halves of one red Blueprint, the
+    exemption's freshness as the ordering in
+    `a-wait-the-queue-caused-says-nothing-about-capacity`, and the recount as the
+    deliberate failing case beside every other invariant.
+- [x] 2026-07-26: Hold a Run to the bounds it declared, and rebuild the read model
+  the class rename changed underneath. The class a Run states is the exchange rate
+  every candidate is scored at, so a class can always be talked into a costlier or a
+  later machine; the bounds are what say how far, and neither of them was fully
+  held.
+  - The class deadline bounded waiting and not starting. It was asked exclusively of
+    a Run being told to wait, so a Run whose capacity came free after the moment its
+    class says the answer stops being worth having was placed by the very pass that
+    should have refused it: it spent the money to produce an answer nobody was
+    waiting for, and the overshoot was however long the sweep interval is.
+    `stepAdmit` asks it on both ways out now. A Run being deferred is asked by
+    `deferOrRefuse`, which keeps recording what was holding it, and a Run nothing is
+    holding is asked before Placement and refused `DEADLINE_UNREACHABLE` with no
+    fleet answer beside it, because nothing weighed a machine for it and that
+    refusal is about the clock. `domain.Admission.DeadlinePassed` is the elapsed half
+    of the rule said once, and `DeadlineUnreachable` is stated over it.
+  - No Blueprint could state a bound on cost, which is why nothing here could catch
+    the other half. `COST_LIMIT_EXCEEDED` has been enforced in production since the
+    unpriced-machine pass and was reachable by no fixture, so everything this corpus
+    could say about money was which machine won on price. `request.max_cost_usd` is
+    the vocabulary, translated once in `WorkloadForRun` so both simulators read one
+    statement, and a budget of zero dollars is refused at load: a bound that refuses
+    every quoted machine in the world is a fixture to write on purpose.
+  - `safety.class_bounds_honoured` is the law. No Run was placed on a machine
+    costing more than its caller allowed, on a machine nobody quoted under a bound
+    on dollars, or past the moment its class states, measured from the deferral that
+    started its wait. The two are one law because they are one failure, and both
+    halves are read off the decision and the public log rather than off the
+    scheduler's own arithmetic. The maximum queue delay is deliberately not restated
+    in it: that promise is what `liveness.aging_prevents_starvation` is stated over,
+    and two laws over one bound let a repair satisfy one of them and be believed.
+  - The migration left the read model behind. The service class rename rewrites the
+    vocabulary inside the event log, and the Run projection is stored rather than
+    recomputed, so every Run recorded before a Run stated its class read back with
+    no class at all through `GET /v1/runs`, for the life of the installation: a
+    rebuild happens when the projection's schema version is not the current one, and
+    a database that predates the rename already carries the current version. The
+    migration reports whether it rewrote anything, and a rewritten log marks the
+    projection stale, which is the question the daemon already asks before it
+    replays each Workspace. It is the one migration in this tree with that problem:
+    the legacy run event migration predates the projection table, and the stored
+    revision migration rewrites workload streams, which no Run record is reduced
+    from.
+  - The live placement harness had been stating a superseded vocabulary. Every case
+    in `internal/daemon/node_placement_test.go` submitted
+    `placement.objective: balanced`, a word nothing has decoded since the class
+    replaced it, so each of them was normalised to standard and none of them
+    asserted anything about the class it thought it set. They state a service class
+    now.
+  - Judgment calls. The deadline fixture is L0 only, and that is a consequence
+    rather than a preference: every class's maximum queue delay is shorter than its
+    deadline, so a Run that reaches its deadline has already starved and
+    `liveness.aging_prevents_starvation` calls a Lab execution of that world a
+    violation. That is the same open question this plan has disclosed twice, and it
+    is a refusal-policy slice rather than something to smuggle in beside a law. The
+    deadline is measured from the first deferral in both the production queue and
+    the law, because a Run told to wait for a second reason has not started waiting
+    again. An unpriced candidate fails a stated bound rather than passing it, which
+    is the rule `Preferred` already ranks on, said as a limit. The corpus runner now
+    names the machine a Run a fixture expected to be waiting was actually placed on:
+    being placed appends no admission fact, so the diagnostic read the wait the Run
+    was in beforehand and reported the deadline regression as a Run still queued for
+    want of capacity when the Run had run.
+  - What is left. The public API still drops `objective` silently, the way any HTTP
+    surface drops a field its schema does not carry, so a caller who kept sending
+    `fastest_start` after the upgrade is scored as standard with nothing in the
+    record saying so. The corpus loader refuses the superseded word by name and the
+    door does not. Refusing it there means holding a list of retired vocabulary at
+    the door, or making the whole operator API strict about unknown fields, and
+    which of those is right is a decision about the wire rather than about the class.
+
+- [x] 2026-07-27: Make waiting a phase that ends, and prove aging is what ends it in
+  the Run's favour. This closes the one thing this plan has disclosed under three
+  separate entries and deferred each time: a Run kept waiting longer than its class
+  allows went on waiting.
+  - The maximum queue delay was the one number on a class that nothing acted on. The
+    ordering derives its aging rate from it, `liveness.aging_prevents_starvation` holds
+    every execution to it, and admission itself only ever ended a wait at the class
+    deadline. So standard work waited four hours past a thirty minute promise, and
+    opportunistic work, which declares no deadline at all, waited for ever. A caller
+    learned nothing while Mercator spent the whole interval deciding it could not help.
+    `domain.RefusedQueueDelayExceeded` is the answer, and `deferOrRefuse` is the one
+    door it is asked at.
+  - It is asked only where waiting continues, which is a judgment call. A Run whose
+    capacity came free a moment after the bound has stopped waiting, and refusing it
+    there would spend the whole wait and then throw away the answer it was for. The
+    deadline is asked at both doors because it is a different question: whether the
+    answer is still worth producing at all.
+  - It is measured off elapsed time rather than off a projection, exactly as
+    `DeadlinePassed` is. A bound that has gone by is a fact about the clock, and the
+    tree already has the case for refusing on a projected wait nobody measured:
+    `a-wait-nobody-can-end-is-not-a-missed-deadline` is a Run closed at its first pass
+    on somebody else's runtime.
+  - `liveness.aging_prevents_starvation` had to be strengthened rather than left
+    alone, and this is the finding that mattered most in the slice. The law said no Run
+    sits queued past its class bound, which a refusal at that bound satisfies by
+    construction: once admission ends every wait it cannot honour, refusing everything
+    is a passing execution and the law has no teeth left. Its second half now reads the
+    refusals. A wait ended at the bound is starvation unless the record says the wait
+    could not have ended, and the whole of that exemption is the fleet answer saying no
+    machine it published could ever hold the Run.
+  - The second half is deliberately stated over waits and never over effective
+    priority. Production orders the queue on `Admission.EffectivePriority`, and a law
+    that read the same function would be checking the aging term against itself:
+    deleting the term makes the ordering wrong and every reading of it agree, which is
+    the mutation this slice is required to be red for. What the law reads instead is the
+    derivation the rate is built from, that a Run outranks anything arriving once it has
+    waited half its own bound, and the only thing it takes from the class table is that
+    bound. Work admitted past such a Run must itself have waited half of its own.
+  - That reading is also what keeps a fleet too small from being called starvation. A
+    machine serving less interactive work than arrives refuses the excess, and every Run
+    admitted ahead of one of those had waited longer than it had, so the law is silent.
+    A Run stepped over by arrivals that had waited nothing is the opposite record, and
+    that is the one it fails on.
+  - `a-batch-run-eventually-runs` is the proof the phase goal asks for, and it is a
+    green conformance Blueprint rather than a repair: aging has existed since the class
+    replaced the objective, and nothing in the corpus asserted it. Every queue fixture
+    before it states one moment of an ordering, and starvation is a claim about what an
+    hour of arrivals does to a Run. One machine, forty one interactive Runs arriving
+    over an hour, and one batch Run at a base priority of twenty. At thirty minutes and
+    thirty seconds the batch Run is worth a hundred and one, the next arrival is the
+    first told it waits behind it, and it takes the position that comes free.
+  - It is driven in thirty second advances rather than to completion, which is a
+    judgment call about the driver. `DriveToCompletion` jumps to whatever the world
+    still owes, so the sweeps between the last arrival and the next completion happen
+    inside one advance with nothing reasoning in the middle of them, and those sweeps
+    are the entire fixture: a freed Booking position is given to whatever outranks the
+    rest of the queue on the sweep that notices it.
+    `an-impossible-ask-empties-no-fleet` is driven to the world's horizon instead, so it
+    reaches five hours in one advance with both bounds behind it, and the bound its
+    refusal names is the earlier one. This entry first recorded that Run as refused
+    `DEADLINE_UNREACHABLE` and presented it as a consequence of the driver, which review
+    refuted. The review bullet below is where that is corrected.
+  - `a-class-with-no-deadline-still-stops-waiting` is the refusal at L0 and
+    `conformance/a-queue-delay-bound-is-refused-loudly` is the same claim at L1. Both
+    are the opportunistic case on purpose, because it is the one where nothing else can
+    end the wait, and the second is what the starvation law's exemption is falsifiable
+    through. It landed as a target Blueprint declaring `refused_queue_delay` and was
+    promoted with the production change, so the corpus was red for the behaviour before
+    the behaviour existed.
+  - The public contract had never described the queue at all. `phase` was an
+    undocumented string, and `service_class`, `queued_since`, and `admission` were
+    emitted over `GET /v1/runs` and absent from `openapi.json`, so the state a queued
+    Run is in was readable in practice and unstated in the contract. That is a gap the
+    queued-phase and class-rename slices left, and this is where the new refusal reason
+    an operator reads had to go, so all of it is described now: the phase enum, the six
+    admission reasons, the fleet answer a wait rests on, and the work named ahead.
+  - The invariant names the slice asked for, `liveness.no_run_starves` and
+    `safety.class_ordering_respected`, are the two laws this tree already holds under
+    `liveness.aging_prevents_starvation` and `safety.service_class_admission_order`.
+    They are the same rules over the same records, the second is already stated as an
+    overlap in time, and renaming them would have been thirty documentation lines and
+    two test files of churn for no change in what is checked.
+  - The bound is unchanged at `longestClassQueueDelay()`, which is two hours, and that
+    is chosen with `longestBound()` in mind: `liveness.admitted_run_progress` already
+    holds every execution to twenty four, so this rule lengthens nothing. A bound past
+    that one would have made every fixture in the tree longer to state a rule about the
+    queue.
+  - Every claim has a case that fails without its fix, verified one at a time. Deleting
+    the aging term from `Admission.EffectivePriority` fails
+    `a-batch-run-eventually-runs` on `liveness.aging_prevents_starvation` by name,
+    naming the arrival that overtook the batch Run and the wait it had accumulated.
+    Deleting the queue-delay branch from `deferOrRefuse` fails
+    `conformance/a-queue-delay-bound-is-refused-loudly` on the same law's first half.
+    The strengthened clause has its own cases in `internal/lab`. Younger work admitted
+    past a Run later refused is a violation, a wait past its bound refused under
+    another name is a violation, a Run the fleet could hold when its wait began and not
+    when it ended is a violation, and a Run Mercator itself placed a machine for is a
+    violation; while a fleet that held nothing from the first deferral to the refusal,
+    older work admitted ahead, another tenant's admission, and a Run placed again after
+    a failed launch are all silent.
+  - Two reviewers refuted parts of this slice on 2026-07-27, five of the six findings
+    were real, and all five are repaired. Every repair has a case that is red against
+    the reading it replaces, driven one at a time.
+    - Admission named the later of two broken bounds. `stepAdmit` asked only the class
+      deadline on the way to Placement, so a Run past both bounds was closed
+      `DEADLINE_UNREACHABLE` with its queue delay unmentioned:
+      `an-impossible-ask-empties-no-fleet` refused `run-impossible` after 17940 seconds
+      against the 1800 its class allows and named the four hour deadline.
+      `Admission.BoundAlreadyBroken` is the one place both doors take the word from now,
+      and it names the promise Mercator broke first. Naming the elapsed deadline is
+      unreachable for every class in the table as a result, which is a fact about a
+      table where every queue delay is shorter than its own deadline rather than a hole:
+      `DEADLINE_UNREACHABLE` is what a projected miss is called, which is the case only
+      `deferOrRefuse` can see. `a-machine-that-came-free-too-late-is-not-a-start` changes
+      reason with it and proves exactly what it did before, that the Run is refused
+      rather than started on a machine that came free too late.
+    - The starvation law read the reason code, so the record above went unjudged by both
+      of its halves at once: the first skips a Run that is closed, and the second
+      filtered refusals on `QUEUE_DELAY_EXCEEDED` and never saw it. It reads the wait
+      against the class bound now, which is what this registry says about reason codes
+      everywhere else.
+    - Both admission laws replayed every tenant in one flat pass while Mercator orders
+      each workspace's queue on its own, so an admission in `ws_beta` convicted a
+      refusal in `ws_alpha` of starvation for an ordering neither queue can express.
+      They are scoped to the workspace now, and `WorkspaceID` was on every event the
+      whole time.
+    - Both laws also restarted a Run's wait at each placement, while
+      `runState.queuedSince` is set at the first deferral and never cleared. A
+      replacement after a launch that failed read back as an arrival that had waited
+      nothing, and convicted the queue it was in fact the oldest member of. Membership
+      of the queue still ends at a placement, and the moment a wait began no longer does.
+    - The exemption was read off the refusal's own fleet answer, and the priority door
+      records none, so a Run nothing in the fleet could ever hold was judged as if the
+      fleet had room for it. It is the fleet's last measurement during the wait now,
+      which is what this law's stated assumption always claimed and what production's own
+      reading deliberately does not do: production asks whether other work must be held
+      behind this wait now, where an unrenewed exemption is a claim about a fleet nobody
+      has asked since.
+    - Two reviewers refuted parts of that pass in turn, and three of these five repairs
+      were incomplete. What each of them left is in the entry below.
+    - Rejected, with the evidence. The sixth finding is that feeding `run.queued` into
+      `Starved` refuses a Run for time it spent holding a Booking rather than queueing.
+      `queued` is elapsed time since the first deferral, which is what the class deadline
+      has always been measured over and what `AdmissionDeferral.QueuedSeconds` documents
+      itself as, so subtracting the launch attempts would make the two bounds measure
+      different things while the record states one number for both. A Run that has not
+      started an hour after a thirty minute promise has broken that promise whether it
+      spent the hour queued or spent it failing to launch. Max pre-start attempts bound
+      how many machines a Run may be tried on, the class bounds how long its caller
+      waits, and whichever bites first is the answer.
+  - The review of that review, on 2026-07-27. Four findings were real and one is
+    rejected with its evidence. Every repair is red against the reading it replaces.
+    - "Both laws" is three laws. `internal/lab/invariant_admission.go` holds three that
+      measure a wait, and `noPlacementPastItsDeadline` was left restarting the clock at
+      each placement, contradicting its own doc comment. So
+      `safety.class_bounds_honoured` measured a shorter wait than `stepAdmit` refuses on,
+      and could not fail for any Run placed past its deadline that had been placed once
+      before, which is exactly the shape a failed launch produces. There is one reading
+      now, `waitsBegan`, and all three laws take the moment from it.
+    - The widened exemption survived a placement Mercator itself made. A Run measured
+      unholdable once, given a machine, and sent back through admission carried that
+      first answer for the rest of its life, because every later deferral through the
+      priority door records no fleet at all, so a Run the fleet demonstrably held was
+      exempt from the starvation law outright. The exemption is every answer during the
+      wait now, and a placement is the strongest answer there is that the fleet could
+      hold the Run. The same reading fixes the other direction: a Run the fleet could
+      hold when its wait began, overtaken for an hour, and refused after the machine
+      left the fleet was exempt on the strength of the last answer alone.
+    - Production held both of the readings the Lab was corrected for.
+      `runState.queuedSince` never moves, and `applyToQueue` dropped the moment a wait
+      began at every placement, so a Run deferred, placed, and told to wait again was
+      ranked at its whole wait by its own door and as an arrival by every other Run in
+      its tenant: it aged toward a queue delay measured from a moment nobody else could
+      see while fresh work of a higher class was admitted past it. The queue keeps both
+      facts now, membership and the moment. The finding named a launch failure as the
+      path that reaches it, and that half is refuted: a replacement that finds no
+      machine closes the Run `RETRY_EXHAUSTED` rather than returning it to the queue,
+      and the only other path, expiring a Booking past its latest start and re-placing
+      its Run, is the schedule advancement this corpus still carries as a target with
+      `schedule_advancement` declared missing. The disagreement was latent rather than
+      live, which is why no Blueprint states it: the record is stated in an orchestrator
+      test over the real event log, and the Blueprint belongs to the slice that builds
+      schedule advancement.
+    - Moving `a-machine-that-came-free-too-late-is-not-a-start` to
+      `QUEUE_DELAY_EXCEEDED` was right, and it left `DEADLINE_UNREACHABLE` asserted by
+      nothing in the whole executable specification. The elapsed branch of
+      `Admission.BoundAlreadyBroken` cannot fire for any class in the table, as the
+      entry above concedes, so the projected miss in `deferOrRefuse` is the only thing
+      left that can produce the word at all, and deleting those four lines left every
+      one of the 36 packages green. `a-start-nobody-can-reach-is-refused-at-the-door`
+      states the world that branch exists for: a machine whose Booking queue is full
+      for twenty five minutes, an interactive Run with no wait behind it and both its
+      bounds still ahead of it, and an answer that has already stopped being worth
+      producing.
+    - Rejected, with the evidence. One finding is that the plan's own
+      `safety.class_bounds_honoured` entries claim the opposite of what the law did, and
+      asks for the entries to be corrected. They say the deadline is measured from the
+      deferral that started the wait, which is what the law was written to do and now
+      does: the code was wrong and the prose was right, so the repair is in the code and
+      there is nothing to fix in the entries. The finding is filed twice, once against
+      `invariant_admission.go` and once against this document, and the code half is the
+      first repair above.
+- [x] 2026-07-27: Make a run group a bound admission holds, and let a world take a
+  machine back. Two vocabularies the corpus could write down and nothing could act on.
+  - A group was a string the arrival plan wrote onto a Run and nothing read. It reached
+    the World Tape and stopped there, because `WorkloadForRun` had nowhere to put it and
+    `domain.WorkloadSpec` had no field for it. It moves onto the request the class
+    already travels on rather than staying beside the arrival, so it enters production
+    the way every other statement a caller makes does, and the per-arrival and
+    per-family strings are deleted rather than joined by a second way to say it. A
+    family is a name and a width together, every member declares the width, and half a
+    declaration is refused where the Run enters: a name with no bound would be held to a
+    width of nothing and never placed.
+  - There is no Group aggregate, and that is the judgment call. A group is a label the
+    work carries, so there is nothing to register before submitting and nothing to
+    reconcile afterwards. The price is that members have to agree about their own width,
+    which `safety.group_parallelism_respected` reports rather than resolves: holding a
+    family to a bound half of it never asked for would be worse than saying the record
+    is contradictory.
+  - Admission asks the family first, ahead of the ordering and ahead of any machine
+    being weighed, because it is the only one of the three questions no ordering and no
+    capacity can answer differently. Asking it later recorded the Run as waiting behind
+    work that outranked it while the thing holding it was its own declaration, and let
+    it hold the queue against unrelated work. The wait it produces therefore holds no
+    queue, which is the same exemption an impossible ask carries and for the same
+    reason.
+  - The count is over placements rather than over executions. A member given a queued
+    Booking behind somebody else's work is not running yet and admission will never ask
+    about it again, so counting what runs would let a family of three commit six
+    machines and then run six of them.
+  - `reclaimable` is the term capacity was sold on, stated by the backend that sold it.
+    It is deliberately not derived from the interruption rate offers already carry: a
+    rate is how often a machine has been seen to fail, and refusing work that may not be
+    interrupted has to rest on what the capacity is. Silence means no provider said it
+    sells this capacity that way, which is safe on this fact alone, because what a
+    provider does not sell as reclaimable it does not reclaim, and the Lab enforces
+    exactly that by refusing to preempt a Rental no fixture declared reclaimable.
+  - Interruption permission is decided before the work starts and never after. Nothing
+    Mercator holds survives a machine being reclaimed, so there is no policy about which
+    execution to give up: by the time the provider says so the choice has been made for
+    it. It joins the class table beside the priority, because the two classes that price
+    waiting at a fifth of the rent or at nothing are exactly the two that would rather
+    be cheap than certain.
+  - `world.capacity.preempted.v1` is the first World Tape event that is neither a
+    caller's doing nor Mercator's. The world removes the capacity and the executions on
+    it, and Mercator learns the way it would in production, by looking and finding the
+    launch missing: a provider that has taken its machine back answers no differently
+    from one whose machine finished the work.
+  - An interrupted Run closes failed. Re-placing work whose process already ran is
+    replanning, which is the remaining phase 4 slice, so this one states the permission
+    and the loss rather than pretending to survive it.
+- [ ] Not yet done, and disclosed rather than implied. No production adapter publishes
+  `reclaimable`: the field is on the wire, the class states the permission, the
+  scheduler refuses on it, and the two simulated worlds write it, but the backends that
+  sell interruptible capacity are the phase 5 provider's business. Soft and hard
+  affinity and a blocked-until-ready edge wider than the single Artifact dependency are
+  also still open, and both want a scenario and an invariant of their own rather than a
+  field added quietly beside this one.
+- [x] 2026-07-27: The group bound under review. Two reviewers refuted parts of the
+  slice above. Three findings were real, the fourth was real about its evidence and
+  wrong about the repair it asked for, and every repair is red against the reading it
+  replaces.
+  - Admission is one decision per workspace at a time. The width a family declared was
+    read over the whole workspace event log and written to one Run's stream, and nothing
+    anywhere refused the second writer: a Run's own stream version guards every other
+    transition it makes, and this bound has no such guard. Intake advances a Run inside
+    its own HTTP request, so a caller launching a sweep is exactly the burst that
+    defeats it, and two members of a family declared one wide each took a machine, five
+    times out of five. It is a lock in this process because the log is this process's own
+    SQLite file, so a workspace's admissions are all decided here or not at all; a
+    second control plane over one log would need the log itself to arbitrate, which is a
+    different design rather than a wider mutex. The price is that admissions in one
+    workspace no longer overlap, including the provider call a provisioning decision
+    makes, and admission already replayed the whole workspace log on every pass, so this
+    stage was never the parallel one.
+  - No Blueprint states that and none can. The Lab drives admission one Run at a time by
+    construction, which is what makes it a deterministic specification, and the daemon
+    fleet harness cannot force the interleaving either: six members of a width-one family
+    submitted together over the public API left the defect green twenty times out of
+    twenty, because the work each request does before admission is long enough that no
+    two admission windows line up. The claim is stated where the interleaving can be
+    forced, in `internal/orchestrator`, and the gap is disclosed here rather than papered
+    over with a case that passes against the defect.
+  - A wait a caller's own declaration is holding is charged the caller's own bound and
+    never Mercator's. A member held by its family's declared width was refused
+    `QUEUE_DELAY_EXCEEDED`, whose own record reads "a Run Mercator has already kept
+    waiting longer than its class allows", while a machine that could have taken it stood
+    idle: any family that takes longer to drain than its class's patience lost its later
+    members as failed Runs. The maximum queue delay is Mercator's promise about waiting
+    for capacity and a caller cannot break it; the deadline asks whether the answer is
+    still worth producing and still ends the wait.
+    `domain.AdmissionDeferral.SelfImposed` is the one place that difference is stated.
+  - The Lab held both readings at once. `liveness.aging_prevents_starvation` exempted
+    such a wait from its half about refusals and demanded through its half about live
+    waits that no accepted Run be left waiting past its class bound, which only refusing
+    the member could satisfy. Both halves carry the exemption now, and the deliberate
+    failure beside it is unchanged: the identical record waiting on `NO_FEASIBLE_OFFER`
+    is still reported.
+  - The corpus can state a queued Booking inside a family, and now does. Both group
+    Blueprints run on idle machines, where a placement and an execution are the same
+    instant, so no member of any family in the tree ever held a queued Booking and
+    counting executions instead of placements left every Blueprint and every law green.
+    That was a Blueprint nobody had written rather than a limitation of the Lab, and it
+    is written now.
+  - What takes a member out of that count is the capacity going back rather than
+    admission being asked about it again. The count left on a deferral, and its
+    correctness rested on the prose claim that admission is only ever asked of a Run that
+    still needs a machine, which holds today only because the one path that re-admits a
+    Run is restricted to capacity failures with no side effect whose Booking was
+    completed first. A Booking is given back in the same commit as the launch failure
+    that ended it, so the log says when the capacity went. An indeterminate launch
+    records a different fact and keeps its Booking, so such a Run keeps its family's
+    place, which is right for the reason the distinction exists: nobody knows whether the
+    container is running.
+  - Disclosed rather than implied. The Lab has no sweep of its own. Its driver advances
+    to the next thing the world does, which for a queued member is always the moment its
+    family makes room, so no Blueprint can ask a held Run a question in the middle of a
+    wait. That is why the queue-delay defect above was invisible at L1 and why the two
+    fixtures that state it drive the clock themselves, one through a `reconcile` step and
+    one through an explicit advance in the test. A periodic reconcile in the Lab would
+    make a class of bounds falsifiable that currently is not, and it is a change to the
+    execution model rather than a fixture, so it wants a slice of its own.
+- [x] 2026-07-27: The divided wait. Two reviewers refuted the repair above. The
+  exemption it added was keyed on the reason of the moment while the whole wait went on
+  accumulating against the bound, so the difference it exists to state was laundered in
+  both directions. Four findings were real, two were real about their evidence and wrong
+  about the repair they asked for, and every repair is red against the reading it
+  replaces.
+  - A wait is two numbers now, `domain.Wait`, and each bound is asked of the part of it
+    that bound is about: the maximum queue delay of the part Mercator caused, the class
+    deadline of the whole of it. The part the caller's own declaration held is summed
+    over intervals, because a deferral is the answer for the interval it opens and
+    nothing else. The exemption's own claim is what the reviewers falsified. A member
+    held seventy minutes by its own siblings, asked on the first pass after its family
+    made room and finding no machine free that instant, was refused
+    `QUEUE_DELAY_EXCEEDED` and closed failed, for a wait Mercator had kept it in for
+    zero seconds. The reverse ran the other way: a Run the fleet had starved for fifty
+    minutes became exempt from the bound and from the starvation law both, for the rest
+    of its life, because a sibling took its family's place.
+  - The claim above that "`domain.AdmissionDeferral.SelfImposed` is the one place that
+    difference is stated" was false, and that is the second finding. One of the two doors
+    that can refuse a Run never read it: a held member past its class deadline was named
+    `QUEUE_DELAY_EXCEEDED` on the way to a machine and `DEADLINE_UNREACHABLE` on the way
+    into the queue, so which broken promise the caller was told about depended on whether
+    a machine happened to be free at that second, which is the sweep-cadence dependence
+    the bound naming exists to forbid. `Admission.BoundAlreadyBroken` now answers for
+    both doors off the wait, and `DeadlineOnlyAlreadyBroken` is deleted rather than
+    kept beside it. `SelfImposed` remains what it always described, one interval.
+  - The record carries the division, `self_imposed_seconds` on the admission fact and in
+    the API contract. Two numbers beside each other cannot be read without it: a deferral
+    an hour past a bound of an hour is a contradiction on the face of the record until it
+    says which part of that hour Mercator caused, and a refusal naming the bound is only
+    checkable against the part it was measured on.
+  - The corpus could not see any of it, and now states both directions.
+    `a-wait-the-fleet-caused-is-not-excused-by-a-sibling` is the laundering the plan Lab
+    can drive, and `only-the-part-of-a-wait-mercator-caused-is-charged` is the handoff
+    instant itself, which needs a world event because nothing in the plan Lab can give
+    capacity back: a provider takes the family's one machine away an hour and a minute
+    in. The two fixtures the previous pass added miss the defect for a reason worth
+    writing down. One never lets the family make room, and the other gives the family two
+    idle machines, so placement always succeeds at the handoff.
+  - The claim above that "the deadline asks whether the answer is still worth producing
+    and still ends the wait" is not true of every class, and the entry did not disclose
+    it. Opportunistic states no deadline, so a member of an opportunistic family whose
+    sibling never gives the place back is bounded by neither of the two bounds its class
+    states. That is the class doing what it says, and refusing it is the repair this pass
+    declined: it would name a moment the caller expressly declined to state, in the words
+    of a promise about capacity that nothing there broke, which is the lie the pass above
+    removed. What bounds it is that Mercator is still holding the Run.
+    `liveness.admitted_run_progress` reads the phase not at all, so a Run of a declared
+    arrival still open a day into an execution is reported whatever it is waiting for,
+    and `TestAFamilyHeldMemberIsStillHeldToProgress` states that over the held
+    opportunistic record. The reviewers' stronger claim, that nothing anywhere could
+    report such a member, is refuted by that law.
+  - `a-member-that-gave-its-capacity-back-leaves-room` described an execution that does
+    not happen. Its summary said the first member "waits behind its own sibling and runs
+    after it" and that "the order the two members ran in is the whole claim"; only one
+    member ever runs, and its own Lab test asserts the other never started. It also
+    cannot constrain what it was promoted for: dropping the `EventLaunchFailed` departure
+    from the admission queue leaves that Blueprint, the whole placement corpus and every
+    Lab law green, and only the orchestrator test over a log that stops between the
+    failure and the replacement goes red. Both are said plainly now, in the fixture, in
+    the test, and in the coverage list, which stated the order claim flatly.
+  - Ordering still ages on the whole wait, and that is a decision rather than an
+    oversight. The bounds are promises about what Mercator does, so they are charged by
+    cause; the ordering is about which work has gone longest without an answer, which is
+    the same question whoever caused the delay. A Run its family holds holds no queue
+    anyway, so the only thing this decides is what such a Run is worth when it competes
+    again.
+- [x] 2026-07-27: No capacity is free. A candidate's price was a rate times one Run's
+  seconds, plus a setup fee charged to every machine whether or not Mercator had to buy
+  one, and both mistakes point the direction that spends money: they make capacity
+  Mercator already holds look cheaper than it is. A price is now four terms and the
+  record carries all of them.
+  - Rent for seconds inside an interval Mercator has already committed to is charged to
+    whoever spends those seconds. The invoice arrives either way, so the money is not
+    what the decision changes; the seconds are, because nothing else can have them
+    afterwards. That is what an owned machine's shadow price states, and it is why an
+    idle owned machine is not free.
+  - Rent beyond that interval is what the placement itself commits Mercator to, bought
+    in whatever increment the publisher sells, and the part of that increment nothing
+    will use is the idle tail. An hourly machine asked for twenty minutes costs the
+    hour; billing the twenty minutes reported two thirds of the bill to nobody.
+    `PriceModel.GranularitySeconds` is what the increment is read from. All four
+    adapters have written it since they were authored and nothing had ever read it, so
+    no fixture could state a world where the increment mattered.
+  - The setup fee and the minimum charge are asked only of capacity Mercator has to
+    acquire. Charging them to a standing machine priced a machine already running as
+    though it were being bought again.
+  - The seconds a Run spends of a commitment are counted from the Run's own start rather
+    than from the decision's moment. Two Runs queued on one machine occupy different
+    seconds of one interval, and charging each of them everything still outstanding
+    would count the same money twice and report a fleet costing more than the invoices
+    it will get. `safety.committed_cost_is_not_double_counted` states that over the
+    placements Mercator took, and `TestTwoRunsMaySpendOneCommittedHourBetweenThem` is
+    the lawful half, so the law is not a ban on committed rent.
+  - Two terms of a sale are refusals rather than prices, because there is nothing to
+    trade off. Capacity held for particular service classes refuses every other class
+    outright, which is how reserved capacity is stated, and capacity that stops being
+    Mercator's at a declared moment refuses work that could still be holding it then.
+    The window is judged against the runtime Mercator enforces rather than the one the
+    caller guessed, because admitting on the guess puts work on a machine that goes away
+    underneath it whenever the guess is short.
+  - An operator states the rest of the sale at invitation, `node.Purchase`: the block
+    the machine is bought in, the classes they hold it for, and the moment it stops
+    being Mercator's. Every part is optional and every absence is an answer rather than
+    a default. No increment is a machine bought in no blocks at all, which is an
+    operator's own hardware: Mercator holds it continuously, so no second of it is a
+    fresh commitment and there is no tail to charge, and that is the same silence
+    `GranularitySeconds` already meant. Where the current block ends is derived from
+    enrolment rather than configured, because that is the moment Mercator started paying
+    for this generation of this machine.
+  - Three of the terms this slice was scoped to carry are not priced, and the reasons are
+    in the section below rather than left as silence: stopped-state storage, preemption
+    risk, and warm-capacity opportunity cost as a term of its own.
+
+- [x] 2026-07-27: Replanning by explicit policy, and a refusal that is not terminal.
+  Reconciliation's mechanics were already real and its policy was implied, and the
+  operation store's dedupe was state-blind, so a machine that refused a pull was
+  answered Duplicate for that content forever.
+  - An operation identity is reissuable exactly when a refusal can have left nothing
+    behind, which is the line `CommandKind.MayLeaveEffectOnFailure` already drew for
+    the node agent's own retry rule: a failed pull left nothing, a failed launch may
+    have made the container. So a refused preparation is asked again and a refused
+    launch keeps its identity spent, and `nodetest.RunStoreSuite` carries both
+    promises so the in-memory and SQLite stores cannot drift apart on them. The
+    refused row is rewritten in place rather than appended beside itself, because
+    the sequence is where the node was first told about this content and a second
+    row would redeliver in the wrong order after a reconnection.
+  - `PrepareReceipt.Refused` is the third answer the seam was missing, and the
+    orchestrator's memory now remembers what the far side took on rather than what
+    Mercator asked for. Remembering a refusal as asked-for is what made it permanent
+    at the control plane: the desire is recomputed identically on the next sweep and
+    an unchanged desire is not resent. Nothing in production fills that field yet,
+    so this is the seam being right rather than a production lane changing
+    behaviour: `broker.Prepare` answers Started or Duplicate and a node settles a
+    refusal asynchronously, so what triggers a second ask on a node is still a
+    change to the desired set. What this slice makes true there is that the second
+    ask reaches the runtime when it comes.
+  - A refusal is answered by the machine that refused. `PrepareItem.Identity` is
+    what one item of a desired set is called, the machine and the content
+    together, and the receipt, the controller's memory, and the key that memory is
+    held under all name items by it. Matching a refusal on content alone let one
+    host's refusal erase the memory of the same content another host had taken on,
+    which collapsed the memory to the empty key: the next desire computed after
+    those Runs were withdrawn read as unchanged and the withdrawal for the transfer
+    that was really running was never sent.
+    `a-refusal-on-one-machine-is-not-a-withdrawal-on-another` is the world that
+    fails on it.
+  - Wanting nothing is a desire with a key of its own. It used to be the empty
+    key, which is also what a control plane holds for every workspace before it
+    has asked for anything, and those two are opposite instructions: one leaves a
+    fleet alone and the other stops everything speculative on it. So a Mercator
+    that restarted after the Runs waiting on a transfer were withdrawn computed a
+    desire naming nothing, read it as unchanged, and let a hundred gigabytes land
+    for Runs that no longer existed. The memory is in process on purpose and that
+    is still right, because the desire is derived from the log every time; what was
+    wrong was a memory that could not tell its own absence from a state it had
+    reached. A control plane with no queued work now sends one desire of nothing at
+    startup, which costs a machine nothing, and the rate bound does not count it,
+    because that bound is on how often Mercator may begin preparing and a
+    withdrawal begins nothing.
+    `a-restart-still-withdraws-what-nobody-waits-for` is the world that fails on it.
+    It stops at the Lab: withdrawal has no node command yet, so nothing at higher
+    fidelity can observe one.
+  - The Lab world can refuse a fetch, under a `reject_command` fault on
+    `node.prepare_image` or `node.prepare_artifact`, and holds the same rule the
+    store now does: a refused fetch is not remembered as work it took on.
+    `a-refused-prepare-can-be-asked-again` is the fixture. It is a conformance entry
+    rather than the top-level path the slice named, because `LoadCorpus` refuses an
+    arrival-driven Blueprint there: every top-level entry is a placement fixture.
+  - `janitor.OrphanPolicy` is the replanning half, stated once and recorded with
+    every decision. Capacity whose recorded launch says the machine outlives its
+    workload is adopted, its slot released and the machine kept; everything else
+    stops existing. The behaviour change is that capacity Mercator cannot account
+    for is destroyed rather than half-reclaimed: releasing only its slot left a
+    machine billing that no Run could ever be placed on. A Run that closed with no
+    cleanup ever asked for is converged too, which is the hole a sweep keyed on the
+    cleanup request alone could only skip.
+  - The launch that took the capacity is what decides, whenever the record holds
+    one. Reading the cleanup request first destroyed the whole machine under a Run
+    that reached a launch on a pool Mercator does not own and then ended without
+    anybody asking for its capacity back, which is the ordinary end of a launch
+    whose attempts ran out.
+    `closed_without_a_cleanup_request` is what is left for a Run that recorded no
+    launch at all, and
+    `an-orphan-is-adopted-or-destroyed-by-policy` states that combination.
+  - A Run holds one recorded launch per attempt, so reading its last one was
+    reading whichever attempt happened to be last. A Run replaced from a machine
+    Mercator provisioned onto a slot Mercator only borrows records terminate and
+    then release, and the machine the first attempt took was then handed back as a
+    slot and left billing with no Run that could ever be placed on it; the reverse
+    mix routed a terminate at a pool Mercator has no right to destroy. The launch is
+    now found by the identities the capacity itself carries, which is what every
+    adapter reads back off its own labels, tags, or environment. Capacity carrying
+    none of them is still decided by the record when every launch of the Run handed
+    capacity back the same way, and when they disagree nothing in the record can say
+    which machine this is, so it stops existing rather than being kept on a guess.
+    `a-machine-two-launches-disagree-about-is-not-adopted` states it.
+  - The decision is recorded before the provider is asked to act on it, and a
+    sweep that finds capacity already decided about carries out that decision
+    rather than judging it again. Acting first left the one failure the rule calls
+    a violation and cannot be recovered from: a terminated machine is never listed
+    again, so nothing remains for a later sweep to explain. `internal/janitor`'s own
+    tests are the whole of what holds this, and no rule in the corpus can see it:
+    the two orderings differ only when a reclaim fails, the Lab world's provider
+    cannot be made to refuse one, and a sweep that returned an error would fail the
+    Lab control plane's tick rather than leave a state a rule could read. Making the
+    corpus hold it is owed.
+  - A provider that answers `ErrTerminateUnsupported` is saying there is no
+    machine of Mercator's to destroy, so the slot is given back and that is the
+    whole of the capacity ceasing to exist. Local Docker answers exactly that, and
+    stopping at the refusal returned before every later object in the same
+    listing, so one container nothing could account for stopped every sweep of
+    that workspace from then on. This one is a provider's vocabulary rather than a
+    world's, and `internal/janitor` and the Docker adapter are what hold it: every
+    machine in the Lab can be destroyed, so no Blueprint can state a provider that
+    refuses to.
+  - `safety.orphan_policy_is_explicit` is stated beside `liveness.orphan_convergence`
+    rather than in place of it. The two read different facts: one asks that no
+    execution Mercator launched outlives the Run that owns it, and the other asks
+    what became of capacity the world was already holding that Mercator never
+    launched. Dropping the first left every projection defect that strands a
+    running execution invisible to the whole corpus.
+  - `world.orphans` is the Blueprint vocabulary, and it is deliberately not an
+    execution. Every rule about the fleet reads an execution as work Mercator is
+    accountable for, so folding the two together would make capacity nobody
+    recognises look like a launch with half its identity missing, which is what
+    `safety.owned_external_resources` exists to refuse. The Lab control plane runs
+    the janitor after the Runs settle, for the same reason production does.
+- [x] 2026-07-27: Close phase 4. The whole verification was run on the amd64 Linux
+  workstation rather than the arm64 macOS laptop the phase 3 slices were built on,
+  and no test failed for a platform reason. What follows is the set of judgment
+  calls the phase made that a reader would otherwise have to reconstruct from
+  twelve slices of commit messages.
+  - The score weights are alive, and the class is what populates them. This was
+    the phase's stated debt: `SchedulingInput.Weights` reached production with
+    only `StartLatencyUSDPerSecond` set, to 0.0005 for the balanced objective, so
+    the reliability, uncertainty, and completion-latency terms were multiplied by
+    zero and phase 3 slice 9 deliberately declined to route a new answer through
+    them. The exchange rates are now stated by the ServiceClass, and the decision
+    records the weights it was scored at, so the score can be recomputed from the
+    record rather than trusted. `safety.score_is_reproducible_from_the_record` is
+    the rule, and the oracle derives the same score independently rather than by
+    calling the scheduler.
+  - A transfer's seconds may never come from launch history. This is the phase's
+    least obvious rule and the one most likely to be undone by a well-meaning
+    change. A duration is a byte count over a throughput, and the byte count
+    belongs to the launch rather than to the candidate: `CandidateIdentity` names
+    the machine and the image, and can name neither the bytes already resident nor
+    the Run's inputs. So `levelKeys` files and answers nothing for `image_fetch`,
+    `unpack`, or `artifact_fetch`, and `safety.prediction_states_its_provenance`
+    refuses a transfer answered from launches. Without that rule a host holding
+    every byte of a 40GB dataset was charged the full cold fetch out of history
+    and struck out on the latency bound.
+  - A wait is charged to whoever caused it. The maximum queue delay is a promise
+    about what Mercator does, so it is asked of the part Mercator caused; the
+    deadline is about when the answer stops being worth having, so it is asked of
+    the whole wait. Ordering still ages on the whole wait, because ordering is
+    about which work has gone longest without an answer rather than about who is
+    to blame. `domain.Wait` carries both numbers and the record states the
+    division.
+  - The idle tail is deliberately conservative. The unused remainder of a billing
+    increment is charged whole to the placement that forced Mercator to buy it,
+    and a later Run that uses part of that remainder is charged nothing. Splitting
+    it needs a model of what arrives next, and every substitute tried made a
+    longer Run cheaper than a shorter one. The error is in the safe direction, and
+    the alternative was charging the remainder to nobody.
+  - A declared field nothing reads is a defect this plan has deleted repeatedly,
+    so the ServiceClass declares only what has a reader. Priority, aging, maximum
+    queue delay, deadline, and backfill eligibility are on `domain.Admission` and
+    read by the queue. Maximum cost stays on `PlacementPolicy`, because a budget
+    is per Run rather than per class and a second copy would be two authorities
+    for one refusal. Group parallelism, interruption permission, and the
+    queue-on-warm preference each become a field in the slice that prices them.
+  - Three economics terms named in the phase goal are deliberately unpriced, each
+    for a stated reason rather than for want of time. Stopped-state storage needs a
+    next-arrival model. Preemption-risk pricing needs a hazard over the length of a
+    Run, and what the probability multiplies is the placement the work would move
+    to rather than this one. Warm-capacity opportunity cost would double count,
+    because an owned machine's shadow price already says its seconds are worth
+    something to somebody else. Reserved capacity is delivered as eligible service
+    classes rather than as a concept of its own, and is not deferred.
 
 ## Phase status
 
@@ -1492,7 +3861,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
-| 4 | Candidate prediction, service classes, owned economics, replanning | not started, except that the four placement objectives now order candidates rather than being multiplied by weights nothing populates |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -1562,16 +3931,30 @@ Phase 3 added:
   `safety.locality_provenance`, which now reads unassembled content too.
 - `silence-is-not-infeasibility` (green): one Run that refuses to wait more than
   three minutes, and two machines at one price that would both take nearly five.
-  The Rental that enumerated itself and holds none of the image is struck out,
-  because that is a measured fact about a machine and a hard bound is what a Run
-  gets to do with one. The borrowed host beside it is not, because nothing has
-  established that it is slow. Making the bound locality-blind fails it with
-  `no feasible offers`, which is the Run finding no capacity at all on machines
-  that may already hold every byte. The decision records
+  The Rental that enumerated itself, holds none of the image, and published what
+  its link to the registry delivers is struck out on the fetch half of its five
+  minutes, which is 433.71 p90 seconds over a link it measured and over the bound
+  on its own. It publishes the same number Mercator would have assumed about it,
+  so the seconds are the seconds either way and what the fixture turns on is that
+  a machine said them. The borrowed host beside it is not struck out, because
+  nothing has established that it is slow. Making the bound locality-blind fails
+  it with `no feasible offers`, which is the Run finding no capacity at all on
+  machines that may already hold every byte. The decision records
   `START_SLO_UNVERIFIED` for that placement rather than `WITHIN_START_SLO`,
   which the scheduler used to append whenever a bound existed at all: admitting
   a candidate because nobody could describe it is not the same as promising it
   will start in time, and the fixture fails if the two are conflated.
+  The second Run states the other half of the same rule, and is why the first
+  says fetch rather than five minutes. The Rental's remaining 108.24 p90 seconds
+  are assembly, priced over `AssumedUnpackMbps`, and `UnpackRate` stamps that as
+  an assumption because nothing in the fleet measures a host's storage. No bound
+  may act on it, so at seven and a half minutes the Rental is admitted
+  `START_SLO_UNVERIFIED` with its whole prediction at 542.95 seconds and its
+  established start at 434.71. That is every machine in the fleet until a
+  measured launch answers the stage, which `stagePredictor` puts into both halves
+  when one exists. Two breaks fail it: stating the unpack rate as a measurement,
+  and making `establishedOverAMeasuredPath` return what it was given, each of
+  which strikes the Rental out on a constant of Mercator's own.
 - `borrowed-warmth-is-invisible` (conformance): a machine Mercator has not
   enrolled holding the whole image before the Run arrives. World Truth says it
   holds it, the offer carries no inventory, and the Run is priced the whole
@@ -1633,16 +4016,31 @@ Phase 3 added:
   owes the same 640 seconds. A placement corpus cannot reach this: the Booking
   Decision was right either way, and only an execution can say which bytes the
   workload was handed.
-- `the-objective-decides-what-wins` (green): one world, two Runs, and the only
-  difference between them is the objective each stated. The warm Rental is a
-  second from ready at 4 USD an hour, the cold one nearly sixteen minutes at 2.
-  A Run that asked for the cheapest capacity takes the cold machine; a Run that
-  asked for the fastest start takes the warm one, pays double, and records
-  `EARLIEST_START` rather than claiming it compared prices. Ranking on cost alone
-  fails it with the hurried Run placed on the cold machine.
-- `dataset-gravity-worth-waiting` (target, missing `rental_schedule`): the same
-  gravity behind a running Booking. It now states one missing capability rather
-  than three, because Artifacts and their per-candidate evidence exist.
+- `the-service-class-decides-what-wins` (green, replacing
+  `the-objective-decides-what-wins`): one world, two Runs, and the only difference
+  between them is the class of work each says it is. The warm Rental is a second
+  from ready at 4 USD an hour, the cold one fifteen minutes at 2. The batch Run
+  takes the cold machine, because batch work values a second of waiting at a fifth
+  of the machine's own rent and the price gap is larger than that. The interactive
+  Run takes the warm one, pays double, and the decision records
+  `SERVICE_CLASS_INTERACTIVE` and the weights it was scored at. Both candidates
+  pin their score in dollars, so the exchange rate is asserted rather than
+  inferred from which machine won: zeroing the class's weights places the hurried
+  Run on the cold machine.
+- `uncertainty-is-priced-once` (green): three machines at one price for one 18.04GB
+  image. One enumerated itself and holds the image, so it owes nothing and is
+  certain of that. One is a machine Mercator has not enrolled that World Truth says
+  is sitting on the whole image: it is charged the whole fetch and half a point of
+  doubt, which is what a duration over an unmeasured link is worth, and that half
+  point is the whole uncertainty term for it. One holds the image and publishes a
+  capacity claim it is 70 percent sure of, which is three tenths of a point and the
+  only thing separating it from the first. Restoring either extra point the
+  reference model used to add, for an unenumerated inventory or for unknown
+  pricing, fails it on the recorded uncertainty and on the score.
+- `dataset-gravity-worth-waiting` (green): the same gravity behind a running
+  Booking. The Rental holding the dataset is busy for eight more minutes and the
+  Rental with the perfect image cache is idle, and the Run queues for the dataset,
+  because 640 seconds of object store dwarfs eight minutes of waiting.
 - `a-late-start-must-be-a-fact` (conformance): one Run refusing to wait three
   minutes and reading a 40GB dataset, against a Rental a second from ready, a
   machine that does not exist yet stating ten minutes of provisioning, and a
@@ -1709,6 +4107,106 @@ Phase 3 added:
   discounted out of the localities and per-kind seconds recorded beside it, so a
   scheduler that counted a silence as established fails while agreeing with itself
   perfectly.
+- `a-start-is-a-moment-somebody-observed` (green): one Run of opportunistic work,
+  a Rental holding the whole image a second from ready at 20 USD an hour, and a
+  machine that does not exist yet at a dollar an hour whose provider publishes
+  five minutes of provisioning that the world really spends: thirty seconds
+  acquiring it, four minutes booting it, thirty seconds enrolling the runtime.
+  Waiting is free to this class so it takes the cheap machine, and the fixture
+  states both moments. At the decision nothing has observed a container and the
+  record says so; ten minutes later the recorded start is 588.64 seconds after the
+  launch was accepted. The provisionable candidate's `provision_seconds` of 300
+  sits beside it, so the published claim and the spent actual are both written
+  down and are different numbers. Shortening the world's boot to zero collapses
+  the two moments and fails it at 348.64; deriving the record from the accepted
+  launch fails it at zero.
+- `a-node-reports-when-the-container-really-started` (conformance): the same claim
+  through the real orchestrator, event log, and Run projection, and the only place
+  the Run Bundle can be read. Two predicted-versus-actual records for one Run
+  rather than one, the start actual sourced `run_stream.execution_started`, the
+  predicted value equal to what the winning candidate's own decision recorded, and
+  the two differing: a calibration set whose columns came from one piece of code
+  teaches nothing. It carries ten records per Run now, one per launch stage beside
+  the two aggregates.
+- `a-launch-is-eight-stages` (green): the waterfall. A machine that does not exist
+  yet publishes ten minutes of provisioning and this world spends them over three
+  stages, then moves 500MB of image, applies it, and asks a container runtime for a
+  process; the Rental beside it holds the image assembled and idle, so its only
+  remaining stages are the container starting and the application coming up, which
+  is what lets the fixture say which stages belong to the machine and which to the
+  workload. Eleven minutes in the container has been running for a moment and the
+  application has said nothing; four minutes later it reports ready, three minutes
+  after its own process began, against the two it declared. Returning nothing from
+  any of the world's three new spends fails it, each on its own number.
+- `every-stage-of-a-launch-has-an-actual` (conformance): the same waterfall at L1,
+  and the only place the per-stage record can be read. Every one of the eight rows
+  has a prediction sourced from the Booking Decision and an actual sourced from the
+  Effect Ledger, boot is predicted at what the provider published against an actual
+  the world spent, acquisition is predicted at nothing because nobody publishes one,
+  and readiness is predicted at what the workload declared against an actual only the
+  workload could state.
+- `safety.prediction_is_recorded_against_its_actual` (Lab invariant): for every
+  launch the Effect Ledger accepted, the record carries a prediction and an actual
+  for each stage the world simulated, and names no stage it cannot carry. The two
+  halves are read from independent places, so the rule cannot be satisfied by the
+  predictor agreeing with itself. It is deliberately not accuracy: that is a
+  calibration metric, and a rule of that shape would fail on a fixture whose world is
+  simply slow.
+- `a-clock-nobody-shares-is-not-a-start` (green): one Run, one Rental holding the
+  image assembled and idle, and a host whose wall clock runs an hour ahead. Its
+  runtime hands back a process twenty seconds after the launch is taken and then
+  states that moment on the clock it has, an hour in Mercator's future, beside its own
+  read of now on the same clock. The record says the stage is unobserved, which is the
+  only honest answer: nothing observed this container start on a clock Mercator
+  shares. It is the first fixture in the corpus whose machine does not keep the
+  control plane's clock.
+- `a-clock-nobody-shares-measures-nothing` (conformance): the same world at L1,
+  through the real orchestrator, event log, Rental Schedule, and Run Bundle. The
+  start-latency row reads `start_not_observed` rather than filing an hour as a
+  measurement, and every standing law still passes, which is the second half of the
+  claim: refusing a moment is not a violation of the rule that a start be observed.
+  Publishing the world's own truth instead of the machine's reading fails it at 20
+  seconds.
+- `safety.start_is_observed_not_inferred` (Lab invariant): no adjudicated Run
+  carries a start moment Mercator derived, and no Rental Schedule measures a
+  Booking's runtime from one. Every moment the run stream records is one an
+  observation of that Run reported, no moment is later than the look that carried it,
+  a moment a holder did report is never dropped, and a Booking's clock is either a
+  start an observation established or the read that carried one. The clauses are
+  stated in the rule's own terms rather than delegated to the production predicate
+  they exist to constrain, and they read independent halves of the record, so none can
+  be satisfied by Mercator agreeing with itself. A Run with no start moment at all is
+  not a violation: acquisition and boot have no production observation until an agent
+  bootstraps on provisioned capacity, and what the record must then say is that the
+  stage is unobserved rather than that it took no time.
+- `safety.score_is_reproducible_from_the_record` (Lab invariant): for every
+  candidate of every Booking Decision Mercator recorded, ScoreUSD is the arithmetic
+  over the terms that decision itself carries, at the weights it says it used. What
+  it forbids is a scoring term whose input is nowhere in the record: such a term
+  moves placements a reader with the whole decision in front of them cannot
+  explain, and no rule can police a number nobody wrote down. That is not
+  hypothetical, and it is why the rule arrives with the class rather than after it:
+  two definitions of uncertainty ran side by side for a phase, one counting the
+  confidences a candidate's answers carried and the other counting facts read
+  straight off the offer, and they agreed on every decision only because both were
+  multiplied by zero.
+- `safety.doubt_only_the_answers_the_score_reads` (Lab invariant): every answer a
+  candidate recorded a confidence for is one `domain.ScoredAnswers` names, which is
+  the capacity claim and the eight stages of a launch. What it forbids is doubt
+  about a question the score reads no answer to. Such a term can only run one way,
+  because a stated confidence is charged and a silence is not: it penalises the
+  publisher that measured its machine, leaves alone the publisher that said
+  nothing, and leaves alone the publisher certain its machine refuses every start,
+  so the machine nobody measured outranks both. A published reliability history sat
+  in that list for a phase, and the arithmetic rule above could not see it, because
+  both models charged the same doubt and the score reproduced from the record
+  exactly.
+- `a-class-mercator-does-not-know-is-refused` (conformance): one idle Rental
+  holding the image, and one Run that says it is urgent. There is no urgent class,
+  so the Run has stated no exchange rate at all, and Mercator refuses it where it
+  enters rather than ranking every candidate on price alone. The world would have
+  placed it, which is what makes the refusal a choice rather than a consequence,
+  and no event is written for a Run turned away at the door.
 - `cache-mounts-never-cross-a-workspace` (conformance): five Runs, two tenants,
   and one shared machine beside a spare. Both tenants declare a cache called
   compiler-cache, so the machine holds two, and the recorded decisions say so: the
@@ -1782,6 +4280,59 @@ Phase 3 added:
   other tenant waits for it to land. Truncating the desire per workspace fails it
   through `safety.prewarm_yields_to_real_work` with `2 speculative fetches were in
   flight at 2030-01-01T00:05:00Z, and this world allows 1`.
+- `a-refused-prepare-can-be-asked-again` (conformance): one machine already holding
+  the image, one Run occupying it, and one queued Run that reads a twenty gigabyte
+  corpus. The machine turns the fetch away, and a minute later, which is the
+  soonest the rate bound allows, Mercator asks the same machine for the same
+  corpus again. The bytes land on the second ask. A world that remembered a refused
+  fetch as work it had taken on answers the second ask Duplicate and moves nothing;
+  a control plane that remembered refused content as content it had asked for
+  computes an unchanged desire and never asks twice.
+- `a-refusal-on-one-machine-is-not-a-withdrawal-on-another` (conformance): two busy
+  machines with a queued Run behind each, both reading the same hundred gigabyte
+  corpus. One machine is asked first and starts reading; the other joins the same
+  desired set five minutes later and turns its fetch away. Then both Runs are
+  withdrawn, and the transfer still running has to be stopped. A control plane that
+  hears a refusal as being about content rather than about one machine's copy of it
+  forgets what the other machine took on, computes an empty desire it believes it
+  never departed from, and sends no withdrawal at all.
+- `a-restart-still-withdraws-what-nobody-waits-for` (conformance): one busy machine
+  and two queued Runs reading the same hundred gigabyte corpus, which is asked for
+  once. Both callers withdraw at the same moment and Mercator restarts on the first
+  of them, so the restarted control plane's first reconciliation is the one that
+  wants nothing, and nothing is also what it would want if it had never asked for
+  anything. A control plane that cannot tell those apart sends no withdrawal and
+  the replica lands nineteen virtual minutes after the last Run that wanted it went
+  away.
+- `an-orphan-is-adopted-or-destroyed-by-policy` (conformance): four machines and
+  two Runs. Three of them are holding something the control plane never launched,
+  and the control plane restarts into that state. The one carrying a Run identity
+  Mercator can account for is adopted, its slot released and its machine kept. The
+  one carrying a Run whose start the provider refused until its attempts ran out is
+  adopted too, because its launch recorded the same release even though nobody ever
+  asked for its capacity back, and reading the cleanup request first destroys that
+  machine. The one carrying nothing anybody can account for is terminated and its
+  machine stops existing. The fleet afterwards is the claim, because an adoption
+  that quietly destroyed the machine and a termination that quietly kept it read
+  the same in a count of things reclaimed.
+- `a-machine-two-launches-disagree-about-is-not-adopted` (conformance): one Run
+  launched twice, first on a machine Mercator provisions for it and whose provider
+  refuses the start, then on a slot Mercator borrows, so its record holds terminate
+  and release at once. A third machine holds capacity carrying that Run and neither
+  of its launch identities. It is destroyed, because no recorded launch accounts for
+  it. Deciding it by the Run's last launch adopts it on `recorded_disposition_release`
+  and leaves it standing and billing, which is what the corpus could not say before:
+  every other world holding an orphan holds a Run with exactly one launch, so the
+  rule that reads the launch that took the capacity and the rule that reads the last
+  one agreed everywhere.
+- `safety.orphan_policy_is_explicit` (Lab invariant): capacity a world began
+  holding that Mercator never launched is either still standing or converged by a
+  decision the record holds, and every such decision names a policy, a reason, and
+  one of the two outcomes an operator can act on. It reads what a world began with
+  rather than the fleet as it stands, because the interesting case is the machine
+  that is no longer here. It stands beside `liveness.orphan_convergence` rather
+  than in place of it: that rule reads executions Mercator launched against the
+  Runs it projects, which is the fact this one says nothing about.
 - `safety.prewarm_rate_within_bound` (Lab invariant): no two moments at which
   Mercator began preparing are closer together than the world's `min_interval`,
   whichever tenant wanted the content and whether or not the control plane
@@ -1811,23 +4362,676 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus at the phase 3 close-out is 24 regression Blueprints, 16 green and 8
-target, beside one demo, one minimized case, and twelve conformance Blueprints,
-counted by `TestOpenCatalogPreservesPlacementClassifications` and reported by
-`TestPlacementScenarios` as `corpus: 16 green, 8 target`. The eight targets are
-what phases 2, 4 and 5 owe: `enrolled-node-survives-its-first-run`,
-`busy-rental-worth-waiting`, `dataset-gravity-worth-waiting`,
-`full-schedule-forces-fresh-capacity`, `multiple-runs-schedule-in-order`,
-`queued-booking-deadline-expiry`, `queued-run-makes-fresh-capacity-win`, and
-`bad-host-facts-rejected-loudly`. Seven of the eight declare `rental_schedule`
-among their missing capabilities, so they wait on a Booking accumulating on
-capacity across Runs, which is why phase 3 promoted none of them. The eighth
-declares `host_facts`.
+Phase 4 added:
 
-The twelve conformance Blueprints are driven from `internal/lab` rather than from
-the placement corpus, because each one asserts something only an execution can
-say: what bytes a workload was handed, when a transfer was moving, what a host
-held afterwards, and what survived a control-plane restart.
+- `busy-rental-worth-waiting` (green): the warm Rental's Booking is expected to
+  finish in four minutes and fresh capacity pays five of boot plus an 18GB pull,
+  so the Run takes a queued Booking behind it. Dropping the seeded schedule out
+  of the world fails it with the Run placed on `fresh-4090` as a running Booking
+  on a Rental identity that did not exist a moment earlier.
+- `multiple-runs-schedule-in-order` (green): two Runs and a Rental one minute
+  from free, against capacity that takes thirty to provision. Both queue, in
+  submission order, and the second's Booking follows the first's rather than the
+  running one, which is the claim: a schedule is ordered, and Mercator reads its
+  own last answer before giving the next.
+- `queued-run-makes-fresh-capacity-win` (green): the same world with the price
+  gap removed, so the queue is the only thing that can decide it. The first Run
+  queues behind five minutes; the second reads a schedule that now holds the
+  first Run's twenty minutes as well, and twenty-five minutes of waiting loses to
+  ten of provisioning and pulling. A queue Mercator itself created is what makes
+  the second answer differ from the first.
+- `full-schedule-forces-fresh-capacity` (green): the cap rather than the score.
+  The warm Rental holds the maximum four waiting Bookings and is refused with
+  QUEUE_CAPACITY_EXCEEDED, and CAPACITY_UNAVAILABLE beside it, because with no
+  open position there is nothing left to make a busy machine available. Its
+  schedule is at version nine holding five Bookings, which is what makes the
+  seeded version load-bearing: a version counts transitions rather than
+  occupants, and deriving it from the Bookings still there fails the fixture with
+  version five.
+- `dataset-gravity-worth-waiting` (green): gravity behind a running Booking. The
+  Rental holding a checked copy of the 40GB dataset is busy for eight more
+  minutes and the Rental with the perfect image cache is idle, and the Run queues
+  for the dataset, because 640 seconds of object store dwarfs eight minutes of
+  waiting.
+- `queued-booking-deadline-expiry` (target, missing `schedule_advancement`): the
+  Run takes a queued Booking with a latest start six minutes out, and the Booking
+  ahead of it runs for thirty. At seven minutes nothing expires it. Its first two
+  steps are green, which is what makes the one declaration it keeps precise. That
+  diagnosis was a step short until the overrun rule landed: at seven minutes the
+  Booking ahead is a minute past the runtime Mercator enforces, so a re-decision
+  read a wait of nothing and would have chosen the same machine, and expiry alone
+  would have produced a placement, an expiry, and the same placement again.
+- `a-queue-drains-as-it-runs` (conformance) gained the record beside the seconds.
+  The Booking ahead is twenty-nine minutes into a declared half hour, so this is
+  the one execution in the tree where what a Booking has left and what its caller
+  asked for are different numbers, and the recorded evidence has to say the
+  first: restating the declared runtimes fails it with "the record says the
+  Booking ahead has 1800.00s left".
+- `an-overrun-booking-is-not-an-empty-queue` (green): the Rental's Booking declared
+  forty-five minutes, fifty have passed, and the machine is occupied for another
+  forty. Both remaining runtimes bottom out at zero, which is what an idle Rental
+  reports, so the Rental was a feasible candidate priced at no waiting at all and
+  the Run took a Booking whose latest acceptable start was the moment it was minted.
+  It is refused on the machine's own capacity evidence now, and the record carries
+  the overrun beside the two remainders that ran out. Reverting the queueing rule
+  fails it through `RentalSchedule.Reserve` refusing to promise a start behind a
+  Booking it cannot project, rather than through the assertion, which is the two
+  layers saying the same thing.
+- An enrolled node publishes the room it has. Every node offer stated
+  `capacity.available` true at full confidence for as long as its lease held,
+  including a machine that had just reported the container it was running, and
+  `feasibilityViolations` only asks `queueable()` of an offer that says it is
+  occupied. So on the only lane that reaches production every queueing rule was
+  unreachable, including the exhausted clause above: a node mid workload was scored
+  idle this instant and won on price and warmth, and the refusal the fixture states
+  could not happen. Worse than a mispriced wait, a machine holding a container past
+  its Booking's bound was selected and `RentalSchedule.Reserve` then refused the
+  reservation, so `stepPlace` returned an error before appending anything: `502
+  REFRESH_RUN_FAILED`, no Booking Decision, no fallback to the idle machine beside
+  it, and the same answer on every reconcile forever. The offer now states how many
+  workloads the machine says it is executing against how many it runs at once, which
+  is the node's own authority over container lifecycle. An orphan therefore blocks
+  placement rather than being placed behind, and a Booking Mercator still holds for
+  a container that has exited blocks nothing.
+- `TestANodeStillRunningPastItsBoundIsNotQueuedBehind` (`internal/daemon`) is the
+  same rule where it is not a declaration. Nothing terminates a workload at its
+  enforced maximum, so a container that does not exit holds its node with the
+  Booking's remaining runtime at zero, and this drives exactly that through the
+  public API, the production storage, and the node protocol. The fleet has two
+  machines, and the assertions are the sentence the rule is: the busy machine is
+  refused on its own capacity evidence, the record carries the overrun beside the
+  remainder that ran out, and the Run is placed on the expensive cold machine
+  instead. An earlier version asserted `502` and that nothing was launched, which
+  every orchestrator error satisfies identically, so it held neither layer: it was
+  green with the Placement rule reverted, through the internal failure above.
+  Reverting either half of Placement fails it now. The domain refusal is held by
+  `TestAScheduleWhoseBookingIsPastItsBoundPromisesNothing`, and with Placement
+  correct it changes no answer here, which the commit message that claimed both were
+  required overstated.
+- The runtime Mercator enforces is measured against the container it bounds. A
+  Booking recorded taking its Rental at the moment its decision was evaluated, and
+  both runtimes it declares bound a container, so provisioning and image pull were
+  spent against a runtime nothing was enforcing yet: a Run declaring twenty minutes
+  that waits fifteen for an 18GB fetch had its Booking read as past its own bound
+  one minute into the workload. That refused its machine to every arriving Run,
+  blocked anything from queueing behind it for the rest of the Run, and published an
+  overrun in the auditable record as a measured fact about a machine running
+  normally. `ScheduledBooking.StartedAt` is the moment the machine that owns the
+  container's lifecycle said it was running, recorded by the orchestrator on the
+  first observation whose phase is running and committed with that observation. A
+  Booking that has not launched owes its whole declared runtime, which is what the
+  zero start already meant for a queued one; it understates occupancy while a
+  machine is fetching, and nothing here bounds preparation, so the wait projected for
+  a Booking that has not started is a floor rather than a promise. Manufacturing an
+  overrun out of that gap was the worse of the two answers.
+  `TestABookingStillStartingIsNotPastItsBound` is the case the old clock could not
+  pass. The corpus seeds a running Booking through the same transition, because a
+  fixture saying a Rental is running work is saying its workload is running.
+- There is no Lab Blueprint for the overrun, and the reason recorded before was a
+  non sequitur about the code as it then stood. The rule does not need a workload to
+  outlive its declared runtime, only a Booking to outlive its bound, and with the
+  bound charged from the placement decision a cold Rental with a long pull stated
+  exactly that: an arrival declaring twenty minutes against a validly modelled ten
+  would have been exhausted while its container was still running. That Blueprint
+  would have been a fixture asserting an overrun for a machine running normally,
+  which is the defect above rather than the rule. With the clock on the container,
+  blueprint validation refusing a runtime model beyond `max_runtime` is the whole
+  reason: no Lab world can state a container that outlives what its Run declared,
+  and the only world this rule is about is a container that does not exit. Lifting
+  that validation would state a world with nothing to enforce it, which belongs with
+  the enforcement work.
+- `safety.promised_start_is_still_ahead` (Lab invariant): no Booking Mercator
+  commits promises a start no later than the moment the decision that minted it
+  was evaluated. It is stated over the decision record, because a promise can only
+  be judged against the moment it was made, and it says nothing about a deadline
+  that passes afterwards: waiting longer than promised is what expiry exists to
+  answer. Its deliberate failure is a decision whose queued Booking carries a
+  latest start equal to its own evaluation time.
+- `warm-idle-rental-wins` and `no-rentals-provisions-fresh` (green) gained
+  `no_rental_schedule`, which is what turns "a Rental nothing is assigned to
+  records nothing" from an unbreakable guard into a rule. Deleting the guard
+  publishes a schedule at version zero with a wait of nothing for every candidate,
+  including machines that do not exist yet and have no Rental at all, and both
+  fixtures now say so.
+- A seeded schedule states a version at least as large as the number of Bookings it
+  holds, checked in the Blueprint validator and again in the store. A version
+  counts transitions and each Booking took one, so a lower version is a history
+  Mercator cannot have had, and the arriving Run's Booking would be minted at a
+  version one of the seeded Bookings already consumed.
+
+- `a-disowned-fact-is-not-an-answer` (green): three Rentals at one price with the
+  same 2GB image to fetch. One publishes 750 Mbps to the registry and states nine
+  tenths of a point of confidence in it, one publishes 5 Gbps and states zero, one
+  publishes nothing. The disowned publisher and the silent one are identical, which
+  is the whole claim: a number nobody stands behind buys its publisher exactly what
+  saying nothing buys. Honouring the disowned fact again flips the placement onto
+  it with "pull_seconds: want at least 32.4, got 3.7"; dropping the harness's path
+  facts fails it from the other side, charging the measured machine the assumption
+  it published past.
+- `a-machine-nobody-priced-is-a-last-resort` (green): two Rentals holding the same
+  image, one quoted at 2.00 USD an hour and one nobody quoted, and a Run that
+  allows unknown pricing. The winner has the higher score, which is the point:
+  dollars order the candidates that have dollars, and an unpriced candidate is
+  ranked behind every priced one rather than being the cheapest thing in the fleet.
+  Dropping the priced-first rule places the Run on the unquoted machine. The
+  decision also records `PRICED_BEFORE_UNPRICED`, because the winner has the higher
+  score and nothing else in the record says why.
+- `a-floor-refuses-a-measurement-and-not-a-silence` (green): the same rule in the
+  half that decides feasibility. A Run states a 500 Mbps floor and allows a link
+  nobody measured, against four Rentals at one price. The machine that published
+  750 Mbps and stands behind it wins, the machine that published 100 and stands
+  behind it is refused with the number it published, and the disowned publisher
+  sits in every column beside the machine that published nothing. Restoring the
+  empty-list test refuses the disowned publisher while the silent machine is
+  selected.
+- `a-link-nobody-measured-is-not-a-slow-link` (conformance): the same world at L1,
+  and the execution the Lab's own path confidence is falsifiable through. Stamping
+  certainty on a fixture's measurement flips the placement onto the machine that
+  disowned 5 Gbps; dropping the world's paths flips it there too, because then
+  nothing separates the four machines.
+- `an-unquoted-machine-is-the-last-resort` (conformance): an unpriced Rental at L1,
+  and the execution the Lab's own unpriced offer is falsifiable through. Publishing
+  the default priced offer for it places the Run on the machine nobody quoted at a
+  rate of zero.
+- `a-machine-that-fails-to-start-says-so` (green): three Rentals at one price and one
+  warmth. Two stand behind a reliability history their provider measured, one having
+  refused two starts in five and been interrupted a quarter of the time and the other
+  never having done either, and nobody has ever measured the third. The decision
+  records each published history, prices none of them, and doubts none of them, so all
+  three score to the same dollar and the placement falls through to the offer ID, which
+  is how the machine known to refuse starts takes the Run. That is the honest state of
+  this model, written where a fixture will fail when somebody closes the gap: what a
+  refusal is worth is a probability times a predicted start, and a flat penalty
+  invented for it now would be the unmeasured constant this plan keeps deleting.
+  Deleting the L0 world's reliability projection fails it on both rates. Charging the
+  published confidence as doubt again, which is what this fixture was first written
+  against, fails it on the doubt, the score, and the winner, because the machine nobody
+  measured becomes 0.003 USD cheaper than the two that were.
+- `a-refusal-to-start-is-recorded-and-not-priced` (conformance): the same world at
+  L1, and the execution the Lab world's own reliability projection is falsifiable
+  through. It asserts the record, the absence of any doubt about it, and deliberately
+  not the placement.
+
+- `a-candidate-is-what-recurs` (green): what a launch history may be filed under,
+  stated as the candidates a fleet has to tell apart and put together. Two asks a
+  marketplace numbered differently for one product in one place key as one candidate,
+  a third ask there whose cards hold half the memory keys as another, a fourth whose
+  probe reported its eight cards as two entries of four keys as the same product as
+  the ask that reported them whole, a fifth holding four of that product keys as
+  another, a sixth that the same provider sells as a one-shot execution rather than as
+  a machine keys as another again, an enrolled machine keys as the machine its backend
+  named and never as the lease or the listing this fixture named it by, and a one-shot
+  pool publishing nothing that outlives its listing has no key at all. The fixture
+  states each whole key, so a world that stopped publishing a region fails it with the
+  region gone rather than silently dropping a rung of the ladder, and it states the
+  enrolled machine's content key as well as its machine key, because what a pull costs
+  is a property of the content and what a boot costs is not.
+- `registry-silence-has-a-name` (green): also states, since the second review, that
+  neither Run has a content key at all. A registry that will not answer leaves
+  Mercator unable to name what it is about to run, and a content key naming no content
+  filed a 900MB image and a 40GB one under one name per machine.
+- `a-candidate-recurs-through-the-control-plane` (conformance): the same candidates at
+  L1, on the keys the real orchestrator recorded in its Booking Decision. It exists
+  because the placement corpus and the Lab are two different simulated worlds, and a
+  key that agreed in only one of them would be a key about the harness.
+- `safety.candidate_identity_recurs` (Lab invariant): no two capacities the world says
+  are different share one candidate key, two Runs that asked one machine for different
+  content do not share one content key, a key names the machine its backend published
+  and never the lease or the listing that search found, and capacity the world
+  publishes nothing recurring about has no key. It is stated against World Truth
+  rather than against the derivation: the collision counts accelerators where the key
+  groups them, the content clause reads the image out of Mercator's own workload
+  record, and the honesty clauses read the offer. Each clause has a case that fails
+  it, one at a time, in `TestEveryClauseOfTheCandidateIdentityRuleCanFail`, and the
+  registry's permanent deliberate failure drives the collision. Through the whole
+  control plane on the conformance Blueprint: restoring the inventory bug where two
+  entries naming one product were deduplicated fails it with an eight-card machine and
+  a four-card machine under one name, dropping the lane fails it with a rental and a
+  one-shot execution of one product under one name, naming the machine from the Rental
+  fails it on every Blueprint in the corpus, and letting any provider recur fails it
+  on the one-shot pool.
+- `history-answers-for-the-machine-it-was-measured-on` (green): six listings of five
+  marketplace machines, two of which this fleet has measured, and one of the measured
+  machines published twice under two ask IDs. A third Run asks all six what they will
+  spend on the stage this fleet has actuals for, and the fixture asserts every answer
+  by level, by sample count, and by seconds: both listings of the measured machine at
+  the exact candidate with its own thirty seconds, the second measured machine with
+  its own hundred and fifty, an unmeasured machine in the same region at the two
+  samples of that provider and place, an unmeasured machine of that provider elsewhere
+  at the provider, and a machine of a provider nobody has measured at the prior, which
+  is what the Run declared about itself. It is the first fixture that states the
+  machine behind a marketplace listing and the readiness of one machine rather than of
+  the whole world, and the second of those is what makes the levels answer different
+  seconds. A fourth Run asks the same six about a second image nothing in this world has
+  ever launched, and every rung has to be silent about it: readiness is the workload's
+  own semantics, so the measured machine, its neighbour in that region, and its provider
+  elsewhere all fall to what that Run declared about itself. A world holding one image
+  is what left the three answers above unfalsifiable against a ladder that carried the
+  content at its narrowest rung alone.
+- `history-answers-through-the-control-plane` (conformance): the same claim at L1,
+  where both halves of the answer are Mercator reading Mercator. The identity is the
+  one its own Booking Decision recorded and the seconds are the difference between two
+  moments its own Run stream adopted, one stated by the machine holding the container
+  and one stated by the application inside it. All three keyed rungs answer here: the
+  machine that ran the first Run at the exact candidate, an unmeasured machine in its
+  region at the provider and place, and an unmeasured machine in another region at the
+  provider, for the same seconds at less confidence. A third Run then asks the same
+  three machines about a second image, and all three fall to its own declaration, so
+  each coarse rung is in this world twice: once where it answers and once where it has
+  to be silent. What the region here holds is the half of its production path that runs
+  from the offer to the recorded identity; that a backend states one at all is held in
+  the adapters, in the lane where they do.
+- `safety.prediction_states_its_provenance` (Lab invariant): every stage of every
+  recorded candidate names the level its answer came from and how many measured
+  launches stand behind it; a keyed level names a key and a positive count, a prior
+  names neither, and the key an answer was read under is the key this candidate has at
+  the level that answered. Two clauses are load-bearing. A key that names the listing
+  the offer arrived under is refused, because a marketplace mints an ask ID per search
+  and a history filed under it reports a key that cannot grow as candidate-specific
+  evidence. And a coarse rung answering a stage that is a property of the content under
+  a key naming no content is refused, because a rung generalizes over machines and
+  never over what those machines were asked to run. Each clause fails on the one record
+  it exists to catch in `TestEveryClauseOfThePredictionProvenanceRuleCanFail` and
+  `TestACoarseRungAnsweringContentItDoesNotNameIsAViolation`, the counterpart holds
+  that an answered stage and a prior are both honest provenance, and the registry's
+  permanent deliberate failure drives the listing clause. Through the whole control
+  plane on the conformance Blueprint: keying the history on the offer snapshot ID, on
+  both the writing and the reading side, fails it with the key naming the listing, and
+  building the coarse keys without the image fails it on the artifact conformance
+  fixtures with a readiness answered at `provider` for content that key does not name.
+
+- `a-fast-machine-far-from-the-data-loses` (green): three Rentals equally warm on the
+  image at one price, one on a measured 4 Gbps path to the object store, one on 200
+  Mbps, and one that has never measured that path at all, and one Run that reads a
+  40GB dataset. The slow machine publishes the faster path to the registry, which buys
+  it nothing, because it holds the image already and there is nothing to fetch over
+  that link. The unmeasured machine is the fallback half of the same claim: it is
+  priced rather than refused, charged the stated prior, capped at what a duration over
+  an unmeasured rate is worth, and its record names `assumed_object_store_rate` rather
+  than presenting 500 Mbps as something a machine reported. It is the first Blueprint
+  to declare a path to an object store, and under one constant per scope it is red
+  three ways: the two measured candidates price the read at 640 seconds against the 80
+  and 1600 stated, both record the assumption where a measurement is asserted, and the
+  placement lands on `rental-far-from-the-data` because nothing separates the three
+  and the tie broke on the offer ID.
+- `a-start-bound-refuses-only-what-it-can-prove` (green): one Run that refuses to wait
+  a quarter of an hour and two machines holding the whole image that both have to read
+  the same 40GB. The one that measured its path at 200 Mbps is struck out, because a
+  Run gets to refuse a machine that is known to be late. The one nobody has measured is
+  taken, priced at the prior over the byte count and recorded `START_SLO_UNVERIFIED`,
+  because a duration over a rate nothing on that machine answered for is a guess and
+  refusing capacity on a guess is silence about a path becoming infeasibility.
+  Restoring the assumed seconds to the established start fails it with `no feasible
+  offers`, which is the Run finding no capacity at all on two machines that may both be
+  a minute from ready. It is a second world beside
+  `a-fast-machine-far-from-the-data-loses` rather than a bound added to it: no single
+  bound can leave a measured slow path feasible for the ranking claim and refuse it for
+  this one.
+- `a-path-somebody-measured-prices-the-read` (conformance): the same world at L1,
+  where the bytes really move. The decision prices each read off the machine's own
+  published path, and the world then spends eighty seconds reading forty gigabytes
+  onto the near one. Both halves come from the one declaration, so the prediction and
+  the actual agree for a reason rather than by construction; dropping the world's
+  reading of paths leaves it spending 640 seconds whatever the fixture declared.
+- `a-path-a-host-disowned-is-still-the-path` (conformance): the one world where the
+  prediction and the actual cannot be the same number. A single Rental reads a 40GB
+  dataset over a path this world crosses at 200 Mbps and states no confidence in, so
+  Mercator prices the read from its own assumption at 640 seconds and the world spends
+  1600. It is what holds the two halves apart in the Lab world: with that world reading
+  published facts instead of its own declaration, the read costs 640 and the actual is
+  derived from Mercator's own input. `a-world-crosses-the-path-its-host-disowned` is
+  the same claim about the fake adapter.
+- `a-floor-on-reading-the-data-is-a-floor-on-delivery` (green): the two ways a
+  candidate can miss a Run's floor on reading its dataset, which no fixture could
+  state because every download floor in the tree was over a registry. Three Rentals
+  hold one image at one price. The machine that delivers four gigabits is refused a
+  floor of eight and the record states the four it published; the machine that
+  delivers ten and last measured a week ago is refused as unmeasured, because this Run
+  acts on nothing older than ten minutes; the third is taken. Dropping either rule
+  fails it on that machine alone. It is the fixture that says an object store p10 is
+  delivery and a floor may know it, and the one that makes a node's dating of its own
+  measurements reachable from the corpus.
+- `a-world-crosses-the-path-its-host-disowned` (green): the fake adapter's transfer
+  model, held apart from Mercator's own input. One Rental holding nothing, an 18GB
+  image, and a four gigabit registry path the machine states no confidence in, so the
+  pull is priced from the fleet assumption at 288 seconds and this world spends the
+  thirty-six the path costs. The start it asserts is the world's moment: deriving the
+  world's rates from the published facts leaves the same Run starting 288 seconds in,
+  which is what running it that way reports. Before it, that substitution left the
+  whole suite green.
+- `safety.transfer_rate_is_attributed` (Lab invariant): every transfer a Booking
+  Decision recorded names either the measurement or the assumption it was priced
+  from, and never both, and a rate the record presents as measured is a number some
+  host or path fact reported at that scope, one its publisher still stands behind. A
+  disowned or expired fact is silence for every other reader here and may not become
+  a measurement by being divided by. A transfer priced from an assumption is worth at
+  most `domain.AssumedLinkConfidence`, asked of the rate and of the stage estimate it
+  produced, which is the clause that keeps the first two from being bookkeeping: an
+  honestly named assumption charged no doubt ranks an unmeasured machine exactly where
+  a fabricated measurement would. It is the rate half of
+  `safety.locality_provenance`, which explains the bytes: seconds are the product of
+  the two, and either one can be invented.
+- `a-changed-decision-names-the-one-it-replaces` (green): a Rental whose schedule
+  already holds a running Booking and the maximum four waiting refuses the only Run in
+  the world, which is recorded as a decision rather than thrown away. Six minutes
+  later the running Booking finishes, a position opens, the Run is placed, and the
+  answer that replaces the refusal names it by ID and gives
+  `PREVIOUS_DECISION_SELECTED_NOTHING`. Both survive in the record. The re-decision is
+  caused by the fleet changing rather than by a machine refusing a launch, because a
+  refused launch is a fault and a placement fixture has none; the launch-failure half
+  is held at L1 by `TestAReplacementNamesTheDecisionItReplaces` over
+  `a-published-rate-is-not-what-a-machine-does`, where the fleet does not move and the
+  machine refuses the start.
+- `safety.decisions_are_never_rewritten` (Lab invariant): one decision ID means one
+  decision, and every answer after the first names the record immediately before it
+  and gives a reason. Two records under one ID that disagree are a decision edited
+  after the fact, and every account built on that ID, the predictions filed against it
+  and the audit of why a Run went where it did, is then an account of something that
+  never happened. The predecessor is checked as the immediate one rather than as any
+  earlier record, because a chain that skips a link is one a reader cannot walk.
+- `safety.a_silence_is_not_an_answer_about_capacity` (Lab invariant): every recorded
+  wait recounted off the decision it was read off, so a fleet that says nothing it
+  published can ever hold this Run has to have weighed a machine that said so. A node
+  whose disk probe failed reports no room and has not said it is full. It recounts
+  rather than trusting the answer beside the reason, for the reason
+  `silenceWasTakenBackOut` recomputes what a candidate was charged: a scheduler that
+  miscounts its own evidence agrees with itself perfectly, and only a reading taken
+  from the record's other half catches it.
+- `safety.decision_is_reproducible` (Lab invariant): re-deriving a decision's ID from
+  the content the record carries yields the ID the record carries. It is what makes
+  the rule above enforceable rather than defeatable by editing a decision and its ID
+  together, which is a chain of consistent-looking records assembled after the fact.
+  It reads every decision and not only the newest, because a superseded decision is
+  the part of the chain nobody is looking at any more, which is exactly where an edit
+  would go.
+- `an-ask-nothing-matches-holds-no-queue` (green): a marketplace publishing a 200GB
+  machine and answering a 900GB ask with nothing at all, which is the strongest thing
+  a fleet can say and was the one wait nothing exempted. The patient ask waits, twelve
+  minutes of waiting promote it past the class that arrives next, and the Run that
+  arrives fits what this fleet sells and is placed. That last part is the case:
+  recording the ask's wait as one for capacity to come free is what let one submission
+  for a shape nobody sells hold a whole workspace for a day while the machine behind
+  it went unsold. Both simulated worlds answer the shape they were asked about for
+  this reason, because a world that returned its whole inventory whatever anybody
+  asked could state a fleet nobody can use and never a fleet that answers one ask with
+  nothing while answering another with a machine, which is the shape production
+  reaches through a shape-filtered search rather than through an empty fleet.
+- `a-machine-that-could-not-look-is-not-a-machine-with-no-room` (green): one machine,
+  holding the image, whose disk probe failed. Placement refuses it, because landing
+  content on a disk nobody measured is a launch nobody can promise, and the refusal
+  names the silence rather than a shortfall: the fleet's answer counts it as a machine
+  that said too little to tell. Every Run carries a disk floor, so reading that as a
+  full disk made every Run in the workspace an ask no capacity can ever hold and took
+  the ordering away from all of them at once. The second Run is the assertion. It
+  arrives later, it is worth less than the Run already waiting, and it is told it waits
+  behind it.
+- `a-fleet-that-changed-is-recorded-again` (green): two machines too small for the ask
+  and one of them on an idle lease that runs out. The wait does not change, and a Run
+  in that wait has an empty list of work ahead of it by construction, so suppression
+  stated over the reason and that list threw away the decision naming the fleet as it
+  now is. It is stated over the fleet's own verdict now, the machines weighed and what
+  each was refused for, which is what every law about Placement reads.
+
+- `a-bound-on-cost-outranks-the-class-that-would-pay` (green): the world
+  `the-service-class-decides-what-wins` states, with a bound on what the Run may
+  cost. Interactive work prices a second of waiting at twenty times the machine's
+  own rent, so its class buys the warm machine on the five minutes of pulling the
+  cold one owes, and twenty minutes there is 1.33 USD against the one dollar its
+  caller allowed. The warm machine is refused `COST_LIMIT_EXCEEDED` and the Run
+  runs on the cheap slow one. It is the first fixture in this corpus that states a
+  budget at all: the refusal was enforced in production and reachable by no
+  Blueprint, so everything the corpus could say about money was which machine won
+  on price. Removing the bound from the scheduler places the Run on the machine its
+  class prefers and fails it three ways over.
+- `a-machine-that-came-free-too-late-is-not-a-start` (green): one busy machine and
+  an interactive Run that will not wait a minute to start, so the only candidate is
+  struck out as too slow and nothing projects when the wait ends. The machine comes
+  free at ten minutes and a quarter, the Run is asked again half a minute later,
+  and its class says it must have started within ten minutes of being told to wait.
+  It is refused `QUEUE_DELAY_EXCEEDED`, which is the earlier of the two bounds that
+  wait broke. Asking the deadline only of a Run being told to wait places it instead,
+  which is what the fixture fails on.
+- `a-start-nobody-can-reach-is-refused-at-the-door` (green): one machine with every
+  Booking position taken and an interactive Run arriving into it with no wait behind
+  it. Both its bounds are still ahead of it and the record already says the machine
+  comes free in twenty five minutes, so the answer has stopped being worth producing
+  before anything was broken, and admission refuses it `DEADLINE_UNREACHABLE` at its
+  first pass. It is the only fixture that pins that reason, and the only branch that
+  can still produce it: `Admission.BoundAlreadyBroken` names the deadline only for a
+  wait that has already reached it, and every class states a queue delay shorter than
+  its own deadline, so a projected miss is the whole of it. Deleting the projected
+  miss from `deferOrRefuse` leaves the Run waiting on `NO_FEASIBLE_OFFER`, which is
+  what the fixture fails on, and left the rest of the tree green before it existed.
+- `a-cost-bound-refuses-the-machine-the-class-would-buy` (conformance): the same
+  world under the real control plane, and the execution
+  `safety.class_bounds_honoured` is falsifiable through. It asserts the refused
+  machine scored better than the selected one, because a world where the cheap
+  machine also wins on score says nothing about a limit.
+- `safety.class_bounds_honoured` (Lab invariant): no Run was placed on a machine
+  costing more than its caller allowed, on a machine nobody quoted under a bound on
+  dollars, or past the moment its own class says the answer stops being worth
+  having, measured from the deferral that started its wait. Both bounds are read
+  off the record rather than off the scheduler's arithmetic, and they are one law
+  because they are one failure: a class is a declaration Mercator scores every
+  candidate on, so it can always be talked into a costlier or a later machine, and
+  the bounds say how far. The maximum queue delay is deliberately not restated in
+  it, because that promise is what `liveness.aging_prevents_starvation` is stated
+  over and two laws over one bound let a repair satisfy one of them and be
+  believed. The deadline half is exercised at L0 and in the rule's own clause tests
+  and nowhere at L1, and it cannot be reached by driving a Run to its deadline at all:
+  every class's maximum queue delay is shorter than its deadline, so a wait that
+  reaches the later bound broke the earlier one first and
+  `Admission.BoundAlreadyBroken` names the earlier one at both doors. What this law
+  catches is a placement past the moment, which is a decision rather than a refusal,
+  and its own deliberate failure is a Run placed 15000 seconds into a wait its class
+  bounds at 14400 with a failed launch in the middle of it.
+- `a-class-with-no-deadline-still-stops-waiting` (green): one machine with 200GB and
+  an opportunistic Run asking for 900GB. Two hours and a minute later it is refused
+  `QUEUE_DELAY_EXCEEDED`, which is the only bound that can end this wait: its class
+  states that its value does not expire, so it declares no deadline, and before the
+  maximum queue delay was a refusal this Run waited for ever.
+- `a-queue-delay-bound-is-refused-loudly` (conformance): the same claim at L1, and the
+  execution the starvation law's exemption is falsifiable through. Deleting the
+  queue-delay branch from `deferOrRefuse` fails it on
+  `liveness.aging_prevents_starvation` naming a Run two hours and five minutes into a
+  wait its class caps at two hours.
+- `a-batch-run-eventually-runs` (conformance): one machine, forty one interactive
+  Runs arriving over an hour, and one batch Run that base priority alone leaves behind
+  every one of them. At thirty minutes and thirty seconds of its own wait it is worth
+  a hundred and one, the next arrival is the first told it waits behind it, and it
+  takes the position that comes free and runs. It is the only fixture in either
+  simulator that states starvation, which is a claim about what a stream of arrivals
+  does to a Run over half an hour rather than about one moment of an ordering.
+  Deleting the aging term from `Admission.EffectivePriority` fails it by name.
+- `liveness.aging_prevents_starvation` (Lab invariant, strengthened): no Run sits
+  queued past the longest wait its own class allows, and no wait admission ended at
+  that bound was one the record says could have ended. The second half is what keeps
+  the first from being satisfied by refusing everything, and it is stated over waits
+  rather than over effective priority: production orders the queue on
+  `Admission.EffectivePriority`, so a law reading the same function would agree with a
+  deleted aging term. What it reads is the derivation the rate is built from, that
+  half a class bound of waiting outranks anything arriving, so work admitted past such
+  a Run must itself have waited half of its own bound. A fleet that published no
+  machine which could ever hold the Run is the whole of the exemption, which is what
+  separates a fleet too small from a queue that wronged somebody.
+- `a-group-never-runs-wider-than-it-declared` (green): eight Runs in one family whose
+  caller said three of them may run at once, four idle machines warm for the image,
+  and the fourth Run told to wait. The record names `GROUP_AT_PARALLELISM`, the three
+  siblings holding capacity, and no fleet answer at all, because no machine was
+  weighed on the fourth's behalf. The ninth Run belongs to no family and takes the
+  fourth machine, which is what makes the fixture about a declared width rather than
+  about a fleet that ran out. Dropping the family from `WorkloadForRun` runs all eight
+  at once and gives the ninth Run a queued Booking on a machine that was busy.
+- `a-group-of-eight-runs-three-at-a-time` (conformance): the same family driven to the
+  end under the real control plane. Three run, five wait, and as each member finishes
+  the next is admitted, so the peak in the launch ledger is three and every member
+  ends succeeded. A family held to its width by never running is starved rather than
+  bounded, and only an execution can tell those apart.
+- `safety.group_parallelism_respected` (Lab invariant): stated in two halves. The
+  family every member declared reached the workload Mercator recorded, and no family
+  ever held capacity wider than that, counted over distinct Runs in the launch ledger
+  rather than over anything the control plane keeps. The first half is what makes the
+  second falsifiable: reading the family off the recorded workload is right for the
+  reason `safety.artifact_dependencies` reads a Run's inputs off it, and on its own it
+  goes silent on exactly the defect this slice repaired, a declaration that never
+  reached the record. Members that disagree about their own width are a violation of
+  their own, which is the price of a group being a label the work carries rather than
+  an object Mercator registers.
+- `only-work-that-may-be-interrupted-runs-on-reclaimable-capacity` (green): two idle
+  machines, and the cheap one is sold on terms that let its provider take it back. The
+  standard Run goes first, while both are free, and `INTERRUPTION_NOT_PERMITTED`
+  strikes out the machine its class would have bought; the batch Run behind it takes
+  the reclaimable machine. Letting the standard class permit interruption puts the Run
+  with most to lose on the machine that can disappear.
+- `a-preemptible-run-is-the-one-interrupted` (conformance): the same fleet with the
+  provider taking both reclaimable machines back five minutes in, which is the first
+  thing in this corpus that happens to Mercator rather than because of it. The batch
+  Run is the one interrupted, and the standard Run runs to the end on capacity nothing
+  could reclaim.
+- `safety.interruption_was_permitted` (Lab invariant): no execution the world took
+  away belonged to a class that forbids interruption. It crosses the world's own
+  reclamation with the workload Mercator recorded, because neither half says it alone:
+  an execution whose machine went away and one that failed on its own are the same
+  fact on the Run's record. It reads the permission off the class table, as the
+  neighbouring laws read the queue bounds off it, so changing what a class permits is
+  a change to the contract rather than a break of it. What it is red for is Mercator
+  ignoring the permission, which dropping the feasibility refusal produces.
+- `liveness.aging_prevents_starvation` (Lab invariant, restated over a divided wait):
+  both halves measure the part of each wait Mercator caused, which is the whole of it
+  less the intervals the Run's own family held it. The width counts members rather than
+  machines, so no ordering could have ended those intervals, and a caller whose width
+  outlasts its class's own patience has contradicted itself rather than been starved.
+  The division is summed over intervals and never read off the latest answer: a
+  deferral says who held the Run over the interval it opens, and exempting the whole
+  record excused every hour the fleet had already starved a Run of as soon as a sibling
+  took the family's place. `TestAWaitItsOwnFamilyHoldsIsNoStarvation` states a wait its
+  family held all of, `TestAFleetStarvedWaitIsNotExcusedByASibling` is the failing case
+  for the other direction, and the deliberate failure beside them is the identical
+  record waiting on `NO_FEASIBLE_OFFER`.
+- `a-family-place-is-taken-by-a-member-that-waits-its-turn` (green): the world
+  `busy-rental-worth-waiting` states, with a family of two one wide in it. The first
+  member is given a queued Booking behind somebody else's running work, which is
+  capacity Mercator committed and not an execution, and the second member is held on
+  `GROUP_AT_PARALLELISM` anyway. It is the only fixture in the tree that tells the two
+  readings of the count apart: counting executions instead reports `run "sweep-2":
+  expected outcome "defer", and admission recorded nothing at all about this Run
+  waiting`, and leaves both group Blueprints, both group executions and every law green.
+- `a-family-holds-its-own-members-past-the-queue-bound` (green): a family of two one
+  wide, half an hour a member, two idle machines. An hour and a minute in, a minute past
+  the whole queue delay this class states, the held member is reconciled and waits,
+  because the wait is the caller's own declaration and not a promise Mercator made. A
+  day and a minute in the same member is refused `DEADLINE_UNREACHABLE`, which is the
+  caller's own bound ending it. Reconciling explicitly is how a fixture asks a held Run a
+  question at a moment nothing else is happening.
+- `a-family-narrower-than-its-class-patience-still-drains` (conformance): the same claim
+  driven to the end, three members one wide at forty minutes each, so the family takes
+  two hours to drain against the hour its class states. The test advances the clock into
+  the middle of the second member's run, which is the minute sweep production has and the
+  Lab does not, and reads the third member still queued and not closed; then all three
+  succeed and the second machine is never taken. Against the reading it replaces the
+  third member is closed failed after 4200 seconds.
+- `a-member-that-gave-its-capacity-back-leaves-room` (conformance): the first launch
+  failure inside a family anywhere in the corpus. One warm machine refuses the first
+  member's launch, the Booking goes back in the same commit, and the second member is
+  admitted onto the machine its sibling gave back and runs; the first member ends failed,
+  because Mercator will not offer it the snapshot that just refused it. That a family
+  which lost a member to a launch failure still drains is the claim, with one member
+  holding capacity at a time throughout. Only one member ever runs, so no order is being
+  claimed, and which recorded fact took the first member out of the count is not what
+  this tells apart: the Booking going back and the Run closing land in the same pass, so
+  either reading admits the sibling here. Its own summary said the opposite of all three
+  until the review that follows.
+- `a-wait-the-fleet-caused-is-not-excused-by-a-sibling` (green): a member whose ask no
+  machine in the fleet can hold waits two hours and a minute on `NO_CAPACITY_FITS`, and
+  then its sibling takes the family's one place. It is refused `QUEUE_DELAY_EXCEEDED`
+  for the two hours the fleet kept it waiting rather than exempted from that moment on.
+  Against the reading it replaces the fixture reports the `GROUP_AT_PARALLELISM`
+  deferral it got instead.
+- `only-the-part-of-a-wait-mercator-caused-is-charged` (conformance): the other
+  direction, and the handoff instant itself. One reclaimable machine, a family of two
+  one wide, and the provider taking the machine back an hour and a minute in, which
+  interrupts the first member and gives the family's place back at a moment nothing
+  else happens. The held member is deferred `NO_CAPACITY_FITS` with 3660 of 3660
+  seconds charged to its caller, and refused `QUEUE_DELAY_EXCEEDED` an hour later with
+  3660 of 7320 charged to Mercator. Against the reading it replaces the member is
+  closed failed at the handoff, for a wait Mercator had kept it in for no time at all.
+  It needs a world event because the plan-driven Lab has no way to give capacity back.
+- `an-idle-machine-is-not-free` (green): an enrolled node at 1 USD an hour bought by the
+  hour, ten minutes into the hour Mercator has already paid for, against a one-shot sold
+  by the minute at 1.60 with a 5 cent fee to hand it over. Four steps. The half-hour Run
+  is 1.17 USD on the node against 0.85 on the one-shot and flips away from the node,
+  which is the whole slice: under a rate times one Run's seconds it is 0.50 and the node
+  wins. The sweep behind it is refused the node `CLASS_NOT_ELIGIBLE` rather than priced
+  there. The long Run wins the node back, because fifty-five minutes uses the hour the
+  node costs either way. The last Run is refused the node `AVAILABILITY_WINDOW_CLOSES`
+  while the long one is still on it, because the window that machine is Mercator's for
+  closes before this Run's turn could end. It is the first fixture in the corpus to
+  state a billing increment, a commitment, a reservation, or a window, and the first to
+  assert a price term by term.
+- `an-owned-hour-is-charged-to-somebody` (conformance): the flip and the reservation
+  through the real control plane, with every term of the node's price asserted rather
+  than the total, and both economics laws read off the recorded decisions. Against the
+  reading it replaces the Run lands on the node and the test fails on its first line.
+- `safety.no_capacity_is_free` (Lab invariant): every candidate somebody quoted carries
+  positive dollars accounted for by the terms recorded beside it. An owned machine is
+  the case it exists for: nothing new is billed for an hour already paid for, so a model
+  asking what this decision adds to the bill reaches zero honestly and is wrong, because
+  the seconds are the scarce thing and a candidate priced at nothing wins every
+  placement it is weighed in. A machine nobody quoted is exempt and carries no terms,
+  because pricing the absence of a price is the fabrication the law is against.
+- `safety.committed_cost_is_not_double_counted` (Lab invariant): one second of one
+  committed interval belongs to one Run. It is stated over the placements Mercator took
+  rather than the candidates it weighed, because candidates are alternatives and neither
+  has spent anything, and it also refuses committed rent charged past the end of the
+  interval, which is the keep-alive term wearing the committed term's discount.
+
+No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
+only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
+none at all, and `internal/scenario` imports nothing from `internal/lab`. Every
+queue these laws have seen was committed by the Broker for a Run the Lab itself
+created, which is what `a-queue-drains-as-it-runs` drives. An earlier version of
+this section claimed `safety.exclusive_booking_capacity` and
+`safety.ephemeral_capacity_not_reused` had begun reading seeded schedules at L0.
+That was false in both halves, and it was offered as the reason the seeding work
+needed no invariant of its own.
+
+Seeding at L1 is a gap rather than a decision, and the Lab refuses the Blueprint
+now instead of dropping the statement: `Compile` fails on a world stating
+`rental_schedules`, because nothing loads them into the control plane's own
+storage and the world would otherwise be built with every Rental idle while the
+fixture said a machine was occupied for the next forty-five minutes. Two things
+have to arrive before the Lab can hold a seeded queue. The Broker's storage needs
+a seam a fixture may write through, and `liveness.superseded_booking_release`
+refuses any Booking whose Run has no record, which is true of every seeded Booking
+by construction.
+
+The corpus is 59 regression Blueprints: 56 green and 3 target, beside two demo
+documents, one minimized case, and forty conformance Blueprints, all of
+them green. The count is read off the
+tree rather than remembered: `internal/scenario/scenarios/*.json` is the
+regression corpus, `conformance/` is driven through the Lab, and the two
+subdirectories beside them hold the demo and the one minimized case.
+`internal/scenario/blueprint_test.go` asserts the three regression figures, so a
+Blueprint added without a classification fails the build rather than drifting the
+number quoted here.
+
+The three targets are the capabilities no simulated world performs yet.
+`enrolled-node-survives-its-first-run` needs an agent to bootstrap on provisioned
+capacity, which is phase 5. `queued-booking-deadline-expiry` needs
+`schedule_advancement`, which is a Booking expiring past its latest start and its
+Run being placed again. `bad-host-facts-rejected-loudly` needs a world that can
+publish host facts a machine then contradicts.
+
+The Lab registry holds forty five invariants, thirty eight safety and seven
+liveness. Every one carries a deliberate failing case, which
+`TestEveryDefaultInvariantHasADeliberatelyFailingCase` requires of the registry
+itself: an invariant nothing can make fail is not evidence, so one cannot be
+registered without the world that breaks it.
+
+The conformance Blueprints are driven from `internal/lab` rather than from the
+placement corpus, because each one asserts something only an execution can say:
+what bytes a workload was handed, when a transfer was moving, what a host held
+afterwards, and what survived a control-plane restart.
 
 ## What phase 2 does not yet do
 
@@ -1895,6 +5099,1943 @@ the launch.
 
 ## Verification evidence
 
+### Phase 4 close-out
+
+The branch was cut from `beng/artifact-locality` before that branch's own phase 3
+close-out landed, so the pull request opened with a merge conflict and GitHub
+computed no merge ref, which is why it had no CI at all rather than failing CI.
+Merging the base in conflicted in eighteen files. Most were both sides appending
+to one list. Six needed a decision about which model is current, and the rule
+applied was that the newer answer wins and the superseded code is deleted rather
+than left beside it: phase 4's class-derived weights and stage waterfall replace
+the dead-weight score and `ArtifactSeconds`, and phase 3's fleet-wide preparation
+pass with a durable clock replaces the per-workspace pass with an in-process one,
+with phase 4's refusal handling reapplied on top of that shape.
+
+The merge surfaced two real defects that neither branch could have seen alone,
+and both are worth recording because both were silent until the other side's code
+existed.
+
+The first is a rate bound that stopped pacing anything. Phase 3's `remember`
+answers whether stating a desire began any preparation, and the durable clock is
+recorded only when it did. Phase 4 made the memory record what the holder kept
+rather than what was sent, so that content a machine refused can be asked for
+again. Composed naively, a wholly refused desire began nothing, moved no clock,
+and was therefore re-askable in the same instant, forever:
+`TestOneMachineRefusingIsNotEveryMachineStopping` caught it, reporting the cheap
+machine answering a refusal and an acceptance at one timestamp. The two questions
+are now asked of different sets. What Mercator remembers asking for is what the
+holder kept, because a refusal left nothing anywhere. What the rate bound measures
+is the attempt, refused or not, because the bound is on how often Mercator may
+begin asking a fleet to move bytes.
+
+The second is a test reading an API that phase 4 replaced. Phase 3's prewarm case
+read `decision` from `GET /v1/runs/{id}/decision`, and phase 4 made that route
+answer `decisions`, the chain, because a Booking Decision is appended and never
+rewritten. The helper decoded nothing, returned the empty string, and reported
+that the Run had never been placed. It had been placed the whole time, on the
+machine the case named, and the case would have gone on reporting a placement
+failure for an API change. It reads the last entry of the chain now.
+
+CI then found four more defects that no command on this workstation could reach,
+because the browser proof needs a Chromium this host cannot launch: Playwright's
+system libraries are absent and there is no sudo to install them. All four are
+recorded here rather than in the merge entry above, because they are what the
+phase's own changes did to the console and they were invisible until a machine
+with a browser ran them.
+
+The first was a Run the Lab can build and production cannot. ServiceClass
+replaced the placement objective outright, so every reader downstream of a Run
+was promised one of five words, and the operator API keeps that promise by
+normalising an omitted class to standard before validation sees it.
+`WorkloadForRun` cast a Blueprint's request straight into the domain instead, so
+three Blueprints produced revisions carrying the empty class.
+`TestEveryArrivingRunStatesAClassMercatorKnows` is the rule now, over every
+arriving Run in the corpus, with the fixture that states an unknown class on
+purpose excluded by name.
+
+The second is what actually blanked the console, and the first fix did not
+address it. `OfferSnapshot.Reliability` is `omitzero`, so a machine whose
+publisher has measured nothing sends no `reliability` key at all, which is every
+provider in this tree. openapi.json listed it as required anyway and the
+console's hand-written decoder mirrored the document rather than the wire, so the
+offer catalog frame failed to decode, the feed ended before `ready`, and the
+canvas drew its skeleton for ever. Phase 4 exposed it by turning reliability from
+one confidence that always serialised into two rates that are absent when nobody
+measured them. Fixed in the document, both generated readers, and the
+hand-written decoder. `feed.contract.test.ts` decodes the real captured feed,
+all forty frames of it, in `bun run test` rather than behind a browser, because
+what broke was two documents disagreeing about one payload.
+
+The third is the one worth remembering. Normalising the class turned the score
+weights on for the demo Blueprint, which had been ranked on dollars alone, and
+the consumer stopped choosing the machine holding its input. The Blueprint now
+states that these Runs are batch work, which is what they are and which is the
+only one of the five classes for which the demo's claim holds: dataset gravity
+decides exactly when a caller can afford to wait for it. The coverage gap
+underneath it is the finding.
+`TestVerifyVerticalProofPassesEveryDeclaredCheckpoint` steps once, restarts, and
+drives to completion, so every placement happens after the restart, and it stays
+green through the whole regression. The console steps twice, advances, restarts,
+and then advances until the Run closes, so the consumer is placed before the
+restart against a fleet the other order never presents.
+`TestVerticalProofHoldsInTheOrderTheConsoleDrivesIt` asks the same fifteen
+checkpoints in the console's order, carries no browser, and fails on it.
+
+The fourth is the Lab job being killed at Go's implicit ten minute test timeout.
+`TestAgingLiftsABatchRunPastSustainedArrivals` drove a fixed hundred and fifty
+sweeps for a Run that succeeds on the eighty fifth, and the remaining sixty five
+assert nothing while being the most expensive in the suite, because each
+re-decides the queue against an event log that is longest at the end. It was a
+hundred and twenty three of the package's two hundred and seventy five seconds
+under the race detector, and is fifty four now that it stops when the Run has
+run. The step also states a twenty five minute budget, because ten minutes was a
+boundary nobody chose that this job happened to sit on.
+
+Run on 2026-07-27 on the merged tree, in the
+`beng/prediction-and-service-classes` worktree, on an amd64 Linux workstation
+with Go 1.25.11 and Docker Engine 29.6.2, which is not the arm64 macOS the phase
+3 slices were built on. The whole verification was run again after the merge
+rather than carried over from before it, because a merge that resolves eighteen
+files is exactly the change most likely to invalidate an earlier green. Every
+command below was executed and its real outcome recorded. Nothing is quoted from
+an earlier run.
+
+`go build ./...` and `go vet ./...` both exit zero with no output.
+
+`go test ./...` exits zero across every package, 36 of which have tests. The
+suite terminates. That matters, because an earlier slice on this branch
+recorded that `go test ./...` did not terminate: `internal/daemon` spun forever on
+a Run with no feasible offer, because `stepAdmit` reported progress while
+`recordDeferral` suppressed the repeated deferral and returned nil, so
+`AdvanceRun` looped on unchanged state re-scanning the event log. The queue slices
+that followed replaced that path, and `internal/daemon` now completes in 9.0s.
+The slowest packages are `internal/lab` at 18.6s, `internal/daemon` at 10.1s, and
+`internal/conformance` at 2.1s.
+
+`go test -race -count=1` over every package this phase touched, which is every
+directory holding a Go file changed between `beng/artifact-locality` and this
+branch, exits zero across the 24 of them that have tests. No data race is
+reported anywhere. `internal/lab` takes 275.3s under the race detector,
+`internal/cli` 31.8s, `internal/nodeagent` 26.7s, `internal/daemon` 17.7s, and
+`internal/orchestrator` 15.3s. The package list is derived from the diff rather
+than typed by hand, so a package this phase touched cannot be omitted by
+forgetting it.
+
+The corpus is 59 regression Blueprints, 56 green and 3 target, and 40 conformance
+Blueprints, all green. Those figures are asserted by
+`internal/scenario/blueprint_test.go` rather than counted by eye, and it passes.
+The three targets each name the capability no simulated world performs yet:
+`enrolled-node-survives-its-first-run` (agent bootstrap, phase 5),
+`queued-booking-deadline-expiry` (`schedule_advancement`), and
+`bad-host-facts-rejected-loudly`.
+
+The web console changed in this phase, so its checks were run too. In `web/app`,
+`bun run typecheck` is clean under `tsc --noEmit`, `bun run test` passes 17 tests
+across 6 files under vitest 4.1.10, and `bun run build` produces the three
+artifacts into `web/static`.
+
+Two limits on what this evidence covers, stated rather than left to be inferred.
+The live half of the phase ran against a real local Docker daemon, a real
+`registry:2` container, and a real MinIO container, so the node, disk, registry,
+artifact-replication, and janitor-sweep paths were exercised against real
+software. No marketplace was contacted: this host holds no Vast, Shadeform, or
+RunPod credential, so the claim that a provider's own identifier recurs across
+listings, which is what the prediction key rests on, is held by unit cases against
+recorded response shapes and by the Lab, and by nothing live. And
+`TestRegistryResolverAgreesWithDockerAboutAPublicImage` still skips, because
+Docker Hub rate-limits this host.
+
+### Phase 4 replanning by explicit policy
+
+On 2026-07-27, two defects the plan already recorded as owed were repaired on a
+Linux workstation with Docker Engine 29.6.2 on the overlayfs driver, which is
+amd64 and not the arm64 macOS the phase 3 slices were built on. Nothing behaved
+differently there.
+
+The state-blind dedupe. `node.Operation.Reissuable` is the whole rule and it
+reuses the line `CommandKind.MayLeaveEffectOnFailure` already drew. Restoring the
+state-blind answer fails both stores through `nodetest.RunStoreSuite` with "a
+preparation the node refused must be askable again, not answered as already
+recorded", fails the Lab fixture with "the ledger records 1 asks for the refused
+corpus, want the refusal and the ask that followed it", and fails the daemon case
+with "the machine never held content it refused once and was asked for again".
+Marking a refused fetch as prepared in the Lab world fails
+`safety.idempotent_external_commands` with "duplicate effect
+node.prepare_artifact/prepare-artifact/builder/artifact:corpus:v9 has no accepted
+command".
+
+The orphan policy. Converging without recording fails
+`safety.orphan_policy_is_explicit` with "orphaned capacity orphan-nobody-claims is
+gone from this world and no decision names the policy that took it". Reclaiming
+unattributed capacity by releasing its slot, which is what the sweep did before it
+had a policy, fails `an-orphan-is-adopted-or-destroyed-by-policy` with "the fleet
+is [forgotten keeper stranded], and the machine the policy terminated is still
+billing".
+
+Reviewed and repaired the same day, before the slice was taken as done. Two of
+those repairs are stated by the corpus and two are stated only by package tests,
+and they are listed apart, because a reader who takes the green corpus as the
+guard for all four would let a later refactor undo half of them in silence.
+
+The corpus states these two. Reading the cleanup request ahead of the recorded
+launch fails `an-orphan-is-adopted-or-destroyed-by-policy` with "the capacity of a
+Run that gave up was converged as terminated / closed_without_a_cleanup_request,
+want it adopted on its recorded disposition". Matching a refusal on content alone
+fails `a-refusal-on-one-machine-is-not-a-withdrawal-on-another` with "the ledger
+records 0 withdrawals, want the transfer nothing was waiting for any more".
+
+`internal/janitor` alone states the other two, and `go test ./internal/lab
+./internal/scenario` is fully green with either of them reverted. Acting before
+recording fails `TestJanitorRecordsItsDecisionBeforeItActsOnIt` with "the record
+holds 0 orphan decisions, want exactly one" once the provider refuses one reclaim.
+Routing terminate at a provider that holds no machine of Mercator's fails
+`TestJanitorReleasesTheSlotOfCapacityItsProviderCannotDestroy` with "sweep:
+adapter: terminate unsupported for standing capacity", which before the repair
+returned before every later object in the same listing. Both gaps are in the
+Blueprint vocabulary rather than in the rules: the Lab's provider destroys
+anything asked of it and cannot be made to refuse a reclaim, and a sweep that
+returned an error would fail the Lab control plane's tick rather than leave a
+state a rule could read. Earning those two a world is owed.
+
+Reviewed again and repaired the same day. Deciding capacity by a Run's last
+recorded launch rather than by the launch whose identity the capacity carries
+fails `a-machine-two-launches-disagree-about-is-not-adopted` with "the capacity two
+launches disagree about was converged as adopted / recorded_disposition_release,
+want it destroyed as capacity no launch accounts for", and fails
+`internal/janitor` on both mixes: the machine one attempt provisioned handed back
+as a slot, and a slot another attempt borrowed routed a terminate. It fails on
+this host's own Docker daemon too, through
+`TestIntegrationTheJanitorConvergesOneAttemptsContainerByThatAttemptsLaunch`, with
+"the sweep of this daemon reports {Found:1 Adopted:1 Terminated:0}". That case is
+the live half of the rule and it exists because nothing below the control plane
+tells the janitor which launch a container came from: the attempt and the launch
+key travel as labels the adapter writes and reads back, so the rule is only as
+true as that round trip through a real engine. Local Docker reaches the same
+daemon command either way, so the recorded reason is the assertion. Reading a
+control plane's own absence as a desire for nothing fails
+`a-restart-still-withdraws-what-nobody-waits-for` with "the ledger records 0
+withdrawals, want the transfer the restart left running", and the replica lands at
+00:31:40 for Runs withdrawn at 00:12. Counting a withdrawal against the rate bound
+fails the daemon's own `TestAQueuedRunPreparesTheMachineItIsGoingTo` with "the
+queued Run's host was never asked to prepare anything", because a control plane
+that sends one desire of nothing at startup then owes the interval before it may
+prepare anything real.
+
+What is left. The control plane's own second ask still rides on
+`PrepareReceipt.Refused`, and no production prepare lane fills it: `broker.Prepare`
+answers Started or Duplicate, a node settles a refusal asynchronously, and nothing
+in the prewarm controller subscribes to that, so what triggers a second ask on a
+node is a change to the desired set. The store change is what makes that second
+ask reach the runtime when it comes, and it is the whole of what this slice
+delivered on that lane. Orphaned reusable capacity is still only what `ListOwned`
+reports, which is the ephemeral executor's view;
+`capability.CapacityProvider.ListOwnedCapacity` has no caller, so a machine
+Mercator provisioned and lost the Rental record for is not yet something the
+policy can see.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/node/... ./internal/storage/sqlite ./internal/janitor \
+  ./internal/orchestrator ./internal/broker ./internal/adapter/... \
+  ./internal/lab ./internal/scenario ./internal/daemon -count=1
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration -count=1
+go test ./internal/nodeagent ./internal/ociresolver -count=1
+```
+
+The live half ran against this host's own daemon. `internal/adapter/docker`'s
+three integration cases are gated on `MERCATOR_DOCKER_INTEGRATION=1` and were run
+with it set; without it they skip. The third is the janitor sweeping a real
+container this adapter launched, which is where the per-launch rule meets a real
+engine's labels. `internal/nodeagent` ran against a real daemon and a real MinIO
+object store, and `internal/ociresolver` against a real registry. The daemon suite
+is not part of that claim: `startFleet` empties `PATH` on purpose, so no local
+Docker connection is seeded and this slice's conformance case there runs against a
+scripted runtime. All green. #165 does not reproduce here and was left alone.
+
+### Phase 4 no capacity is free
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04, against
+`beng/prediction-and-service-classes` with this slice's commits on it, from
+`65b2fa1`. `go build ./...`, `go vet ./...` and `go test ./... -count=1` all clean over 36
+packages, and `go test -race -count=1` clean over `internal/domain`,
+`internal/scheduler`, `internal/scenario/...`, `internal/node`, `internal/httpapi`,
+`internal/storage/sqlite`, `internal/daemon` and `internal/lab`, `internal/lab`
+taking 216s of it. `cd web/app && bun run typecheck && bun run test && bun run
+build` clean, because the contract was regenerated from `openapi.json` rather than
+hand edited.
+
+The root corpus is 59 Blueprints, 56 of them green, with 32 conformance fixtures. Two
+Blueprints were added and no fixture moved classification.
+
+The Blueprint is red under the one-number shadow price, which is the acceptance this
+slice was set. With the commitment and the increment unpriced and the setup fee charged
+to everything, `an-idle-machine-is-not-free` reports the placement itself as well as
+the arithmetic: `expected "ask-minute" to win, but the decision placed on "node-owned"`,
+`candidate "node-owned": cost_usd: want at least 1.16, got 0.5`, `cost term
+committed_rent: want at least 0.166, got 0`, `cost term idle_tail: want at least 0.666,
+got 0`, and then the fourth step never gets a decision at all, because the node is
+still running the first Run. The same mutation fails
+`TestAnIdleMachineIsNotFreeAtL1` on its first line, with the half-hour Run landing on
+the node through the real control plane.
+
+Both laws are red against the record they exist to forbid, and the failing cases are
+permanent rather than mutations.
+
+- `safety.no_capacity_is_free` fails on `ownedMachinePricedAtNothing`, an owned machine
+  weighed for a Run and priced at nothing because the hour it sits inside was already
+  paid for. `TestAPriceItsOwnTermsDoNotAddUpToIsRefused` is the accounting half, a
+  candidate priced at 0.85 USD out of terms adding up to 0.80, and
+  `TestAnUnquotedMachineCarriesNoPriceToAccountFor` is the exemption, so the law cannot
+  be satisfied by inventing dollars for a machine nobody quoted.
+- `safety.committed_cost_is_not_double_counted` fails on `oneCommittedHourSoldTwice`,
+  two placements on one machine each charged everything still outstanding when its own
+  decision was taken, which is what pricing a commitment from the decision's moment
+  produces. `TestCommittedRentStopsAtTheEndOfTheInterval` is the single-placement form
+  of the same overselling, and `TestTwoRunsMaySpendOneCommittedHourBetweenThem` is the
+  lawful case that keeps the law from being a ban on committed rent.
+
+Per-candidate oracle agreement still holds with the new terms, and the reference model
+derives every one of them independently: its own occupancy, its own overlap with the
+committed interval, its own rounding up to the increment, and its own reading of what
+has to be acquired. A reference model that called the production pricing function would
+agree with it about a bug in the rounding, which is the one thing an independent model
+is for.
+
+Three terms this slice was scoped to carry are not priced, and each is a decision with
+a reason rather than an omission.
+
+- Stopped-state storage has no horizon anything states. A machine Mercator stops rather
+  than releases costs its disk until something uses it again, and nothing here predicts
+  when that is; every honest-looking substitute made a longer Run cheaper than a shorter
+  one, because it charged the part of a commitment the placement did not consume.
+- Preemption risk is not priced, and the corpus already argued this out under
+  `a-published-risk-history-ranks-nothing`: expected redo cost is a probability times a
+  predicted redo, and what the probability multiplies is the placement the work would be
+  redone on rather than this one. A published interruption rate is a rate rather than a
+  hazard over the length of a Run, so nothing here can say how much of a Run is lost
+  when a machine drops it. The availability window is the part of that risk that can be
+  stated without inventing either: the moment is declared, so it is a refusal.
+- Warm-capacity opportunity cost is not a term of its own, because it would double
+  count. An owned machine's shadow price is exactly the statement that its seconds are
+  worth something to somebody else, which is why committed rent is charged to the Run
+  that spends those seconds even though no invoice depends on the decision.
+
+The idle tail is deliberately conservative and this is where that shows. It charges the
+whole unused remainder of the increment a placement forces Mercator to buy, to the
+placement that forced it, and a later Run that used part of that remainder would be
+charged nothing for it. Splitting the tail between a Run that bought it and Runs that
+have not arrived needs a model of what arrives next, which nothing here has; the
+direction of the error is the safe one, because it overstates what committing to fresh
+capacity costs rather than understating it, and the alternative is the previous model,
+which charged the remainder to nobody.
+
+What the window does not yet cover, said plainly. A placement is refused when the
+runtime Mercator enforces could outlive the window, which is checked once, at the
+decision. A Booking queued behind another one is projected from where that Booking is
+at that moment, so a predecessor that overruns can push a queued Booking's own
+enforced end past a window that was clear when it was admitted. Nothing reconciles
+that today: no Blueprint can state it either, because the corpus has no world where a
+window closes over a queue, and the slice that adopts or terminates capacity by policy
+is where a Booking caught by a closing window belongs.
+
+Named and not fixed here. The local Docker adapter publishes `RatePerSecondUSD: 0` with
+`Known: true`, which is the one production publisher of capacity somebody says is free,
+and `safety.no_capacity_is_free` cannot see it because invariants read Lab executions.
+The honest answer is either a configured shadow price on the connection, as a node has,
+or an unpriced offer that a Run must allow, and both change where every local Run lands.
+It wants a slice of its own. `gofmt -l .` still reports
+`internal/adapter/vast/client.go` and `internal/scheduler/scheduler_test.go`, struct tag
+alignment left earlier on this branch.
+
+The live half ran on this host's own daemon rather than in simulation:
+`MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration`
+launches, observes, and releases a real container on the native engine. Nothing in this
+pass needed a container of its own, because what it changes is arithmetic over
+published facts and what an operator can say about a machine they own; the highest
+fidelity that means anything for it is the real node protocol over the real event log
+and SQLite, which the two `internal/daemon` cases drive. Mercator issue #165 does not
+reproduce here and was left alone.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 -timeout 900s ./internal/domain ./internal/scheduler \
+  ./internal/scenario/... ./internal/node ./internal/httpapi \
+  ./internal/storage/sqlite ./internal/daemon ./internal/lab
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+cd web/app && bun run typecheck && bun run test && bun run build
+```
+
+### Phase 4 the divided wait, and the six findings
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04, against
+`beng/prediction-and-service-classes` at the five commits above `1d62556`.
+`go build ./...`, `go vet ./...` and `go test ./... -count=1` all clean over 36
+packages, and `go test -race -count=1` clean over `internal/domain`, `internal/lab`,
+`internal/orchestrator`, `internal/scenario/...` and `internal/daemon`, `internal/lab`
+taking 202s of it.
+
+The root corpus is 58 Blueprints, 55 of them green, with 31 conformance fixtures. Two
+Blueprints were added and no fixture moved classification.
+
+Every repair is red against the reading it replaces, mutated back one at a time.
+
+- Charging the whole wait against the class's queue delay again, with the
+  latest-answer exemption restored, fails
+  `TestAWaitAFamilyHeldIsNotChargedWhenTheFleetTakesOver` with `the member was
+  answered "QUEUE_DELAY_EXCEEDED" after seventy minutes its own family held it, and
+  what holds it now is one busy machine`, and fails
+  `TestOnlyThePartOfAWaitMercatorCausedIsCharged` with `the held member is "closed"
+  with outcome "failed", and every second of its wait so far was its own family's
+  declared width`.
+- The same mutation fails `TestAHeldMemberPastItsDeadlineIsRefusedForItsDeadline` with
+  `a member its own family held for a day and a minute was refused
+  "QUEUE_DELAY_EXCEEDED", and the only bound its wait broke is its own deadline`,
+  which is the second door naming the wrong broken promise.
+- Exempting the record on its latest answer in the starvation law instead of dividing
+  the wait fails `TestAFleetStarvedWaitIsNotExcusedByASibling`, and the new fixture
+  `a-wait-the-fleet-caused-is-not-excused-by-a-sibling` reports `run "sweep-2":
+  expected outcome "refuse", and admission recorded
+  "compute.run.admission_deferred.v1" with reason "GROUP_AT_PARALLELISM"`.
+- Removing the departure on a launch failure from the admission queue leaves
+  `internal/lab` and `internal/scenario` entirely green, including
+  `a-member-that-gave-its-capacity-back-leaves-room`, and fails only
+  `internal/orchestrator`. That is the reviewer's own mutation and it stands: the
+  Blueprint that was promoted for the reading cannot state it, which the fixture and
+  the coverage list now say.
+
+Two findings were real about their evidence and wrong about the repair they asked for.
+Both concerned the class that states no deadline. The review asked for an opportunistic
+member held by its own family to be refused at the class's queue delay, which is the
+refusal the pass above removed and for the same reason: Mercator had kept it waiting for
+capacity for none of that time, and `QUEUE_DELAY_EXCEEDED` is a statement about
+Mercator's own promise. The review also held that no invariant anywhere could report
+such a member. `liveness.admitted_run_progress` reports any Run of a declared arrival
+still open a day into an execution, whatever it is waiting for, and
+`TestAFamilyHeldMemberIsStillHeldToProgress` states it over the held opportunistic
+record. What was real is that the entry claimed the deadline "still ends the wait"
+without disclosing the one class it does not end, and that is disclosed now.
+
+What this pass could not reach, unchanged. The Lab still has no sweep of its own, so
+both new fixtures drive the clock themselves, one through a `reconcile` step and one
+through explicit advances in its test. Concurrency still has no Blueprint.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth` and
+`TestANodeMeasuresTheObjectStorePathItJustCrossed` pass against MinIO containers of the
+native engine, and `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker
+-run TestIntegration` passes against real containers. Nothing in this pass needed a
+container of its own: what it changes is how admission divides a wait and the laws
+stated over it. Mercator issue #165 does not reproduce here and was left alone.
+
+Named and not fixed here, unchanged. `gofmt -l .` reports
+`internal/adapter/vast/client.go`, `internal/scheduler/scheduler.go` and
+`internal/scheduler/scheduler_test.go`, struct tag alignment left by `595f7b0` and
+`1e13518` earlier on this branch.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/lab ./internal/orchestrator \
+  ./internal/scenario/... ./internal/daemon
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
+
+### Phase 4 the group bound under review, and the four findings
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04, against
+`beng/prediction-and-service-classes` at the four commits above `0683288`.
+`go build ./...`, `go vet ./...` and `go test ./... -count=1` all clean over 36
+packages, and `go test -race -count=1` clean over `internal/domain`, `internal/lab`,
+`internal/orchestrator`, `internal/scenario/...` and `internal/daemon`, `internal/lab`
+taking 202s of it.
+
+The root corpus is 57 Blueprints, 54 of them green, with 30 conformance fixtures. Three
+Blueprints were added and no fixture moved classification.
+
+Every repair is red against the reading it replaces, mutated back one at a time.
+
+- Removing the workspace lock from `stepAdmit` fails
+  `TestAFamilyBurstSubmittedIsStillHeldToItsWidth` five times out of five with `a family
+  declared 1 wide was given capacity for [run_a on off_one run_b on off_one], and every
+  member of it asked at the same instant`. The offers are provisionable on purpose: a
+  queued Booking on an existing Rental commits through a Rental Schedule whose version is
+  checked, so two members competing for one machine would be serialised by that check for
+  a reason that has nothing to do with the family, and provisioning mints a fresh Rental
+  per Booking.
+- Charging a self-imposed wait against the class's queue delay again fails
+  `a-family-holds-its-own-members-past-the-queue-bound` with `expected outcome "defer",
+  and admission recorded "compute.run.admission_refused.v1" with reason
+  "QUEUE_DELAY_EXCEEDED"`, and fails `TestAFamilyNarrowerThanItsClassPatienceStillDrains`
+  with `the third member is "closed" with outcome "failed" after waiting 4200s`.
+- Removing the new exemption from the first half of
+  `liveness.aging_prevents_starvation` instead fails the same conformance case from the
+  law rather than from the assertion: `Run "run-member-003" of class "batch" has waited
+  1h10m0s, which is past the 3600s its class allows, behind run-member-002`. That is the
+  two halves of one law disagreeing, which is what the repair ended.
+- Counting executions rather than placements fails
+  `a-family-place-is-taken-by-a-member-that-waits-its-turn` with `run "sweep-2": expected
+  outcome "defer", and admission recorded nothing at all about this Run waiting`, and
+  leaves `a-group-never-runs-wider-than-it-declared`,
+  `a-group-of-eight-runs-three-at-a-time`, `a-family-narrower-than-its-class-patience-
+  still-drains` and every group law green. That is the reviewer's own mutation and its
+  own evidence: the corpus could not see the count before.
+- Removing the departure on a launch failure fails
+  `TestAMemberThatGaveItsCapacityBackLeavesRoomForItsFamily` with `the second member is
+  held by a family whose only other member holds no capacity: [run_first]`, and leaves
+  `a-member-that-gave-its-capacity-back-leaves-room` green. That asymmetry is stated
+  rather than hidden: under the real control plane the replacement follows in the same
+  pass, so a member whose launch failed is either placed again or closed
+  `RETRY_EXHAUSTED` before anything else asks, and the moment in between is what a sweep
+  interrupted by an error or a restart leaves behind.
+
+One finding was real about its evidence and wrong about the repair it asked for. The
+review asked for the population of `holding` to move from the decision to the dispatch,
+as the mutation that proves the corpus blind, and that is the reading the count must not
+have: a member given a queued Booking is never asked about again, so a family of one
+would commit a second machine and then run two. What was missing is the Blueprint, and
+the Blueprint is what this pass added.
+
+What this pass could not reach. The Lab has no sweep of its own, so no Blueprint can ask
+a held Run a question in the middle of a wait, and the two fixtures that need one drive
+the clock themselves. Concurrency has no Blueprint either and the daemon harness cannot
+force the interleaving. Both are disclosed in the progress entry rather than implied by a
+green corpus.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed` and
+`TestAStartBoundRefusesOnlyThePathThisNodeMeasured` pass against MinIO containers of the
+native engine, and `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run
+TestIntegration` passes against real containers. Nothing in this pass needed a container
+of its own: what it changes is admission's own bookkeeping and the laws stated over it.
+Mercator issue #165 does not reproduce here and was left alone.
+
+Named and not fixed here, unchanged from the entries below. `gofmt -l .` reports
+`internal/adapter/vast/client.go`, `internal/scheduler/scheduler.go` and
+`internal/scheduler/scheduler_test.go`, struct tag alignment left by `595f7b0` and
+`1e13518` earlier on this branch, untouched by this pass and still held in another
+session's stash against this worktree.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/lab ./internal/orchestrator \
+  ./internal/scenario/... ./internal/daemon
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
+
+### Phase 4 run groups and interruption
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04, so nothing that wants a daemon skipped:
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/lab ./internal/orchestrator ./internal/scheduler \
+  ./internal/domain ./internal/scenario
+cd web/app && bun run typecheck && bun run test && bun run build
+```
+
+Both Blueprints were red before and are green after, and each one and each half of
+each law was measured by breaking the production behaviour and reading what failed.
+
+- Dropping the family from `WorkloadForRun` fails
+  `a-group-never-runs-wider-than-it-declared` six ways: five members reported as
+  `admission recorded nothing at all about this Run waiting`, and the Run outside the
+  family placed on `rental-1` as a queued Booking rather than on the idle machine. The
+  same mutation fails `safety.group_parallelism_respected` on its first half, with
+  `Run "run-member-001" was submitted into family "sweep" at a width of 3 and Mercator
+  recorded family "" at a width of 0`.
+- Stopping admission from asking about the family fails the second half, with `group
+  "sweep" declared that 3 of its Runs may hold capacity at once, and at effect 15 it
+  held 4`, and fails the daemon case with `run is "requested" waiting for "", want a
+  Run queued waiting for "GROUP_AT_PARALLELISM"`.
+- Letting the standard class permit interruption fails
+  `only-work-that-may-be-interrupted-runs-on-reclaimable-capacity` three ways, on the
+  placement and on both halves of the refusal the record should carry.
+- Dropping the feasibility refusal fails `safety.interruption_was_permitted` with `Run
+  "run-trainer" of class "standard" was running when the capacity it was placed on was
+  reclaimed at effect 13`. That is the mutation the law is red for rather than the class
+  table itself: the law reads the permission off the class, as the neighbouring laws read
+  the queue bounds off it, so editing what a class permits is a change to the contract
+  and not a break of it.
+- The bound is tight rather than merely respected. The launch ledger of
+  `a-group-of-eight-runs-three-at-a-time` peaks at exactly three, in three waves at 0s,
+  9m26s and 18m47s, and every one of the eight members ends succeeded.
+
+What this slice could not reach. No production adapter publishes `reclaimable`, so the
+live half of the interruption rule is the class refusing a machine a simulated world
+sold that way; the daemon case that runs against real capacity is the group bound, over
+the public API, the real event log, and two nodes enrolled over the node protocol. A
+real-container case for it would prove the container runtime rather than the bound,
+which is a seam this slice does not touch, and the fleet harness clears PATH so that
+the enrolled node is the only capacity in play.
+
+### Phase 4 the review of the queue review, and the three repairs that stopped short
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine on Ubuntu 26.04, against `beng/prediction-and-service-classes` at
+the four commits above `fc3fbdb`. `go build ./...`, `go vet ./...` and `go test ./...
+-count=1` all clean over 36 packages, and `go test -race -count=1` clean over
+`internal/domain`, `internal/lab`, `internal/orchestrator` and `internal/scenario/...`,
+`internal/lab` taking 198s of it.
+
+Every repair is red against the reading it replaces, mutated back one at a time.
+
+- Letting `waitsBegan` move the moment a wait began on a later deferral fails
+  `TestAReplacedRunIsHeldToTheDeadlineOfItsWholeWait`, which is a standard Run placed
+  15000 seconds into one wait against the 14400 its class states, with a placement and
+  a second deferral in the middle of it. Before the repair the law returned nothing on
+  that record and `replayQueueDepartures` beside it reported the same wait as 15000
+  seconds, which is the two readings that were in one file.
+- Dropping the placement from the fleet's answer fails
+  `TestAPlacementRevokesTheFleetExemption`, a batch Run measured unholdable at the
+  first deferral, given a machine at 600 seconds, refused at its bound at 3601, with an
+  interactive Run that had waited nothing admitted at 2000.
+- Reading that answer off the latest measurement rather than off all of them fails
+  `TestARefusedQueueDelayIsStarvationWhenTheFleetOnceHeldIt`, which is the same shape
+  without the placement: the fleet could hold the Run when its wait began and could not
+  when it ended.
+- Restoring the delete of the wait's own moment on a placement in `applyToQueue` fails
+  `TestAPlacementDoesNotRestartTheWaitTheQueueOrdersOn`, which reports the fresh
+  standard Run waiting on `NO_FEASIBLE_OFFER` where the batch Run twenty minutes into
+  its wait should have held it.
+- Deleting the projected-miss branch from `deferOrRefuse` fails
+  `a-start-nobody-can-reach-is-refused-at-the-door` in `internal/scenario` with
+  `expected outcome "refuse", and admission recorded ... reason "NO_FEASIBLE_OFFER"`.
+  The same deletion against `fc3fbdb` left all 36 packages green, which is the coverage
+  the reason change vacated.
+
+One existing case changed the world it states rather than the claim it makes.
+`TestARefusedQueueDelayIsNotStarvationWhenTheFleetCouldHoldNothing` built its opening
+deferral with the generic helper, which records a machine that could hold the Run, and
+then asserted the law is silent about a fleet too small. Under the reading that looks
+at every answer during the wait that is a fleet which could hold it, so the fixture now
+states the world its own comment describes and the case it used to state is the new
+deliberate failure beside it.
+`TestARefusedQueueDelayIsNotStarvationWhenTheFleetLastSaidItCouldHoldNothing` is
+renamed for the reading it exercises.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed` and
+`TestAStartBoundRefusesOnlyThePathThisNodeMeasured` pass against MinIO containers of
+the native engine, and `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker
+-run TestIntegration` passes against real containers. Nothing in this pass needed a
+container of its own: what it changes is the control plane's own record and the laws
+stated over it. Mercator issue #165 does not reproduce here and was left alone.
+
+Named and not fixed here, unchanged from the entry below. `gofmt -l .` reports
+`internal/adapter/vast/client.go`, `internal/scheduler/scheduler.go` and
+`internal/scheduler/scheduler_test.go`, struct tag alignment left by `595f7b0` and
+`1e13518` earlier on this branch, untouched by this pass and still held in another
+session's stash against this worktree.
+
+The root corpus is 53 Blueprints, 50 of them green, with 26 conformance fixtures. One
+green Blueprint was added and no fixture moved classification.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/lab ./internal/orchestrator \
+  ./internal/scenario/...
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
+
+### Phase 4 the queue slice under review, and the five readings it got wrong
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04, against `beng/prediction-and-service-classes`
+at the three commits above `b41429b`. `go build ./...`, `go vet ./...` and `go test
+./... -count=1` all clean over 36 packages, and `go test -race -count=1` clean over
+`internal/domain`, `internal/lab`, `internal/orchestrator` and `internal/scenario/...`,
+`internal/lab` taking 198s of it.
+
+Every repair is red against the reading it replaces, mutated back one at a time.
+
+- Naming the deadline at the door on the way to Placement fails
+  `TestAnImpossibleAskEmptiesNoFleetUnderTheRealControlPlane` with `the wait ended as
+  "DEADLINE_UNREACHABLE" after 17940s, against the 1800s of queue this class allows`,
+  and fails `a-machine-that-came-free-too-late-is-not-a-start` in
+  `internal/scenario` on the reason its own timeline states.
+- Filtering the starvation law's second half on `QUEUE_DELAY_EXCEEDED` again leaves it
+  silent on a standard Run refused 17940 seconds into its wait under the other name,
+  while an interactive arrival that had waited nothing was admitted 3000 seconds in.
+- Dropping the workspace from the adjudication reports `Run "run-quiet" of class
+  "batch" was refused after waiting 3601s, and "run-other-tenant" of class
+  "interactive" was admitted 1900s into that wait having waited 0s` for two Runs in
+  two tenants, and dropping it from the ordering law reports the same shape for an
+  opportunistic Run admitted in `ws_beta`.
+- Restoring the delete on each Booking Decision reports `"run-watched" of class
+  "interactive" was admitted 2000s into that wait having waited 0s` for a Run that had
+  been waiting for three thousand seconds and was placed again after a failed launch.
+- Reading the exemption off the refusal's own fleet answer reports starvation for
+  `run-unholdable`, a Run whose fleet had already answered that no machine it published
+  can ever hold it, refused at its bound through the priority door.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed`,
+`TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers` and
+`TestAStartBoundRefusesOnlyThePathThisNodeMeasured` all pass against MinIO containers
+of the native engine, and both cases of `MERCATOR_DOCKER_INTEGRATION=1 go test
+./internal/adapter/docker -run TestIntegration` pass against real containers. Nothing
+in this pass needed a container of its own, because what it changes is the control
+plane's own record and the laws stated over it. Mercator issue #165 does not reproduce
+here and was left alone.
+
+Named and not fixed here. `gofmt -l .` reports `internal/adapter/vast/client.go`,
+`internal/scheduler/scheduler.go` and `internal/scheduler/scheduler_test.go`, which are
+struct tag alignment left by `595f7b0` and `1e13518` earlier on this branch and are
+untouched by this pass. They are not reformatted here because a concurrent session
+holds `internal/scheduler/scheduler.go` in a stash against this worktree, and a
+whitespace commit under it would conflict for no gain.
+
+The root corpus is 52 Blueprints, 49 of them green, with 26 conformance fixtures. No
+fixture moved classification: one green Blueprint states a different refusal reason,
+which is the behaviour under repair. That sentence was written as though the change
+were costless, and the review of this review established that it was not:
+`a-machine-that-came-free-too-late-is-not-a-start` was the only fixture in the tree
+asserting `DEADLINE_UNREACHABLE`, so the move left the reason pinned by nothing and the
+projected miss in `deferOrRefuse` deletable with the whole suite green. The entry above
+this one records the fixture that pins it.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/lab ./internal/orchestrator \
+  ./internal/scenario/...
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
+
+### Phase 4 a decision is added, and a Run that found nothing gets one
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04. `go build ./...`, `go vet ./...` and
+`go test ./...` all clean, `go test -race` clean over `internal/orchestrator`,
+`internal/scheduler`, `internal/lab`, `internal/scenario`, `internal/httpapi`,
+`internal/domain`, `internal/conformance` and `internal/daemon`, and the console's
+typecheck, tests and build clean.
+
+The live half ran. `TestANodeReplicatesAnArtifactFromARealObjectStore` stands up
+MinIO in a container of this machine's own daemon and passes here, which is what
+establishes that this host's Docker is real and that the container-backed
+conformance path is available on it. Nothing in this slice needed a container of its
+own: what it changes is the control plane's own record, so its highest-fidelity level
+is the real daemon over HTTP with a real enrolled node, which is where
+`TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout` now reads the refusal.
+
+The two laws were both shown failing against the code before the fix, one at a time.
+
+Dropping the supersession, by making `runState.supersession` return nothing, fails
+`safety.decisions_are_never_rewritten` by name at L1 on the real launch-failure
+re-placement: `Run "run-unlucky": decision "dec_c30b5ca387bdf3f61" supersedes "", and
+the decision recorded before it was "dec_b392eef53b4daf83a"`. The same mutation fails
+the corpus Blueprint on both halves of the claim, once on the predecessor and once on
+the reason.
+
+Editing a recorded decision in place, by changing its model version after the
+identity was derived, fails `safety.decision_is_reproducible` on the canonical
+execution: `carries decision "dec_197f366a3d7d323dd", and re-deriving that decision's
+own inputs yields "dec_4e49890b611303c6a"`. Before the scheduler derived its ID
+through `domain.BookingDecision.Identity`, that law failed on every real decision in
+the tree, which is the same statement from the other side: an ID computed one way and
+checked another is a claim about the content that the content does not answer.
+
+Naming the wrong reason for a refused launch, by reporting
+`PREVIOUS_DECISION_SELECTED_NOTHING` there, fails
+`TestAReplacementNamesTheDecisionItReplaces`.
+
+Dropping the recorded refusal fails two layers at once. The daemon case answers `404
+DECISION_NOT_FOUND` from the decision route, which is exactly the hole this closes,
+and `an-impossible-ask-empties-no-fleet` reports the Run nothing could place having no
+recorded decision to be explained from.
+
+What the corpus Blueprint reported while it was red, before any of the production
+behaviour: `expected 1 recorded decisions, and the record holds 0` on the refusal, and
+`expected 2 recorded decisions, and the record holds 1` on the answer that replaces
+it. Everything else in that fixture, the deferral's reason, the five Bookings it names
+as work ahead, the count of machines weighed and the placement six minutes later, was
+already green, so what it added is only the two claims.
+
+One consequence that had to be fixed with it, and is worth recording because it is the
+kind of thing an appended record breaks. The Run projection decided a Run was queued
+by asking whether it had no decision. A Run nothing could place has one now, so that
+test reported every queued Run as `requested` again, and the phase asks whether
+anything was chosen instead. "Decided" and "placed" are separate questions from this
+slice onwards, and `runState.placed` is the one place that difference is stated.
+
+What is not closed. The suppression that keeps a Run from writing a decision every
+tick means the recorded refusal is the one from the moment the answer last changed,
+not from the latest evaluation: an operator reading a Run that has waited an hour
+against an unchanged fleet is reading evidence an hour old, and the deferral beside it
+says the same. That is the right trade for the log's size and it is a difference a
+reader cannot see, because nothing in the record says the fleet was asked again and
+gave the same answer.
+
+### Phase 4 a rung of the ladder may not answer content it does not name
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2. Two independent reviewers refuted the entry below it.
+Both raised the same defect through different routes and it was real: the ladder
+carried the image into its narrowest key alone, so the two coarse rungs answered
+`application_ready` out of launches of other content.
+
+The consequence was not one wrong number on a record. Readiness is the only stage
+this fleet measures, so every sample in every history was a readiness sample, and any
+candidate with no launch of its own was answered from whatever else its provider had
+run: `stagePredictor` feeds the answer into both the score and the established half,
+the established half becomes `EstablishedStartSeconds`, and `scheduler.go` strikes out
+any candidate whose P90 there exceeds `Placement.MaxP90StartSeconds`. A Run of a
+static page in a region where a 70B model server had once taken fifteen minutes was
+struck out with `LATENCY_SLO_EXCEEDED` on evidence about the model server. The keys
+the record showed named a lane, a provider, and a place, and no image, so neither a
+reader nor the invariant could see what the seconds were of.
+
+Fixed at the source. `domain.keyForContent` is now the one place any level of the
+hierarchy asks whether the content belongs in the key, `ProviderAndRegion` and
+`ProviderKey` take the same question `Candidate` already took, and `levelKeys` asks it
+of the stage once and gives every rung the same answer. Content nobody could name has
+no key at any level, so a fleet of unresolved manifests does not collapse into one
+bucket the way it would have if the coarse keys had grown an `image=` with nothing
+after it.
+
+`safety.prediction_states_its_provenance` could not have caught it, which is the
+second half of the finding and the reason this is not only a one-line fix. The rule
+derived the candidate's own key at the exact-candidate level and returned early at
+every other level, so a coarse answer only had to name some key that was not the
+listing. It now derives the key at whichever level answered, through `keyOfLevel`, and
+refuses an answer whose level this candidate has no key at.
+
+The coverage the entry below promoted could not have caught it either: both its
+worlds held one image, so every rung answered the same launch whether or not the key
+named it. The placement Blueprint now has a second image and a fourth Run asking the
+same six listings about it, and the conformance fixture a second image on all three
+Rentals and a third Run of it, so each coarse rung appears twice in a world, once
+where it answers and once where it must be silent.
+
+What the new coverage reports when the fix is removed. Building the two coarse keys
+without the image again fails `history-answers-for-the-machine-it-was-measured-on`
+sixteen ways across four candidates, each of the form `application_ready level: want
+"prior", answered at "provider_and_region" from 2 samples`. It also fails twenty-two
+cases in `internal/lab` on the invariant rather than on an assertion, of the form `Run
+"run-checkpoint-consumer" answered candidate "doomed-rental"'s application_ready stage
+out of "lane=reusable;provider=lab", and at level "provider" this candidate is
+"lane=reusable;provider=lab;image=sha256:9f2c..."`. All but one of those twenty-two are
+fixtures about Artifacts, caches, Run Bundles, or preparation that have nothing to say
+about prediction, which is how far the collapse reached: readiness answered out of
+another image's launch was in the green corpus everywhere a second Run existed, and no
+fixture's expectations had to change when it stopped.
+
+Two deliberate Lab cases hold the tightened rule, one per coarse rung, with every
+other stage of the same record at an honest prior so what fails is the rung and not
+the company it is in. Both keys they use recur and name no listing; what makes them
+violations is the stage they answered.
+
+At unit level the estimator now holds that no rung answers content it does not name
+and that the same content on an unmeasured neighbour is still answered at the region
+rung, which is what keeps the first rule from being satisfiable by a ladder that
+answers nothing.
+
+A second finding was half real and is recorded above, in the entry it refuted: the
+region rung's L1 coverage is in the reusable lane, and no production backend states a
+region there, so what that fixture holds is the path from the offer to the key and not
+a backend stating a place. The entry now says which half it holds and where the other
+half is held, and `TestAnEnrolledMachineStatesNoPlaceAndSaysSo` states the production
+fact in the package that builds those offers.
+
+Refused: the same finding called `lane=reusable;provider=node` a bucket that is not a
+provider, merging every enrolled machine of every provider and region, and asked for it
+to be treated as a defect. It is the coarsest rung behaving as designed. That rung is
+already "this source, anywhere, of any shape" for a marketplace too, where it merges a
+3060 in Poland with an 8xH100 in Texas, and the estimator's own comment says an answer
+from it is evidence that this candidate resembles them rather than evidence about this
+candidate: it is worth 0.4 at most and 0.2 from one launch, the record names the level
+and the key beside the seconds, and the rung above it is skipped rather than faked when
+no place is stated. What made the reviewer's example alarming was the collapse this
+entry fixes, because the bucket was answering about content nobody had run on any of
+those machines. Now that the key names the content, the claim it makes is that this
+image came up in this many seconds somewhere in this fleet, which is weak evidence
+honestly labelled. The rung stops merging unlike machines when an enrolment carries the
+provider and the region of the machine underneath it, which is capacity the node
+registry does not model yet and is not something to fake in a key.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/lab ./internal/scenario/... ./internal/prediction \
+  ./internal/domain ./internal/node/...
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
+
+The live half ran again on this host's own engine, and both Docker integration cases
+pass against Engine 29.6.2, including the one holding that a daemon reached twice
+through two endpoints is one machine. Nothing here touches the web console, so its
+checks were not re-run. Mercator issue #165 does not reproduce on this host and was
+left alone.
+
+### Phase 4 the middle rung of the ladder, held through the real control plane
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2. The hierarchical estimator was re-verified end to end
+rather than reimplemented, because it had already landed with its two reviews. Four
+of the deliberate breaks the entry below records were re-run on this host and each
+reported what that entry says it reports, with two figures changed by the slices that
+landed on top of it: `History.Predict` short-circuited to the prior now fails the
+placement Blueprint twenty ways across five candidates rather than twenty-four,
+because the transfer stages the fixture later gained answer the prior in both the
+broken and the whole tree, and at L1 the offer-ID break is now reported by
+`safety.candidate_identity_recurs` before the provenance rule reaches the same
+record. Both rules fail on it; the driver stops at the first.
+
+One thing the estimator's own ladder had no coverage for above the Lab. The three
+keyed rungs were held at L0 by the placement Blueprint and directly by the
+invariant's deliberate cases, and the L1 conformance asserted the exact candidate and
+the provider with nothing between them, because its two Rentals published no region.
+That left the rung the region exists to create untested through the control plane's
+own path to it, which is a path with steps in it: an offer states the region,
+aggregation carries it, the decision records the identity, and the estimator files a
+launch under the key. Any of those dropping the field would collapse the region rung
+onto the provider rung and no test above a unit test would have said so.
+
+This paragraph claimed more than that when it was written, and a reviewer was right to
+refute it. It said the fixture holds an adapter stating the region, and the fixture is
+in the reusable lane, where no production backend states one: `internal/node/offers.go`
+is the only source of reusable offers today, it deliberately publishes no region, and
+`capability.Declare` makes vast, shadeform, runpod, and docker ephemeral-only. So the
+first step of that path is held where it exists, in the adapters, in the lane where
+they do state a place: `TestTwoSearchesOfOneMachineAreOneCandidate` pins Vast's
+geolocation reaching `lane=ephemeral;provider=vast;region=US-CA`,
+`TestOneRegionNameInTwoCloudsIsTwoPlaces` pins Shadeform's cloud and region reaching
+the same rung as one key, and `TestOneProductInTwoCloudsIsTwoCandidates` pins a RunPod
+catalog naming no datacenter having no such rung at all. What the conformance fixture holds is
+the offer reaching the recorded identity and the identity reaching the key, in a world
+whose reusable backend states a place because the Blueprint schema has always let one.
+That is the target ontology this corpus is written against, and the machine half of it
+is now stated as a fact of its own: `TestAnEnrolledMachineStatesNoPlaceAndSaysSo`
+holds that an enrolled machine publishes no region and that its ladder is therefore
+this machine and then every machine this control plane has enrolled, so a reader of
+the reusable fixtures is not left thinking a region survives that path in production.
+
+The fixture now states a region on its two Rentals and adds a third in another
+region, so the second Run's decision answers at all three levels at L1: the machine
+that ran the first Run at the exact candidate, its unmeasured neighbour at the
+provider and place, and the machine elsewhere at the provider, all three for the same
+forty-five seconds out of the same single launch, at strictly declining confidence.
+That the seconds are equal across the three is the point of asserting the level and
+the confidence beside them: the seconds alone read identically for a machine measured
+and a machine two rungs away from anything measured.
+
+The new coverage fails two ways. Dropping the region from `CandidateIdentityOf`
+answers the neighbour at `provider` from a key naming only the lane and the provider,
+which is the collapse described above. Moving the far Rental into the measured region
+answers it at `provider_and_region`, which holds that the third machine is
+discriminated by where it is rather than by being third.
+
+Two further reviewers refuted this entry again, and both were right. It still counted
+aggregation among the steps the conformance fixture holds, and the Lab runs no
+aggregation at all: `internal/lab/control_plane.go` hands the simulated world to
+`orchestrator.New` as the Adapter, where `internal/daemon/runtime.go` hands it the
+Broker. So the one production step that rewrites an offer was covered nowhere, and for
+that step this entry was wrong in the stronger direction: no test at any level would
+have said so, not merely no test above a unit test. The four adapter suites stamp the
+adapter type and the lane with their own local `aggregated()` helper rather than through
+broker code, and no test in the repository carried a non-empty region through
+`broker.AggregateOffers`. Verified by breaking it on this host: dropping the region
+inside the rewrite loop left `go test ./... -count=1` completely green.
+
+`TestAggregationCarriesWhatACandidateCanBeLearnedAbout` now holds that step where it
+happens. A marketplace ask shaped like the ones Vast publishes, a place and a card and
+no machine, goes through `broker.ListOffers`, and the identity derived from what comes
+out has to equal the identity derived from what the backend stated, plus the lane and
+the provider that aggregation itself stamps. Asserting the derived identity rather than
+the fields is deliberate: it holds a rewrite that reprojects the snapshot instead of
+mutating it in place, which is the shape the second reviewer proposed as the realistic
+way this field gets lost. It fails both ways. Dropping the region in the existing
+rewrite loop and reprojecting the snapshot without it each report the ask as learnable
+in no place, against a backend that named one. The L1 comment and this entry now say
+which steps the fixture holds and where the other two are held, so no reader takes the
+conformance corpus for coverage of the Broker.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/lab ./internal/scenario/... ./internal/broker
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
+
+The live half ran on this host's own engine: both Docker integration cases pass
+against Engine 29.6.2, including the one holding that a daemon reached twice through
+two endpoints is one machine, which is the identity half of the estimator against
+real hardware. What still has not run live is the learning half, for the reason the
+entry below gives: the readiness callback is authenticated per Run and the daemon
+fixture configures no reporting. Mercator issue #165 does not reproduce here and was
+left alone.
+
+One flake to name rather than to hide, seen once while re-verifying this on the
+workstation. `TestTheFleetListingReportsTheRoomThisMachineReallyHas` compares what the
+production agent measured against a second reading of the same live filesystem, and it
+allows a thousandth of the total for the drift between them. On this host that is 3.4GB
+of a 3.5TB disk, and a full `go test ./...` writing a cold build cache moved 7.4GB of
+free space between the two readings. It passed three times in isolation and again on a
+repeat full run, and it is measuring a quantity that genuinely moves, so nothing was
+changed here: the tolerance is a property of that live test and belongs to whoever
+tightens it, not to a locality slice touching the Broker.
+
+### Phase 4 a transfer is not a stage a launch history can answer
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2, against the working tree of
+`beng/prediction-and-service-classes`. Two independent reviewers refuted the entry
+below it. Four of the five findings were real, one was refused with its evidence, and
+the central one is that the entry below fixed the wrong half of the collision it
+found.
+
+**The estimator was lying, not only the record.** The entry below found the transfer
+law reading an assumption's name over seconds an assumption did not produce, and it
+deleted the rate. The seconds were the invented half. `stages.Answered` replaces a
+transfer's prediction with what measured launches of this candidate spent, with no
+regard to what this launch has to move, so a machine holding a verified copy of the
+whole forty gigabyte dataset was charged 920 seconds from two launches of itself and
+refused: `LATENCY_SLO_EXCEEDED`, `Offered 937.25` against a bound of 180, with its own
+`ArtifactEvidence` reading `Locality:hot FetchBytes:0` in the same record. The same
+reproduces on the image side, where a host reporting every layer of the image was
+charged the pull it had already performed and struck out for it. That inverts the
+premise of Artifact locality: a host that holds the data is the reason the data is
+worth holding.
+
+A transfer is a byte count over a throughput, and the byte count belongs to the launch
+rather than to the candidate: what a host still has to move is whatever it does not
+already hold at the moment it is asked. A `CandidateIdentity` names the machine and
+the image and can name neither what is resident on the disk now nor which Artifact
+versions the Run consumes, so a warm launch and a cold launch of one machine land in
+one bucket. So `image_fetch`, `unpack` and `artifact_fetch` are filed nowhere and
+answer nothing, `prediction.contentStage` is left holding the one stage it is true of,
+and the deleted rate comes back: every stage with bytes to move records the throughput
+it was divided by, with no exception, which is the account both
+`safety.transfer_rate_is_attributed` and `safety.locality_is_never_infeasibility`
+read.
+
+Nothing measured is lost. What recurs about a transfer is the throughput of the path,
+and an enrolled node already measures it on the reads it performs and publishes it as
+a fact with a validity window, which the inventory's byte count is multiplied by when
+the decision is taken. Seconds over a whole stage are that product with both factors
+thrown away, and `TestANodeMeasuresTheObjectStorePathItJustCrossed` is that half
+against a real store.
+
+**The Lab reported a lawful refusal as a violation, and it needed no clause of its
+own.** The second finding was `safety.locality_is_never_infeasibility` failing a host
+that could not enumerate its copies and had its fetch answered from history: `charged
+920.00s for content nobody could describe, of which only 0.00s was left out of the
+established start`, because `pricedSilenceSeconds` multiplies a share of bytes by
+seconds those bytes did not produce. Once no transfer's seconds come from anywhere but
+bytes and a rate, the share is again a share of the quantity that produced them, and
+the same fixture now passes with 640 predicted seconds and 1.25 established. Refusing
+the answer outright is what the Lab states instead, in
+`safety.prediction_states_its_provenance`, so no other law has to ask first whether
+the seconds it is reading are a transfer's seconds.
+
+**A conformance case freed the bytes it was about to measure.** The disk case removed
+any container an interrupted earlier run had left behind, and it did so after taking
+the reading it compares against. The leftover holds the same half gigabyte the case
+writes, so `before` counted those bytes as used, the removal freed them, and the new
+write took them again: `a workload wrote 512MiB and the room this node reports fell by
+0 bytes`, reproduced on this host by recreating the container with the case's own
+`dd`, and green three runs over with the removal hoisted in front of the first
+reading. The node's measurement was correct both times. Review's wider point stands
+and is now written into the case: the surviving lower bound is an assertion about the
+rest of the machine too, in the other direction, and it stays because it is the claim.
+
+**Half of the drain was asked for by nothing.** `Registry.draining` and the
+`OpenSession` refusal it gates could both be deleted with `go test ./internal/node
+./internal/daemon -count=26` green, which review demonstrated. The guard is not a
+race in the production binary: `http.Server` closes its listeners and leaves every
+open keep-alive connection usable, and the agent posts events and opens its session
+over one `http.Transport`, so a session request arriving on a connection the sweep did
+not close begins a fresh long-lived read that `Shutdown` waits out for the whole
+fifteen seconds. `TestADrainedRegistryOpensNoFurtherSession` fails with the flag and
+the refusal deleted, and `TestADrainEndsTheSessionANodeIsHoldingOpen` fails with the
+sweep deleted, both at the object that owns the sessions rather than through an HTTP
+server.
+
+**The corpus can now catch the change that brings the defect back.** The fifth finding
+was that the transfer-rate change was adjudicated by one Go fixture and by nothing in
+the executable specification, and that is true and half of it stays true.
+`history-answers-for-the-machine-it-was-measured-on` now asks its two measured
+machines what they will spend pulling as well as what they spend coming up, and the
+answer is the prior with the throughput it was divided by. Asserting the exact
+candidate instead fails on both machines, and asserting a measured path fails on both
+rates, so the assertion binds. Nothing in the world produces a timed transfer today,
+so it cannot fail on this tree; the moment `Launch.Observations` emits one and the
+estimator files it, that Blueprint's third Run reports a machine's own pull history
+answering a stage it may not answer. The rest of the finding is answered by giving the
+rate law the stage it was silent about: its three clauses are all stated over recorded
+rates, so charging seconds and leaving the throughput off the record was a cheaper way
+out than inventing a measurement, and `everyTransferNamesItsRate` now fails on each of
+the three transfer stages on its own. One hand-stated fixture was charging
+`artifact_fetch` while pricing `unpack`, which is a record no decision writes.
+
+What is refused, with its evidence. Nothing here is deferred on the grounds that a
+Blueprint could have said it: no Blueprint can, because `Launch.Observations` emits
+`application_ready` alone, so no Lab world can produce the timed transfer that would
+be answered from. The four unit and Lab cases drive the production scheduler and the
+production registry, and the corpus assertion above is what will fail on the day the
+world can. The slice that makes it corpus-adjudicable is the one where a node reports
+the stages it performs, and it is named in the plan rather than smuggled in here.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed`,
+`TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet` and the disk case above all pass
+against MinIO containers and busybox writes of the native engine. The full suite is
+green three times, `internal/daemon` is green over 25 runs of the package, and the
+race detector is green over the packages this pass touched, `internal/lab` at 77s
+among them. The root corpus is unchanged at 45 Blueprints, 42 of them green, and no
+fixture moved: the one that changed gained assertions and lost none. The console's
+generated contract was regenerated, because it is derived from `openapi.json` and the
+commit that changed that description had left it behind, so the two clients carried
+two wordings of one field.
+
+One failure in this pass was somebody else's. `TestRegistryResolverAgreesWithDockerAboutAPublicImage`
+failed once with `toomanyrequests: You have reached your unauthenticated pull rate
+limit` from Docker Hub, in a `go test ./...` between two green ones, and passed again
+immediately. It is written down rather than folded in: the case compares Mercator's
+resolver against `docker manifest inspect` over the public registry, so it depends on
+an allowance this host shares with everything else that pulls, and a case that cannot
+tell that apart from a resolver defect is its own thing to fix.
+
+Named and not fixed here. The operator console's event stream is still the same shape
+of long-lived read as a node session, and `Runtime.Shutdown` still waits for one.
+Mercator issue #165 still does not reproduce on this host and was left alone.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/prediction ./internal/scheduler ./internal/domain \
+  ./internal/lab ./internal/scenario/... ./internal/node ./internal/nodeagent \
+  ./internal/daemon ./internal/orchestrator
+go test ./internal/daemon -count=25
+cd web/app && bun run generate:api && bun run typecheck && bun run test
+```
+
+### Phase 4 three defects two reviewers found under the transfer-path pass
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2, against the working tree of
+`beng/prediction-and-service-classes`. Two independent reviewers refuted parts of the
+entry below it, all three findings were real, and each was fixed at its source rather
+than restated. Production code changed in two of the three.
+
+**The daemon was intermittently red, and it was two defects rather than a sighting.**
+`go test ./internal/daemon -count=1`, run 48 times against the tree the entry below
+describes, failed twice, both at `node_protocol_test.go:105` with `shutdown runtime:
+context deadline exceeded`, under two unrelated case names. The same site is where the
+sighting the entry wrote down as unreproducible had landed.
+
+The first cause is production. A node session is a long-lived read: the machine holds
+the connection open and the control plane writes commands down it, so the request stays
+active for as long as the node is healthy. `http.Server.Shutdown` waits for active
+requests and cancels none of them, and nothing in the tree ended a session, so the
+drain could only finish if the agent's own connection happened to drop first. In the
+suite that is a flake. In `mercator serve` it is not a race at all: the binary gives
+`Shutdown` fifteen seconds, so a control plane with one enrolled machine burned all
+fifteen and then exited 1 on a deadline it could never have met.
+`Registry.Drain` now ends every open session and refuses to open another, registered
+through `RegisterOnShutdown` so it runs while the drain waits rather than before it or
+after it. `TestADaemonDrainsWhileANodeHoldsItsSessionOpen` fails at the deadline
+without it and returns in 0.076s with it. A drained node loses nothing, because a
+command is durable before it reaches a session. Only the sweep was asked for by
+anything: review deleted the refusal and the flag with every package green, and the
+entry above is where they are asked for.
+
+The second cause is the case's own bound. `net/http` keeps a connection that was
+accepted and has sent nothing out of its quiescent set for five seconds, so a client
+slow with its first header is not cut off, and an `http.Transport` dials
+speculatively: an agent reporting every twenty milliseconds routinely leaves one
+behind. A goroutine dump taken at the failing site showed exactly that, one connection
+parked in `conn.serve` on the first `Peek` of a request that never came. Away from
+Mercator entirely, a bare `http.Server` with one silent connection fails `Shutdown` at
+a two second budget and returns in 3.2s at eight. The cases now give the daemon the
+window the production binary gives it. With both fixes, 80 runs of the package are
+green.
+
+**The transfer law and the hierarchical estimator contradicted each other.** The
+estimator replaces a stage's seconds with what measured launches of this candidate
+really spent, `artifact_fetch` included, and the confidence it carries is what those
+launches are worth. The record went on stating the offer's link speed beside them, so
+`safety.transfer_rate_is_attributed` read an assumption's name over seconds an
+assumption did not produce: `candidate "rental-far" priced its artifact_fetch stage
+from "assumed_object_store_rate", which nothing on this machine measured, and the
+estimate it produced is worth 0.60 where a duration over an unmeasured rate is worth at
+most 0.50`. Neither acceptance break of the slice below could reach it, because both
+mutate the rate rather than the answer.
+
+This pass concluded the record was the half that was lying and deleted the rate, and
+review refuted that: the estimate was lying too, a machine holding every byte was
+charged the transfer it performed the last time it held none, and the entry above is
+the correction. The reproduced violation quoted here is real and its cause is one
+level down. The rate is back, and it is the answer that is refused.
+
+It was invisible because `prediction.Launch.Observations` emits `application_ready`
+alone and that stage carries no rate. Nothing pinned that, and the estimator already
+declared `artifact_fetch` a content stage, so the collision arrived with the first node
+that reported a fetch it timed. That is still the trigger, and what arrives there now
+is a transfer priced from its own bytes: the corpus asserts it of the two machines it
+has measured, and the entry above says what it took.
+
+**A conformance case asserted the rest of the machine was quiet.**
+`TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt` asserted that writing 512MiB
+moved this host's global docker-root free space by between 400 and 700MiB, which fails
+whenever anything else keeps more than 188MiB during the same 0.7 seconds. Reproduced
+on demand with one neighbouring container retaining 300MiB chunks: the room fell by
+851554304 bytes, and by 1480986624 on a second run. The suite pulls images in another
+package beside this one, which is what took a full-suite run down. The lower bound is
+what the case is about and stays. Which filesystem the number describes is already
+pinned by the total size beside it and by a container's own root in the case before it,
+so the upper bound caught nothing the rest of the file does not. What this pass missed
+is that the case released half a gigabyte inside its own window, which review
+reproduced and the entry above fixes.
+
+The live half ran on this host's own daemon again rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed`,
+`TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet` and the disk case above all pass
+against MinIO containers and busybox writes of the native engine, so the store, the
+presigned reads, the node's own timing and the filesystem it reports are real rather
+than scripted. The full suite is green three times, and the race detector is green over
+the packages this pass touched, `internal/lab` at 77s among them. The root corpus is
+unchanged at 45 Blueprints, 42 of them green: no fixture moved, because no fixture in
+the corpus answers a rate-carrying stage out of history.
+
+Named and not fixed here. The operator console's event stream is the same shape of
+long-lived read as a node session, and `Runtime.Shutdown` still waits for one: ending
+it needs a signal that stops streaming while requests can still write events, which is
+its own change with its own regression test. Mercator issue #165 still does not
+reproduce on this host and was left alone.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario/... ./internal/node ./internal/nodeagent ./internal/daemon
+```
+
+### Phase 4 the transfer path, held under the slices that landed on top of it
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2, against the working tree of
+`beng/prediction-and-service-classes` at `4dead6a`. No code changed. The four entries
+above closed the transfer-path slice, and what this pass adds is evidence rather than
+behaviour: it is the first run of the slice's own breaks with the hierarchical
+estimator, the queue slices and the wait classification sitting on top of it, and the
+earlier passes ran against a `git archive` of their commit because a concurrent session
+shared the worktree.
+
+Both acceptance breaks were reproduced here.
+
+- The Blueprint is still red under the flat constant. Dropping the fact read from
+  `OfferSnapshot.DownloadRate`, so every path answers `AssumedDownloadRate`, fails
+  `a-fast-machine-far-from-the-data-loses` with `expected "rental-near-the-data" to
+  win, but the decision placed on "rental-far-from-the-data"`, and beside it
+  `artifact_fetch_seconds: want exactly 1600, got 640`, `artifact_fetch confidence:
+  want 0.9, got 0.5`, `artifact_fetch rate: want 200 Mbps, priced at 500`, and the
+  measurement `blueprint_path` recorded as the assumption `assumed_object_store_rate`.
+  Five more fixtures fail with it: `a-disowned-fact-is-not-an-answer`,
+  `a-floor-on-reading-the-data-is-a-floor-on-delivery`,
+  `a-floor-refuses-a-measurement-and-not-a-silence`,
+  `a-start-bound-refuses-only-what-it-can-prove` and `silence-is-not-infeasibility`.
+- A rate no host reported, presented as measured, is still a violation. Naming
+  `nodeagent.ArtifactCopySource` as the measurement on the object-store assumption
+  fails `safety.transfer_rate_is_attributed` throughout `internal/lab` with `candidate
+  "doomed-rental" priced its artifact_fetch stage at 500.00 Mbps measured by
+  "node_artifact_copy", and nothing its publisher stood behind was published about its
+  "object_store" path when the decision was taken`.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed`,
+`TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers` and
+`TestAStartBoundRefusesOnlyThePathThisNodeMeasured` all pass against MinIO containers
+of the native engine, so the store, the presigned reads and the node's own timing are
+real. Mercator issue #165 does not reproduce here and was left alone.
+
+Two paragraphs of this entry were refuted by review and are corrected in the entry
+below, which is where the reader should go. The failure this pass recorded as an
+unreproducible sighting in `internal/daemon` reproduces on this tree at about one run
+in twenty-four, and it was two defects rather than none. `go test ./... -count=1` was
+not the deterministic gate this entry presents it as either, for a reason in
+`internal/nodeagent` rather than the package the sighting was attributed to. And the
+two breaks above, which still reproduce, cannot reach the one place this slice's law
+and the estimator that landed on top of it contradicted each other.
+
+Open, unchanged, and named in the entries above: whether
+`DefaultObjectStoreDownloadMbps` is a pessimistic prior or an optimistic one, whether
+0.03 USD a point is the right price for doubt, and a measured unpack rate. All three
+are calibration against measurements this tree does not yet hold.
+
+The root corpus is 45 Blueprints, 42 of them green.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario/... ./internal/adapter/fake ./internal/capability ./internal/node \
+  ./internal/nodeagent
+```
+
+### Phase 4 a hierarchical estimator keyed on what recurs
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2. A concurrent session held its own slice open across
+`internal/scheduler/scheduler.go`, `internal/domain/types.go` and one corpus fixture
+in the same worktree throughout, so the full suite, `go vet`, `gofmt` and the race
+detector were all run against a `git archive` of the commit rather than against the
+shared working directory, and only this slice's own files were staged.
+
+Every stage estimate now names the level its answer came from and the number of
+measured launches behind it, keyed on `domain.CandidateIdentity` rather than on
+anything a listing was numbered with. `SchedulingInput.LatencyEstimates` is deleted.
+
+- The new Blueprint is red before the estimator and green after. With
+  `History.Predict` short-circuited to the prior, it fails twenty-four ways across
+  five candidates: `application_ready_seconds: want exactly 30, got 300`,
+  `application_ready source: want "history", got "workload.expected_ready"`,
+  `application_ready level: want "exact_candidate", answered at "prior" from 0
+  samples`, and the sample count beside each. Every level in the fixture is asserted
+  by all three.
+- Keying the history on the offer snapshot ID, on both the writing and the reading
+  side, fails the Blueprint on the second listing of the measured machine with
+  `application_ready level: want "exact_candidate", answered at "provider_and_region"
+  from 2 samples`, and fails `safety.prediction_states_its_provenance` at L1 with the
+  key naming the listing. Filing the history under the Run ID instead fails the L1
+  case with the machine answered at the provider level from a key naming nothing but
+  the provider.
+- Deleting the machine handle from the Vast adapter fails
+  `TestTwoSearchesOfOneMachineAreOneCandidate` with `the key names machine ""`, and
+  fails `TestTwoMachinesWithOneCardInOnePlaceAreTwoCandidates` with two machines
+  sharing one key. `machine_id` was decoded and read by nothing before this: in a
+  catalog that is other people's hardware, a region full of identical 4090s is the
+  ordinary case, so a fast host and a slow host in one city shared a history and each
+  was served back as evidence about the other.
+- Each clause of the provenance rule fails on the one record it exists to catch, and
+  the counterpart holds that an answered stage and a prior are both honest, because a
+  rule that failed those could only be satisfied by a tree that predicts nothing.
+
+Four judgment calls are worth stating rather than hiding.
+
+One stage has an actual today and the record says so about the other seven.
+Readiness is bounded by two moments Mercator observes from independent authorities:
+the machine states when the process began and the application states when it began
+serving. Every other stage happens inside one observed interval, because a provider
+reports a machine running from the moment it accepts the launch, and attributing that
+interval across seven stages would be arithmetic wearing a measurement's clothes.
+Those stages keep the published claims and stated constants they had, now named as
+the prior they are, and they become learnable without touching the estimator when a
+node reports the stages it performs.
+
+A coarser level beats a published claim. A provider's own boot window is a claim
+about a listing and a region's samples are launches somebody watched. The level is
+charged for its breadth instead: the confidence declines from 0.9 at the exact
+candidate to 0.6 at the provider and region and 0.4 at the provider, and one sample
+is worth half of what its level is worth. None of the three is 1, because the next
+launch is a draw from a distribution rather than a repeat of its median.
+
+The start is the sum of its stages, always. What was deleted replaced that sum with a
+measured start for the offer snapshot ID, which nothing ever wrote and which could
+not have been written honestly: a start latency is the sum of seven stages whose
+costs depend on what the machine holds now, so the measurement of a machine that
+pulled forty gigabytes last week would be served back as the prediction for the same
+machine now holding the image.
+
+The history is rebuilt per placement from the Booking Decisions and the Run
+projection. A Workspace pays one filtered scan of its decisions and one page walk of
+its Runs to place a Run, which is honest and is not free; a projection maintained on
+append is worth building when a Workspace's history is long enough for it to show.
+
+The live half ran on this host's own engine.
+`MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration`
+launches, observes and releases a real container on Docker Engine 29.6.2 and reaches
+the same daemon twice, once through the ambient socket and once through a docker
+context, holding that the daemon's own ID names one machine where the endpoint label
+names two. That is the identity half of this slice against real hardware. What did
+not run live is the learning half above the Lab: the readiness callback is
+authenticated with a per-run token and the daemon fixture does not configure
+reporting, so a fleet case in which a real node's workload reports itself ready and a
+second Run is then predicted from it is deferred rather than claimed. Mercator issue
+#165 does not reproduce here and was left alone.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/prediction ./internal/scheduler ./internal/orchestrator \
+  ./internal/lab ./internal/scenario/... ./internal/domain ./internal/adapter/vast \
+  ./internal/adapter/fake
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
+
+### Phase 4 the third review of the transfer path
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine. Two reviewers refuted four things about the transfer-path slice.
+Three were real, one was two claims of which the gating half is refuted, and the
+central one was that the slice's own headline claim was false in the production code
+its fixture certified. A concurrent session held its own slice open across
+`internal/domain/types.go`, `internal/scheduler/scheduler.go`, `internal/lab/oracle.go`
+and `internal/scenario/schema.go` in the same worktree, so the suites below were run
+against a `git archive` of the commit rather than against the working tree, and only
+this slice's own files were staged.
+
+What the corpus and the laws could not say, and now can.
+
+- A machine nobody measured the path of could be refused capacity. Adding
+  `"max_start_latency": "15m"` to `a-fast-machine-far-from-the-data-loses` on the
+  reviewed commit reports `rental-nobody-measured-the-path-of`: "expected
+  feasible=true, got false (rejections [LATENCY_SLO_EXCEEDED@placement.max_p90_start_seconds])",
+  on 640 seconds derived entirely from `DefaultObjectStoreDownloadMbps`.
+  `safety.locality_is_never_infeasibility` passed that decision, because the byte count
+  was established and the rule measured silence only in unknown-locality bytes.
+- Restoring those seconds to the established start, by dropping the measured-path test
+  from `establishedOverAMeasuredPath`, fails
+  `a-start-bound-refuses-only-what-it-can-prove` with `no feasible offers`, and fails
+  `TestAStartBoundRefusesOnlyThePathThisNodeMeasured` against real content out of MinIO
+  with "nothing measured this machine's path and a bound struck it out anyway:
+  [LATENCY_SLO_EXCEEDED ... Required:12.51 Offered:961.25]". The node had just
+  delivered 12787 Mbps of real content onto its own disk, and the machine refused
+  beside it had published nothing.
+- The Lab law now sees it. `pricedSilenceSeconds` reads the transfer rates the decision
+  recorded as well as its localities, and the deliberate case is the third row of
+  `TestSilenceIsPricedAndAMeasurementBinds`: a machine that enumerated its copies
+  exactly, refused on 640 seconds priced from `assumed_object_store_rate`. The row
+  below it changes one field, the provenance of the rate, and is lawful.
+- Telling the score an assumed read was certain while leaving the estimate honest is
+  no longer green. Stating `artifact_fetch_seconds` as 1 in `scheduler.confidences`
+  while `Estimates.Stages.ArtifactFetch.Confidence` stays at 0.5 now fails
+  `safety.transfer_rate_is_attributed` through the whole Lab with "the doubt the score
+  charged for it is worth 1.00 where a duration over an unmeasured rate is worth at
+  most 0.50", on every world that reads an Artifact. Before this it was green across
+  the tree except for one unrelated fixture's hard-coded uncertainty.
+- The determinism claim the last entry credited to the third machine is not there.
+  With `OfferSnapshot.DownloadRate` stripped of its fact read, the three-machine
+  fixture reports eleven failures and every one of them names
+  `rental-near-the-data` or `rental-far-from-the-data`. The placement falls to
+  `rental-far-from-the-data`, which is where it fell before the third machine existed.
+
+Suites. The full `go test ./...` is green on the extracted commit, including the live
+half: `TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed`,
+`TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers` and
+`TestAStartBoundRefusesOnlyThePathThisNodeMeasured` all ran against MinIO containers on
+this host's own daemon. `go test -race` is green over `internal/domain`,
+`internal/scheduler`, `internal/lab` and `internal/nodeagent`. The regression corpus is
+39 Blueprints, 36 of them green.
+
+Not done, and why. `DefaultObjectStoreDownloadMbps` is a flat 500 answering the same
+question a node's p10 answers, and nothing has measured whether that is a pessimistic
+prior or an optimistic one. A host whose true p10 is under it is ranked worse for
+having published it. The uncertainty term does counterweight it and has since the
+service class landed, at 0.03 USD a point for a standard Run, so what is open is
+whether 500 and 0.03 are the right numbers rather than whether either is charged.
+Both belong to the calibration work rather than to a locality slice, and repricing
+either here would move every fixture in the corpus against no measurement at all.
+
+### Phase 4 what an unmeasured path costs
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2. This pass closes the transfer-path slice on the machine
+nobody measured and on what an admitted assumption may be worth. The full suite, the
+race detector over the five packages touched, and the live half all ran on this host
+against the working tree.
+
+What the corpus and the laws could not say, and now can.
+
+- Restoring the flat constant, by making `OfferSnapshot.DownloadRate` ignore the facts
+  it reads, fails `a-fast-machine-far-from-the-data-loses` on both measured candidates
+  and on the placement: "expected `rental-near-the-data` to win, but the decision
+  placed on `rental-far-from-the-data`", plus the seconds, the confidence and the rate
+  provenance for each. The third machine's own expectations do not move under that
+  break, which is what makes them the fallback half rather than a restatement of the
+  measured half.
+- Raising the object-store assumption's own confidence to 1 in
+  `domain.AssumedDownloadRate` fails
+  `conformance/a-path-a-host-disowned-is-still-the-path` with "priced its
+  artifact_fetch stage from \"assumed_object_store_rate\", which nothing on this
+  machine measured, and the rate itself is worth 1.00 where a duration over an
+  unmeasured rate is worth at most 0.50". Stamping `objectStoreRead` at 1 while leaving
+  the rate honest fails the same world on "the estimate it produced". Both breaks were
+  green before this clause existed.
+- Each clause of the rule fails on the one record it exists to catch in
+  `TestEveryClauseOfTheTransferRateRuleCanFail`, which now carries the two records a
+  guess charged as knowledge looks like.
+
+The live half ran, on this host's own daemon rather than in simulation.
+`go test ./internal/nodeagent -run TestANodeMeasuresTheObjectStorePathItJustCrossed`
+starts MinIO in a container of the native engine, PUTs sixteen megabytes over a
+presigned write, has the node stream it back over a presigned read, and then asserts
+the node published a real throughput it timed itself, named `node_artifact_copy`, dated
+so Mercator may act on it, and that the production scheduler priced the next forty
+gigabyte read off that number rather than off the assumption. Dropping
+`pathMeasurements.record` from `fetchArtifact` fails it with "the node published [],
+and nothing there describes its path to the object store". The two replication cases
+beside it, including the wrong-content case, ran on the same daemon. Mercator issue
+#165 does not reproduce here and was left alone.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/lab ./internal/scenario/... ./internal/nodeagent \
+  ./internal/domain ./internal/scheduler
+go test -count=1 ./internal/nodeagent -run 'TestANode|TestACopy'
+```
+
+### Phase 4 the second review of the candidate identity
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2. Two reviewers refuted the first review of the identity,
+and all six of their findings were real. The key was blind to the execution lane and
+to content nobody could name, the rule could not judge two of the three clauses it
+advertised, neither simulated world could state the machine or the split inventory the
+breaks are about, and two claims in this plan were false. A concurrent session held its own slice
+open across `internal/lab/world.go`, `internal/lab/invariant.go` and
+`internal/scenario/schema.go` in the same worktree, so every suite below was run
+against a `git archive` of the commit rather than against the working tree, and only
+this slice's own hunks were staged.
+
+What the worlds could not say, and now can.
+
+- A machine reports its cards the way its probe grouped them. Restoring the
+  deduplication fails `safety.candidate_identity_recurs` through the whole control
+  plane with "ask-2211 is reusable machine "" on simvast/US-CA/ with 8 cards of
+  640000000000 bytes, and ask-2212 is ... 4 cards of 320000000000 bytes", and fails
+  `a-candidate-is-what-recurs` on ask-2211's key. Before this, that break failed two
+  domain unit tests and nothing else: no Blueprint could state a machine whose
+  inventory arrived split, which is the only shape the bug has.
+- A simulated machine is named something its lease and its listing are not. Naming
+  the machine from the Rental, which is the production defect the derivation exists
+  to prevent, now fails the rule on every Blueprint the Lab drives, including the
+  generated ones, with "filed candidate "rental-quoted" under machine
+  "rental-quoted", and the machine it is is "node-1"". Before this it was green
+  everywhere: both worlds used one string as the offer ID, the Rental ID and the
+  machine, so the honesty clause had nothing to compare against.
+- One product a provider sells in both lanes is two candidates. Dropping the lane
+  fails the rule with "ask-2211 is reusable ... and ask-4417-oneshot is ephemeral
+  ...", fails the corpus, and fails `TestOneProductInTwoLanesIsTwoCandidates`.
+  `capability.Declare` refuses a backend implementing both `NodeRuntime` and
+  `EphemeralExecutor`, so this is a world the specification can state and production
+  cannot yet reach; it becomes reachable when RunPod's lane migration lands.
+- Unknown content has no content key. `registry-silence-has-a-name` states that
+  neither Run has one, and without the fix it fails with
+  `lane=reusable;provider=fake;machine=node-1;image=` on all four candidates, which
+  is every unresolvable image in a fleet sharing one key per machine.
+- The rule holds the converse of its own third clause. Letting any provider recur
+  fails it on the one-shot pool with "this world publishes nothing about it that
+  outlives the listing"; before this, capacity that wrongly acquired a key was never
+  judged at all.
+- Every clause has a case that fails it, one at a time, in
+  `TestEveryClauseOfTheCandidateIdentityRuleCanFail`. The content clause is only
+  there: no Blueprint states a world where two registries go silent on one machine.
+
+Two claims in this plan were false and are corrected in place, in the first review's
+section above: the break said to prove the rule has bite did not fail it, and the
+justification for keeping the node generation out of the key was arithmetic the
+codebase contradicts, because `internal/httpapi/nodes.go` hardcodes `Generation: 1`
+and nothing in `internal/` increments one. The rejection itself stands on the reason
+that a machine which stops and resumes is the same hardware.
+
+The live half ran. `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker
+-run TestIntegration` launches, observes and releases a real container on this host's
+engine and reaches the same daemon twice, once through the ambient socket and once
+through a docker context, and both cases now check that the key names the engine's
+own ID before comparing two keys: an unstamped offer produces no key at all, and two
+keys that name nothing are equal. Mercator issue #165 does not reproduce here and was
+left alone.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+cd web/app && bun run typecheck && bun run test
+```
+
+### Phase 4 the review of the measured transfer path
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and a real native
+Docker daemon. A concurrent session shared the worktree with its own slice in flight
+across several of the same files, so the full suite was run against a `git archive` of
+the commit under test rather than against the shared working directory. Every claim is
+held by a deliberate break that fails it:
+
+- restoring the running floor, so that later transfers re-date the slowest reading,
+  fails `TestASlowReadingRetiresWhileTheNodeKeepsWorking` with the reviewers' own
+  record: `100 Mbps, sample_count 25, observed_at 2026-07-27T00:00:00Z`, published by
+  a node that had measured a gigabit every half hour since noon. Dating the fact by
+  the latest transfer instead of the transfer that measured it fails
+  `TestANodePublishesTheSlowestTransferItHasSeen` on the date alone;
+- adding a ten minute idle lease to `rental-far-from-the-data` in
+  `conformance/a-path-somebody-measured-prices-the-read`, which is the reviewers'
+  repro, fails the old attribution rule with `candidate
+  "rental-far-from-the-data" priced its artifact_fetch stage at 200.00 Mbps measured by
+  "blueprint_path", and this world publishes no such machine to have measured it`. The
+  lease is now part of the fixture, so the corpus drives a decision past the retirement
+  of the machine it was about. `TestARateMeasuredOnCapacitySinceRetiredIsNotAViolation`
+  states the same law on its own;
+- putting the day-long expiry back on a fixture-declared path fails
+  `TestADeclaredPathIsStillPublishedADayLater`, which is the second instance of the
+  same defect: past the expiry Mercator reads silence about a path both worlds are
+  still crossing at the declared rate;
+- replacing the body of `simulatedWorld.linkMbps` with a read of the published-fact
+  channel, which is the reviewers' break and which used to leave the suite green,
+  fails `conformance/a-path-a-host-disowned-is-still-the-path` with `this world spent
+  640.00s reading forty gigabytes over the 200 Mbps path it declared, and it costs
+  sixteen hundred`;
+- the five clauses of `safety.transfer_rate_is_attributed` are still each driven by a
+  record no code in this tree writes, now stated over the publication record rather
+  than the standing fleet.
+
+The live half ran again on this host. `TestANodeReplicatesAnArtifactFromARealObjectStore`
+and `TestANodeMeasuresTheObjectStorePathItJustCrossed` start MinIO in a container of
+this daemon and stream real content over a presigned GET, and the reading the node
+publishes is the one it timed over that transfer. Mercator issue #165 was left alone.
+
+One limit is stated rather than hidden. A fixture's `p10_mbps` is one figure for what
+this world delivers and what the host publishes, and what separates the two channels
+is the confidence the host puts on its own number, which is what the new Blueprint
+spends. A world where a machine publishes one positive rate and delivers a different
+one is still unstatable, and it stays that way until something needs it: the number a
+node measures is delivery end to end, so a host whose disk is slower than its link is
+a host with a slower object-store path, stated as one.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race ./internal/domain ./internal/scheduler ./internal/scenario ./internal/lab \
+  ./internal/adapter/fake ./internal/node ./internal/nodeagent ./internal/httpapi ./internal/daemon
+```
+
+### Phase 4 transfer rates from a measured path
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and a real native
+Docker daemon. A concurrent session shared the worktree throughout and had its own
+slice in flight across several of the same files, so every command was run against a
+`git archive` of the commit under test rather than against the shared working
+directory. Each claim is held by a deliberate break that fails it:
+
+- pinning the scheduler's object-store rate back to `domain.AssumedDownloadRate`
+  fails `a-fast-machine-far-from-the-data-loses` five ways per candidate, with
+  `artifact_fetch_seconds: want exactly 1600, got 640`, `artifact_fetch confidence:
+  want 0.9, got 0.5`, `artifact_fetch rate: want 200 Mbps, priced at 500`, the
+  measurement recorded as the assumption, and the placement on
+  `rental-far-from-the-data`. That is the state the tree shipped in: two machines
+  twenty times apart on the path to their data, priced identically;
+- the same break fails `TestAMeasuredPathPricesTheReadAndThenSpendsIt` with `the
+  decision placed on "rental-far-from-the-data", and the machine beside the data
+  reads the dataset twenty times faster`;
+- dropping the Lab world's reading of the Blueprint's paths fails that same case with
+  `this world spent 640.00s reading forty gigabytes over a 4 Gbps path, and the path
+  says eighty`, which is the tautology the slice exists to remove: the prediction
+  still said eighty;
+- each of the five clauses of `safety.transfer_rate_is_attributed` is driven by a
+  record no code in this tree writes, one case at a time, in
+  `TestEveryClauseOfTheTransferRateRuleCanFail`. The counterpart,
+  `TestARatePricedFromTheStatedAssumptionIsNotAViolation`, holds that an honest
+  assumption passes: nothing measures a host's storage, so every assembly in the
+  fleet is priced from Mercator's own constant, and a rule that failed that could
+  only be satisfied by claiming measurements the tree does not have;
+- raising `minimumMeasuredBytes` past the object's size fails
+  `TestANodeMeasuresTheObjectStorePathItJustCrossed` with `the node published [], and
+  nothing there describes its path to the object store`, and so does dropping
+  `Network` from the reported host facts;
+- publishing the latest reading instead of the slowest fails
+  `TestANodePublishesTheSlowestTransferItHasSeen` with `the node published 2000 Mbps,
+  and the slowest of its three reads was 100`.
+
+The live half ran. `TestANodeMeasuresTheObjectStorePathItJustCrossed` starts MinIO in
+a container of this host's own daemon, writes a sixteen-megabyte object, and has the
+node fetch it over a real presigned GET: the throughput it publishes is one it
+measured over that transfer, and the production scheduler then prices a
+forty-gigabyte read off the reported number rather than the assumption. Docker is
+native here, so the store, the presigned read, and the node's own timing are all
+real. Mercator issue #165 was left alone.
+
+Two limits are worth stating rather than hiding. Each simulated world's constant for
+a path no fixture declared is the same figure as the scheduler's assumption, so an
+undeclared path still has prediction and actual agreeing by construction; what
+separates them is a declaration, which is why the fixture declares one. And
+`MeasuredLinkConfidence` is a stated 0.9: a node's own reading is worth more than a
+fleet-wide guess and less than certainty, and the figure is an assumption about
+assumptions until predicted-versus-actual for the fetch stage can replace it.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race ./internal/domain ./internal/scheduler ./internal/scenario ./internal/lab \
+  ./internal/adapter/fake ./internal/node ./internal/nodeagent ./internal/httpapi ./internal/daemon
+cd web/app && bun run typecheck && bun run test && bun run build
+```
+
+### Phase 4 the review of the candidate identity
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and a real native
+Docker daemon. Two reviewers refuted the slice that keyed a launch history, and
+every claim below is held by a deliberate break that fails it.
+
+- restoring `slices.Compact` over the sorted inventory fails
+  `TestTwoSpellingsOfOneCardAreOneProduct` and `TestTwiceTheCardsIsNotOneProduct`,
+  which is the reviewers' case that a four-GPU machine and a two-GPU machine keyed as
+  one exact candidate. It does not fail `TestOneModelInTwoMemorySizesIsTwoProducts`,
+  which this section claimed until the second review measured it: that test holds the
+  memory half of the product and is broken by dropping the memory, not by the
+  grouping;
+- naming the machine from the endpoint label again fails
+  `TestTwoDaemonsOnOneBoxAreTwoMachines`, `TestOneDaemonReachedTwoWaysIsOneMachine`,
+  and `TestAnUnreachableDaemonNamesNoMachine`, and fails the live case against this
+  host's own engine with `lane=ephemeral;provider=docker;machine=loopback` beside
+  `lane=ephemeral;provider=docker;machine=mercator-machine-...`, the lane having
+  joined the key in the second review;
+- naming the machine from the Rental again fails
+  `TestTwoMachinesOnOneLeaseOfferTwoMachines` in the node registry and
+  `TestTwoMachinesOnOneLeaseAreTwoCandidates` in the domain, which is the case an
+  operator reaches by inviting two machines against one rental_id. Since the second
+  review it also fails `safety.candidate_identity_recurs` on every Blueprint, which
+  it did not when this was written;
+- deleting `Region: o.Geolocation` fails `TestTwoSearchesOfOneMachineAreOneCandidate`,
+  deleting `InstanceType: cloud + "/" + g.ID` fails
+  `TestOneProductInTwoCloudsIsTwoCandidates`, and deleting either Shadeform fact
+  fails `TestOneRegionNameInTwoCloudsIsTwoPlaces`. All four lines could be deleted
+  with the suite green before this pass;
+- dropping the region from either simulated world fails
+  `a-candidate-is-what-recurs` on every key that states one and fails
+  `TestACandidateIsWhatRecursThroughTheWholeLabWorld` on the ask it states in full;
+- dropping the accelerator memory from the product fails
+  `safety.candidate_identity_recurs` through the whole control plane, with `ask-4417`
+  and `ask-51120` under one name at eight cards each. This is the break that fires the
+  rule, and until the second review this section named a different one.
+
+The live half ran. `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker
+-run TestIntegrationOneDaemonReachedTwoWaysIsOneMachine` reaches this host's Docker
+Engine 29.6.2 twice, once through the ambient socket and once through a docker
+context created for the case, and holds that the daemon's own ID names one machine
+where the endpoint label names two. Mercator issue #165 does not reproduce here and
+was left alone.
+
+One refutation is rejected. The reviewers asked for the node generation in the key.
+It is not there on purpose: the generation exists so a command is never sent to a
+runtime that has been replaced, which is fencing, and a machine that stops and resumes
+is the same disk and the same hardware, so what it spends pulling and booting is the
+same thing to learn about across the boundary. Keying on it would split one machine's
+launch history at every stop and resume while nothing about the machine changed, and
+what a machine currently holds is read from its live inventory rather than from its
+history. The collision the reviewers found in the same finding, two machines on one
+lease, is real and is fixed by naming the node.
+
+This paragraph first justified the rejection by claiming that keying on the
+generation would leave every launch history one sample long, and the second review
+established that the codebase says otherwise. `internal/httpapi/nodes.go` is the only
+production construction of a `node.Invitation` and sets `Generation: 1`
+unconditionally from a request body with no generation field, and nothing in
+`internal/` increments one, so a key carrying it would partition nothing at all
+today. On the definition in `internal/node/node.go` it changes on stop and resume, so
+a machine running fifty launches between two resumes would hold fifty samples and not
+one. The rejection stands on the reason above; the arithmetic it was first argued
+from was wrong.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+```
+
+### Phase 4 the second review of the start moment
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and a real native
+Docker daemon. Each claim is held by a deliberate break that fails it:
+
+- reverting `bookingStartedAt` to adopting any moment that is not nil fails
+  `TestANodeWithASkewedClockDoesNotSetMercatorsOwn` with `the record says the Booking
+  has 3509.47s of enforced runtime left, and it ran out`, and fails
+  `TestABookingClockIsHeldToTheSameLawAsTheRunStream` at the Lab rule;
+- copying the node's own `ObservedAt` through `broker.observeOnNode` fails the same
+  fleet case with `the Run records a start of 2026-07-26T13:59:23Z, and its machine's
+  clock is an hour ahead of the control plane's`;
+- deleting the registry's receipt stamp fails
+  `TestAReportedWorkloadIsDatedByTheClockMercatorKeeps`, and fails both fleet start
+  cases with a 502 from the Broker refusing a report it cannot place on Mercator's
+  clock;
+- deleting the clause about a moment ahead of its read from
+  `adapter.EstablishedStart` fails `a-clock-nobody-shares-is-not-a-start` with
+  `records a start moment of 2030-01-01T01:00:20Z, and the fixture says nobody
+  observed one`, and the Lab rule keeps failing the same record on its own terms,
+  which is the independence the delegation had removed;
+- publishing the world's own truth instead of the machine's reading fails
+  `TestAHostRunningAheadIsRefusedThroughTheWholeLabWorld` with `the start-latency row
+  is sourced "run_stream.execution_started" with 20.00s`;
+- dropping the parse error on the node runtime's `State.StartedAt` fails
+  `TestARuntimeThatStatesAnUnreadableStartMomentFailsTheRead`, which drives a daemon
+  printing Go's default time form;
+- dropping the error on the Docker adapter's `Created` moment fails
+  `TestContainerFromInspectRefusesAMomentItCannotRead/Created`, which nothing in the
+  tree could fail before.
+
+The live half ran. `go test ./internal/nodeagent -run TestTheNodeReportsWhenTheContainerStarted`
+and the Docker adapter's integration case were exercised against this host's own
+Docker Engine, which is native here rather than behind a VM, so the two moments the
+adapter parses are the ones a real daemon printed. Mercator issue #165, the
+reachability probe with no timeout, does not reproduce on this host and was
+deliberately left alone.
+
+One limit is worth stating rather than hiding. The Booking clock's refusal is driven
+end to end only on the reusable lane. Both simulated worlds report running from the
+moment a launch is accepted, so the first observation the control plane gets carries
+no start moment and the schedule is measured from that read, which is the fallback
+the rule has to allow rather than the case it exists to catch. The lane where a start
+arrives with the first running observation is the one an enrolled node serves, and
+that is where the fleet case drives it.
+
+### Phase 4 the review of the launch waterfall
+
+On 2026-07-26, on the amd64 Linux workstation. Every command was run against a `git
+archive` of the commit under test with only this pass's files overlaid, because a
+concurrent session shared the worktree and had it non-compiling for stretches of the
+work. Each fix is held by a break that fails it:
+
+- restoring the unconditional assignment of `RunRecord.ReadyAt` fails three of the
+  four readiness cases in `internal/orchestrator`: a moment an hour ahead of the read
+  is recorded, a moment a minute before the container start is recorded, and a second
+  report moves a readiness already taken;
+- publishing the world's own readiness truth instead of the machine's reading leaves
+  `a-clock-nobody-shares-is-not-a-start` unable to say anything about a refused
+  readiness, and reverting `Session.RunRecord` to read the report makes the same
+  fixture assert that no workload spoke rather than that Mercator refused;
+- deleting any one clause of `safety.readiness_is_reported_not_inferred` leaves the
+  record it exists to catch passing, which is what
+  `TestEveryClauseOfTheReadinessRuleCanFail` drives one case at a time;
+- restoring `UnpackBytes: 0` for bytes a host has to fetch fails
+  `unpacked-is-not-the-same-as-pulled` with `unpack_seconds: want at least 70, got 0`
+  and `unpack confidence: want 0.5, got 1`, and fails
+  `TestBothModelsPriceDoubtTheSameWay` on the doubt a cold candidate carries;
+- replacing a fixture's `boot` stage assertion with the record's own JSON key
+  `boot_seconds` now fails at load with `stage "boot_seconds", which is not one of
+  [...]`, where before it silently asserted zero seconds and passed;
+- deleting `"stage_seconds": world.stageSeconds(execution)` now fails
+  `safety.prediction_is_recorded_against_its_actual`, which it did not before;
+- restoring the worlds that always report ready fails
+  `a-running-process-is-not-a-serving-one` with `records its application ready at
+  2030-01-01T00:00:20Z, and the fixture says it has not said so` and fails
+  `TestAWorkloadThatNeverBecomesReadyMeasuresNoReadiness` with a readiness row sourced
+  `effect_ledger.launch.stage_seconds` at 0.00s.
+
+The six live Docker cases named in the section below were re-run unskipped on this
+host against Docker Engine 29.6.2 with the overlayfs storage driver.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+```
+
+### Phase 4 the launch waterfall
+
+On 2026-07-26, on the amd64 Linux workstation, the eight-stage record was written
+against the world and both Blueprints were promoted in the same change once green.
+Each claim is held by a deliberate break that fails it:
+
+- returning nothing from `LaunchSpec.ContainerStartSpend` fails
+  `a-launch-is-eight-stages` with `start_latency_seconds: want at least 658, got
+  638`. That is the state both worlds shipped in: a container runtime asked for a
+  process handed one back in the same instant;
+- returning nothing from `LaunchSpec.UnpackSpend` fails it with `want at least
+  658, got 628`;
+- returning nothing from `ProvisioningSpec.BootSpend` fails it with `want at least
+  658, got 298` and, one stage down the waterfall, `records its application ready
+  at 2030-01-01T00:07:58Z, and the fixture says it has not said so`. A machine that
+  boots instantly is ready four minutes before the fixture says anything can be;
+- returning nothing from `LaunchSpec.ApplicationReadySpend` fails it with
+  `ready_latency_seconds: want exactly 180, got 0` and with the same premature
+  readiness. That is the state the tree shipped in for readiness as a whole: an
+  untyped callback nothing keyed on, so a workload was serving the moment its
+  process existed;
+- dropping one stage out of the world's launch consequence fails
+  `safety.prediction_is_recorded_against_its_actual` through the registry's own
+  deliberate case: the decision predicted all eight, the ledger reports seven, and
+  the unpack the machine really did is a prediction measured against nothing;
+- deleting `controlPlane.deliverReadiness` fails
+  `TestEveryStageOfALaunchHasAnActual` with `the Run projection carries start
+  2030-01-01 00:10:58 +0000 UTC and readiness <nil>`;
+- refusing to reduce a readiness report into `RunRecord.ReadyAt` fails
+  `TestRunnerVerifiesARealReportedRunAndConfirmedCleanup` with `verdict =
+  "failed"` and `ApplicationReadyAt:<nil>`, which is the trial reading
+  `PROBE_READY_MOMENT_MISSING` off a probe that ran, reported, and left the last
+  stage of its launch unproven;
+- pricing the whole image answer as one stage fails
+  `TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes` and
+  `TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked`, which now assert
+  that a machine holding every byte of an unassembled image is charged the assembly
+  and no transfer.
+
+Two limits are worth stating rather than hiding.
+
+No new live-container case was added for readiness. The application-ready stage has
+no node-side and no provider-side participant by construction: its authority is the
+workload posting to the public report endpoint, which is exercised against the real
+HTTP server, the real report signer, and the real probe code in
+`internal/conformance`. Driving the probe inside a real container would need the
+committed probe image built in the test and a daemon whose public URL is reachable
+from the Docker bridge, which is the conformance runner's own production
+configuration and belongs with the phase 5 provider work rather than with this
+slice. What did run live on this machine, against Docker Engine 29.6.2 with the
+overlayfs storage driver: `TestTheNodeReportsWhenTheContainerStarted`,
+`TestDockerRuntimeReportsTheLayersItUnpacked`,
+`TestEveryImageThisDaemonHoldsIsAssembled`,
+`TestALaunchThatNeverRunsLeavesNoCacheBehind`,
+`TestAContainerThatNeverStartsIsNotACacheThisNodeHolds`, and
+`TestTheFleetListingReportsTheRoomThisMachineReallyHas`, none of them skipped. Each
+of those either gates on `requireDocker` or is handed
+`nodeagent.NewDockerRuntime`, which is what makes the daemon version and the storage
+driver mean anything about it.
+
+This list first named `TestANodeReportsTheMomentItsContainerReallyStarted` as well,
+and that was wrong. `startFleet` sets `PATH` to an empty directory precisely so the
+daemon seeds no local connection, and the case takes no `runningOn` option, so the
+runtime under it is `scriptedRuntime` and the start moment it compares is one that
+fake fabricated as `time.Now().Add(-scriptedStartDelay)`. The case is worth having
+and it holds the end-to-end seam over the public API, but it would pass with the
+Docker daemon stopped or uninstalled, so nothing about Docker Engine 29.6.2 or
+overlayfs is established by it. The container-start stage's live evidence is
+`TestTheNodeReportsWhenTheContainerStarted`, which reads `State.StartedAt` back off a
+container this machine's own daemon really ran.
+
+Nothing in production predicts acquisition or agent enrollment, and nothing
+measures either. Both are recorded as unpublished, which is honest and is a
+prediction of zero seconds for the two stages a fresh machine spends most of its
+first minutes in. The hierarchical estimator is what replaces them with a history,
+and the actuals it will read now exist.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario ./internal/adapter/fake ./internal/orchestrator \
+  ./internal/conformance ./internal/conformanceprobe ./internal/daemon \
+  ./internal/nodeagent ./internal/httpapi -count=1
+cd web/app && bun run typecheck && bun run test && bun run build
+```
+
+### Phase 3 the second review of the service class
+
+On 2026-07-26, on the amd64 Linux workstation, `go build ./...` and `go test
+./internal/...` pass, and `bun run typecheck` and `bun run test` pass in
+`web/app`. Each fix is held by a break that fails it:
+
+- restoring the empty-fact-list test in `downloadFloorViolations` refuses
+  `rental-disowned` with `NETWORK_FACT_UNSATISFIED` while `rental-silent` is
+  selected, which fails `a-floor-refuses-a-measurement-and-not-a-silence`,
+  `a-link-nobody-measured-is-not-a-slow-link` at L1, and
+  `TestADownloadFloorRefusesOnlyWhatWasMeasuredTooSlow`;
+- `Confidence: 1` in `applyOfferWorldFacts` places the Run on the machine that
+  disowned 5 Gbps, and so does dropping the world's paths altogether, each failing
+  `TestADisownedLinkFactBuysWhatSilenceBuysAtL1`. Both mutations left the whole
+  tree green before this Blueprint existed;
+- deleting the `Unpriced` block in `newSimulatedWorld` places the Run on the
+  machine nobody quoted at a rate of zero, failing
+  `TestAnUnquotedMachineIsTheLastResortAtL1`. That mutation also left the whole
+  tree green before;
+- not wiring `migrateStoredRevisionSecrets` leaves `hf_live_SECRETVALUE` in the
+  public payload of the fixture database, failing
+  `TestOpenMovesAStoredRevisionsSecretsOutOfThePublicPayload`, and reverting the
+  door leaves the token in the event
+  `TestAStoredRevisionKeepsItsSecretsOutOfThePublicEvent` reads.
 ### Phase 3 close-out
 
 On 2026-07-25, on ws, an amd64 Linux workstation with 24 cores and Docker Engine
@@ -3353,6 +8494,54 @@ halves of the invariant inspect real content and neither objects.
 go build ./... && go vet ./... && go test ./...
 go test -race ./internal/lab ./internal/scenario ./internal/adapter/fake ./internal/daemon -count=1
 ```
+
+### Phase 3 and 4 fleet answers
+
+On 2026-07-26, on amd64 Linux with a real Docker daemon, so nothing skipped:
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/domain ./internal/scheduler ./internal/lab ./internal/scenario \
+  ./internal/adapter/fake ./internal/adapter/vast ./internal/adapter/shadeform \
+  ./internal/node ./internal/nodeagent ./internal/daemon ./internal/orchestrator \
+  ./internal/broker ./internal/capability ./internal/conformance -count=1
+cd web/app && bun run typecheck && bun run test && bun run build
+```
+
+Each fix answering the third round of review was measured by breaking it and reading
+what failed.
+
+- deleting the locality and the confidences from `FleetVerdict` fails
+  `TestALocalityThatWentSilentIsADifferentVerdict` with `a machine that stopped saying
+  what it holds gave the same verdict as one that said: off_only_machine:
+  LATENCY_SLO_EXCEEDED at placement.max_p90_start_seconds`, which is the reviewer's
+  own scenario read off the record. The two cases beside it hold the suppression the
+  verdict exists for, so the widening cannot be answered by comparing decisions whole;
+- reading an unmeasured disk as a shortfall fails
+  `a-machine-that-could-not-look-is-not-a-machine-with-no-room` four ways at once:
+  the reason, the count of machines that said too little, and both halves of the
+  ordering the second Run asserts;
+- removing the shape filter from the fake world fails
+  `an-ask-nothing-matches-holds-no-queue` with `the machines weighed: want exactly 0,
+  got 1`; requiring a weighed machine before a fleet may say it holds nothing fails
+  the same case with `no booking decision recorded` for the Run that fits. Both halves
+  are load-bearing, which is the point: the world has to be able to answer one ask
+  with nothing while answering another with a machine;
+- carrying the queue exemption forward through a wait that asked the fleet nothing
+  fails `a-wait-the-queue-caused-says-nothing-about-capacity` on the ordering its last
+  Run states;
+- `safety.a_silence_is_not_an_answer_about_capacity` fails on the record its
+  deliberate case builds: one machine refused for a disk nobody measured, and a wait
+  claiming no machine in the fleet can ever hold the Run;
+- adding `CollectOffers` to the orchestrator's seam failed ten orchestrator cases and
+  a green Blueprint before every double that states its own offers stated its own
+  census, because Go resolves an embedded method against the embedded value.
+
+What this round could not reach. Neither marketplace adapter has a conformance trial,
+because both need credentials and real money, so the corrected offer queries are held
+by unit cases against recorded response shapes and by the two Blueprints that state
+what an empty answer means. The claim that an empty answer means the shape is not sold
+is now true of every adapter in the tree, and nothing yet holds a new adapter to it.
 
 ### Phase 2 placement
 

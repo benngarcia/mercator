@@ -59,6 +59,32 @@ func TestCompileRejectsAnUnsupportedBlueprintSchema(t *testing.T) {
 	}
 }
 
+// TestCompileRefusesAWorldStatementItWouldDrop is the one shape of Blueprint this
+// harness must never accept quietly. A seeded Rental Schedule is Broker state, and
+// nothing here loads one: the world would be built with every Rental idle, and a
+// fixture declaring that a machine is occupied for the next forty-five minutes
+// would pass with its Run placed there immediately. A world statement that reaches
+// nothing has to be an error rather than a silence.
+func TestCompileRefusesAWorldStatementItWouldDrop(t *testing.T) {
+	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/conformance/execution-warms-a-rental.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+	blueprint.World.RentalSchedules = []scenario.RentalScheduleSpec{{
+		RentalID: "held-4090",
+		Version:  1,
+		Running: &scenario.RunningBookingSpec{
+			BookingID:           "booking-active",
+			RunID:               "run-active",
+			RemainingMaxRuntime: scenario.Duration(45 * time.Minute),
+		},
+	}}
+
+	if _, _, err := Compile(blueprint, CompileOptions{}); err == nil {
+		t.Fatal("compiled a world whose seeded Bookings nothing would load")
+	}
+}
+
 func TestCompileSamplesActualRuntimeIndependentlyFromMercatorPrediction(t *testing.T) {
 	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/demos/artifact-warmth-restart.json")
 	if err != nil {

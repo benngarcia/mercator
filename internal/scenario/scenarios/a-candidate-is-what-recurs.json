@@ -1,0 +1,104 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "The candidates a fleet has to be able to tell apart and put together: two asks for one marketplace machine that must key as one candidate, a third ask in the same place whose cards hold half the memory and must key as another, a fourth whose probe reported its eight cards as two entries of four and must key as the same product as the ask that reported them whole, a fifth holding half as many of that product and keying as another, an enrolled machine that keys as the machine its backend named and never as the lease or the listing this fixture named it by, a listing of that same first product its provider sells as a one-shot execution instead, which is not the same thing to learn about and must key as another candidate, the same enrolled machine filed under a second key that carries the content it was asked to run, because what a pull costs is a property of the content and what a boot costs is not, and a one-shot product publishing nothing that outlives its listing, which has no key at all and about which nothing may ever claim candidate-specific evidence.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "400MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "enrolled-a100",
+        "provider": "simnode",
+        "region": "US-CA",
+        "rate_per_hour_usd": 1.0,
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB"}}
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "ask-4417",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 3.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "ask-90218",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 3.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "ask-51120",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB"}}
+      },
+      {
+        "id": "ask-2211",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB", "entries": 2}}
+      },
+      {
+        "id": "ask-2212",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 4, "memory": "80GB"}}
+      },
+      {
+        "id": "ask-4417-oneshot",
+        "provider": "simvast",
+        "lane": "ephemeral",
+        "region": "US-CA",
+        "rate_per_hour_usd": 3.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "oneshot-pool",
+        "provider": "simpool",
+        "lane": "ephemeral",
+        "rate_per_hour_usd": 5.0,
+        "provisioning": {"expected": "1m", "p90": "2m", "acquisition": "6s", "boot": "45s", "agent_ready": "9s"}
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "expected_runtime": "20m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "enrolled-a100",
+    "candidates": {
+      "enrolled-a100": {
+        "candidate": "lane=reusable;provider=simnode;machine=node-1",
+        "content": "lane=reusable;provider=simnode;machine=node-1;image=sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"
+      },
+      "ask-4417": {"candidate": "lane=reusable;provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
+      "ask-90218": {"candidate": "lane=reusable;provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
+      "ask-51120": {"candidate": "lane=reusable;provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@80000000000x8"},
+      "ask-2211": {"candidate": "lane=reusable;provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@80000000000x8"},
+      "ask-2212": {"candidate": "lane=reusable;provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@80000000000x4"},
+      "ask-4417-oneshot": {"candidate": "lane=ephemeral;provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
+      "oneshot-pool": {"candidate": ""}
+    }
+  }
+}

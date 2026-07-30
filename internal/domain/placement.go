@@ -1,74 +1,308 @@
 package domain
 
-import "slices"
+import (
+	"math"
+	"slices"
+	"strconv"
+	"strings"
+)
 
-// This file is what a Run's stated objective does to a placement. The objective
-// is public API, so "fastest_start" is a promise Mercator makes about where the
-// Run lands, and until this existed it was a word that changed nothing: every
-// candidate was ranked on one blended dollar score whose only time term was a
-// weight nothing populated outside the balanced objective, so a Run that asked
-// to start soonest was placed on whichever machine was a fraction of a cent
-// cheaper and, when prices tied, on whichever offer ID sorted first.
+// This file is the score. One number decides a placement, and the whole of it is
+// stated here: the dollars the Run will be billed, plus the dollars its
+// ServiceClass says it would rather pay than wait, plus the dollars it would
+// rather pay than act on an answer nobody stands behind.
 //
-// An objective is a ranking rather than an exchange rate. Converting a second
-// of waiting into dollars needs a number nobody has measured, and inventing one
-// per objective would be the unmeasured constant this codebase keeps deleting.
-// What a Run did state is which quantity it wants least of, and that orders
-// candidates on its own.
+// Before a class declared those rates, the second and third terms were
+// multiplied by zero for every Run in production, so the score was the price and
+// nothing else, and the Run's stated objective had to order candidates on its
+// own to mean anything at all. The exchange rate is what removes that
+// indirection: the class states what waiting costs it, and cost and waiting
+// become comparable quantities rather than two rankings.
 
-// BalancedWaitingUSDPerSecond is what the balanced objective presumes a second
-// spent waiting to start is worth: 1.80 USD an hour, roughly the rent on the
-// machine doing the waiting. It is a stated assumption rather than a
-// measurement, said once here so the scheduler and the Lab's reference model
-// cannot disagree about a number neither of them measured.
-const BalancedWaitingUSDPerSecond = 0.0005
-
-// Prefers reports whether this candidate is the better placement under the
-// objective the Run stated. It is a total order: candidates that tie on every
-// term the objective names fall back to the offer snapshot ID, so one offer set
-// produces one decision however the offers arrived.
-func (policy PlacementPolicy) Prefers(candidate, incumbent CandidateDecision) bool {
-	if order := slices.Compare(policy.rank(candidate), policy.rank(incumbent)); order != 0 {
-		return order < 0
-	}
-	return candidate.OfferSnapshotID < incumbent.OfferSnapshotID
+// ScoreWeights is what one ServiceClass declares its seconds and its doubts are
+// worth. It is stated by the class rather than passed into Placement, because a
+// weight nothing populates is a term multiplied by zero, and this whole file was
+// dead code for exactly that reason.
+type ScoreWeights struct {
+	StartLatencyUSDPerSecond      float64 `json:"start_latency_usd_per_second,omitempty"`
+	CompletionLatencyUSDPerSecond float64 `json:"completion_latency_usd_per_second,omitempty"`
+	// UncertaintyPenaltyUSD is what a whole point of doubt costs. A point is one
+	// answer worth nothing; see CandidateDecision.Uncertainty for what counts.
+	UncertaintyPenaltyUSD float64 `json:"uncertainty_penalty_usd,omitempty"`
 }
 
-// rank is what this objective orders candidates by, most significant term
-// first. Every objective ends in the term another one leads with: a Run that
-// asked for speed still takes the cheaper of two equally quick machines, and a
-// Run that asked for price still takes the quicker of two equally cheap ones,
-// which is the only thing that lets locality decide a placement between offers
-// at one price.
+// ScoreUSD is what this candidate is worth to a Run whose class declared these
+// weights, in dollars, lowest first.
 //
-// Completion is start plus the runtime the Run expects. That runtime is the
-// same for every candidate today, so this ranks exactly as fastest_start does
-// until something predicts per-candidate throughput, which is phase 4. It is
-// written as the sum it means rather than as the shortcut it currently equals.
-func (policy PlacementPolicy) rank(candidate CandidateDecision) []float64 {
-	cost := candidate.ScoreUSD
+// It reads nothing but the candidate record the decision keeps, which is what
+// makes the score reproducible: a reader with the decision in front of them can
+// re-derive this number, and a scoring term whose input is not recorded cannot be
+// added without the Lab noticing. Two definitions of uncertainty drifted apart
+// under exactly that blind spot, one of them reading facts off the offer that no
+// decision carried, and neither could be caught while both were multiplied by
+// zero.
+//
+// An infeasible candidate scores nothing. It has no price because it is not for
+// sale, and ranking it beside the others would have the cheapest refusal win.
+//
+// A candidate nobody quoted scores its waiting and its doubt and no dollars,
+// because there are none to state and inventing a zero would price the absence.
+// That number is not comparable with a priced candidate's, which is why Preferred
+// asks Priced first and the decision records which rule ranked them.
+func (weights ScoreWeights) ScoreUSD(candidate CandidateDecision, expectedRuntimeSeconds float64) float64 {
+	if !candidate.Feasible {
+		return 0
+	}
 	start := candidate.Estimates.StartSeconds.Expected
-	switch policy.Objective {
-	case ObjectiveFastestStart:
-		return []float64{start, cost}
-	case ObjectiveFastestCompletion:
-		return []float64{start + policy.ExpectedRuntimeSeconds, cost}
-	default:
-		return []float64{cost, start}
-	}
+	return round(candidate.Estimates.CostUSD.Expected+
+		weights.StartLatencyUSDPerSecond*start+
+		weights.CompletionLatencyUSDPerSecond*(start+expectedRuntimeSeconds)+
+		weights.UncertaintyPenaltyUSD*candidate.Uncertainty(), 6)
 }
 
-// SelectionReason names the rule that chose the winner, so the decision record
-// says what it ranked on. A Run that asked for the earliest start and got the
-// costliest machine is explained by its own objective, and recording that as
-// LOWEST_SCORE would describe a comparison Mercator did not make.
-func (policy PlacementPolicy) SelectionReason() string {
-	switch policy.Objective {
-	case ObjectiveFastestStart:
-		return "EARLIEST_START"
-	case ObjectiveFastestCompletion:
-		return "EARLIEST_COMPLETION"
-	default:
-		return "LOWEST_SCORE"
+// Uncertainty is how far this candidate's own answers fall short of certainty,
+// summed over the confidences the decision recorded beside it.
+//
+// It counts confidences and never facts. A host that could not say what it holds
+// is already priced twice for that silence, once as the whole content it might
+// have to fetch and once as the confidence cap on the seconds that takes, so
+// adding a point for the unknown inventory on top was charging the same doubt a
+// third time. What is left is the honest question: how much is each answer this
+// candidate was scored on worth?
+//
+// An answer nobody stated a confidence for states no opinion and counts nothing.
+// Zero is silence rather than worthlessness, and a doubt about a silence is not
+// two doubts.
+//
+// Which means an answer may only be doubted here if the score reads the answer
+// itself. Otherwise the term runs backwards: a publisher that measures a machine
+// and states its own confidence is charged, a publisher that says nothing is not,
+// and a publisher certain of the worst news is not either, so the score improves
+// the less anybody stands behind and improves again when nobody speaks. That is
+// the inverse of modelling the unknown as uncertainty, and it is what happened
+// while the published reliability history was doubted here and priced nowhere.
+// ScoredAnswers is that rule written down, and
+// safety.doubt_only_the_answers_the_score_reads is what holds every recorded
+// decision to it.
+func (candidate CandidateDecision) Uncertainty() float64 {
+	shortfall := 0.0
+	for _, confidence := range candidate.Confidences {
+		if confidence.Value > 0 && confidence.Value < 1 {
+			shortfall += 1 - confidence.Value
+		}
 	}
+	return shortfall
+}
+
+// AnswerCapacity is the claim that this machine can be had at all, named here
+// because the score reads it: an unavailable machine is infeasible and an
+// infeasible candidate is not for sale. It is a constant rather than a word
+// spelled at each site for the reason a stage's answer is derived from the
+// stage, which is that the same answer spelled independently in two places lets
+// a rule stated over one of them pass while the other says something else.
+const AnswerCapacity = "capacity"
+
+// ScoredAnswers is every question this score reads an answer to, and therefore
+// the whole of what Uncertainty may charge doubt about. The capacity claim
+// decides whether a candidate is for sale, and each stage of a launch is a term
+// of the start the two latency rates are multiplied by, so a shortfall in any of
+// them is doubt about a number the score used.
+//
+// Nothing else may appear beside a candidate as a confidence. An answer the score
+// does not read charges its publisher for having answered and charges silence
+// nothing, which ranks the machine nobody measured above the machine measured and
+// never seen to fail. A published reliability history was doubted here for a
+// phase on exactly that footing, and the term was invisible while every weight
+// that multiplied it was zero.
+func ScoredAnswers() []string {
+	answers := make([]string, 0, len(LaunchStages)+1)
+	answers = append(answers, AnswerCapacity)
+	for _, stage := range LaunchStages {
+		answers = append(answers, stage.ConfidenceAnswer())
+	}
+	return answers
+}
+
+// Priced reports whether the dollars in this candidate's cost estimate are a
+// price somebody quoted. It reads the record rather than the offer, like every
+// other input to the ranking, and the record states it as the source of the cost
+// estimate, which is where every other missing answer here says it is missing.
+func (candidate CandidateDecision) Priced() bool {
+	return candidate.Estimates.CostUSD.Source != CostUnpriced
+}
+
+// FleetStanding is what one weighed machine turned out to be worth to one Run:
+// capacity this Run may end up on, capacity that can never take it, or a machine
+// that said too little for anybody to tell.
+type FleetStanding int
+
+const (
+	// StandingCouldHold is a machine this Run could be placed on now, or once the
+	// capacity it is spending right now comes back.
+	StandingCouldHold FleetStanding = iota
+	// StandingUnstated is a machine that refused this Run only for facts nobody
+	// published. It is neither of the other two, and counting it as either is how
+	// a silence became an answer about the fleet.
+	StandingUnstated
+	// StandingNeverHolds is a machine that refused this Run for what the machine
+	// is. No amount of waiting for this machine produces a placement.
+	StandingNeverHolds
+)
+
+// Standing is which of the three this candidate is, read off its refusals.
+//
+// It is the question the admission queue is ordered on, which is why it is asked
+// of the refusals rather than of the Bookings. A machine that is both busy and
+// too small is busy and too small: reading the Booking alone made every occupied
+// machine in the fleet look like a wait this Run was in, so one ask nothing could
+// hold emptied a workspace as soon as anything else was running.
+//
+// A stated refusal outranks a silence, because a machine that is too small to
+// ever hold this Run is too small whatever else it failed to say about itself.
+func (candidate CandidateDecision) Standing() FleetStanding {
+	standing := StandingCouldHold
+	for _, refusal := range candidate.Rejections {
+		switch {
+		case refusal.EndedByWaiting:
+		case refusal.Unstated:
+			standing = StandingUnstated
+		default:
+			return StandingNeverHolds
+		}
+	}
+	return standing
+}
+
+// FleetVerdict is what this decision said about the fleet: every machine it
+// weighed, and what each of them said about this Run. It answers "has the fleet
+// said anything different", which is the only reason a Run still waiting for the
+// same thing needs its evidence recorded again.
+//
+// The refusals alone were not enough, and the version of this that compared only
+// them left the audit hole it was written to close. Every law about Placement is
+// stated over recorded decisions, and the ones about locality read no refusal at
+// all: what a machine holds is priced rather than refused, on purpose, so a
+// candidate whose locality went from known to a silence produced a byte-identical
+// list of refusals and the decision that broke the law was never appended. So the
+// verdict is what each machine was struck out for, what it was found holding, and
+// what every answer it gave was worth, which together are the evidence those laws
+// read.
+//
+// The numbers beside them are still left out, because they move on their own and a
+// decision compared whole would be recorded on every tick of the sweep: a
+// projected start a minute nearer than it was is the same answer about the same
+// fleet. What is here changes when the fleet does.
+func (decision BookingDecision) FleetVerdict() string {
+	verdicts := make([]string, 0, len(decision.Candidates))
+	for _, candidate := range decision.Candidates {
+		verdicts = append(verdicts, candidate.verdict())
+	}
+	slices.Sort(verdicts)
+	return strings.Join(verdicts, "; ")
+}
+
+// verdict is one machine's whole answer about one Run, as the fleet's own account
+// of it: the refusals it was struck out for, the locality it was found at, and the
+// confidence every answer it published was scored at.
+func (candidate CandidateDecision) verdict() string {
+	said := make([]string, 0, len(candidate.Rejections)+len(candidate.Confidences)+1)
+	for _, refusal := range candidate.Rejections {
+		said = append(said, refusal.Code+" at "+refusal.Path)
+	}
+	said = append(said, "holds "+string(candidate.ImageLocality))
+	for _, confidence := range candidate.Confidences {
+		said = append(said, confidence.Answer+" worth "+strconv.FormatFloat(confidence.Value, 'f', -1, 64))
+	}
+	slices.Sort(said)
+	return candidate.OfferSnapshotID + ": " + strings.Join(said, ", ")
+}
+
+// Preferred reports whether this candidate is the better placement. It is a
+// total order: candidates that tie on dollars take the one that is ready sooner,
+// and candidates that tie on both fall back to the offer snapshot ID, so one
+// offer set produces one decision however the offers arrived.
+//
+// A machine nobody priced ranks behind every machine somebody did, and that is
+// asked first because it is not a comparison of dollars at all. The score is in
+// dollars and a candidate with no price has none: scoring the absence as zero
+// made the unpriced machine the cheapest thing in the fleet, so a Run that allowed
+// unknown pricing took it every time, however much later it would start and with
+// no price at all. AllowUnknownPricing says a caller would rather run on a machine
+// nobody priced than not run, which is what this ordering means, and never that
+// they prefer one.
+//
+// Otherwise there is one rule for every class, because the class is already in the
+// score. A ranking per class was what the objective needed while the exchange
+// rates were dead; now that a second of waiting has a price, a Run that hates
+// waiting and a Run that does not are comparing the same quantity in the same
+// units.
+func (candidate CandidateDecision) Preferred(over CandidateDecision) bool {
+	if candidate.Priced() != over.Priced() {
+		return candidate.Priced()
+	}
+	if candidate.ScoreUSD != over.ScoreUSD {
+		return candidate.ScoreUSD < over.ScoreUSD
+	}
+	if candidate.Estimates.StartSeconds.Expected != over.Estimates.StartSeconds.Expected {
+		return candidate.Estimates.StartSeconds.Expected < over.Estimates.StartSeconds.Expected
+	}
+	return candidate.OfferSnapshotID < over.OfferSnapshotID
+}
+
+// round is how precisely a score is stated. Six places is well below a cent and
+// well above the noise of summing four terms, and it is applied in one place so
+// the reference model and the record cannot disagree about the last digit.
+func round(value float64, places int) float64 {
+	factor := math.Pow10(places)
+	return math.Round(value*factor) / factor
+}
+
+// PublishedTo reports whether a marketplace search for this shape would return
+// this listing. It is the world model of a provider offer query, and it exists
+// because an offer query is a search: every marketplace adapter in this tree
+// hands the provider the shape asked for and gets back only what matches, so a
+// fleet answers one ask with a listing and another with nothing at all.
+//
+// The whole classification of a wait rests on that. A Run the fleet published
+// nothing for is waiting for capacity to be added, and a Run refused by machines
+// the fleet did publish is waiting for one of those machines. A simulated world
+// that returned its whole inventory whatever was asked could state the second and
+// never the first, so the corpus could not go red on the case that empties a
+// workspace.
+//
+// It is asked only of a listing, which is a search result. Capacity Mercator
+// holds is not searched for: an enrolled node and a Rental under lease are
+// machines the control plane knows about, they are listed whole, and the decision
+// records why each was refused. That is the difference between a catalog and a
+// fleet, and both simulated worlds keep it.
+//
+// It filters on room and on cards, which is what the real searches filter on, and
+// on nothing else. A predicate stricter than the scheduler's own checks would
+// withhold a machine the scheduler would have taken.
+func (offer OfferSnapshot) PublishedTo(resources ResourceRequirements) bool {
+	if offer.Kind != OfferKindProvisionable {
+		return true
+	}
+	if offer.Resources.EphemeralDiskKnown && offer.Resources.EphemeralDiskBytes < resources.EphemeralDisk.MinBytes {
+		return false
+	}
+	return offer.Resources.AcceleratorCount() >= requestedAcceleratorCount(resources)
+}
+
+// AcceleratorCount is how many cards this machine reports across every inventory
+// entry it publishes, which is what a search filtering on card count reads.
+func (inventory ResourceInventory) AcceleratorCount() int {
+	cards := 0
+	for _, entry := range inventory.Accelerators {
+		cards += entry.Count
+	}
+	return cards
+}
+
+func requestedAcceleratorCount(resources ResourceRequirements) int {
+	cards := 0
+	for _, requirement := range resources.Accelerators {
+		cards += requirement.Count
+	}
+	return cards
 }

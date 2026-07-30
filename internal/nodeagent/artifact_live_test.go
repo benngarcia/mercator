@@ -16,6 +16,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
 // This file is the higher-fidelity half of Artifact replication: the node
@@ -369,4 +370,310 @@ func sign(key []byte, message string) []byte {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(message))
 	return mac.Sum(nil)
+}
+
+// TestANodeMeasuresTheObjectStorePathItJustCrossed is the live half of the
+// transfer model. Everything else about how long content takes to reach a
+// machine is Mercator's own stated assumption, and this is the one place a real
+// number enters the system: the node streams sixteen megabytes out of a real
+// S3-compatible store over a real presigned GET, times the bytes it actually
+// moved, and publishes what it found as a fact about that path.
+//
+// Then Placement prices the next read off the reported number. That is the whole
+// point of measuring: a rate a machine published and nothing reads is a rate that
+// changes no decision, which is what the field this fills has been since phase 2.
+func TestANodeMeasuresTheObjectStorePathItJustCrossed(t *testing.T) {
+	requireDocker(t)
+	endpoint := startObjectStore(t)
+	// Large enough to be a measurement of throughput rather than of the round trip
+	// to the store, which is the distinction minimumMeasuredBytes draws.
+	content := []byte(strings.Repeat("mercator throughput conformance 0123456789abcdef\n", 340_000))
+	digest := sha256.Sum256(content)
+	putObject(t, endpoint, "datasets", "corpus-v9", content)
+
+	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
+	if err := runtime.PrepareArtifact(context.Background(), capability.PrepareArtifactCommand{
+		ArtifactID:    "artifact:corpus:v9",
+		ContentDigest: "sha256:" + hex.EncodeToString(digest[:]),
+		Source:        presign(t, http.MethodGet, endpoint, "datasets", "corpus-v9", time.Hour),
+		SizeBytes:     int64(len(content)),
+	}); err != nil {
+		t.Fatalf("replicate the Artifact: %v", err)
+	}
+
+	facts, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read the node's facts: %v", err)
+	}
+	measured := objectStorePath(t, facts.Host.Network)
+	if measured.ValueMbps <= 0 || measured.SampleCount != 1 {
+		t.Fatalf("the node reports %+v, want the one transfer it just timed", measured)
+	}
+	if measured.Source != ArtifactCopySource || measured.Confidence != MeasuredLinkConfidence {
+		t.Fatalf("the node reports %+v, want a reading it names as its own", measured)
+	}
+	if !measured.Answers(facts.ObservedAt) {
+		t.Fatalf("the node published %+v, which Mercator may not act on at the moment it was reported", measured)
+	}
+
+	// The next Run that reads out of this store is priced off that number rather
+	// than off the fleet-wide assumption. The offer is the node's own facts as the
+	// registry projects them, which is where a measurement either reaches a
+	// decision or stops being worth making.
+	fetch := pricedArtifactRead(t, facts, 40_000_000_000)
+	if fetch.Measurement != ArtifactCopySource || fetch.Mbps != measured.ValueMbps {
+		t.Fatalf("Placement priced the next read at %+v, and this machine measured %.2f Mbps itself",
+			fetch, measured.ValueMbps)
+	}
+	if fetch.Assumption != "" {
+		t.Fatalf("Placement priced the next read from the assumption %q on a machine that measured the path", fetch.Assumption)
+	}
+}
+
+func objectStorePath(t *testing.T, facts []domain.NetworkFact) domain.NetworkFact {
+	t.Helper()
+	for _, fact := range facts {
+		if fact.Scope == domain.NetworkScopeObjectStore {
+			return fact
+		}
+	}
+	t.Fatalf("the node published %+v, and nothing there describes its path to the object store", facts)
+	return domain.NetworkFact{}
+}
+
+// pricedArtifactRead runs the production scheduler over this node's own facts and
+// answers what it charged the Artifact read at. It reads the rate the decision
+// recorded rather than the seconds, because the seconds are bytes over a rate and
+// only the rate says which of the two halves this case is about.
+func pricedArtifactRead(t *testing.T, facts capability.NodeFacts, bytes int64) domain.TransferRate {
+	t.Helper()
+	candidate := placeAReadOfTheCorpus(t, facts, bytes, runAsking{})
+	for _, rate := range candidate.TransferRates {
+		if rate.Stage == domain.StageArtifactFetch {
+			return rate
+		}
+	}
+	t.Fatalf("the decision priced no Artifact read: %+v", candidate)
+	return domain.TransferRate{}
+}
+
+// runAsking is what the Run in these cases refuses to do without: a floor on how
+// fast this machine reaches the object store, and a bound on how long it may take
+// to start. They are the two hard readers of one measurement, stated together
+// because what a case turns on is which of them was allowed to act on the number
+// this node published about itself.
+type runAsking struct {
+	download        *domain.NetworkDownloadRequirement
+	maxStartSeconds float64
+}
+
+// placeAReadOfTheCorpus runs the production scheduler over this node's own facts
+// and answers what it made of the machine. The Run may state a floor on how fast
+// it reaches the object store, which is the other reader of the same measurement:
+// one asks how long the read takes and the other asks whether this machine may
+// serve the Run at all, and both are asked of the number this node published
+// about itself.
+func placeAReadOfTheCorpus(
+	t *testing.T,
+	facts capability.NodeFacts,
+	bytes int64,
+	asks runAsking,
+) domain.CandidateDecision {
+	t.Helper()
+	now := facts.ObservedAt
+	decision, err := scheduler.New().Evaluate(context.Background(), scheduler.SchedulingInput{
+		RunID: "run-reader",
+		Workload: domain.WorkloadRevision{
+			WorkspaceID: "ws_alpha",
+			Spec: domain.WorkloadSpec{
+				Containers: []domain.ContainerSpec{{
+					Name:     "reader",
+					Image:    "trainer@sha256:" + strings.Repeat("cd", 32),
+					Platform: domain.Platform{OS: "linux", Architecture: "amd64"},
+				}},
+				Placement: domain.PlacementPolicy{
+					Class:                  domain.ClassStandard,
+					ExpectedRuntimeSeconds: 600,
+					MaxP90StartSeconds:     asks.maxStartSeconds,
+				},
+				Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 3600},
+				Artifacts: domain.ArtifactRequirements{Consumes: []string{"artifact:corpus:v9"}},
+				Network:   domain.NetworkRequirements{Download: asks.download},
+			},
+		},
+		Offers: []domain.OfferSnapshot{{
+			ID:           "nod_live",
+			RentalID:     "rnt_live",
+			ConnectionID: "conn_nodes",
+			Kind:         domain.OfferKindStanding,
+			Lane:         domain.LaneReusable,
+			ObservedAt:   now,
+			ExpiresAt:    now.Add(time.Minute),
+			Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
+			Resources:    domain.ResourceInventory{CPUMillis: 8000, MemoryBytes: 32 << 30, EphemeralDiskBytes: 1 << 40, EphemeralDiskKnown: true},
+			Capabilities: domain.CapabilityProfile{
+				Container: domain.ContainerCapabilities{MaxContainers: 4, SupportsDigestRefs: true},
+			},
+			// The one field this case is about, carried the way node.Registry
+			// projects it onto an offer.
+			Network:   domain.NetworkFacts{Download: facts.Host.Network},
+			Pricing:   domain.PriceModel{Currency: "USD", RatePerSecondUSD: 0.0005, Known: true},
+			Capacity:  domain.CapacityEvidence{Available: true, Confidence: 1},
+			Artifacts: facts.Artifacts,
+		}},
+		Artifacts: []domain.ArtifactVersion{{
+			ID:            "artifact:corpus:v9",
+			ContentDigest: "sha256:" + strings.Repeat("ef", 32),
+			SizeBytes:     bytes,
+		}},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate placement over this node's facts: %v", err)
+	}
+	return decision.Candidates[0]
+}
+
+// TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers is the conformance half
+// of a Run's hard floor on how fast it reaches its dataset. The corpus states that
+// floor against declared paths; here it is asked of a number this machine really
+// produced, reading real content out of a real object store onto a real disk.
+//
+// Two copies rather than one, because what a node publishes is a quantile over
+// the transfers it still stands behind and never one of them. The date on it says
+// when this machine last measured the path, so it cannot precede the second copy,
+// and a Run that will act on nothing older than ten minutes is served by a machine
+// that has just been reading.
+//
+// The floor is stated on either side of what this host delivered, which is the
+// only way to state one against a rate nobody can predict: no host is refused for
+// its link alone, so a machine whose Artifact disk is slower than its path is
+// refused a floor above what it delivers and served one below it.
+func TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers(t *testing.T) {
+	requireDocker(t)
+	endpoint := startObjectStore(t)
+	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
+	replicate(t, runtime, endpoint, "corpus-v10", 8_000_000)
+	secondCopyBegan := time.Now().UTC()
+	replicate(t, runtime, endpoint, "corpus-v11", 160_000_000)
+
+	facts, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read the node's facts: %v", err)
+	}
+	measured := objectStorePath(t, facts.Host.Network)
+
+	if measured.SampleCount != 2 {
+		t.Fatalf("the node published %+v after timing two copies, and a p10 is a quantile over the transfers it stands behind", measured)
+	}
+	if measured.ObservedAt.Before(secondCopyBegan) {
+		t.Fatalf("the node dated its p10 %s, and it was still reading this path at %s",
+			measured.ObservedAt.Format(time.RFC3339Nano), secondCopyBegan.Format(time.RFC3339Nano))
+	}
+	refused := placeAReadOfTheCorpus(t, facts, 40_000_000_000, runAsking{download: &domain.NetworkDownloadRequirement{
+		Scope:                    domain.NetworkScopeObjectStore,
+		MinP10Mbps:               measured.ValueMbps * 2,
+		MaxMeasurementAgeSeconds: 600,
+	}})
+	if refused.Feasible {
+		t.Fatalf("this node delivered %.2f Mbps and was admitted to a Run that states a floor of %.2f", measured.ValueMbps, measured.ValueMbps*2)
+	}
+	if !rejectedFor(refused, "NETWORK_FACT_UNSATISFIED", "network.download") {
+		t.Fatalf("the decision refused this node as %+v, and what it published was measured too slow rather than absent", refused.Rejections)
+	}
+	served := placeAReadOfTheCorpus(t, facts, 40_000_000_000, runAsking{download: &domain.NetworkDownloadRequirement{
+		Scope:                    domain.NetworkScopeObjectStore,
+		MinP10Mbps:               measured.ValueMbps / 2,
+		MaxMeasurementAgeSeconds: 600,
+	}})
+	if !served.Feasible {
+		t.Fatalf("this node delivered %.2f Mbps a moment ago and was refused a Run asking for half of it: %+v", measured.ValueMbps, served.Rejections)
+	}
+}
+
+// TestAStartBoundRefusesOnlyThePathThisNodeMeasured is the conformance half of
+// what a hard start bound is allowed to act on. The corpus states it against
+// declared paths; here one machine has really read content out of a real object
+// store onto a real disk and published what it delivered, and the other is that
+// same machine with nothing to say about the path.
+//
+// Both owe the same forty gigabytes and both are predicted to be late. Only one
+// of them is known to be, and the Run's bound may refuse only that one. What
+// prices the silent machine is Mercator's fleet-wide prior, a number nothing on
+// that host answered for, so a refusal resting on it would refuse capacity for
+// this model's own opinion and turn silence about a path into infeasibility. It
+// stays a price: the prediction still carries every one of those seconds.
+//
+// The bound is stated from what this machine measured rather than as a constant,
+// because no case can predict what a loopback object store delivers. Half of its
+// own reading is a bound this host provably misses and the silent host is priced
+// well past.
+func TestAStartBoundRefusesOnlyThePathThisNodeMeasured(t *testing.T) {
+	requireDocker(t)
+	endpoint := startObjectStore(t)
+	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
+	replicate(t, runtime, endpoint, "corpus-v12", 160_000_000)
+
+	facts, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read the node's facts: %v", err)
+	}
+	measured := objectStorePath(t, facts.Host.Network)
+	const dataset = 40_000_000_000
+	bound := float64(dataset*8) / 1_000_000 / measured.ValueMbps / 2
+
+	refused := placeAReadOfTheCorpus(t, facts, dataset, runAsking{maxStartSeconds: bound})
+	if refused.Feasible {
+		t.Fatalf("this node measured %.2f Mbps itself, which is twice the %.2fs bound away from the data, and it was admitted",
+			measured.ValueMbps, bound)
+	}
+	if !rejectedFor(refused, "LATENCY_SLO_EXCEEDED", "placement.max_p90_start_seconds") {
+		t.Fatalf("the decision refused this node as %+v, and what it published was a path measured too slow", refused.Rejections)
+	}
+	if refused.Estimates.EstablishedStartSeconds.P90 <= bound {
+		t.Fatalf("this node was refused against a %.2fs bound with %.2fs of its start established, so the refusal rests on something nobody measured",
+			bound, refused.Estimates.EstablishedStartSeconds.P90)
+	}
+
+	silent := facts
+	silent.Host.Network = nil
+	admitted := placeAReadOfTheCorpus(t, silent, dataset, runAsking{maxStartSeconds: bound})
+	if admitted.Estimates.StartSeconds.P90 <= bound {
+		t.Fatalf("the unmeasured machine is predicted to start in %.2fs against a bound of %.2fs, so this case proves nothing",
+			admitted.Estimates.StartSeconds.P90, bound)
+	}
+	if !admitted.Feasible {
+		t.Fatalf("nothing measured this machine's path and a bound struck it out anyway: %+v", admitted.Rejections)
+	}
+	if admitted.Estimates.EstablishedStartSeconds.P90 > bound {
+		t.Fatalf("the unmeasured machine established %.2fs of its start, and the only thing known about it is the byte count",
+			admitted.Estimates.EstablishedStartSeconds.P90)
+	}
+}
+
+// replicate is one Artifact put into the store and read back out by the node,
+// which is one timed transfer over the path this case is about.
+func replicate(t *testing.T, runtime *DockerRuntime, endpoint, key string, size int) {
+	t.Helper()
+	content := []byte(strings.Repeat("mercator delivery conformance 0123456789abcdef\n", size/47+1))
+	digest := sha256.Sum256(content)
+	putObject(t, endpoint, "datasets", key, content)
+	if err := runtime.PrepareArtifact(context.Background(), capability.PrepareArtifactCommand{
+		ArtifactID:    "artifact:" + key,
+		ContentDigest: "sha256:" + hex.EncodeToString(digest[:]),
+		Source:        presign(t, http.MethodGet, endpoint, "datasets", key, time.Hour),
+		SizeBytes:     int64(len(content)),
+	}); err != nil {
+		t.Fatalf("replicate %s: %v", key, err)
+	}
+}
+
+func rejectedFor(candidate domain.CandidateDecision, code, path string) bool {
+	for _, rejection := range candidate.Rejections {
+		if rejection.Code == code && rejection.Path == path {
+			return true
+		}
+	}
+	return false
 }

@@ -363,7 +363,7 @@ func cliRevision() domain.WorkloadRevision {
 			},
 			Network: domain.NetworkRequirements{Inbound: domain.InboundNetworkNone},
 			Placement: domain.PlacementPolicy{
-				Objective:              domain.ObjectiveCheapest,
+				Class:                  domain.ClassBatch,
 				ExpectedRuntimeSeconds: 60,
 			},
 			Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 60, MaxPreStartAttempts: 1},

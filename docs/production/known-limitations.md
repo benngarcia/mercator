@@ -32,9 +32,6 @@ limits.
   identity. Placement makes that binding unqueueable and records the honest
   `launch_ephemeral` disposition, but the Booking record type is shared with
   reusable placements, so a reader of the schema alone cannot tell them apart.
-- Rental Schedules exist in the domain model and the console, but nothing
-  populates them across Runs yet: queueing behind a running Booking is a target
-  scenario, not shipped behavior.
 - Reuse works only on nodes an operator enrolled by hand. Provisioned capacity
   arrives with no agent on it, so renting a machine still produces one-shot
   execution. Bootstrapping the agent through a provider is
@@ -42,13 +39,22 @@ limits.
 - Enrolling a node is a manual two-step: `POST /v1/nodes` for the bootstrap,
   then run `mercator-node` with it. There is no CLI command and no quickstart
   step.
-- A node's price is the shadow price configured at invitation, and nothing else.
-  Committed billing intervals, idle-tail expectation, and warm-capacity
-  opportunity cost are not modelled, so a node's cost in a Booking Decision is
-  a flat rate rather than an economic estimate.
-- A node runs one workload at a time and Rental Schedules are not populated, so
-  a second Run arriving while a node is busy provisions elsewhere instead of
-  queueing behind it.
+- A node runs one workload at a time. A second Run arriving while a node is busy
+  queues behind its Booking rather than provisioning elsewhere, which is the
+  Rental Schedule working, but the node still executes them one after another.
+- Nothing enforces `max_runtime_seconds`. The node agent passes it to Docker as
+  `--stop-timeout`, which governs how long a stop waits before killing, not how
+  long a container may run. A workload that never exits runs until something
+  else stops it, and it holds its machine's Rental Schedule slot while it does.
+  Every overrun rule in the scheduler exists for that world and none of them
+  terminates anything
+  ([#44](https://github.com/benngarcia/mercator/issues/44)).
+- The local Docker adapter publishes `RatePerSecondUSD: 0` with the price marked
+  known, which is the one production publisher of free capacity left. It makes a
+  local machine unconditionally the cheapest candidate. Both honest repairs, a
+  configured shadow price on the connection or an unpriced offer a Run must opt
+  into, change where every local Run lands
+  ([#188](https://github.com/benngarcia/mercator/issues/188)).
 - Image locality is exact only where a node reports content. Mercator resolves a
   digest-pinned image's manifest from the registry and subtracts what an enrolled
   node says it holds, so an enrolled node's candidacy is priced on real content.
@@ -65,6 +71,63 @@ limits.
   adjudicated: nothing re-places it and nothing fails it. Adjudicating a lost
   node's Bookings needs a declared grace window and restart policy, which is
   replanning work ([#163](https://github.com/benngarcia/mercator/issues/163)).
+
+## Prediction And Scheduling
+
+- The prediction key has never been tested against a live marketplace. The whole
+  hierarchical estimator rests on a provider's own identifier for a machine shape
+  recurring across listings, and that claim is held by unit cases against recorded
+  Vast and Shadeform response shapes and by the Lab, not by a real account. This
+  host holds no Vast, Shadeform, or RunPod credential. If a provider mints a fresh
+  identifier per listing, every candidate falls to the region rung or the global
+  prior and the exact-candidate level is dead weight. Check the recorded fallback
+  level on real decisions before trusting a p50.
+- Nothing production-side has ever populated launch history for the three
+  transfer stages, and by design nothing will: `image_fetch`, `unpack`, and
+  `artifact_fetch` are priced from missing bytes over a measured path rather than
+  answered from history, because a duration keyed on the candidate cannot know
+  what bytes that candidate is missing. A transfer answered from history is a
+  Lab invariant violation. The consequence for operators is that transfer
+  estimates are only as good as the published path throughput, and an unmeasured
+  path falls back to a stated assumption.
+- Predicted-versus-actual is recorded but nothing calibrates on it. No feedback
+  loop adjusts a prior that is consistently wrong, so a systematically optimistic
+  global prior stays optimistic until somebody reads the Run Bundles. Calibration
+  is phase 6.
+- Soft and hard affinity are not implemented. The phase scoped a thin dependency
+  model and delivered artifact dependencies, blocked-until-ready, group
+  parallelism, queueing, interruptibility, deadline, and service class. Affinity
+  has no field, no scheduler term, and no scenario, so a Run cannot ask to land
+  near or away from anything.
+- Three capacity-economics terms are deliberately unpriced, so a Booking
+  Decision's cost is an underestimate in known directions. Stopped-state storage
+  is not charged, so a machine kept stopped looks free. Preemption risk is not
+  priced into the score; it is expressed only as a hard refusal when a class
+  forbids interruption on capacity the provider may reclaim. Warm-capacity
+  opportunity cost is folded into the shadow price rather than modelled
+  separately.
+- The idle tail is charged whole to the placement that forced Mercator to buy the
+  billing increment, and a later Run that uses part of that remainder is charged
+  nothing. A short Run that triggers a purchase therefore looks expensive and its
+  successors look cheap. The error is deliberate and in the safe direction.
+- The availability window is decided once, at placement, against the runtime
+  Mercator enforces. A Booking queued behind another one is projected from where
+  that predecessor sits at that moment, so a predecessor that overruns can push a
+  queued Booking's end past a window that was clear when it was admitted. Nothing
+  reconciles that afterwards.
+- A Run that no machine in the fleet can ever hold stays queued until its
+  deadline refuses it, rather than being refused when it exceeds its class's
+  maximum queue delay. What admission should do at that bound is an unmade
+  refusal-policy decision.
+- The operator API silently drops an unknown `objective` field. A caller who kept
+  sending the retired `fastest_start` after the ServiceClass migration is scored
+  as `standard` with nothing in the record saying their request was reinterpreted.
+  The Blueprint loader refuses the retired vocabulary by name; the HTTP door does
+  not.
+- Two rules of the orphan-adoption policy are held only by package tests, not by
+  the scenario corpus: that the janitor records its decision before acting on it,
+  and that it releases the slot of capacity whose provider cannot destroy it. A
+  refactor that undoes either leaves the whole corpus green.
 
 ## Locality, Artifacts, And Caches
 
@@ -87,12 +150,6 @@ limits.
   inside its own container, and nothing hashes or files those bytes, so the
   producing host reports no replica of what it just wrote and the next Run reads
   the object store even when it lands on that same machine.
-- A refused preparation is terminal for that content on that node. The node
-  operation store dedupes on operation identity with no regard for state, so a
-  node whose prefetch failed answers `Duplicate` for that image or Artifact from
-  then on, and the desired set is never restated either. The Run still runs,
-  fetching at launch, and the prefetch never retries. Clearing it needs operator
-  intervention in the node's operation store.
 - A withdrawn prefetch keeps running on the node
   ([#170](https://github.com/benngarcia/mercator/issues/170)). The node protocol
   has one command per piece of content and no way to say stop, so cancelling a
@@ -113,9 +170,6 @@ limits.
   full machine from an unmeasurable one through `disk_report` and
   `disk_free_bytes` on `GET /v1/nodes`, and cannot see capacity or a utilisation
   ratio.
-- A Run that finds no feasible offer records no Booking Decision, so a refused
-  placement leaves no rejection an operator can read. The refusal is visible on
-  the Run and in the daemon's answer alone.
 - Cache Mounts are isolated per workspace and per generation, and nothing prices
   them. A warm cache is recorded on a candidate and never scored, so two
   otherwise equal machines are chosen between on cost and start latency even
@@ -177,8 +231,19 @@ limits.
 
 These are gaps in the evidence rather than in the product, recorded so a reader
 knows which promises rest on CI or on a credential this repository does not
-carry. Stated as of the phase 3 close-out on 2026-07-25, from an amd64 Linux
-workstation running Docker Engine 29.6.2.
+carry. Stated as of the phase 4 close-out on 2026-07-27, from an amd64 Linux
+workstation running Docker Engine 29.6.2. The phase 3 entries below were restated
+on that host and still hold.
+
+- The prediction key's recurrence is unproven against any live marketplace, which
+  is phase 4's largest untested assumption
+  ([#184](https://github.com/benngarcia/mercator/issues/184)). The hierarchical
+  estimator's narrowest rung keys on a provider's own identifier for a machine
+  shape, and nothing here has ever seen a provider list the same shape twice.
+  Docker-backed conformance is not blocked on this host and was used instead
+  wherever a container could stand in, including a real MinIO object store and a
+  real `registry:2`, but a marketplace read needs an account rather than a
+  container.
 
 - The public-image half of registry conformance did not run. Docker Hub answers
   an anonymous manifest read from this address with 429, so
@@ -192,9 +257,18 @@ workstation running Docker Engine 29.6.2.
   behaviour rests on the recorded fixtures in each adapter's tests and on
   `mercator verify` being run by an operator who holds a key. See
   `docs/production/provider-conformance.md`.
-- The browser-driven console checkpoints skip without
-  `MERCATOR_BROWSER_TEST=1` and a Playwright Chromium install, so the console
-  half of the Lab acceptance flow was proven by CI rather than locally.
+- The browser-driven console checkpoints cannot run on this workstation at all.
+  Playwright's Chromium needs system libraries that are not installed and there
+  is no sudo to add them, so the console half of the Lab acceptance flow is
+  proven by CI and never locally. That gap is not theoretical: four defects in
+  the phase 4 close-out were found only when CI ran that flow, including one
+  where the console rendered nothing at all because the offer catalog frame
+  failed to decode. Two of them now have non-browser regression tests
+  (`feed.contract.test.ts` decodes the captured feed,
+  `TestVerticalProofHoldsInTheOrderTheConsoleDrivesIt` drives the console's
+  order without a browser), so the same class of break fails locally next time.
+  Anyone changing an event payload, a schema, or a placement weight should
+  assume the console is affected and cannot confirm it here.
 - Provisioned reusable capacity has no live coverage at all, because no provider
   bootstraps a node agent yet. Everything about a node that a real daemon proves
   here was proven on this workstation's own daemon.

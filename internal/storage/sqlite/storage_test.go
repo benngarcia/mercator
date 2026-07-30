@@ -12,11 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/runprojection"
+	"github.com/benngarcia/mercator/internal/scheduler"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workload"
 	"github.com/benngarcia/mercator/internal/workspace"
@@ -97,6 +100,218 @@ func TestOpenCompletesV052BookingDecisionMigration(t *testing.T) {
 	t.Cleanup(func() { _ = storage.Close() })
 
 	assertMigratedLegacyBooking(t, ctx, storage)
+}
+
+// TestOpenRenamesLegacyPlacementObjectives is the service class rename on
+// history. A Run that stated an objective carries a word nothing reads, in three
+// places: the public request, the private one, and the policy its Booking Decision
+// was taken under. A stored workload revision is the fourth, and the one that
+// repriced work rather than only leaving a stale word behind. Each becomes the
+// class that prices waiting the way that objective ranked it, and the objective is
+// gone rather than kept beside it, because two vocabularies for one answer is how
+// they drift.
+func TestOpenRenamesLegacyPlacementObjectives(t *testing.T) {
+	ctx, db := openLegacyObjectiveFixture(t)
+
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	for _, migrated := range []struct {
+		column string
+		path   string
+		want   domain.ServiceClass
+	}{
+		{"data_json", "$.workload_revision.spec.placement.service_class", domain.ClassInteractive},
+		{"private_data", "$.workload_revision.spec.placement.service_class", domain.ClassInteractive},
+		{"data_json", "$.decision.policy.service_class", domain.ClassBatch},
+		{"data_json", "$.revision.spec.placement.service_class", domain.ClassExperimental},
+	} {
+		var class string
+		query := "SELECT json_extract(" + migrated.column + ", '" + migrated.path + "') FROM events WHERE json_type(" + migrated.column + ", '" + migrated.path + "') = 'text'"
+		if err := db.QueryRowContext(ctx, query).Scan(&class); err != nil {
+			t.Fatalf("read %s at %s: %v", migrated.column, migrated.path, err)
+		}
+		if domain.ServiceClass(class) != migrated.want {
+			t.Errorf("%s at %s = %q, want %q", migrated.column, migrated.path, class, migrated.want)
+		}
+	}
+	// The rates each old decision was actually scored at, which were nearly all
+	// zero: nothing populated the weights in production, so a Run that asked for
+	// the cheapest capacity was scored on price and nothing else.
+	var weights string
+	if err := db.QueryRowContext(ctx, `
+		SELECT json_extract(data_json, '$.decision.weights') FROM events
+		WHERE json_type(data_json, '$.decision.weights') IS NOT NULL
+	`).Scan(&weights); err != nil {
+		t.Fatalf("read migrated weights: %v", err)
+	}
+	if weights != "{}" {
+		t.Errorf("migrated weights = %s, and the cheapest objective was scored on price alone", weights)
+	}
+	// Completeness is asked of the whole payload rather than of the paths the
+	// migration writes. Counting objectives at the sites it already rewrote is a
+	// tautology that passes while a site nobody listed keeps the old vocabulary,
+	// which is exactly how the stored workload revision was missed.
+	var objectives int
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM events
+		WHERE data_json LIKE '%"objective"%' OR private_data LIKE '%"objective"%'
+	`).Scan(&objectives); err != nil {
+		t.Fatalf("count remaining objectives: %v", err)
+	}
+	if objectives != 0 {
+		t.Errorf("%d events still state a placement objective somewhere in their payload", objectives)
+	}
+	// The class a caller stored, read back through the door a caller reads it
+	// through. A revision left speaking the old vocabulary reads back with no
+	// class at all, and the next Run created from it is normalised to standard.
+	revision, err := workload.New(storage.EventLog()).GetRevision(ctx, "ws_1", "wl_1", "wrev_9")
+	if err != nil {
+		t.Fatalf("read the migrated revision: %v", err)
+	}
+	if revision.Spec.Placement.Class != domain.ClassExperimental {
+		t.Errorf("the stored revision reads class %q, and a Run created from it is priced at whatever it says", revision.Spec.Placement.Class)
+	}
+}
+
+// TestAMigratedRunReadsBackWithTheClassItsHistoryNowStates is the other half of
+// migrating a vocabulary: the read model derived from the log Mercator rewrote.
+//
+// The Run projection is what GET /v1/runs serves, and it is stored rather than
+// recomputed, so renaming the field inside the events left every historical Run
+// answering with no class at all and nothing able to notice. Its schema version
+// was already the current one, which is the only thing that asks for a rebuild,
+// so the projection would have kept the old vocabulary for the life of the
+// database. The migration marks it stale, and the rebuild the daemon already
+// performs for that reason reduces the migrated log into the record a reader
+// reads.
+func TestAMigratedRunReadsBackWithTheClassItsHistoryNowStates(t *testing.T) {
+	ctx, db := openLegacyObjectiveFixture(t)
+
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	rebuild, err := storage.Runs().RequiresRebuild(ctx)
+	if err != nil {
+		t.Fatalf("inspect the Run projection: %v", err)
+	}
+	if !rebuild {
+		t.Fatalf("the migration rewrote the log the Run projection is derived from and nothing asked for a rebuild")
+	}
+	orch := orchestrator.New(
+		storage.EventLog(),
+		scheduler.New(),
+		fake.New(),
+		orchestrator.WithRunProjection(storage.Runs()),
+	)
+	if err := orch.RebuildRunProjection(ctx, "ws_1"); err != nil {
+		t.Fatalf("rebuild the Run projection: %v", err)
+	}
+
+	page, err := storage.Runs().List(ctx, "ws_1", runprojection.PageRequest{})
+	if err != nil {
+		t.Fatalf("list the Run projection: %v", err)
+	}
+	if len(page.Records) != 1 {
+		t.Fatalf("the projection holds %d Runs, want the one the fixture recorded", len(page.Records))
+	}
+	if page.Records[0].ServiceClass != domain.ClassInteractive {
+		t.Errorf("the projected Run reads class %q, and this is the copy every API reader is served",
+			page.Records[0].ServiceClass)
+	}
+}
+
+// TestOpenLeavesTheRunProjectionAloneWithNoHistoryToMigrate keeps the staleness
+// specific to a log that was rewritten. A database Mercator has nothing to
+// migrate must not ask for a rebuild of every Workspace it holds on every
+// startup, which is what invalidating the projection unconditionally would do.
+func TestOpenLeavesTheRunProjectionAloneWithNoHistoryToMigrate(t *testing.T) {
+	ctx := context.Background()
+	dsn := "file:" + filepath.Join(t.TempDir(), "mercator.db")
+	storage, err := sqlitestore.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	if err := storage.Runs().MarkRebuilt(ctx); err != nil {
+		t.Fatalf("mark the Run projection current: %v", err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatalf("close storage: %v", err)
+	}
+
+	reopened, err := sqlitestore.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("reopen storage: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	rebuild, err := reopened.Runs().RequiresRebuild(ctx)
+	if err != nil {
+		t.Fatalf("inspect the Run projection: %v", err)
+	}
+	if rebuild {
+		t.Errorf("a database with nothing to migrate asked for a Run projection rebuild")
+	}
+}
+
+// TestOpenRefusesToRenameObjectivesWhileARunIsOpen is why the rename is safe on
+// history and nowhere else. A Run still open is a Run whose next event Mercator
+// appends from state it has already read, so rewriting the vocabulary underneath
+// it leaves one stream speaking both.
+func TestOpenRefusesToRenameObjectivesWhileARunIsOpen(t *testing.T) {
+	ctx, db := openLegacyObjectiveFixture(t)
+	if _, err := db.ExecContext(ctx, `DELETE FROM events WHERE event_type = 'compute.run.closed.v1'`); err != nil {
+		t.Fatalf("reopen the legacy run: %v", err)
+	}
+
+	_, err := sqlitestore.New(ctx, db)
+
+	if err == nil || !strings.Contains(err.Error(), "open legacy placement objectives") {
+		t.Fatalf("open storage error = %v", err)
+	}
+}
+
+// TestOpenRefusesAnObjectiveWithNoServiceClass keeps the mapping from guessing.
+// An objective outside the four that existed prices a historical Run's waiting at
+// a rate nobody chose, and a decision record is not a place to guess.
+func TestOpenRefusesAnObjectiveWithNoServiceClass(t *testing.T) {
+	ctx, db := openLegacyObjectiveFixture(t)
+	if _, err := db.ExecContext(ctx, `
+		UPDATE events
+		SET data_json = json_set(data_json, '$.decision.policy.objective', 'whatever_is_free')
+		WHERE json_type(data_json, '$.decision.policy.objective') = 'text'
+	`); err != nil {
+		t.Fatalf("write an objective nothing maps: %v", err)
+	}
+
+	_, err := sqlitestore.New(ctx, db)
+
+	if err == nil || !strings.Contains(err.Error(), `objective "whatever_is_free" has no service class`) {
+		t.Fatalf("open storage error = %v", err)
+	}
+}
+
+func openLegacyObjectiveFixture(t *testing.T) (context.Context, *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mercator.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	fixture, err := os.ReadFile("testdata/legacy_objective_event.sql")
+	if err != nil {
+		t.Fatalf("read legacy objective fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, string(fixture)); err != nil {
+		t.Fatalf("load legacy objective fixture: %v", err)
+	}
+	return ctx, db
 }
 
 func openLegacyEventFixture(t *testing.T) (context.Context, *sql.DB) {
@@ -508,4 +723,74 @@ func waitForDatabaseWaiter(t *testing.T, db *sql.DB, after int64) {
 		}
 		runtime.Gosched()
 	}
+}
+
+// TestOpenMovesAStoredRevisionsSecretsOutOfThePublicPayload is the history half of
+// the revision door's redaction. The door wrote the whole revision, environment
+// values included, into a public event, and the console streams every public event
+// of a workspace to every reader of it, so fixing the door leaves the tokens in the
+// records those readers read. Opening the database rewrites them: the public
+// payload states each value's kind, the private payload is the revision, and the
+// revision a Run would be created from is unchanged.
+func TestOpenMovesAStoredRevisionsSecretsOutOfThePublicPayload(t *testing.T) {
+	ctx, db := openStoredRevisionSecretFixture(t)
+
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	defer func() { _ = storage.Close() }()
+
+	events, err := storage.EventLog().ReadStream(ctx, eventlog.StreamKey{
+		WorkspaceID: "ws_1",
+		Type:        "workload",
+		ID:          "wrk_1",
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("read the migrated workload: %v", err)
+	}
+	var migrated eventlog.StoredEvent
+	for _, event := range events {
+		if event.Type == "compute.workload.revision_created.v1" {
+			migrated = event
+		}
+	}
+	if migrated.ID == "" {
+		t.Fatalf("the migrated stream has no revision event: %+v", events)
+	}
+	if strings.Contains(string(migrated.Data), "hf_live_SECRETVALUE") {
+		t.Fatalf("the public payload still carries the token: %s", migrated.Data)
+	}
+	if !strings.Contains(string(migrated.Data), `"kind":"literal"`) || !strings.Contains(string(migrated.Data), `"kind":"empty"`) {
+		t.Fatalf("the public payload says nothing about the variables at all: %s", migrated.Data)
+	}
+	if !strings.Contains(string(migrated.PrivateData), "hf_live_SECRETVALUE") {
+		t.Fatalf("the private payload lost the value the caller stored: %s", migrated.PrivateData)
+	}
+
+	revision, err := workload.New(storage.EventLog()).GetRevision(ctx, "ws_1", "wrk_1", "wrev_1")
+	if err != nil {
+		t.Fatalf("read the migrated revision back: %v", err)
+	}
+	value := revision.Spec.Containers[0].Env["HF_TOKEN"].Value
+	if value == nil || *value != "hf_live_SECRETVALUE" {
+		t.Fatalf("the migrated revision reads back with %v, and a Run created from it would run with that", value)
+	}
+}
+
+func openStoredRevisionSecretFixture(t *testing.T) (context.Context, *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mercator.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	fixture, err := os.ReadFile("testdata/stored_revision_secret.sql")
+	if err != nil {
+		t.Fatalf("read the stored revision fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, string(fixture)); err != nil {
+		t.Fatalf("load the stored revision fixture: %v", err)
+	}
+	return ctx, db
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 )
@@ -70,7 +71,7 @@ func TestListOffersQueriesSecureTierAndMapsOffers(t *testing.T) {
 	if len(offers) != 1 || offers[0].NativeRef != "9001" {
 		t.Fatalf("only the verified offer must survive, got %+v", offers)
 	}
-	for _, want := range []string{`"verified":{"eq":true}`, `"datacenter":{"eq":true}`, `"external":{"eq":false}`, `"rentable":{"eq":true}`, `"type":"ondemand"`, `"num_gpus":{"eq":1}`} {
+	for _, want := range []string{`"verified":{"eq":true}`, `"datacenter":{"eq":true}`, `"external":{"eq":false}`, `"rentable":{"eq":true}`, `"type":"ondemand"`, `"num_gpus":{"gte":1}`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("secure-tier search body missing %s: %s", want, body)
 		}
@@ -118,7 +119,7 @@ func TestLaunchCreatesInstanceWithLabelEnvAndArgs(t *testing.T) {
 	if createPath != "/api/v0/asks/9001/" {
 		t.Errorf("create path = %q", createPath)
 	}
-	for _, want := range []string{`"verified":{"eq":true}`, `"datacenter":{"eq":true}`, `"rentable":{"eq":true}`, `"rented":{"eq":false}`, `"num_gpus":{"eq":1}`, `"disk_space":{"gte":20}`} {
+	for _, want := range []string{`"verified":{"eq":true}`, `"datacenter":{"eq":true}`, `"rentable":{"eq":true}`, `"num_gpus":{"gte":1}`, `"disk_space":{"gte":20}`} {
 		if !strings.Contains(secureLookupBody, want) {
 			t.Errorf("launch secure-tier lookup missing %s: %s", want, secureLookupBody)
 		}
@@ -293,6 +294,35 @@ func TestObserveMapsRunningStatus(t *testing.T) {
 	}
 }
 
+// TestObserveReportsNoStartForARunningInstance is the calibration seam, and what
+// it pins is an absence. start_date is when Vast started this instance's contract,
+// which is before the image has landed and before anything runs on it, and it does
+// not move when the container process begins. This instance is one Vast calls
+// running and the observation still states no start: reporting the contract's start
+// as the workload's would fold a whole image pull into the runtime and calibrate the
+// start estimator on close to nothing.
+func TestObserveReportsNoStartForARunningInstance(t *testing.T) {
+	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"instances":[
+			{"id":777,"label":"mercator-lk1","actual_status":"running","start_date":1785067100.5,"extra_env":[["MERCATOR_OWNERSHIP_TOKEN","own1"]]}
+		]}`), nil
+	})
+	a.now = func() time.Time { return time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC) }
+
+	obs, err := a.Observe(context.Background(), observeRequest())
+
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if obs.Phase != adapter.ExternalPhaseRunning {
+		t.Fatalf("phase = %q, and Vast says this instance is running", obs.Phase)
+	}
+	if obs.StartedAt != nil {
+		t.Fatalf("the observation reports %s as this workload's start, and an instance record establishes no such moment",
+			obs.StartedAt.Format(time.RFC3339Nano))
+	}
+}
+
 func TestObserveExitedMapsToFailedWithoutExitCode(t *testing.T) {
 	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(200, `{"instances":[
@@ -446,5 +476,31 @@ func TestNewNormalizesGPUNameUnderscores(t *testing.T) {
 	}
 	if len(a.gpuNames) != 2 || a.gpuNames[0] != "RTX 4090" || a.gpuNames[1] != "H100 SXM" {
 		t.Fatalf("gpuNames = %+v", a.gpuNames)
+	}
+}
+
+// TestLaunchRefusesAnAskSomebodyElseIsOn is the other side of publishing rented
+// asks. The search returns them now, because that is how this fleet says a shape
+// is sold out rather than unsold, and the scheduler never selects one. What
+// reaches here is an ask that was free when the decision was taken and was taken
+// before the launch, and it is refused by name: attempting the create would have
+// Vast refuse it, and the Run's record would then say the provider failed rather
+// than that somebody got there first.
+func TestLaunchRefusesAnAskSomebodyElseIsOn(t *testing.T) {
+	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/instances/":
+			return jsonResponse(200, `{"instances":[]}`), nil
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v0/bundles/":
+			return jsonResponse(200, `{"offers":[{"id":9001,"num_gpus":1,"dph_total":0.31,"verification":"verified","rented":true}]}`), nil
+		}
+		t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		return nil, nil
+	})
+
+	_, err := a.Launch(context.Background(), launchRequest())
+
+	if err == nil || !strings.Contains(err.Error(), "ask 9001 is rented") {
+		t.Fatalf("launch onto an ask somebody is already on returned %v", err)
 	}
 }

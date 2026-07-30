@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 func loadFixtureText(t *testing.T, text string) (Scenario, error) {
@@ -119,7 +121,70 @@ func TestLoadRejectsFixtureMistakes(t *testing.T) {
 		"queued Booking without running Booking": {
 			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`, `"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}], "rental_schedules": [{"rental": "rental-a", "version": 1, "queued": [{"booking": "p1", "run": "r1", "max_runtime": "5m"}]}]`, "require a RunningBooking"},
 		"winning offer missing from world": {`"offer": "rental-a"`, `"offer": "rental-z"`, "not in the world"},
-		"unknown outcome":                  {`"outcome": "place"`, `"outcome": "defer"`, "outcome must"},
+		"unknown outcome":                  {`"outcome": "place"`, `"outcome": "someday"`, "outcome must"},
+		// A stage nobody named is the assertion that cannot fail. The record answers
+		// about an unknown stage with a zero Estimate from no source, so a fixture
+		// naming the record's own JSON key, or inventing a stage, used to assert zero
+		// seconds and pass while the assertion it was written for was gone.
+		"stage named by its record key": {
+			`"offer": "rental-a"`,
+			`"offer": "rental-a", "candidates": {"rental-a": {"stages": {"boot_seconds": {"seconds": 0}}}}`,
+			`stage "boot_seconds"`,
+		},
+		// A machine that splits its cards across entries is stating how its probe
+		// reported them, and cards that do not divide evenly describe no machine.
+		"cards that do not divide across the entries reporting them": {
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`,
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0, "resources": {"gpu": {"model": "A100", "count": 3, "memory": "80GB", "entries": 2}}}]`,
+			"fraction of a card",
+		},
+		"a request stating how a machine grouped its cards": {
+			`"request": {"image": "app:v1"}`,
+			`"request": {"image": "app:v1", "resources": {"gpu": {"model": "A100", "count": 2, "entries": 2}}}`,
+			"what it needs rather than how a machine reported it",
+		},
+		"stage that does not exist": {
+			`"offer": "rental-a"`,
+			`"offer": "rental-a", "candidates": {"rental-a": {"stages": {"agent_enrolled": {"seconds": 0}}}}`,
+			`stage "agent_enrolled"`,
+		},
+		// A term nobody charges is the price assertion that cannot fail, for the reason
+		// a stage nobody predicts is: the record carries the terms it charged and
+		// nothing else, so a fixture naming another one would read the absence as
+		// agreement.
+		"cost term that is not part of a price": {
+			`"offer": "rental-a"`,
+			`"offer": "rental-a", "candidates": {"rental-a": {"cost": {"terms": {"electricity": 0.5}}}}`,
+			`cost term "electricity"`,
+		},
+		// A machine nobody quoted has no dollars, so a fixture that says both is
+		// stating two worlds and one of the two assertions can never be checked.
+		"a price on a machine the fixture says nobody quoted": {
+			`"offer": "rental-a"`,
+			`"offer": "rental-a", "candidates": {"rental-a": {"cost": {"unpriced": true, "usd": 0.5}}}`,
+			"states unpriced or states an amount",
+		},
+		// A commitment that has already lapsed at the world's own start is capacity
+		// nothing could ever be placed on, which is a fixture asserting a refusal by
+		// arithmetic rather than a world.
+		"a commitment that ended before the world began": {
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`,
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0, "terms": {"committed_for": "0s"}}]`,
+			"positive duration from the world's start",
+		},
+		// A machine held for work Mercator refuses at the door is held for nothing.
+		"a reservation for a class Mercator cannot price": {
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`,
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0, "terms": {"eligible_service_classes": ["urgent"]}}]`,
+			"which Mercator cannot price",
+		},
+		// A publisher selling blocks of no time bills continuously, which a fixture
+		// states by saying nothing.
+		"a billing increment of no time at all": {
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`,
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0, "billing": {"granularity": "0s"}}]`,
+			"billing granularity must be positive",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -161,7 +226,7 @@ func TestLoadRejectsIncoherentQueuedBooking(t *testing.T) {
           "state": "queued",
           "after": "booking-active",
           "projected_start_in": "5m",
-          "schedule_version": 2
+          "schedule_version": 3
         }
       }
     }`
@@ -208,7 +273,7 @@ func TestLoadEnforcesScheduleBounds(t *testing.T) {
         "rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}],
         "rental_schedules": [{
           "rental": "rental-a",
-          "version": 1,
+          "version": 6,
           "running": {"booking": "p0", "run": "r0", "remaining_max_runtime": "5m"},
           "queued": [
             {"booking": "p1", "run": "r1", "max_runtime": "5m"},
@@ -224,6 +289,13 @@ func TestLoadEnforcesScheduleBounds(t *testing.T) {
     }`
 	if _, err := loadFixtureText(t, overfull); err == nil || !strings.Contains(err.Error(), "at most 4") {
 		t.Fatalf("a fifth QueuedBooking must be rejected, got %v", err)
+	}
+	// A version counts transitions, and the two Bookings here took two of them.
+	// Stating one is a history Mercator cannot have had, and it is the version the
+	// arriving Run's own Booking would be minted at.
+	understated := strings.Replace(overfull, `"version": 6`, `"version": 1`, 1)
+	if _, err := loadFixtureText(t, understated); err == nil || !strings.Contains(err.Error(), "took a transition") {
+		t.Fatalf("a schedule holding more Bookings than transitions must be rejected, got %v", err)
 	}
 }
 
@@ -262,7 +334,7 @@ func TestProjectedStartsWorkOffExpectedRuntimes(t *testing.T) {
         "rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}],
         "rental_schedules": [{
           "rental": "rental-a",
-          "version": 1,
+          "version": 2,
           "running": {
             "booking": "p0",
             "run": "r0",
@@ -284,7 +356,7 @@ func TestProjectedStartsWorkOffExpectedRuntimes(t *testing.T) {
           "state": "queued",
           "after": "p1",
           "projected_start_in": "5m",
-          "schedule_version": 2
+          "schedule_version": 3
         }
       }
     }`
@@ -308,5 +380,23 @@ func TestBoundChecksExactAndRangeExpectations(t *testing.T) {
 	atLeast := float64(200)
 	if problem := (Bound{AtLeast: &atLeast}).Check(199); problem == "" {
 		t.Fatalf("at_least bound must reject a smaller value")
+	}
+}
+
+// TestADeclaredPathIsStillPublishedADayLater is the standing of a fixture's own
+// declaration. A machine is seeded once and stamps its facts once, so an expiry
+// measured from the world's start is a moment every long execution crosses: past
+// it, Mercator read silence about a path it had been reading all along, both
+// simulated worlds went on moving bytes at the declared rate, and every measured
+// rate already recorded against those machines named a fact nothing published.
+func TestADeclaredPathIsStillPublishedADayLater(t *testing.T) {
+	start := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	paths := PathSpecs{{From: "rental-near-the-data", To: "objects.example", Scope: "object_store", P10Mbps: 4000}}
+
+	facts := paths.PublishedFacts("rental-near-the-data", start)
+
+	fact, answered := facts.DownloadP10(domain.NetworkScopeObjectStore, start.Add(48*time.Hour))
+	if !answered || fact.ValueMbps != 4000 {
+		t.Fatalf("two days into the execution the machine publishes %+v about a path this world still crosses at 4000 Mbps", facts)
 	}
 }

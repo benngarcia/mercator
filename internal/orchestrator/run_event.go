@@ -12,13 +12,38 @@ import (
 )
 
 type runState struct {
-	requested                *runRequestedData
-	bookingDecision          *domain.BookingDecision
-	attempt                  *attemptData
-	launchIntent             *adapter.LaunchRequest
-	launchAccepted           bool
-	launchAcceptedAt         time.Time
-	launchFailure            *launchFailureData
+	requested        *runRequestedData
+	bookingDecision  *domain.BookingDecision
+	attempt          *attemptData
+	launchIntent     *adapter.LaunchRequest
+	launchAccepted   bool
+	launchAcceptedAt time.Time
+	// startedAt is when this attempt's workload actually began, as the machine
+	// holding it reported the moment. It is nil until something observed one, and
+	// it is never filled in from launchAcceptedAt: the gap between the two is the
+	// start latency every prediction in phase 4 is calibrated against, and a
+	// derived value would make that subtraction zero for every Run in the log.
+	startedAt *time.Time
+	// readyAt is when this attempt's application reported that it can do work, as
+	// the application stated the moment. It is nil until a report arrives and is
+	// never derived from startedAt: a running process is not a ready one, and only
+	// the workload can tell the difference.
+	readyAt       *time.Time
+	launchFailure *launchFailureData
+	// deferral is why admission last told this Run to wait, deferredAt is when it
+	// said so, and queuedSince is when it first did. The three come apart on
+	// purpose: the reason is replaced every time the answer changes, the moment
+	// the wait started is what the class's bounds are measured from and must never
+	// move, and the moment of the latest answer is where the interval that answer
+	// covers begins.
+	deferral    *domain.AdmissionDeferral
+	deferredAt  time.Time
+	queuedSince time.Time
+	// selfImposedWait is how much of this Run's wait the caller's own declaration
+	// held, over the intervals that are closed. The interval still open is added
+	// where the wait is read, because how long it has run is a question about now.
+	selfImposedWait          time.Duration
+	deferralCount            int
 	attemptCount             int
 	excludedOfferSnapshotIDs []string
 	cancelRequested          bool
@@ -48,6 +73,68 @@ func (state runState) externalObjectPossible() bool {
 
 func (state runState) replacementEligible() bool {
 	return state.launchFailure != nil && state.launchFailure.replacementEligible()
+}
+
+// wait is how long this Run has been waiting at one moment, split into the whole
+// of it and the part the caller's own declaration held, which is what each of the
+// two bounds its class states is asked of.
+//
+// A Run nothing has deferred yet has waited nothing, which is not the same as a
+// wait of zero seconds that has begun: the class bounds are measured from the
+// first deferral, and there is no such moment yet.
+func (state runState) wait(at time.Time) domain.Wait {
+	if state.queuedSince.IsZero() {
+		return domain.Wait{}
+	}
+	return domain.Wait{
+		Seconds:            at.Sub(state.queuedSince).Seconds(),
+		SelfImposedSeconds: (state.selfImposedWait + state.selfImposedSince(at)).Seconds(),
+	}
+}
+
+// selfImposedSince is how much of the interval between admission's latest answer
+// and one later moment the caller's own declaration held. An answer stands until
+// the next one replaces it, so the reason recorded at the start of the interval is
+// what held the Run through it.
+//
+// A Run with no answer standing contributes nothing, which is the reading for the
+// two ways that happens. A Run nobody has deferred has no wait to divide. A Run
+// whose latest fact is a placement is a Run whose wait Mercator ended, and the
+// interval it spent holding a machine is charged to nobody's queue: what the
+// placement says about the family is that this Run is in the count rather than
+// waiting on it.
+func (state runState) selfImposedSince(at time.Time) time.Duration {
+	if state.deferral == nil || state.deferredAt.IsZero() || !state.deferral.SelfImposed() {
+		return 0
+	}
+	return at.Sub(state.deferredAt)
+}
+
+// supersession is the decision a fresh evaluation of this Run stands in for, and
+// why. A Run nothing has decided about yet supersedes nothing, which is what
+// leaves the first decision on every Run naming nothing.
+//
+// The reason is read off the Run's own record rather than passed down from the
+// caller, because the record is what an operator will check it against: the
+// machine the last decision chose refused to start the work, or the last decision
+// placed the Run nowhere and the fleet is being asked again. Those are the only
+// two ways Mercator decides twice about one Run, and both are facts already in
+// the stream.
+func (state runState) supersession() (string, string) {
+	if state.bookingDecision == nil {
+		return "", ""
+	}
+	if state.replacementEligible() {
+		return state.bookingDecision.ID, domain.SupersededLaunchFailed
+	}
+	return state.bookingDecision.ID, domain.SupersededSelectedNothing
+}
+
+// placed reports whether the last decision on this Run chose a machine. A
+// decision that chose nothing is still a decision, and it is recorded, so
+// "decided" and "placed" are separate questions now.
+func (state runState) placed() bool {
+	return state.bookingDecision != nil && state.bookingDecision.SelectedOfferSnapshotID != ""
 }
 
 func (state runState) bookingQueued() bool {
@@ -87,6 +174,42 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		state.bookingDecision = &data.Decision
+		if data.Decision.SelectedOfferSnapshotID != "" {
+			// Placed work is not waiting on a decision, whatever it is still
+			// waiting for on the machine. How long it waited stays recorded, and so
+			// does what held it: the interval the placement ends is closed here
+			// rather than at the next deferral, because there is no answer standing
+			// after this to attribute it to.
+			state.selfImposedWait += state.selfImposedSince(stored.OccurredAt.UTC())
+			state.deferral = nil
+		}
+
+	case EventAdmissionDeferred:
+		var data admissionDeferredData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if reason := invalidAdmissionDeferral(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		state.selfImposedWait += state.selfImposedSince(stored.OccurredAt.UTC())
+		state.deferral = &data.Deferral
+		state.deferredAt = stored.OccurredAt.UTC()
+		state.deferralCount++
+		if state.queuedSince.IsZero() {
+			state.queuedSince = stored.OccurredAt.UTC()
+		}
+
+	case EventAdmissionRefused:
+		var data admissionDeferredData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if reason := invalidAdmissionDeferral(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		state.deferral = &data.Deferral
+		state.deferralCount++
 
 	case EventBookingDispatched:
 		var data bookingDispatchedData
@@ -114,6 +237,10 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		state.launchIntent = nil
 		state.launchAccepted = false
 		state.launchAcceptedAt = time.Time{}
+		// A new attempt is a new container, so the moment the previous one started
+		// says nothing about this one and is cleared with the launch it belonged to.
+		state.startedAt = nil
+		state.readyAt = nil
 		state.launchFailure = nil
 
 	case EventLaunchIntentRecorded:
@@ -199,6 +326,24 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			state.firstTerminal = &terminalFact{Outcome: outcomeForPhase(data.Phase)}
 		}
 
+	case EventExecutionStarted:
+		var data executionStartedData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if reason := invalidExecutionStarted(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		startedAt := data.StartedAt.UTC()
+		state.startedAt = &startedAt
+		// A readiness already filed for a moment before this one is not this
+		// container's readiness. The two moments come from different authorities,
+		// the workload's arrives first as often as not, and neither of them can
+		// check the order on its own, so it is checked here as well.
+		if state.readyAt != nil && state.readyAt.Before(startedAt) {
+			state.readyAt = nil
+		}
+
 	case EventRunReported:
 		var data runReportedData
 		if err := decodePublicRunPayload(stored, &data); err != nil {
@@ -206,6 +351,19 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		}
 		if err := data.validate(); err != nil {
 			return invalidRunEvent(stored, err.Error())
+		}
+		// The application's own moment rather than the moment Mercator appended
+		// the report, and only where that moment is one Mercator can defend: no
+		// later than the read that carried it, and no earlier than the container
+		// it is about. Adopting whatever arrived is the defect the observed start
+		// moment was fixed for one stage over, asked here in the same terms.
+		//
+		// The first defensible moment stands. A workload reports its readiness
+		// once, so a second report is a repeat rather than a correction, and a
+		// readiness that moved afterwards would rewrite a measurement already
+		// recorded against a prediction.
+		if ready, established := data.establishedReady(stored.OccurredAt, state.startedAt); established && state.readyAt == nil {
+			state.readyAt = &ready
 		}
 		if data.terminal() && state.firstTerminal == nil {
 			code := *data.ExitCode
@@ -364,8 +522,26 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 		WorkloadRevisionID: state.requested.Workload.ID,
 		Phase:              "requested",
 		Cleanup:            domain.CleanupNotRequired,
+		ServiceClass:       state.requested.Workload.Spec.Placement.Class,
+		Admission:          state.deferral,
 		CreatedBy:          state.createdBy,
 		CancelledBy:        state.cancelledBy,
+	}
+	if !state.queuedSince.IsZero() {
+		queuedSince := state.queuedSince
+		record.QueuedSince = &queuedSince
+	}
+	// A Run admission is still holding is queued, which is the phase the
+	// lifecycle was missing: before this, a Run nothing could place read as
+	// "requested" for ever and was indistinguishable from one Mercator had not
+	// got to yet.
+	//
+	// It asks whether anything was chosen rather than whether anything was
+	// decided. A Run nothing could place now records the decision that placed it
+	// nowhere, and reading the presence of a decision as placement would report
+	// every queued Run as requested again.
+	if state.deferral != nil && !state.placed() {
+		record.Phase = "queued"
 	}
 	if state.launchIntent != nil {
 		record.Phase = "launching"
@@ -380,6 +556,14 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 	if state.launchAccepted || state.launchIndeterminate() {
 		record.Phase = "running"
 		record.Cleanup = domain.CleanupPending
+	}
+	if state.startedAt != nil {
+		startedAt := *state.startedAt
+		record.StartedAt = &startedAt
+	}
+	if state.readyAt != nil {
+		readyAt := *state.readyAt
+		record.ReadyAt = &readyAt
 	}
 	if state.cleanupRequested {
 		record.Phase = "cleaning_up"

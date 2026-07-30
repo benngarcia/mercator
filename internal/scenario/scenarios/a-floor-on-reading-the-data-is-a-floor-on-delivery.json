@@ -1,0 +1,78 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One Run that states a floor on how fast it can read its dataset, and three Rentals that miss or clear it for different reasons. The link is the object store one and not the registry one, which is the first thing no fixture here could say: every download floor this corpus could state was over a registry, so the refusal a Run asking about its own data receives was decided by a rule nothing in the tree could reach. What an object store p10 means is delivery, the bytes crossing the path and landing on the disk this host would read them onto, so the machine that delivers four gigabits is refused a floor of eight and the record states the four it published rather than the word unknown. A machine on a ten gigabit link whose Artifact disk delivers four is a slow machine to read on, and this is the fixture that says a floor is allowed to know that. The third machine delivers ten and would clear the floor twice over, and it last measured the path a week ago: this Run acts on nothing older than ten minutes, so that reading is silence for it, and the record says nobody answered rather than naming a speed. The two refusals are different sentences about different machines and the corpus could state neither, which is what let a node summarising an hour of transfers under the wrong date answer every fixture here while failing the one reader that date is for.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-that-delivers-ten-gigabit",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-whose-disk-delivers-four",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-that-measured-last-week",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "paths": [
+      {"from": "rental-that-delivers-ten-gigabit", "to": "objects.example", "scope": "object_store", "p10_mbps": 10000, "confidence": 0.9},
+      {"from": "rental-whose-disk-delivers-four", "to": "objects.example", "scope": "object_store", "p10_mbps": 4000, "confidence": 0.9},
+      {"from": "rental-that-measured-last-week", "to": "objects.example", "scope": "object_store", "p10_mbps": 10000, "confidence": 0.9, "measured_ago": "168h"}
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "service_class": "standard",
+    "download": {"scope": "object_store", "min_p10_mbps": 8000, "max_measurement_age": "10m"},
+    "consumes_artifacts": ["artifact:imagenet:v2.41"],
+    "expected_runtime": "20m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-that-delivers-ten-gigabit",
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
+    "candidates": {
+      "rental-that-delivers-ten-gigabit": {
+        "feasible": true,
+        "stages": {
+          "artifact_fetch": {"seconds": 32, "confidence": 0.9, "rate": {"mbps": 10000, "measurement": "blueprint_path"}}
+        }
+      },
+      "rental-whose-disk-delivers-four": {
+        "feasible": false,
+        "rejected": [{"code": "NETWORK_FACT_UNSATISFIED", "path": "network.download"}],
+        "stages": {
+          "artifact_fetch": {"seconds": 80, "confidence": 0.9, "rate": {"mbps": 4000, "measurement": "blueprint_path"}}
+        }
+      },
+      "rental-that-measured-last-week": {
+        "feasible": false,
+        "rejected": [{"code": "UNKNOWN_FACT", "path": "network.download"}],
+        "stages": {
+          "artifact_fetch": {"seconds": 32, "confidence": 0.9, "rate": {"mbps": 10000, "measurement": "blueprint_path"}}
+        }
+      }
+    }
+  }
+}

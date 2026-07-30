@@ -1,0 +1,45 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The two silences at L1. One Run states a 500 Mbps floor on how fast a candidate reaches the registry and would rather run on a machine nobody has measured than not run, against four Rentals at one price, none holding the 2GB image. The machine that published 750 Mbps and stands behind it answers, clears the floor, and takes the Run. The machine that published 100 Mbps and stands behind it was measured too slow and is refused with the number it published. The machine that published 5 Gbps and stated no confidence in it, and the machine that published nothing at all, are identical in every column and both feasible. This is the Blueprint the Lab's own world statement about path confidence is falsifiable through: stamping certainty on a fixture's measurement again makes the disowned 5 Gbps the fastest answer in the fleet and flips the placement onto it, and dropping the world's paths charges the measured machine the standing assumption it published past.",
+  "seed": "mercator-lab-disowned-link-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:9c1f1cc70e2c0dd7bb0b1ff37e5a20d3fd67ed6d4a3f0f7ec26f10e2b1b3f9aa": {
+        "layers": [
+          {
+            "digest": "sha256:6b8f4e4a09d95c60e50e1cba4bb52bbde5ba0bd8a3c0eb0d5c0a19f0b1de3f21",
+            "size": "2GB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {"id": "rental-measured", "rate_per_hour_usd": 2.0},
+      {"id": "rental-slow", "rate_per_hour_usd": 2.0},
+      {"id": "rental-disowned", "rate_per_hour_usd": 2.0},
+      {"id": "rental-silent", "rate_per_hour_usd": 2.0}
+    ],
+    "paths": [
+      {"from": "rental-measured", "to": "registry.example", "scope": "registry", "p10_mbps": 750, "confidence": 0.9},
+      {"from": "rental-slow", "to": "registry.example", "scope": "registry", "p10_mbps": 100, "confidence": 0.9},
+      {"from": "rental-disowned", "to": "registry.example", "scope": "registry", "p10_mbps": 5000, "confidence": 0}
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "picky",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:9c1f1cc70e2c0dd7bb0b1ff37e5a20d3fd67ed6d4a3f0f7ec26f10e2b1b3f9aa",
+          "download": {"scope": "registry", "min_p10_mbps": 500, "allow_unknown": true},
+          "expected_runtime": "10m",
+          "max_runtime": "30m"
+        }
+      }
+    ]
+  }
+}

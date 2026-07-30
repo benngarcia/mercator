@@ -210,3 +210,103 @@ func (a *countingOfferAggregator) Calls() int {
 	defer a.mu.Unlock()
 	return a.calls
 }
+
+// TestConsoleEventStreamCarriesNoStoredEnvironmentValue is the redaction at the
+// audience it exists for. The console subscribes to every public event of a
+// workspace with no restriction on which stream it came from, so a workload
+// revision stored with a token in a container's environment put that token on the
+// wire to every reader. Both doors that write a revision into a public event are
+// held to one rule now, and this is the one that reads what a reader actually
+// receives.
+func TestConsoleEventStreamCarriesNoStoredEnvironmentValue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	logStore, err := eventlog.OpenSQLite(ctx, "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = logStore.Close() })
+	provider := fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_console_secret", time.Now().UTC())}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+	)
+	handler := New(Deps{
+		Orchestrator: orchestrator.New(workspaceTestLog{EventLog: logStore}, scheduler.New(), provider),
+		Offers:       singleProviderOffers{provider: provider},
+		Workloads:    workload.New(workspaceTestLog{EventLog: logStore}),
+		Events:       logStore,
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/console/events?workspace_id=ws_1", nil)
+	if err != nil {
+		t.Fatalf("new stream request: %v", err)
+	}
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	readSSEFrame(t, reader)
+	readSSEFrame(t, reader)
+
+	storeRevisionThroughHTTP(t, server.Client(), server.URL, "hf_live_SECRETVALUE")
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for the stored revision to reach the console")
+		default:
+		}
+		frame := readSSEFrame(t, reader)
+		if frame.Event != "domain_event" {
+			continue
+		}
+		var event eventlog.CloudEvent
+		if err := json.Unmarshal(frame.Data, &event); err != nil {
+			t.Fatalf("decode domain event: %v", err)
+		}
+		if event.Type != workload.EventWorkloadRevisionCreated {
+			continue
+		}
+		if bytes.Contains(event.Data, []byte("hf_live_SECRETVALUE")) {
+			t.Fatalf("the console received the token verbatim: %s", event.Data)
+		}
+		if !bytes.Contains(event.Data, []byte(`"kind":"literal"`)) {
+			t.Fatalf("the console learned nothing about the variable at all: %s", event.Data)
+		}
+		return
+	}
+}
+
+func storeRevisionThroughHTTP(t *testing.T, client *http.Client, baseURL, secret string) {
+	t.Helper()
+	post := func(path, idempotencyKey string, body []byte) {
+		request, err := http.NewRequest(http.MethodPost, baseURL+path, bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("new request for %s: %v", path, err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", idempotencyKey)
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("post %s: %v", path, err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusAccepted {
+			var responseBody bytes.Buffer
+			_, _ = responseBody.ReadFrom(response.Body)
+			t.Fatalf("post %s status = %d body=%s", path, response.StatusCode, responseBody.String())
+		}
+	}
+	post("/v1/workloads", "idem_workload_secret",
+		mustMarshal(t, CreateWorkloadRequest{WorkspaceId: "ws_1", WorkloadId: "wrk_secret", Name: "secret"}))
+	revision := httpRevision()
+	revision.WorkloadID = "wrk_secret"
+	revision.Spec.Containers[0].Env = map[string]domain.EnvBinding{"HF_TOKEN": {Value: &secret}}
+	post("/v1/workloads/wrk_secret/revisions?workspace_id=ws_1", "idem_revision_secret",
+		mustMarshal(t, CreateRevisionRequest{Revision: revision}))
+}

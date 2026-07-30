@@ -14,13 +14,15 @@ import (
 	"github.com/benngarcia/mercator/internal/ociresolver"
 )
 
-// registryMbps is how fast this world moves image content onto a machine. The
-// arithmetic below it is the world's own transfer model, deliberately
-// independent of the scheduler's prediction: a fixture is only meaningful when
-// the actual pull and the predicted pull are produced by different code. The
-// speed itself is the standing assumption about an unmeasured link, which is
-// stated once so the two models cannot disagree about what they never measured.
-const registryMbps = domain.DefaultRegistryDownloadMbps
+// unmeasuredLinkMbps is how fast this world moves content over a path no fixture
+// declared. The arithmetic below it is the world's own transfer model,
+// deliberately independent of the scheduler's prediction: a fixture is only
+// meaningful when the actual pull and the predicted pull are produced by
+// different code. The figure matches the standing assumption on purpose, because
+// an unmeasured path is the one case where both halves are guessing about the
+// same thing. A fixture that wants them to differ declares a path, and this world
+// then really spends what the path states.
+const unmeasuredLinkMbps = 500.0
 
 // Clock is a scripted wall clock shared by a World, its machines, and the
 // orchestrator under test. Time only moves when a scenario advances it, so
@@ -135,10 +137,53 @@ type Machine struct {
 	// lease bound. An expired machine stops being offered, standing in for
 	// janitor termination until the rental lifecycle exists.
 	LeaseExpiresAt time.Time
+	// ProvisionSpend is what this world takes to turn a listing into a machine
+	// that can run a container: acquisition, boot, and agent enrollment together.
+	// It is deliberately not the estimate the offer publishes, which is a claim
+	// the scheduler predicts from; a world that spent its own published
+	// expectation would make that expectation right by construction. Standing
+	// capacity spends none of it, because the machine is already there.
+	ProvisionSpend time.Duration
+	// UnpackSpend is what this machine takes to turn content on its disk into a
+	// layer chain a container can start on, and ContainerStartSpend is what its
+	// runtime takes to create the container and hold a process in it. Both are
+	// stated durations for the reason ProvisionSpend is: a world computing the
+	// arithmetic the predictor computes would make the prediction right by
+	// construction.
+	UnpackSpend         time.Duration
+	ContainerStartSpend time.Duration
+	// ApplicationReadySpend is what a workload takes to report it can do work
+	// once its process is running here, where this machine is not like the rest of
+	// the world. Zero is the world's own answer rather than an instant readiness,
+	// because a world states one figure for its applications and a machine states
+	// a difference from it: a fleet where every machine brings the same
+	// application up in the same time is a fleet where a per-candidate prediction
+	// cannot be told from a fleet-wide one.
+	ApplicationReadySpend time.Duration
+	// ClockAhead is how far this machine's wall clock runs ahead of the control
+	// plane's. It changes nothing about when anything here happens and everything
+	// about the moment this machine states when asked: a host does not know its
+	// clock is wrong, so it reads its container's start off the clock it has.
+	ClockAhead time.Duration
+	// LinkMbps is how fast this world really moves content of each kind onto this
+	// machine. It is world truth and never the facts the offer publishes: a fact
+	// carries a confidence, and a host that disowns its own measurement has told
+	// Mercator nothing while still crossing the path at the speed the path is. A
+	// scope missing from it is a path no fixture declared.
+	LinkMbps map[domain.NetworkScope]float64
 
 	// fetching is content this machine is still pulling. A host holds an image
 	// when its bytes have arrived, not when the container was dispatched.
 	fetching []transfer
+}
+
+// linkMbps is how fast content of one kind reaches this machine, and this
+// world's own constant over a path no fixture declared.
+func (m *Machine) linkMbps(scope domain.NetworkScope) float64 {
+	if declared, stated := m.LinkMbps[scope]; stated {
+		return declared
+	}
+	return unmeasuredLinkMbps
 }
 
 // transfer is one execution's arrival on this machine: the image it had to
@@ -168,23 +213,39 @@ type transfer struct {
 // evidence, so all three say a machine holds a cache from when a workload of
 // that tenant and generation started here: one cancelled halfway leaves the
 // cache it was attached to, and one that never started leaves nothing.
-func (m *Machine) startExecution(image string, layers []Layer, caches []domain.CacheMount, now time.Time) {
-	if !m.Offer.KeepsWhatItRuns() {
-		return
-	}
+// It answers when the container starts, which is when the machine exists and the
+// bytes it needs have landed on it. That answer is made for every machine,
+// including the ones that keep nothing: what such a machine does not do is hold
+// the content afterwards, and that is a different question from when its workload
+// began.
+func (m *Machine) startExecution(image string, layers []Layer, caches []domain.CacheMount, now time.Time) time.Time {
 	var bytes int64
 	for _, layer := range layers {
 		if _, held := m.HeldLayers[layer.Digest]; !held {
 			bytes += layer.Bytes
 		}
 	}
+	// Nothing can be fetched onto a machine that does not exist yet, so the world
+	// spends acquisition, boot, and agent enrollment before the pull begins. Bytes
+	// that land are then applied, and only then does a runtime hand back a
+	// process: a launch is a waterfall, and a stage that costs nothing here is a
+	// stage no prediction of it could ever be measured against.
+	readyAt := now.Add(m.ProvisionSpend)
+	startsAt := readyAt.
+		Add(transferDuration(bytes, m.linkMbps(domain.NetworkScopeRegistry))).
+		Add(m.assemblySpend(bytes, layers)).
+		Add(m.ContainerStartSpend)
+	if !m.Offer.KeepsWhatItRuns() {
+		return startsAt
+	}
 	m.fetching = append(m.fetching, transfer{
 		image:       image,
 		layers:      layers,
 		caches:      caches,
 		bytes:       bytes,
-		completesAt: now.Add(transferDuration(bytes)),
+		completesAt: startsAt,
 	})
+	return startsAt
 }
 
 // settle applies every execution whose bytes have arrived by now. Until then the
@@ -230,6 +291,17 @@ func (m *Machine) openCaches(caches []domain.CacheMount, at time.Time) {
 // borrows and a machine that does not exist yet report nothing, which is what
 // every provider adapter in the tree publishes. What such a machine holds stays
 // true and stays readable as world state; no offer says it.
+// capacityConfidence is how sure this machine's publisher is that the capacity it
+// is claiming is there. A machine registered without an opinion is certain, which
+// is what a simulated provider can honestly say about a machine it can see: it
+// answers from world state rather than from a stale catalog.
+func (m *Machine) capacityConfidence() float64 {
+	if m.Offer.Capacity.Confidence == 0 {
+		return 1
+	}
+	return m.Offer.Capacity.Confidence
+}
+
 func (m *Machine) publishedInventory(now time.Time) domain.ImageInventory {
 	if !m.Offer.KeepsWhatItRuns() {
 		return domain.ImageInventory{}
@@ -385,11 +457,36 @@ func (m *Machine) inventory(now time.Time) domain.ImageInventory {
 	return inventory
 }
 
-func transferDuration(bytes int64) time.Duration {
+// applicationReadySpend is what a workload takes to come up on this machine: the
+// machine's own answer where it states one, and the world's for every machine
+// that is like the rest of the fleet.
+func (m *Machine) applicationReadySpend(world time.Duration) time.Duration {
+	if m.ApplicationReadySpend > 0 {
+		return m.ApplicationReadySpend
+	}
+	return world
+}
+
+// assemblySpend is what applying this launch's content costs here. A machine with
+// nothing to apply spends nothing: unpacking is work over bytes, and a host
+// holding the image assembled has none of it to do.
+func (m *Machine) assemblySpend(fetched int64, layers []Layer) time.Duration {
+	if fetched > 0 {
+		return m.UnpackSpend
+	}
+	for _, layer := range layers {
+		if m.Packed[layer.Digest] || m.Packed[layer.DiffID] {
+			return m.UnpackSpend
+		}
+	}
+	return 0
+}
+
+func transferDuration(bytes int64, mbps float64) time.Duration {
 	if bytes <= 0 {
 		return 0
 	}
-	seconds := float64(bytes*8) / 1_000_000 / registryMbps
+	seconds := float64(bytes*8) / 1_000_000 / mbps
 	return time.Duration(seconds * float64(time.Second))
 }
 
@@ -438,16 +535,61 @@ type World struct {
 	// and a marketplace offer are the same kind of entry: what separates them
 	// is whether the offer names capacity Mercator keeps.
 	machines map[string]*Machine
+	// startsAt is when each launch's container actually begins, keyed by launch
+	// key. The provider reports running from the moment it accepts, exactly as
+	// every provider in the tree does, so this is the only place the world holds
+	// the moment a process began and the only thing an observation can report it
+	// from once it has arrived.
+	startsAt map[string]time.Time
+	// readyAt is when each workload here really begins serving, which is what makes
+	// a report due. The moment the report carries is the same one read on its host's
+	// clock, and for one machine in this corpus those are not the same moment.
+	readyAt map[string]time.Time
+	// statedStarts is the same moment as each machine holding it would report it,
+	// which is world truth read on that host's own clock. The two are one map for
+	// every machine that keeps Mercator's clock and two for a machine that does
+	// not, and a world that held only the truth could not state the case where a
+	// host publishes a moment Mercator has not reached.
+	statedStarts map[string]time.Time
+	// ApplicationReadySpend is how long after its process starts a workload here
+	// reports that it can do work. It is a fact about the applications in this
+	// world rather than about any machine: a runtime that started a container
+	// cannot see whether the thing inside it is serving.
+	ApplicationReadySpend time.Duration
+	// ApplicationBecomesReady is whether the applications here ever report they can
+	// do work. A world that says they never do is the failure mode the readiness
+	// stage exists to expose, and it has to be stated because a spend of nothing is
+	// already a world where a process is serving the instant it exists.
+	ApplicationBecomesReady bool
+	// readiness is every workload that will report itself ready and has not done
+	// so yet, keyed by launch key. A workload reports once, so an entry is dropped
+	// when it is handed over: a report re-delivered on every look would tell
+	// Mercator the same thing forever.
+	readiness map[string]ReadinessReport
+}
+
+// ReadinessReport is one workload telling Mercator it can do work, with the
+// moment it could. The moment travels in the report because it is the
+// application's own: a readiness stamped when the control plane recorded it would
+// move with how often the control plane looks.
+type ReadinessReport struct {
+	WorkspaceID string
+	RunID       string
+	ReadyAt     time.Time
 }
 
 func NewWorld(clock *Clock, options ...Option) *World {
 	options = append([]Option{WithNow(clock.Now)}, options...)
 	return &World{
-		Adapter:   New(options...),
-		clock:     clock,
-		images:    map[string]Image{},
-		artifacts: map[string]domain.ArtifactVersion{},
-		machines:  map[string]*Machine{},
+		Adapter:      New(options...),
+		clock:        clock,
+		images:       map[string]Image{},
+		artifacts:    map[string]domain.ArtifactVersion{},
+		machines:     map[string]*Machine{},
+		startsAt:     map[string]time.Time{},
+		readyAt:      map[string]time.Time{},
+		statedStarts: map[string]time.Time{},
+		readiness:    map[string]ReadinessReport{},
 	}
 }
 
@@ -529,7 +671,7 @@ func (w *World) Machine(id string) (*Machine, bool) {
 // clock's now: machines whose lease has not expired, each stating what it holds
 // and whether it is busy. Busy machines advertise unavailable capacity and
 // their remaining maximum runtime as queue evidence.
-func (w *World) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+func (w *World) ListOffers(_ context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	now := w.clock.Now()
@@ -538,10 +680,29 @@ func (w *World) ListOffers(context.Context, adapter.OfferRequest) ([]domain.Offe
 		if machine.leaseExpiredAt(now) {
 			continue
 		}
-		offers = append(offers, w.machineOffer(machine, now))
+		offer := w.machineOffer(machine, now)
+		// A marketplace listing is a search result, so this world answers the shape
+		// it was asked about. Capacity Mercator holds is listed whole and refused in
+		// the record. See domain.OfferSnapshot.PublishedTo.
+		if !offer.PublishedTo(request.Resources) {
+			continue
+		}
+		offers = append(offers, offer)
 	}
 	sort.Slice(offers, func(i, j int) bool { return offers[i].ID < offers[j].ID })
 	return offers, nil
+}
+
+// CollectOffers is this world answering as the whole fleet. It is stated here
+// rather than inherited from the embedded adapter, because Go resolves an
+// embedded method against the embedded value: a census built on the adapter's own
+// offer list would answer about a fleet this world does not have.
+func (w *World) CollectOffers(ctx context.Context, req adapter.OfferRequest) (adapter.OfferCollection, error) {
+	offers, err := w.ListOffers(ctx, req)
+	if err != nil {
+		return adapter.OfferCollection{}, err
+	}
+	return adapter.OfferCollection{Offers: offers, Queried: []string{ConnectionID}}, nil
 }
 
 // Launch runs the workload and leaves what it fetched and what it opened on the
@@ -559,6 +720,10 @@ func (w *World) Launch(ctx context.Context, request adapter.LaunchRequest) (adap
 // recordExecution starts the pull the launch implies and declares the caches it
 // will open. What the machine keeps afterwards is its own answer: only capacity
 // Mercator keeps is still holding any of it when the next Run asks.
+//
+// It also records when the container will begin, which is what makes the world's
+// own start moment a fact an observation can report rather than something a
+// reader has to infer from the launch being accepted.
 func (w *World) recordExecution(request adapter.LaunchRequest) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -568,7 +733,78 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 	}
 	now := w.clock.Now()
 	machine.settle(now)
-	machine.startExecution(request.Image, w.images[request.Image].Layers, declaredCaches(request), now)
+	startsAt := machine.startExecution(
+		request.Image, w.images[request.Image].Layers, declaredCaches(request), now,
+	)
+	w.startsAt[request.LaunchKey] = startsAt
+	// What the machine will say when asked, which is the moment above read on its
+	// own clock. World truth stays above: this world knows when the container
+	// really began, and the host reporting it does not know its clock is wrong.
+	w.statedStarts[request.LaunchKey] = startsAt.Add(machine.ClockAhead)
+	if !w.ApplicationBecomesReady {
+		// A world whose applications never come up records no readiness at all,
+		// which is a different world from one whose applications are serving the
+		// instant their process exists.
+		return
+	}
+	readyAt := startsAt.Add(machine.applicationReadySpend(w.ApplicationReadySpend))
+	w.readyAt[request.LaunchKey] = readyAt
+	w.readiness[request.LaunchKey] = ReadinessReport{
+		WorkspaceID: request.WorkspaceID,
+		RunID:       request.RunID,
+		// The application reads the clock of the host it runs on, so what it states
+		// is the moment above on that machine's clock. World truth stays in readyAt:
+		// this world knows when the workload really began serving, and the workload
+		// reporting it does not know its host's clock is wrong.
+		ReadyAt: readyAt.Add(machine.ClockAhead),
+	}
+}
+
+// DueReadinessReports is every workload here that has become ready and has not
+// said so yet. It is an inbound callback rather than something an observation
+// carries, because the workload is the only authority on whether it can do work.
+func (w *World) DueReadinessReports() []ReadinessReport {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := w.clock.Now()
+	var due []ReadinessReport
+	for _, launchKey := range slices.Sorted(maps.Keys(w.readiness)) {
+		report := w.readiness[launchKey]
+		// Due on the world's own clock rather than on the clock the report states,
+		// because when a workload becomes ready is a fact about the world and the
+		// moment it names is a fact about its host.
+		if now.Before(w.readyAt[launchKey]) {
+			continue
+		}
+		delete(w.readiness, launchKey)
+		due = append(due, report)
+	}
+	return due
+}
+
+// Observe is the embedded adapter's answer with the world's own start moment on
+// it. The phase says running from the moment the launch was accepted, which is
+// what every provider in this tree does and why a phase can never establish a
+// start; the moment the container began is a separate fact, reported once it has
+// happened and left absent until then.
+func (w *World) Observe(ctx context.Context, request adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	observation, err := w.Adapter.Observe(ctx, request)
+	if err != nil {
+		return observation, err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	startsAt, launched := w.startsAt[request.LaunchKey]
+	if !launched || w.clock.Now().Before(startsAt) {
+		return observation, nil
+	}
+	// The machine states the moment on its own clock. That is the same clock the
+	// control plane keeps for every machine in this corpus but one, and the
+	// exception is the point: a host running ahead publishes a start that has
+	// arrived here and not there.
+	stated := w.statedStarts[request.LaunchKey]
+	observation.StartedAt = &stated
+	return observation, nil
 }
 
 // declaredCaches is the mutable state this launch asks its host to attach, named
@@ -626,8 +862,14 @@ func (w *World) machineOffer(machine *Machine, now time.Time) domain.OfferSnapsh
 	offer.ExpiresAt = now.Add(5 * time.Minute)
 	// What a machine offers is the room it has left rather than the disk it was
 	// built with, because content it is already holding is not room a Run can
-	// have.
-	offer.Resources.EphemeralDiskBytes = machine.freeDiskBytes()
+	// have. A machine this world declares cannot measure its disk offers no
+	// answer at all: the bytes it would have stated are bytes nobody
+	// established, and publishing them anyway is exactly the fabrication the
+	// node registry made when it read a failed measurement as a full disk.
+	offer.Resources.EphemeralDiskBytes = 0
+	if offer.Resources.EphemeralDiskKnown {
+		offer.Resources.EphemeralDiskBytes = machine.freeDiskBytes()
+	}
 	offer.Images = machine.publishedInventory(now)
 	offer.Artifacts = machine.publishedArtifacts(now)
 	offer.Caches = machine.publishedCaches(now)
@@ -637,11 +879,11 @@ func (w *World) machineOffer(machine *Machine, now time.Time) domain.OfferSnapsh
 		// queued Booking instead. It remains visible now so the decision records
 		// the running Booking's expected (p50) remaining runtime as
 		// queue-delay evidence; the enforced max bound backs latest-start math.
-		offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: 1}
+		offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: machine.capacityConfidence()}
 		offer.Queue = &domain.QueueSnapshot{QueuedWorkSeconds: machine.expectedRemainingAt(now).Seconds(), ActiveSlots: 1}
 		return offer
 	}
-	offer.Capacity = domain.CapacityEvidence{Available: true, Confidence: 1}
+	offer.Capacity = domain.CapacityEvidence{Available: true, Confidence: machine.capacityConfidence()}
 	offer.Queue = &domain.QueueSnapshot{}
 	return offer
 }

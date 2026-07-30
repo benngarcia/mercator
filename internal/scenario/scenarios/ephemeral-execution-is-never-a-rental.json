@@ -17,14 +17,26 @@
         "provider": "simcloud",
         "lane": "ephemeral",
         "rate_per_hour_usd": 1.0,
-        "provisioning": {"expected": "1m", "p90": "2m"}
+        "provisioning": {
+          "expected": "1m",
+          "p90": "2m",
+          "acquisition": "6s",
+          "boot": "45s",
+          "agent_ready": "9s"
+        }
       },
       {
         "id": "reusable-4090",
         "provider": "simcloud",
         "lane": "reusable",
         "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "4m", "p90": "8m"}
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m",
+          "agent_ready": "36s"
+        }
       }
     ]
   },

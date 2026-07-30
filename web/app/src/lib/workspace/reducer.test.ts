@@ -97,6 +97,32 @@ function requestedMessage(
   return requested;
 }
 
+// A one-shot execution on a provider-native product is the whole ephemeral
+// lane, and the console could not read one: "launch_ephemeral" was missing from
+// the hand-written disposition literals, so every Booking Decision that
+// recorded the common case threw on decode instead of reaching the timeline.
+test("reads a Booking Decision that launched a one-shot ephemeral execution", () => {
+  const decided = bookingDecidedMessage({
+    eventID: "evt_booking_ephemeral",
+    globalPosition: 2,
+    runID: "run-one-shot",
+    bookingID: "booking-one-shot",
+    state: "running",
+    candidateDisposition: "launch_ephemeral",
+  });
+
+  const workspace = [
+    requestedMessage("run-one-shot", "evt_requested_one_shot", 1),
+    decided,
+  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+
+  // The decision reaching the canvas at all is the assertion. A disposition the
+  // schema cannot spell throws on decode, and the reduce that throws leaves the
+  // Run where it was requested with no Booking on it.
+  expect(workspace.runs["run-one-shot"]?.bookingID).toBe("booking-one-shot");
+  expect(workspace.runs["run-one-shot"]?.phase).toBe("running");
+});
+
 function bookingDecidedMessage(input: {
   eventID: string;
   globalPosition: number;
@@ -104,6 +130,7 @@ function bookingDecidedMessage(input: {
   bookingID: string;
   state: "running" | "queued";
   afterBookingID?: string;
+  candidateDisposition?: string;
 }): WorkspaceMessage {
   return {
     type: "domain_event",
@@ -125,9 +152,34 @@ function bookingDecidedMessage(input: {
           workload_revision_digest: "sha256:fixture",
           evaluated_at: "2030-01-01T00:00:01Z",
           model_version: "scheduler-v1",
-          policy: { objective: "cheapest" },
+          policy: { service_class: "batch" },
+          weights: { completion_latency_usd_per_second: 0.0001 },
           collection_report: {},
-          candidates: [],
+          candidates: input.candidateDisposition
+            ? [
+                {
+                  offer_snapshot_id: "offer-warm",
+                  disposition: input.candidateDisposition,
+                  feasible: true,
+                  estimates: {
+                    queue_seconds: {},
+                    stages: {
+                      acquisition_seconds: {},
+                      boot_seconds: {},
+                      agent_ready_seconds: {},
+                      image_fetch_seconds: {},
+                      unpack_seconds: {},
+                      artifact_fetch_seconds: {},
+                      container_start_seconds: {},
+                      application_ready_seconds: {},
+                    },
+                    start_seconds: {},
+                    established_start_seconds: {},
+                    cost_usd: {},
+                  },
+                },
+              ]
+            : [],
           selected_offer_snapshot_id: "offer-warm",
           booking: {
             id: input.bookingID,
@@ -139,7 +191,7 @@ function bookingDecidedMessage(input: {
               : {}),
             schedule_version: 1,
           },
-          selection_reason_codes: ["LOWEST_SCORE"],
+          selection_reason_codes: ["FEASIBLE", "SERVICE_CLASS_BATCH"],
         },
       },
     },
@@ -194,3 +246,71 @@ test("replaces a failed provider booking for the same Run", () => {
     "booking-replacement-provider",
   );
 });
+
+// The console's elapsed runtime is measured from the moment the machine said its
+// container began, which arrives on its own event. It used to be stamped twice
+// from Mercator's own clock: once when the Booking Decision was recorded, which
+// for a provisioned machine is before that machine existed, and again on every
+// observation, so a reconnecting console reported a workload as newly started.
+test("counts a workload's runtime from the moment its machine said it began", () => {
+  const decided = bookingDecidedMessage({
+    eventID: "evt_booking_started",
+    globalPosition: 2,
+    runID: "run-observed",
+    bookingID: "booking-observed",
+    state: "running",
+  });
+  const started = executionStartedMessage(
+    "run-observed",
+    "2030-01-01T00:04:48Z",
+  );
+
+  const workspace = [
+    requestedMessage("run-observed", "evt_requested_observed", 1),
+    decided,
+    started,
+  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+
+  const run = workspace.runs["run-observed"];
+  expect(run?.startedAt).toBe("2030-01-01T00:04:48Z");
+  expect(run?.startedAt).not.toBe(decided.type === "domain_event" ? decided.event.time : undefined);
+});
+
+// A Run nothing has reported a start for carries none. The console shows no
+// elapsed runtime for it rather than counting from whenever Mercator last looked.
+test("records no start moment for a Run nothing observed starting", () => {
+  const workspace = [
+    requestedMessage("run-quiet", "evt_requested_quiet", 1),
+    bookingDecidedMessage({
+      eventID: "evt_booking_quiet",
+      globalPosition: 2,
+      runID: "run-quiet",
+      bookingID: "booking-quiet",
+      state: "running",
+    }),
+  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+
+  expect(workspace.runs["run-quiet"]?.startedAt).toBeUndefined();
+});
+
+function executionStartedMessage(
+  runID: string,
+  startedAt: string,
+): WorkspaceMessage {
+  return {
+    type: "domain_event",
+    event: {
+      specversion: "1.0",
+      id: `evt_started_${runID}`,
+      source: "test",
+      type: "compute.run.execution_started.v1",
+      subject: `runs/${runID}`,
+      time: "2030-01-01T00:05:00Z",
+      workspaceid: "ws_scenario",
+      streamversion: 4,
+      globalposition: 6,
+      correlationid: runID,
+      data: { launch_key: `launch-${runID}`, started_at: startedAt },
+    },
+  } as unknown as WorkspaceMessage;
+}

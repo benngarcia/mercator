@@ -19,7 +19,178 @@ const (
 	bulkyImage           = "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d"
 	auditorImage         = "auditor@sha256:5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e"
 	corpusArtifact       = "artifact:corpus:v7"
+
+	refusedPrepareBlueprint      = "a-refused-prepare-can-be-asked-again"
+	refusedCorpus                = "artifact:corpus:v9"
+	refusalIsPerMachineBlueprint = "a-refusal-on-one-machine-is-not-a-withdrawal-on-another"
+	restartedWithdrawalBlueprint = "a-restart-still-withdraws-what-nobody-waits-for"
 )
+
+// TestContentAMachineRefusedIsAskedForAgain is the whole of what a refusal means
+// on either side of the seam. The machine turned the fetch away, which left
+// nothing on its disk and nothing in flight, so the identity is still askable and
+// Mercator asks the same machine for the same corpus at the next moment its own
+// rate bound allows. The bytes land on the second ask, and the queued Run starts
+// on a host holding a checked copy of the content it reads.
+//
+// It fails two ways. A world that remembered a refused fetch as work it had taken
+// on answers the second ask Duplicate and moves nothing. A control plane that
+// remembered refused content as content it had asked for computes an unchanged
+// desire and never asks a second time.
+func TestContentAMachineRefusedIsAskedForAgain(t *testing.T) {
+	execution := driveRefusedPrepareExecution(t)
+
+	asks := preparationAsks(t, execution, "prepare-artifact/builder/"+refusedCorpus)
+	if len(asks) != 2 {
+		t.Fatalf("the ledger records %d asks for the refused corpus, want the refusal and the ask that followed it: %+v", len(asks), asks)
+	}
+	if asks[0].Command != EffectCommandRejected || asks[0].FaultID != "corpus-fetch-refused" {
+		t.Fatalf("the first ask was %q under fault %q, want the machine turning the fetch away", asks[0].Command, asks[0].FaultID)
+	}
+	if asks[1].Command != EffectCommandAccepted {
+		t.Fatalf("the second ask was %q, want a machine that can still be asked for content it refused", asks[1].Command)
+	}
+	replica, held := heldReplica(execution, "builder", refusedCorpus)
+	if !held || !replica.State.Usable() {
+		t.Fatalf("the machine holds %+v of the refused corpus, want the copy the second ask fetched", replica)
+	}
+}
+
+// TestOneMachineRefusingIsNotEveryMachineStopping is what a refusal is about.
+// Two machines were each asked for the same corpus, one turned its fetch away and
+// the other started reading, and then both Runs that wanted it were withdrawn.
+// What is still moving has to be stopped, and the only thing that can stop it is
+// Mercator's own memory of what each machine took on.
+//
+// A control plane that hears a refusal as being about content rather than about
+// one machine's copy of it forgets the transfer that is really running, computes
+// an empty desire it believes it never departed from, and sends nothing at all.
+// The machine reads twenty gigabytes for Runs that no longer exist.
+func TestOneMachineRefusingIsNotEveryMachineStopping(t *testing.T) {
+	execution := driveRefusalIsPerMachineExecution(t)
+
+	asks := preparationAsks(t, execution, "prepare-artifact/east/"+refusedCorpus)
+	if len(asks) != 1 || asks[0].Command != EffectCommandRejected {
+		t.Fatalf("the cheap machine answered %+v, want the one refusal this world states", asks)
+	}
+	withdrawn := abandonedPreparations(t, execution)
+	if len(withdrawn) != 1 {
+		t.Fatalf("the ledger records %d withdrawals, want the transfer nothing was waiting for any more: %+v", len(withdrawn), withdrawn)
+	}
+	if withdrawn[0].OfferID != "west" || withdrawn[0].Content != refusedCorpus {
+		t.Fatalf("the withdrawal names %q on %q, want the corpus the other machine was still reading", withdrawn[0].Content, withdrawn[0].OfferID)
+	}
+	if replica, held := heldReplica(execution, "west", refusedCorpus); held {
+		t.Fatalf("the machine holds %+v, want a read that stopped when the Runs waiting for it went away", replica)
+	}
+}
+
+// TestARestartedControlPlaneStillWithdrawsWhatNobodyWaitsFor is speculation
+// meeting the one thing that empties Mercator's memory of it. The machine was
+// asked for a hundred gigabyte corpus and started reading, the Run that wanted it
+// was withdrawn, and Mercator restarted before it could act on that.
+//
+// What the restarted control plane wants is nothing, and nothing is also what a
+// control plane that has never asked for anything wants. Those two are the same
+// set and not the same fact, and a memory that cannot tell them apart says
+// nothing at all: the transfer nobody is waiting for runs to completion and the
+// machine's room comes back only once the bytes have landed.
+func TestARestartedControlPlaneStillWithdrawsWhatNobodyWaitsFor(t *testing.T) {
+	execution := driveRestartedWithdrawalExecution(t)
+
+	withdrawn := abandonedPreparations(t, execution)
+	if len(withdrawn) != 1 {
+		t.Fatalf("the ledger records %d withdrawals, want the transfer the restart left running: %+v", len(withdrawn), withdrawn)
+	}
+	if withdrawn[0].OfferID != "west" || withdrawn[0].Content != refusedCorpus {
+		t.Fatalf("the withdrawal names %q on %q, want the corpus the machine was still reading", withdrawn[0].Content, withdrawn[0].OfferID)
+	}
+	if replica, held := heldReplica(execution, "west", refusedCorpus); held {
+		t.Fatalf("the machine holds %+v, want a read that stopped when the Run waiting for it went away", replica)
+	}
+}
+
+// driveRestartedWithdrawalExecution runs the Blueprint a virtual minute at a
+// time, for longer than the withdrawn transfer would have taken to land.
+func driveRestartedWithdrawalExecution(t *testing.T) *Execution {
+	t.Helper()
+	execution := openConformanceExecution(t, restartedWithdrawalBlueprint)
+	t.Cleanup(func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	})
+	for range 40 {
+		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
+			t.Fatalf("drive the execution: %v", err)
+		}
+	}
+	return execution
+}
+
+// driveRefusalIsPerMachineExecution runs the Blueprint a virtual minute at a
+// time, for longer than the transfer it withdraws would have taken to land.
+func driveRefusalIsPerMachineExecution(t *testing.T) *Execution {
+	t.Helper()
+	execution := openConformanceExecution(t, refusalIsPerMachineBlueprint)
+	t.Cleanup(func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	})
+	for range 30 {
+		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
+			t.Fatalf("drive the execution: %v", err)
+		}
+	}
+	return execution
+}
+
+func driveRefusedPrepareExecution(t *testing.T) *Execution {
+	t.Helper()
+	execution := openConformanceExecution(t, refusedPrepareBlueprint)
+	t.Cleanup(func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	})
+	for range 60 {
+		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
+			t.Fatalf("drive the execution: %v", err)
+		}
+	}
+	return execution
+}
+
+// preparationAsk is one crossing of the preparation seam as the ledger recorded
+// it, whatever the machine answered. The other readers here keep only what was
+// accepted, and a rule about a refusal has to be able to see the refusal.
+type preparationAsk struct {
+	At      time.Time
+	Command EffectCommand
+	FaultID string
+}
+
+func preparationAsks(t *testing.T, execution *Execution, operationID string) []preparationAsk {
+	t.Helper()
+	var asks []preparationAsk
+	for _, effect := range execution.runtime.world.effectRecords() {
+		if effect.OperationID != operationID {
+			continue
+		}
+		asks = append(asks, preparationAsk{At: effect.At, Command: effect.Command, FaultID: effect.FaultID})
+	}
+	return asks
+}
+
+func heldReplica(execution *Execution, offerID, artifactID string) (domain.ArtifactReplica, bool) {
+	for _, replica := range execution.runtime.world.truthSnapshot().ArtifactReplicas {
+		if replica.OfferID == offerID && replica.ArtifactID == artifactID {
+			return replica.ArtifactReplica, true
+		}
+	}
+	return domain.ArtifactReplica{}, false
+}
 
 // driveBlueprintForEightyMinutes runs a Blueprint at the cadence a control plane
 // reconciles at, one virtual minute at a time. Preparation is a controller rather
@@ -195,16 +366,16 @@ func TestAPreparedHostIsWarmForARunThatNeverExecutedThere(t *testing.T) {
 		t.Fatalf("the third Run landed on %q, want the prepared machine", decision.SelectedOfferSnapshotID)
 	}
 	candidate := candidateDecision(t, decision, "builder")
-	if candidate.Estimates.PullSeconds.Expected != 0 || candidate.ImageLocality != domain.LocalityHot {
+	if candidate.Estimates.Stages.ImageFetch.Expected != 0 || candidate.ImageLocality != domain.LocalityHot {
 		t.Fatalf(
 			"the prepared machine was priced %.2f pull seconds and recorded %q, want zero on a host holding the image whole",
-			candidate.Estimates.PullSeconds.Expected, candidate.ImageLocality,
+			candidate.Estimates.Stages.ImageFetch.Expected, candidate.ImageLocality,
 		)
 	}
-	if candidate.Estimates.ArtifactSeconds.Expected != 0 {
+	if candidate.Estimates.Stages.ArtifactFetch.Expected != 0 {
 		t.Fatalf(
 			"the prepared machine was priced %.2f seconds of Artifact read, want zero on a host holding a checked copy",
-			candidate.Estimates.ArtifactSeconds.Expected,
+			candidate.Estimates.Stages.ArtifactFetch.Expected,
 		)
 	}
 	// Warming by preparation and warming by execution are different facts about

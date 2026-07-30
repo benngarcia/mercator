@@ -26,13 +26,25 @@ import {
   RunPhaseTimeline,
   RunStatusBadge,
 } from "@/components/runs";
-import { useRun, useRunDecision, useRunEvents } from "@/lib/api/queries";
+import { useRun, useRunDecisions, useRunEvents } from "@/lib/api/queries";
+import type { DecisionChainOf } from "@/components/runs/DecisionPanel";
+import { standingDecision } from "@/components/runs/DecisionPanel";
+import type { BookingDecision } from "@/lib/api/types";
+
+// decisionChain narrows what the API answered to the case the decision tab is
+// about: a Run that has been decided about at least once. A Run nothing has
+// answered yet gets the empty state, and the panel below never has to ask again.
+function decisionChain(decisions: BookingDecision[] | null): DecisionChainOf | null {
+  const [first, ...later] = decisions ?? [];
+  return first === undefined ? null : [first, ...later];
+}
 
 function RunDetailPage() {
   const { runId } = runsDetailRoute.useParams();
   const run = useRun(runId);
   const events = useRunEvents(runId);
-  const decision = useRunDecision(runId);
+  const decisions = useRunDecisions(runId);
+  const chain = decisionChain(decisions.data ?? null);
 
   if (run.isLoading) {
     return (
@@ -110,23 +122,25 @@ function RunDetailPage() {
           </div>
 
           <TabsContent value="decision" className="mt-0 p-5">
-            {decision.isLoading ? (
+            {decisions.isLoading ? (
               <Skeleton className="h-48 w-full" />
-            ) : decision.isError ? (
+            ) : decisions.isError ? (
               <ErrorState
-                error={decision.error}
-                onRetry={() => void decision.refetch()}
+                error={decisions.error}
+                onRetry={() => void decisions.refetch()}
               />
-            ) : decision.data ? (
+            ) : chain ? (
               <div className="flex flex-col gap-5">
-                <DecisionPanel decision={decision.data} />
+                <DecisionPanel decisions={chain} />
                 <div className="flex flex-col gap-3 border-t pt-5">
                   <span className="text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
                     Candidates
                   </span>
                   <CandidateTable
-                    candidates={decision.data.candidates ?? []}
-                    selectedOfferId={decision.data.selected_offer_snapshot_id}
+                    candidates={standingDecision(chain).candidates ?? []}
+                    selectedOfferId={
+                      standingDecision(chain).selected_offer_snapshot_id
+                    }
                   />
                 </div>
               </div>

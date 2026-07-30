@@ -13,7 +13,6 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
-	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/ociresolver"
@@ -721,7 +720,7 @@ func newHTTPTestServerWithOptions(t *testing.T, options ...Option) http.Handler 
 	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: resolver}, options...)
 }
 
-func newHTTPTestServerForAdapter(t *testing.T, provider capability.EphemeralExecutor) http.Handler {
+func newHTTPTestServerForAdapter(t *testing.T, provider fleetOfOne) http.Handler {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -757,7 +756,7 @@ func httpRevision() domain.WorkloadRevision {
 				EphemeralDisk: domain.DiskRequirement{MinBytes: 1 << 30},
 			},
 			Network:   domain.NetworkRequirements{Inbound: domain.InboundNetworkNone},
-			Placement: domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, ExpectedRuntimeSeconds: 60},
+			Placement: domain.PlacementPolicy{Class: domain.ClassStandard, ExpectedRuntimeSeconds: 60},
 			Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 120, MaxPreStartAttempts: 3},
 		},
 	}
@@ -778,6 +777,7 @@ func httpOffer(id string, now time.Time) domain.OfferSnapshot {
 			CPUMillis:          2000,
 			MemoryBytes:        2 << 30,
 			EphemeralDiskBytes: 2 << 30,
+			EphemeralDiskKnown: true,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, MaxEnvironmentBytes: 32768},

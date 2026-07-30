@@ -873,7 +873,7 @@ func orchRevision() domain.WorkloadRevision {
 				EphemeralDisk: domain.DiskRequirement{MinBytes: 1 << 30},
 			},
 			Network:   domain.NetworkRequirements{Inbound: domain.InboundNetworkNone},
-			Placement: domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, ExpectedRuntimeSeconds: 60},
+			Placement: domain.PlacementPolicy{Class: domain.ClassStandard, ExpectedRuntimeSeconds: 60},
 			Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 120, MaxPreStartAttempts: 3},
 		},
 	}
@@ -901,6 +901,7 @@ func orchOffer(id string, now time.Time) domain.OfferSnapshot {
 			CPUMillis:          2000,
 			MemoryBytes:        2 << 30,
 			EphemeralDiskBytes: 2 << 30,
+			EphemeralDiskKnown: true,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, SupportsEntrypointOverride: true, MaxEnvironmentBytes: 32768},
@@ -1123,4 +1124,28 @@ func decodeRunRequested(events []eventlog.StoredEvent) (runRequestedData, error)
 		}
 	}
 	return runRequestedData{}, fmt.Errorf("orchestrator: run requested event not found")
+}
+
+// CollectOffers is this double answering as the whole fleet. Every double that
+// states its own offers has to state its own census too: Go resolves an embedded
+// method against the embedded value, so a census inherited from the fake adapter
+// would answer about offers this double does not publish.
+func (m *mutableOfferAdapter) CollectOffers(ctx context.Context, req adapter.OfferRequest) (adapter.OfferCollection, error) {
+	offers, err := m.ListOffers(ctx, req)
+	if err != nil {
+		return adapter.OfferCollection{}, err
+	}
+	return adapter.OfferCollection{Offers: offers, Queried: []string{fake.ConnectionID}}, nil
+}
+
+// CollectOffers is this double answering as the whole fleet. Every double that
+// states its own offers has to state its own census too: Go resolves an embedded
+// method against the embedded value, so a census inherited from the fake adapter
+// would answer about offers this double does not publish.
+func (c *captureLaunchAdapter) CollectOffers(ctx context.Context, req adapter.OfferRequest) (adapter.OfferCollection, error) {
+	offers, err := c.ListOffers(ctx, req)
+	if err != nil {
+		return adapter.OfferCollection{}, err
+	}
+	return adapter.OfferCollection{Offers: offers, Queried: []string{fake.ConnectionID}}, nil
 }

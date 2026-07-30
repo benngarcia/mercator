@@ -33,11 +33,11 @@ func SolveSmallWorld(input scheduler.SchedulingInput) (ReferenceDecision, error)
 		}
 		feasible = append(feasible, referenceCandidate(input, offer))
 	}
-	// The Run's objective orders the candidates here exactly as it does in
-	// production, because which quantity a Run asked for the least of is a
-	// statement about the placement and not about either model's arithmetic.
-	policy := input.Workload.Spec.Placement
-	sort.Slice(feasible, func(i, j int) bool { return policy.Prefers(feasible[i], feasible[j]) })
+	// Candidates are ordered here exactly as they are in production: least
+	// dollars, then earliest ready, then the offer ID. What differs per Run is
+	// what its class said a second of waiting is worth, and that is already in
+	// each candidate's own score.
+	sort.Slice(feasible, func(i, j int) bool { return feasible[i].Preferred(feasible[j]) })
 	decision := ReferenceDecision{FeasibleOfferIDs: make([]string, len(feasible))}
 	for index, candidate := range feasible {
 		decision.FeasibleOfferIDs[index] = candidate.OfferSnapshotID
@@ -54,11 +54,16 @@ func validateSmallWorld(input scheduler.SchedulingInput) error {
 		return fmt.Errorf("small-world oracle requires evaluated_at and exactly one container")
 	}
 	container := input.Workload.Spec.Containers[0]
+	// A world this fleet has already measured is refused rather than modelled.
+	// The generated cases this oracle grades are single decisions in worlds with
+	// no launch behind them, so a history here would mean the generator started
+	// producing a world the reference model has no independent account of, and
+	// the two models would agree because one of them stopped having an opinion.
 	if len(container.Ports) > 0 ||
 		len(input.Workload.Spec.Resources.Accelerators) > 0 ||
 		input.Workload.Spec.Network.Download != nil ||
-		len(input.LatencyEstimates) > 0 {
-		return fmt.Errorf("small-world oracle does not support ports, accelerators, network requirements, or measured latency overrides")
+		!input.History.Empty() {
+		return fmt.Errorf("small-world oracle does not support ports, accelerators, network requirements, or a measured launch history")
 	}
 	return nil
 }
@@ -89,9 +94,23 @@ func referenceFeasible(input scheduler.SchedulingInput, offer domain.OfferSnapsh
 	if !referenceDisk(input, offer).Fits() {
 		return false
 	}
-	estimates := referenceEstimates(input, offer)
-	if maximum := input.Workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil && estimates.CostUSD.Expected > *maximum {
+	// Capacity reserved for other work, and capacity that stops being Mercator's
+	// before this Run would be off it, are refused by this model too. Both are
+	// terms of a sale rather than a price, so a model that priced them instead
+	// would rank a machine the work can never have and disagree with production
+	// about the winner for a reason belonging to neither model.
+	if !offer.Terms.Admits(input.Workload.Spec.Placement.Class) {
 		return false
+	}
+	estimates := referenceEstimates(input, offer)
+	if offer.Terms.OutlivesWindow(referenceOccupancy(input, estimates.StartSeconds)) {
+		return false
+	}
+	// A budget is not cleared by a candidate with no dollars to compare against it.
+	if maximum := input.Workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil {
+		if estimates.CostUSD.Source == domain.CostUnpriced || estimates.CostUSD.Expected > *maximum {
+			return false
+		}
 	}
 	// Only a candidate KNOWN to start late fails the latency SLO, so the bound
 	// is asked of the established part of the prediction. Seconds priced out of
@@ -110,6 +129,12 @@ func referenceQueueFull(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	return exists && len(schedule.Bookings) >= domain.RentalScheduleQueueCapacity+1
 }
 
+// referenceCapacityAvailable is this model's own answer to whether a machine may
+// be used: capacity that says it is there, or a Rental with an open position in a
+// schedule that can still say when it comes free. A schedule whose Booking is
+// past the runtime Mercator enforces projects no wait at all, so a model that
+// queued behind it would call an occupied machine immediately available and
+// disagree with production about a machine neither of them can project.
 func referenceCapacityAvailable(input scheduler.SchedulingInput, offer domain.OfferSnapshot) bool {
 	if offer.Capacity.Available {
 		return true
@@ -118,34 +143,75 @@ func referenceCapacityAvailable(input scheduler.SchedulingInput, offer domain.Of
 	return offer.Kind == domain.OfferKindStanding &&
 		exists &&
 		len(schedule.Bookings) > 0 &&
-		len(schedule.Bookings) < domain.RentalScheduleQueueCapacity+1
+		len(schedule.Bookings) <= domain.RentalScheduleQueueCapacity &&
+		!schedule.Exhausted(input.EvaluatedAt)
 }
 
 // referenceCandidate is the reference model's own candidate record: enough of
-// one for the Run's objective to rank it, and nothing else. Ranking is stated
-// against the same fields the production decision carries, so the two models
-// compare the same quantities or disagree visibly.
+// one to be ranked, and nothing else. It is stated against the same fields the
+// production decision carries, so the two models compare the same quantities or
+// disagree visibly.
+//
+// The confidences are the reference model's own, derived from its own estimates,
+// which is what keeps the uncertainty term independent. Both models now count the
+// same thing, the shortfall of the answers this candidate was scored on, and the
+// definitions that drifted apart counted different things and agreed only because
+// each was multiplied by zero.
 func referenceCandidate(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
-	return domain.CandidateDecision{
+	estimates := referenceEstimates(input, offer)
+	candidate := domain.CandidateDecision{
 		OfferSnapshotID: offer.ID,
-		Estimates:       referenceEstimates(input, offer),
-		ScoreUSD:        referenceScore(input, offer),
+		Feasible:        true,
+		Estimates:       estimates,
+		// The rate every transfer was priced at, recorded by this model for the
+		// reason the risk history below is: two models that price the same seconds
+		// off different rates agree about the answer and disagree about why, and a
+		// record only one of them keeps cannot catch it.
+		TransferRates: referenceTransferRates(input, offer),
+		Confidences:   referenceConfidences(offer, estimates),
+		// The risk history this model was given, carried through unpriced and
+		// undoubted. It is here so the two records hold the same answers: a term
+		// added to one model and not the other is the drift an independent model
+		// exists to catch.
+		Reliability: offer.Reliability,
 	}
+	weights := input.Workload.Spec.Placement.Class.Weights()
+	candidate.ScoreUSD = weights.ScoreUSD(candidate, input.Workload.Spec.Placement.ExpectedRuntimeSeconds)
+	return candidate
 }
 
-func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot) float64 {
-	estimates := referenceEstimates(input, offer)
-	weights := input.Weights
-	if weights.StartLatencyUSDPerSecond == 0 && input.Workload.Spec.Placement.Objective == domain.ObjectiveBalanced {
-		weights.StartLatencyUSDPerSecond = domain.BalancedWaitingUSDPerSecond
+// referenceConfidences is what this model says each of its own answers is worth.
+// A published capacity confidence is worth what its publisher said; a transfer
+// duration is worth what the reference content estimate concluded. The published
+// risk history is worth nothing here, because this model prices no refusal and a
+// doubt about an answer the score never reads is a charge for having answered.
+func referenceConfidences(offer domain.OfferSnapshot, estimates domain.CandidateEstimates) []domain.Confidence {
+	var stated []domain.Confidence
+	for _, answer := range []domain.Confidence{
+		{Answer: domain.AnswerCapacity, Value: offer.Capacity.Confidence},
+		{Answer: domain.StageImageFetch.ConfidenceAnswer(), Value: estimates.Stages.ImageFetch.Confidence},
+		{Answer: domain.StageUnpack.ConfidenceAnswer(), Value: estimates.Stages.Unpack.Confidence},
+		{Answer: domain.StageArtifactFetch.ConfidenceAnswer(), Value: estimates.Stages.ArtifactFetch.Confidence},
+	} {
+		if answer.Value > 0 {
+			stated = append(stated, answer)
+		}
 	}
-	score := estimates.CostUSD.Expected +
-		weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
-		weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds) +
-		weights.StartFailurePenaltyUSD*offer.Reliability.StartFailureRate +
-		weights.InterruptionPenaltyUSD*offer.Reliability.InterruptionRate +
-		weights.UncertaintyPenaltyUSD*offer.UncertaintyPenalty()
-	return math.Round(score*1_000_000) / 1_000_000
+	return stated
+}
+
+// referenceTransferRates is this model's own account of what each stage that had
+// bytes to move was priced at. It reads the paths the same way it prices them,
+// and states nothing for a stage with nothing to move.
+func referenceTransferRates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) []domain.TransferRate {
+	work, _ := input.Image.StartWork(offer.Images)
+	fetchBytes, _ := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
+	stated := []domain.TransferRate{
+		domain.TransferRateFor(domain.StageImageFetch, domain.NetworkScopeRegistry, work.TransferBytes, offer.DownloadRate(domain.NetworkScopeRegistry, input.EvaluatedAt)),
+		domain.TransferRateFor(domain.StageUnpack, "", work.UnpackBytes, domain.UnpackRate()),
+		domain.TransferRateFor(domain.StageArtifactFetch, domain.NetworkScopeObjectStore, fetchBytes, offer.DownloadRate(domain.NetworkScopeObjectStore, input.EvaluatedAt)),
+	}
+	return slices.DeleteFunc(stated, func(rate domain.TransferRate) bool { return rate.Bytes == 0 })
 }
 
 // referenceEstimates is the reference model's own account of a candidate,
@@ -155,39 +221,163 @@ func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot)
 // rather than about which silences each one happened to notice.
 func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.CandidateEstimates {
 	queue := referenceQueue(input, offer)
-	provision := referenceProvision(offer)
 	work, locality := input.Image.StartWork(offer.Images)
 	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
-	pull := referenceContent(referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()))
-	fetch := referenceContent(referenceObjectStoreSeconds(fetchBytes))
-	establishedPull := domain.Estimate{}
-	if locality != domain.LocalityUnknown {
-		establishedPull = pull
-	}
+	// The rate each transfer crosses is asked of the offer rather than assumed,
+	// and asked per path: a machine beside the object store reads a dataset faster
+	// than one across the country from it, and a model that priced both at one
+	// constant would disagree with production about every machine that published a
+	// measurement of its own.
+	registry := offer.DownloadRate(domain.NetworkScopeRegistry, input.EvaluatedAt)
+	store := offer.DownloadRate(domain.NetworkScopeObjectStore, input.EvaluatedAt)
+	storage := domain.UnpackRate()
+	imageFetch := referenceContent(
+		referenceTransferSeconds(work.TransferBytes, registry.Mbps),
+		referenceImageStageConfidence(work.TransferBytes, locality, registry.Confidence),
+	)
+	unpack := referenceContent(
+		referenceUnpackSeconds(work.UnpackBytes, storage.Mbps),
+		referenceImageStageConfidence(work.UnpackBytes, locality, storage.Confidence),
+	)
+	fetch := referenceContent(
+		referenceObjectStoreSeconds(fetchBytes, store.Mbps),
+		referenceArtifactConfidence(evidence, fetchBytes, store.Confidence),
+	)
 	establishedBytes := int64(0)
 	for _, found := range evidence {
 		if found.Locality != domain.LocalityUnknown {
 			establishedBytes += found.FetchBytes
 		}
 	}
-	establishedFetch := referenceContent(referenceObjectStoreSeconds(establishedBytes))
-	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
-	if runtime <= 0 {
-		runtime = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
+	establishedFetch := referenceContent(
+		referenceObjectStoreSeconds(establishedBytes, store.Mbps),
+		referenceArtifactConfidence(evidence, establishedBytes, store.Confidence),
+	)
+	stages := domain.LaunchStageEstimates{
+		Boot:             referenceProvision(offer),
+		ImageFetch:       imageFetch,
+		Unpack:           unpack,
+		ArtifactFetch:    fetch,
+		ContainerStart:   referenceContainerStart(),
+		ApplicationReady: referenceApplicationReady(input),
 	}
-	if runtime <= 0 {
-		runtime = 1
+	established := stages
+	established.ArtifactFetch = establishedFetch
+	// Content nobody could describe is priced and never established, which is
+	// what stops a start bound striking a candidate out for a silence.
+	if locality == domain.LocalityUnknown {
+		established.ImageFetch = domain.Estimate{}
+		established.Unpack = domain.Estimate{}
 	}
-	billed := math.Max(runtime, float64(offer.Pricing.MinimumChargeSeconds))
+	// So are seconds nobody measured the path of. A byte count an inventory
+	// answered about exactly is still divided by the same prior every silent
+	// machine is given, and a bound refusing capacity on that quotient refuses it
+	// for a number nothing on the machine ever published.
+	established.ImageFetch = referenceEstablished(established.ImageFetch, registry)
+	established.Unpack = referenceEstablished(established.Unpack, storage)
+	established.ArtifactFetch = referenceEstablished(established.ArtifactFetch, store)
+	start := referenceStart(queue, stages)
+	cost, terms, committed := referenceCost(input, offer, referenceOccupancy(input, start))
 	return domain.CandidateEstimates{
 		QueueSeconds:            queue,
-		ProvisionSeconds:        provision,
-		PullSeconds:             pull,
-		ArtifactSeconds:         fetch,
-		StartSeconds:            referenceStart(queue, provision, pull, fetch),
-		EstablishedStartSeconds: referenceStart(queue, provision, establishedPull, establishedFetch),
-		CostUSD:                 domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
+		Stages:                  stages,
+		StartSeconds:            start,
+		EstablishedStartSeconds: referenceStart(queue, established),
+		CostUSD:                 cost,
+		CostTerms:               terms,
+		Committed:               committed,
 	}
+}
+
+// referenceOccupancy is this model's own account of when a Run would hold a
+// machine and for how long. It reads the start it just derived, because what a
+// second of an already-committed interval is worth to a Run depends on whether
+// the Run is there for it.
+func referenceOccupancy(input scheduler.SchedulingInput, start domain.Estimate) domain.Occupancy {
+	maximum := float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
+	if maximum <= 0 {
+		maximum = float64(domain.DefaultMaxRuntimeSeconds)
+	}
+	// A Run that stated no expectation is priced over the bound Mercator would
+	// enforce, because that is the only statement about its length anybody made.
+	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
+	if runtime <= 0 {
+		runtime = maximum
+	}
+	return domain.Occupancy{
+		At:                input.EvaluatedAt,
+		StartSeconds:      start.Expected,
+		RuntimeSeconds:    runtime,
+		MaxRuntimeSeconds: maximum,
+	}
+}
+
+// referenceEstablished is this model's own reading of which half of a transfer
+// prediction rests on somebody's measurement. Nothing to move is nothing to wait
+// for whatever the path, and every other duration is only as established as the
+// rate that produced it.
+func referenceEstablished(estimate domain.Estimate, rate domain.LinkSpeed) domain.Estimate {
+	if estimate.Expected > 0 && !rate.Measured() {
+		return domain.Estimate{}
+	}
+	return estimate
+}
+
+// referenceCost is this model's own account of what Mercator's spend changes by
+// if this Run occupies this machine, term by term. It states the absence of a
+// price the same way production does, because that absence is what the ranking
+// reads: a model predicting zero dollars for a machine nobody quoted would call
+// it the cheapest candidate in the world and agree with nothing.
+//
+// Every term is derived here rather than borrowed. The seconds of an already-owed
+// interval are counted from this model's own occupancy, the increment a publisher
+// sells is rounded up to by this model's own arithmetic, and the acquisition fee is
+// charged by this model's own reading of what has to be allocated. A reference
+// model that called the production pricing function would agree with it about a
+// bug in the rounding, which is the one thing an independent model is for.
+func referenceCost(input scheduler.SchedulingInput, offer domain.OfferSnapshot, held domain.Occupancy) (domain.Estimate, []domain.CostTerm, domain.CommittedInterval) {
+	if !offer.Pricing.Known {
+		return domain.Estimate{Source: domain.CostUnpriced}, nil, domain.CommittedInterval{}
+	}
+	rate := offer.Pricing.RatePerSecondUSD
+	committed := domain.CommittedInterval{}
+	if until := offer.Terms.CommittedUntil; !until.IsZero() {
+		owed := until.Sub(held.Begins()).Seconds()
+		committed = domain.CommittedInterval{
+			Until:       until,
+			FromSeconds: held.StartSeconds,
+			Seconds:     math.Max(0, math.Min(held.RuntimeSeconds, owed)),
+		}
+	}
+	fee, minimum := 0.0, 0.0
+	if offer.Kind == domain.OfferKindProvisionable {
+		fee, minimum = offer.Pricing.SetupFeeUSD, float64(offer.Pricing.MinimumChargeSeconds)
+	}
+	keepAlive := held.RuntimeSeconds - committed.Seconds
+	billed := referenceBilledSeconds(math.Max(keepAlive, minimum), offer.Pricing.GranularitySeconds)
+	terms := []domain.CostTerm{
+		{Name: domain.CostTermSetupFee, USD: fee},
+		{Name: domain.CostTermCommittedRent, USD: rate * committed.Seconds},
+		{Name: domain.CostTermKeepAlive, USD: rate * keepAlive},
+		{Name: domain.CostTermIdleTail, USD: rate * (billed - keepAlive)},
+	}
+	total := 0.0
+	for _, term := range terms {
+		total += term.USD
+	}
+	return domain.Estimate{Expected: total}, terms, committed
+}
+
+// referenceBilledSeconds is this model's own account of what a publisher charges
+// for holding a machine for these seconds. A publisher that states no increment
+// bills continuously; every other one sells whole increments and bills a whole
+// one for a second of use.
+func referenceBilledSeconds(seconds float64, granularity int64) float64 {
+	if granularity <= 0 || seconds <= 0 {
+		return math.Max(0, seconds)
+	}
+	increments := math.Ceil(seconds / float64(granularity))
+	return increments * float64(granularity)
 }
 
 // referenceDisk is the reference model's own account of what this Run asks of
@@ -251,23 +441,85 @@ func referenceProvision(offer domain.OfferSnapshot) domain.Estimate {
 	return estimate
 }
 
-// referenceContent is what content that has to move costs, tail included. Half
-// again as long is this model's own pessimism about a transfer, and it is stated
-// here rather than applied to the finished sum because a start's tail is made of
-// each part's tail.
-func referenceContent(seconds float64) domain.Estimate {
-	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds * 1.5}
+// referenceContent is what content that has to move costs, tail included, and
+// what this model says that answer is worth. Half again as long is its own
+// pessimism about a transfer, stated here rather than applied to the finished sum
+// because a start's tail is made of each part's tail.
+func referenceContent(seconds, confidence float64) domain.Estimate {
+	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds * 1.5, Confidence: confidence}
 }
 
-// referenceStart assembles a start out of the parts a candidate waits on, plus
-// the second a launch costs whatever it holds.
-func referenceStart(parts ...domain.Estimate) domain.Estimate {
-	start := domain.Estimate{
-		Expected: domain.LaunchSeconds,
-		P50:      domain.LaunchSeconds,
-		P90:      domain.LaunchSeconds * 1.25,
+// referenceImageStageConfidence is what this model thinks one of its own image
+// answers is worth. Certainty belongs to a stage with nothing to do on a host
+// that said what it holds. Bytes that have to move cross a rate somebody either
+// measured or assumed, and bytes charged because a host said nothing are worth no
+// more than an assumption whatever the rate is worth.
+//
+// A stage with nothing to do on a host nobody could describe gets no confidence
+// at all, because the model stated no opinion rather than a doubtful one: the
+// same nothing is charged to every candidate, so there is nothing to be uncertain
+// between.
+func referenceImageStageConfidence(bytes int64, locality domain.LocalityState, rateConfidence float64) float64 {
+	if bytes == 0 {
+		if locality == domain.LocalityUnknown {
+			return 0
+		}
+		return 1
 	}
-	for _, part := range parts {
+	if locality == domain.LocalityUnknown {
+		return min(rateConfidence, domain.AssumedLinkConfidence)
+	}
+	return rateConfidence
+}
+
+// referenceContainerStart is what this model says asking a container runtime for
+// a process costs on a machine holding everything it needs.
+func referenceContainerStart() domain.Estimate {
+	return domain.Estimate{
+		Expected: domain.AssumedContainerStartSeconds,
+		P50:      domain.AssumedContainerStartSeconds,
+		P90:      domain.AssumedContainerStartSeconds * 1.25,
+	}
+}
+
+// referenceApplicationReady is what this model says the workload's own readiness
+// costs, which is what the workload declared and nothing else. A model with a
+// prior of its own here would disagree with production about every Run that
+// declared nothing, for a reason that is not about either model.
+func referenceApplicationReady(input scheduler.SchedulingInput) domain.Estimate {
+	seconds := input.Workload.Spec.Placement.ExpectedReadySeconds
+	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds}
+}
+
+// referenceArtifactConfidence is what this model thinks its own Artifact answer
+// is worth. A Run that reads nothing is not a Run with a doubtful read, so it
+// carries no confidence at all; a host that owes nothing is certain; and a read
+// that has to happen is worth what the path it crosses is worth, which is a
+// measurement on a host that published one and an assumption on a host that did
+// not.
+func referenceArtifactConfidence(evidence []domain.ArtifactEvidence, bytes int64, rateConfidence float64) float64 {
+	switch {
+	case len(evidence) == 0:
+		return 0
+	case bytes == 0:
+		return 1
+	default:
+		return rateConfidence
+	}
+}
+
+// referenceStart assembles a start out of the wait in front of a candidate and
+// every stage before its process is running. Readiness is left out for the reason
+// production leaves it out: the actual a start is calibrated against is the
+// container's own start moment, and readiness happens after it.
+func referenceStart(queue domain.Estimate, stages domain.LaunchStageEstimates) domain.Estimate {
+	start := queue
+	start.Confidence, start.Source, start.SampleCount = 0, "", 0
+	for _, stage := range domain.LaunchStages {
+		if stage == domain.StageApplicationReady {
+			continue
+		}
+		part := stages.Stage(stage)
 		start.Expected += part.Expected
 		start.P50 += part.P50
 		start.P90 += part.P90
@@ -276,25 +528,29 @@ func referenceStart(parts ...domain.Estimate) domain.Estimate {
 }
 
 // referenceObjectStoreSeconds is the reference model's own account of reading a
-// Run's declared inputs out of the object store. It carries no fixed overhead
-// because nothing has measured one: the only honest terms are the bytes and the
-// assumed rate they cross.
-func referenceObjectStoreSeconds(bytes int64) float64 {
-	return float64(bytes*8) / 1_000_000 / domain.DefaultObjectStoreDownloadMbps
+// Run's declared inputs out of the object store, over the path this host reaches
+// it on. It carries no fixed overhead because nothing has measured one: the only
+// honest terms are the bytes and the rate they cross.
+func referenceObjectStoreSeconds(bytes int64, mbps float64) float64 {
+	return float64(bytes*8) / 1_000_000 / mbps
 }
 
-// referenceStartWorkSeconds is the reference model's own account of how long a
-// candidate is from starting: bytes over the wire, plus bytes already here that
-// still have to be unpacked. Fetching and unpacking are separate work over
-// separate resources, so an independent model that folded them together would
-// disagree with the scheduler about every half-assembled host for a reason that
-// has nothing to do with either model.
-func referenceStartWorkSeconds(work domain.ImageWork, bandwidthMbps float64) float64 {
-	if work.None() {
+// referenceUnpackSeconds is the reference model's own account of turning bytes
+// already on the disk into a layer chain. It is stated apart from the transfer
+// above it because it is different work over a different resource, priced from a
+// rate of its own.
+func referenceUnpackSeconds(bytes int64, mbps float64) float64 {
+	return float64(bytes*8) / 1_000_000 / mbps
+}
+
+// referenceTransferSeconds is the reference model's own account of bytes crossing
+// a link onto this host, including the half second a transfer costs before any of
+// them move. A host with nothing to fetch pays neither.
+func referenceTransferSeconds(bytes int64, bandwidthMbps float64) float64 {
+	if bytes == 0 {
 		return 0
 	}
-	return float64(work.TransferBytes*8)/1_000_000/bandwidthMbps +
-		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
+	return float64(bytes*8)/1_000_000/bandwidthMbps + 0.5
 }
 
 func CheckOfferOrderIndependence(ctx context.Context, production scheduler.Scheduler, input scheduler.SchedulingInput) error {
@@ -362,8 +618,7 @@ func CheckReducedBandwidthDoesNotReduceTransferDuration(bytes int64, fasterMbps,
 	if bytes <= 0 || fasterMbps <= slowerMbps || slowerMbps <= 0 {
 		return fmt.Errorf("bandwidth metamorphism requires positive bytes and faster > slower > 0")
 	}
-	transfer := domain.ImageWork{TransferBytes: bytes}
-	if referenceStartWorkSeconds(transfer, slowerMbps) < referenceStartWorkSeconds(transfer, fasterMbps) {
+	if referenceTransferSeconds(bytes, slowerMbps) < referenceTransferSeconds(bytes, fasterMbps) {
 		return fmt.Errorf("reducing bandwidth reduced transfer duration")
 	}
 	return nil

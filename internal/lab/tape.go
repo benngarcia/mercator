@@ -21,7 +21,24 @@ const (
 	// an arrival is: the caller changed its mind, and everything Mercator was
 	// doing on that Run's behalf has to stop.
 	EventRunCancelled = "world.run.cancelled.v1"
+	// EventCapacityPreempted is a provider taking back a machine it sold on terms
+	// that let it. It is the first event here that is neither a caller's doing nor
+	// Mercator's: nothing the control plane decides causes it, nothing it does stops
+	// it, and whatever was running there is gone.
+	//
+	// The world carries it out rather than answering a command about it, which is
+	// what makes it exogenous in the strongest sense this tape has. Mercator learns
+	// of it the way it would in production: it looks, and the execution is missing
+	// and the capacity is no longer on offer.
+	EventCapacityPreempted = "world.capacity.preempted.v1"
 )
+
+// CapacityPreemption names the machine a provider is taking back. Only a Rental
+// can be named, because only a machine that already exists can be reclaimed: a
+// marketplace listing describes one nobody has allocated.
+type CapacityPreemption struct {
+	Rental string `json:"rental"`
+}
 
 // RunCancellation names the Run a caller withdrew.
 type RunCancellation struct {
@@ -51,8 +68,7 @@ type WorldEvent struct {
 }
 
 type RunArrival struct {
-	Name  string `json:"name"`
-	Group string `json:"group,omitempty"`
+	Name string `json:"name"`
 	// Workspace is the Blueprint's label for the tenant this Run belongs to.
 	// Empty is the default workspace, which is where a single-tenant fixture
 	// puts everything.
@@ -100,6 +116,15 @@ func (tape WorldTape) Validate() error {
 			}
 			if cancellation.Name == "" {
 				return fmt.Errorf("World Tape Run cancellation %q needs a name", event.ID)
+			}
+		}
+		if event.Kind == EventCapacityPreempted {
+			var preemption CapacityPreemption
+			if err := json.Unmarshal(event.Data, &preemption); err != nil {
+				return fmt.Errorf("decode World Tape capacity preemption %q: %w", event.ID, err)
+			}
+			if preemption.Rental == "" {
+				return fmt.Errorf("World Tape capacity preemption %q needs a Rental", event.ID)
 			}
 		}
 		if ids[event.ID] {

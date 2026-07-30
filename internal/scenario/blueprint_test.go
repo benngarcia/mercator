@@ -102,14 +102,14 @@ func TestOpenCatalogPreservesPlacementClassifications(t *testing.T) {
 		counts[entry.Blueprint.Classification]++
 	}
 
-	if regressions != 24 {
-		t.Errorf("regression Blueprints = %d, want 24", regressions)
+	if regressions != 59 {
+		t.Errorf("regression Blueprints = %d, want 59", regressions)
 	}
-	if counts[ClassificationGreen] != 16 {
-		t.Errorf("green Blueprints = %d, want 16", counts[ClassificationGreen])
+	if counts[ClassificationGreen] != 56 {
+		t.Errorf("green Blueprints = %d, want 56", counts[ClassificationGreen])
 	}
-	if counts[ClassificationTarget] != 8 {
-		t.Errorf("target Blueprints = %d, want 8", counts[ClassificationTarget])
+	if counts[ClassificationTarget] != 3 {
+		t.Errorf("target Blueprints = %d, want 3", counts[ClassificationTarget])
 	}
 }
 
@@ -309,6 +309,19 @@ func TestLoadBlueprintRejectsTaggedImageIdentity(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "digest-pinned") {
 		t.Fatalf("tagged image identity must fail loudly, got %v", err)
+	}
+}
+
+// TestLoadBlueprintRejectsARiskHistoryThatStatesNoRate keeps silence and a clean
+// record two worlds a fixture cannot confuse. A history is a measurement, and a
+// confidence with no rate under it measured nothing: read as two rates of zero it
+// would state a machine measured and never seen to fail, which is the claim its
+// provider never made.
+func TestLoadBlueprintRejectsARiskHistoryThatStatesNoRate(t *testing.T) {
+	_, err := LoadBlueprint("testdata/blueprints/invalid/reliability-history-without-a-rate.json")
+
+	if err == nil || !strings.Contains(err.Error(), "states no rate") {
+		t.Fatalf("a published history with nothing measured in it must fail loudly, got %v", err)
 	}
 }
 

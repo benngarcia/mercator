@@ -10,6 +10,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/gpunorm"
+	"github.com/benngarcia/mercator/internal/prediction"
 )
 
 type Scheduler interface {
@@ -17,9 +18,17 @@ type Scheduler interface {
 }
 
 type SchedulingInput struct {
-	RunID                    string
-	Workload                 domain.WorkloadRevision
-	Offers                   []domain.OfferSnapshot
+	RunID    string
+	Workload domain.WorkloadRevision
+	Offers   []domain.OfferSnapshot
+	// Collection is who was asked for those offers. It is given rather than
+	// derived, because it cannot be derived: a connection that answered with
+	// nothing publishes no offer to be counted, and neither does a connection
+	// nobody contacted. Deriving the census from the offers stated the two
+	// identically, so an operator reading a Run that nothing matched could not
+	// tell a marketplace selling no machine of that shape from a workspace whose
+	// providers were never asked.
+	Collection               domain.CollectionReport
 	Schedules                map[string]domain.RentalSchedule
 	ExcludedOfferSnapshotIDs []string
 	ModelVersion             string
@@ -32,32 +41,22 @@ type SchedulingInput struct {
 	// travels with the request for the same reason the manifest does: size and
 	// content digest are properties of the content, and a host that does not
 	// hold something cannot be asked how big it is.
-	Artifacts        []domain.ArtifactVersion
-	Weights          ScoreWeights
-	LatencyEstimates map[string]domain.Estimate
-}
-
-// ScoreWeights turns each predicted quantity into the dollars a caller says it
-// is worth. Nothing populates it in production: it is the seam calibration
-// fills in phase 4, and until something measures those exchange rates the only
-// one stated is what the balanced objective presumes waiting costs. Which
-// candidate wins is decided by the Run's objective rather than by these
-// weights, because ranking a Run that asked for the earliest start on a blended
-// dollar score would answer a question it did not ask.
-//
-// It gains no field for locality or warmth, and none should be added until the
-// weights are populated at the source. Four of these five terms are multiplied by
-// zero in every deployment, so a preference expressed as a sixth would be a
-// capability that provably changes no placement, and one expressed as a hardcoded
-// bonus outside them would be a hard constraint wearing a preference's clothes.
-// What a locality answer is worth belongs in the seconds it costs, which every
-// objective already ranks on.
-type ScoreWeights struct {
-	StartLatencyUSDPerSecond      float64
-	CompletionLatencyUSDPerSecond float64
-	StartFailurePenaltyUSD        float64
-	InterruptionPenaltyUSD        float64
-	UncertaintyPenaltyUSD         float64
+	Artifacts []domain.ArtifactVersion
+	// Supersedes is the decision this evaluation is being asked to stand in for,
+	// and SupersedesReason is why. They are inputs rather than something stamped on
+	// afterwards because the decision's identity is derived from them: two answers
+	// about one unchanged fleet at one instant are different decisions exactly
+	// because the second one replaces the first, and an identity that ignored that
+	// would give them the same ID.
+	Supersedes       string
+	SupersedesReason string
+	// History is what earlier launches of these candidates really spent, indexed
+	// by what recurs about them. It replaces a map of measured estimates keyed by
+	// offer snapshot ID: nothing in production ever wrote that map, and nothing
+	// could have written it honestly, because half the backends in the tree mint a
+	// fresh snapshot ID for every search of one machine and a store keyed on one
+	// would report a key that cannot grow as candidate-specific evidence.
+	History prediction.History
 }
 
 type deterministicScheduler struct{}
@@ -73,9 +72,15 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 	if input.ModelVersion == "" {
 		input.ModelVersion = "latency-v1"
 	}
-	if input.Weights.StartLatencyUSDPerSecond == 0 && input.Workload.Spec.Placement.Objective == domain.ObjectiveBalanced {
-		input.Weights.StartLatencyUSDPerSecond = domain.BalancedWaitingUSDPerSecond
+	// A class Mercator cannot price is refused rather than ranked. CreateRun
+	// already turns such a Run away, so reaching here means a revision was stored
+	// by something that did not ask: scoring it would rank every candidate on
+	// price alone and record a reason naming a class nothing declared.
+	class := input.Workload.Spec.Placement.Class
+	if !class.Known() {
+		return domain.BookingDecision{}, fmt.Errorf("scheduler: workload states service class %q, which Mercator cannot price", class)
 	}
+	weights := class.Weights()
 
 	decision := domain.BookingDecision{
 		RunID:                  input.RunID,
@@ -83,46 +88,46 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 		EvaluatedAt:            input.EvaluatedAt.UTC(),
 		ModelVersion:           input.ModelVersion,
 		Policy:                 input.Workload.Spec.Placement,
-		CollectionReport: domain.CollectionReport{
-			ConnectionsQueried: connectionIDs(input.Offers),
-		},
-		Candidates: make([]domain.CandidateDecision, 0, len(input.Offers)),
+		Weights:                weights,
+		Supersedes:             input.Supersedes,
+		SupersedesReason:       input.SupersedesReason,
+		CollectionReport:       input.Collection,
+		Candidates:             make([]domain.CandidateDecision, 0, len(input.Offers)),
 	}
 
 	bestIndex := -1
 	offers := sortedOffers(input.Offers)
 	for _, offer := range offers {
-		candidate := evaluateOffer(input, offer)
+		candidate := evaluateOffer(input, weights, offer)
 		decision.Candidates = append(decision.Candidates, candidate)
 		if !candidate.Feasible {
 			continue
 		}
-		if bestIndex == -1 || decision.Policy.Prefers(candidate, decision.Candidates[bestIndex]) {
+		if bestIndex == -1 || candidate.Preferred(decision.Candidates[bestIndex]) {
 			bestIndex = len(decision.Candidates) - 1
 		}
 	}
 	if bestIndex >= 0 {
 		decision.SelectedOfferSnapshotID = decision.Candidates[bestIndex].OfferSnapshotID
-		decision.SelectionReasonCodes = []string{"FEASIBLE", decision.Policy.SelectionReason()}
+		decision.SelectionReasonCodes = []string{"FEASIBLE", class.SelectionReason()}
 		decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, selectionReason(decision.Candidates[bestIndex].Disposition))
+		if code := pricedRankingReason(decision.Candidates, bestIndex); code != "" {
+			decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, code)
+		}
 		if code := startSLOReason(input.Workload.Spec.Placement.MaxP90StartSeconds, decision.Candidates[bestIndex]); code != "" {
 			decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, code)
 		}
 	} else {
 		decision.SelectionReasonCodes = []string{"NO_FEASIBLE_OFFERS"}
 	}
-	id, err := domain.CanonicalHash(struct {
-		RunID       string
-		Revision    string
-		EvaluatedAt time.Time
-		Model       string
-		Candidates  []domain.CandidateDecision
-		SelectedID  string
-	}{input.RunID, input.Workload.Digest, input.EvaluatedAt.UTC(), input.ModelVersion, decision.Candidates, decision.SelectedOfferSnapshotID})
+	// The identity is derived from the decision itself and not from the search that
+	// produced it, so that any reader holding the record can re-derive it and get
+	// the same answer. See domain.BookingDecision.Identity.
+	id, err := decision.Identity()
 	if err != nil {
 		return domain.BookingDecision{}, err
 	}
-	decision.ID = "dec_" + id[len("sha256:"):24]
+	decision.ID = id
 	if bestIndex >= 0 {
 		booking, err := bookingForDecision(input, decision.ID, offers[bestIndex])
 		if err != nil {
@@ -196,24 +201,27 @@ func runtimeBounds(workload domain.WorkloadRevision) (float64, float64) {
 	return expectedRuntime, maxRuntime
 }
 
-func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
+// evaluateOffer is one candidate: what it was found holding, what that leaves it
+// to do, whether it may be used at all, and what it is worth to a Run of this
+// class. The score is computed last and from the record, never from the offer:
+// every quantity it multiplies is a field of the candidate below, which is what
+// lets a reader re-derive it and what lets the Lab police a term whose input
+// nobody wrote down.
+func evaluateOffer(input SchedulingInput, weights domain.ScoreWeights, offer domain.OfferSnapshot) domain.CandidateDecision {
 	work := estimateCandidate(input, offer)
 	rejections := feasibilityViolations(input, offer, work)
-	estimates := work.estimates
-	score := estimates.CostUSD.Expected +
-		input.Weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
-		input.Weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds) +
-		input.Weights.StartFailurePenaltyUSD*offer.Reliability.StartFailureRate +
-		input.Weights.InterruptionPenaltyUSD*offer.Reliability.InterruptionRate +
-		input.Weights.UncertaintyPenaltyUSD*offer.UncertaintyPenalty()
-	if len(rejections) > 0 {
-		score = 0
-	}
-	return domain.CandidateDecision{
-		OfferSnapshotID:  offer.ID,
-		ConnectionID:     offer.ConnectionID,
-		AdapterType:      offer.AdapterType,
-		NativeRef:        offer.NativeRef,
+	candidate := domain.CandidateDecision{
+		OfferSnapshotID: offer.ID,
+		ConnectionID:    offer.ConnectionID,
+		AdapterType:     offer.AdapterType,
+		NativeRef:       offer.NativeRef,
+		// What this candidate is, as opposed to what this listing was called. Every
+		// stage below is about to be predicted from what earlier launches of the same
+		// thing spent, and this is the account of what Mercator took the same thing to
+		// be: derived from the facts the backend published rather than from the ID it
+		// numbered the listing with, which recurs for one backend and never for
+		// another.
+		Candidate:        domain.CandidateIdentityOf(offer, input.Image.Digest),
 		Disposition:      candidateDisposition(input, offer),
 		Feasible:         len(rejections) == 0,
 		Rejections:       rejections,
@@ -226,10 +234,70 @@ func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.Can
 		// a cache of the same name in another workspace is a different cache, and
 		// it must never read as warmth on this Run's record.
 		CacheEvidence: domain.CacheWarmth(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches),
-		Disk:          work.disk,
-		Estimates:     estimates,
-		ScoreUSD:      round(score, 6),
+		// What this machine's publisher says it does to work: refuse to start it,
+		// or drop it once it is running. Recorded and not scored, because pricing a
+		// refusal needs a probability times a predicted start and nothing here
+		// predicts either. It is recorded for the same reason the cache warmth above
+		// is: this is the account of what was known when the placement was taken,
+		// and a fact the record omits is one the slice that prices it cannot be
+		// held to.
+		Reliability:    offer.Reliability,
+		Disk:           work.disk,
+		RentalSchedule: scheduleEvidence(input, offer),
+		Estimates:      work.estimates,
+		TransferRates:  work.rates,
+		Confidences:    confidences(offer, work.estimates),
 	}
+	candidate.ScoreUSD = weights.ScoreUSD(candidate, input.Workload.Spec.Placement.ExpectedRuntimeSeconds)
+	return candidate
+}
+
+// confidences is what each answer this candidate was scored on is worth, in the
+// order the placement asked the questions. Only an answer whose source stated a
+// confidence is recorded: zero means nobody said, and recording a silence as
+// worthlessness would charge every candidate for questions this Run never asked.
+//
+// Every answer here is one the score reads: the capacity claim decides whether
+// this machine is for sale at all, and the two transfer durations are terms of
+// the start it is priced on. The reliability history is read by nothing, and the
+// doubt about it was listed here anyway. Because a stated confidence is charged
+// and a silence is not, the only thing a published history could do to a score
+// was penalise its publisher for having published one: a machine measured and
+// never seen to fail lost the Run to an identical machine nobody had measured,
+// and to a machine whose provider was certain it refuses every start. Doubt about
+// an answer the score does not use prices the absence of a price, and what a
+// refusal is worth belongs to the term that predicts a redo.
+//
+// Which answers those are is declared by domain.ScoredAnswers rather than by this
+// list, and safety.doubt_only_the_answers_the_score_reads holds every recorded
+// decision to the declaration. The rule stated in a comment beside the one
+// producer is the shape the reliability entry survived a phase in.
+func confidences(offer domain.OfferSnapshot, estimates domain.CandidateEstimates) []domain.Confidence {
+	var stated []domain.Confidence
+	for _, answer := range []domain.Confidence{
+		{Answer: domain.AnswerCapacity, Value: offer.Capacity.Confidence},
+		{Answer: domain.StageImageFetch.ConfidenceAnswer(), Value: estimates.Stages.ImageFetch.Confidence},
+		{Answer: domain.StageUnpack.ConfidenceAnswer(), Value: estimates.Stages.Unpack.Confidence},
+		{Answer: domain.StageArtifactFetch.ConfidenceAnswer(), Value: estimates.Stages.ArtifactFetch.Confidence},
+	} {
+		if answer.Value > 0 {
+			stated = append(stated, answer)
+		}
+	}
+	return stated
+}
+
+// scheduleEvidence is the Broker state this candidate was weighed against. A
+// Rental with no Bookings on it records none: the queue estimate already says
+// there is nothing to wait for, and an empty schedule offered as evidence reads
+// as a queue that was measured rather than one that does not exist.
+func scheduleEvidence(input SchedulingInput, offer domain.OfferSnapshot) *domain.ScheduleEvidence {
+	schedule, scheduled := input.Schedules[offer.RentalID]
+	if !scheduled || len(schedule.Bookings) == 0 {
+		return nil
+	}
+	evidence := schedule.Evidence(input.EvaluatedAt)
+	return &evidence
 }
 
 func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, work candidateWork) []domain.Violation {
@@ -244,6 +312,9 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 			Required: "offer not rejected by an earlier attempt",
 			Offered:  offer.ID,
 			Message:  "Offer was rejected as unavailable by an earlier launch attempt.",
+			// What this machine refused was a launch, and what it said was that it
+			// had nothing to run it on. That is capacity somebody else is spending.
+			EndedByWaiting: true,
 		})
 	}
 	if !offer.Lane.Valid() {
@@ -268,10 +339,10 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.max_containers", Required: len(workload.Spec.Containers), Offered: offer.Capabilities.Container.MaxContainers, Message: "Offer cannot run the required number of containers."})
 	}
 	if !offer.Capacity.Available && !queueable(input, offer) {
-		violations = append(violations, domain.Violation{Code: "CAPACITY_UNAVAILABLE", Path: "capacity.available", Required: true, Offered: false, Message: "Offer capacity evidence says the capacity is not currently available."})
+		violations = append(violations, domain.Violation{Code: "CAPACITY_UNAVAILABLE", Path: "capacity.available", Required: true, Offered: false, Message: "Offer capacity evidence says the capacity is not currently available.", EndedByWaiting: true})
 	}
 	if schedule, ok := input.Schedules[offer.RentalID]; ok && len(schedule.Bookings) >= domain.RentalScheduleQueueCapacity+1 {
-		violations = append(violations, domain.Violation{Code: "QUEUE_CAPACITY_EXCEEDED", Path: "rental_schedule.bookings", Required: domain.RentalScheduleQueueCapacity + 1, Offered: len(schedule.Bookings), Message: "Rental Schedule has no open Booking position."})
+		violations = append(violations, domain.Violation{Code: "QUEUE_CAPACITY_EXCEEDED", Path: "rental_schedule.bookings", Required: domain.RentalScheduleQueueCapacity + 1, Offered: len(schedule.Bookings), Message: "Rental Schedule has no open Booking position.", EndedByWaiting: true})
 	}
 	if !offer.Capabilities.Container.SupportsDigestRefs {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.supports_digest_refs", Required: true, Offered: false, Message: "Offer must support digest-pinned images."})
@@ -291,7 +362,23 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	// asking about the floor alone lets a machine with nowhere to put forty
 	// gigabytes be selected and then refuse the launch with nothing in the record
 	// naming disk.
-	if !work.disk.Fits() {
+	//
+	// A machine that never measured its room is refused too, and not for the same
+	// thing. Landing content on a disk nobody looked at is a launch nobody can
+	// promise, so the refusal stands, but it names a fact nobody published rather
+	// than a shortfall somebody measured. Read as a shortfall it said the fleet
+	// can never hold this work on the strength of one failed statfs.
+	switch {
+	case !work.disk.FreeBytesKnown:
+		violations = append(violations, domain.Violation{
+			Code:     "UNKNOWN_FACT",
+			Path:     "resources.ephemeral_disk",
+			Required: work.disk.RequiredBytes(),
+			Offered:  "unknown",
+			Message:  "Offer does not say how much room this machine has left.",
+			Unstated: true,
+		})
+	case !work.disk.Fits():
 		violations = append(violations, domain.Violation{
 			Code:     "RESOURCE_INSUFFICIENT",
 			Path:     "resources.ephemeral_disk",
@@ -311,16 +398,61 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	// mistaken for a hard constraint. The transfer estimate records the silence
 	// with no confidence, so the decision says which it was.
 	if req := workload.Spec.Network.Download; req != nil {
-		if !downloadRequirementSatisfied(input.EvaluatedAt, *req, offer.Network.Download) {
-			code := "NETWORK_FACT_UNSATISFIED"
-			if len(offer.Network.Download) == 0 && !req.AllowUnknown {
-				code = "UNKNOWN_FACT"
-			}
-			violations = append(violations, domain.Violation{Code: code, Path: "network.download", Required: req.MinP10Mbps, Offered: "unknown_or_insufficient", Message: "Offer lacks a compatible registry download p10 fact."})
-		}
+		violations = append(violations, downloadFloorViolations(input.EvaluatedAt, *req, offer.Network)...)
 	}
 	if !offer.Pricing.Known && !workload.Spec.Placement.AllowUnknownPricing {
 		violations = append(violations, domain.Violation{Code: "UNKNOWN_FACT", Path: "pricing", Required: "known", Offered: "unknown", Message: "Policy does not allow unknown pricing."})
+	}
+	// Capacity its provider may take back is refused to work whose class does not
+	// permit interruption. It is decided here, before the work starts, because that
+	// is the only moment there is a decision to make: nothing Mercator holds
+	// survives a machine being reclaimed, so by the time the provider says so the
+	// choice has been made for it.
+	//
+	// It refuses the machine for what it is rather than for what it is doing, so no
+	// amount of waiting ends it and the fleet answer counts this candidate among the
+	// machines that can never hold this Run.
+	if offer.Reclaimable && !workload.Spec.Placement.Class.Admission().PermitsInterruption {
+		violations = append(violations, domain.Violation{
+			Code:     "INTERRUPTION_NOT_PERMITTED",
+			Path:     "reclaimable",
+			Required: false,
+			Offered:  true,
+			Message:  "Offer capacity can be taken back by its provider, and this Run's class does not permit interruption.",
+		})
+	}
+	// Capacity somebody holds for a particular kind of work is refused to every
+	// other kind rather than priced for it. Reserved capacity is a statement about
+	// what the machine is for, so no amount of waiting makes a batch sweep eligible
+	// for a machine kept for work somebody is watching, and pricing it there would
+	// rank a machine the sweep can never have.
+	if !offer.Terms.Admits(workload.Spec.Placement.Class) {
+		violations = append(violations, domain.Violation{
+			Code:     "CLASS_NOT_ELIGIBLE",
+			Path:     "capacity_terms.eligible_classes",
+			Required: offer.Terms.EligibleClasses,
+			Offered:  workload.Spec.Placement.Class,
+			Message:  "This capacity is reserved for other service classes, and this Run's class is not one of them.",
+		})
+	}
+	// Capacity that stops being Mercator's at a known moment is refused work that
+	// could still be holding it then. The bound is the runtime Mercator enforces
+	// rather than the one the Run expects, because the expectation is a guess and
+	// the bound is what Mercator would actually allow: admitting on the guess puts
+	// work on a machine that goes away underneath it whenever the guess is short.
+	//
+	// It is a refusal rather than a price because there is nothing to trade off. A
+	// window that closes mid-Run does not make the work more expensive, it makes it
+	// not happen, and a Run that waits longer for this machine is worse off rather
+	// than better.
+	if offer.Terms.OutlivesWindow(work.occupancy) {
+		violations = append(violations, domain.Violation{
+			Code:     "AVAILABILITY_WINDOW_CLOSES",
+			Path:     "capacity_terms.available_until",
+			Required: offer.Terms.AvailableUntil,
+			Offered:  work.occupancy.LatestEnd(),
+			Message:  "This capacity stops being available before the Run would have to be off it.",
+		})
 	}
 	if exceedsStartSLO(workload.Spec.Placement.MaxP90StartSeconds, estimates.EstablishedStartSeconds) {
 		violations = append(violations, domain.Violation{
@@ -331,8 +463,19 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 			Message:  "Offer is known to start later than the requested p90 start latency, before any content nobody could describe is priced.",
 		})
 	}
-	if workload.Spec.Placement.MaxExpectedCostUSD != nil && estimates.CostUSD.Expected > *workload.Spec.Placement.MaxExpectedCostUSD {
-		violations = append(violations, domain.Violation{Code: "COST_LIMIT_EXCEEDED", Path: "placement.max_expected_cost_usd", Required: *workload.Spec.Placement.MaxExpectedCostUSD, Offered: estimates.CostUSD.Expected, Message: "Offer exceeds the requested maximum expected cost."})
+	// A bound on dollars is not cleared by a candidate that has no dollars. An
+	// unpriced machine reported a cost of zero, so it passed every budget a Run
+	// could state, which is the same fabrication as pricing it at nothing: the Run
+	// asked to spend no more than a number, and nobody can say what this spends.
+	if maximum := workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil {
+		offered := any(estimates.CostUSD.Expected)
+		exceeded := estimates.CostUSD.Expected > *maximum
+		if estimates.CostUSD.Source == domain.CostUnpriced {
+			offered, exceeded = domain.CostUnpriced, true
+		}
+		if exceeded {
+			violations = append(violations, domain.Violation{Code: "COST_LIMIT_EXCEEDED", Path: "placement.max_expected_cost_usd", Required: *maximum, Offered: offered, Message: "Offer exceeds the requested maximum expected cost."})
+		}
 	}
 	return violations
 }
@@ -381,7 +524,16 @@ type candidateWork struct {
 	estimates domain.CandidateEstimates
 	image     domain.LocalityState
 	artifacts []domain.ArtifactEvidence
-	disk      domain.DiskDemand
+	// rates is the throughput every stage that had bytes to move was priced at.
+	// It travels with the estimates because it is where they came from: one
+	// LinkSpeed produced the seconds and this account of them.
+	rates []domain.TransferRate
+	disk  domain.DiskDemand
+	// occupancy is when this Run would hold the machine and for how long, which
+	// is what the price above was computed over and what the terms of the sale
+	// are checked against. It travels with the estimates because it is derived
+	// from one of them: the start.
+	occupancy domain.Occupancy
 }
 
 // contentWork is what one kind of content costs this candidate and how much of
@@ -395,24 +547,143 @@ type contentWork struct {
 
 func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candidateWork {
 	queue := queueEstimate(input, offer)
-	provision := provisionEstimate(input, offer)
+	machine := provisionEstimate(input, offer)
 	content := contentFor(input, offer)
-	image := pullEstimate(input.Image, offer, content, input.ModelVersion)
-	inputs := artifactEstimate(offer.Artifacts, content, input.ModelVersion)
+	registry, store, storage := offer.DownloadRate(domain.NetworkScopeRegistry, input.EvaluatedAt), offer.DownloadRate(domain.NetworkScopeObjectStore, input.EvaluatedAt), domain.UnpackRate()
+	fetch, unpack := imageEstimates(input.Image, offer, content, registry, storage, input.ModelVersion)
+	inputs := artifactEstimate(offer.Artifacts, content, store, input.ModelVersion)
+	container := containerStartEstimate(input.ModelVersion)
+	ready := applicationReadyEstimate(input)
+	stages := domain.LaunchStageEstimates{
+		Acquisition:      machine.acquisition,
+		Boot:             machine.boot,
+		AgentReady:       machine.agentReady,
+		ImageFetch:       fetch.predicted,
+		Unpack:           unpack.predicted,
+		ArtifactFetch:    inputs.predicted,
+		ContainerStart:   container,
+		ApplicationReady: ready,
+	}
+	established := stages
+	established.ImageFetch = fetch.established
+	established.Unpack = unpack.established
+	established.ArtifactFetch = inputs.established
+	// What this fleet has watched this candidate do, wherever it has watched
+	// anything, replaces what it assumed. Both halves go through the same
+	// predictor: a measurement is established by definition, so a stage answered
+	// from history is as good in the bound as it is in the score. No stage priced
+	// from bytes is answerable that way, so the discount the established estimate
+	// carries above is never one a measurement of some other launch swallowed.
+	answer := stagePredictor(input, offer)
+	stages, established = stages.Answered(answer), established.Answered(answer)
+	start := startEstimate(input, queue, stages)
+	// The price is asked last, of the start this launch was just predicted to
+	// have. What a machine costs depends on when the Run gets it: the seconds a
+	// Run spends of an interval Mercator already owes begin where the wait in
+	// front of it ends, and a model that priced from the decision's own moment
+	// would sell one committed hour to everything queued on the machine.
+	held := occupancy(input, start)
+	cost, terms, committed := costEstimate(input, offer, held)
 	return candidateWork{
 		estimates: domain.CandidateEstimates{
 			QueueSeconds:            queue,
-			ProvisionSeconds:        provision,
-			PullSeconds:             image.predicted,
-			ArtifactSeconds:         inputs.predicted,
-			StartSeconds:            startEstimate(input, offer, queue, provision, image.predicted, inputs.predicted),
-			EstablishedStartSeconds: startEstimate(input, offer, queue, provision, image.established, inputs.established),
-			CostUSD:                 costEstimate(input, offer),
+			Stages:                  stages,
+			StartSeconds:            start,
+			EstablishedStartSeconds: startEstimate(input, queue, established),
+			CostUSD:                 cost,
+			CostTerms:               terms,
+			Committed:               committed,
 		},
 		image:     content.locality,
 		artifacts: content.evidence,
+		rates:     transferRates(content, registry, storage, store),
 		disk:      content.disk,
+		occupancy: held,
 	}
+}
+
+// stagePredictor is this candidate's launch put to the fleet's own history:
+// every stage is answered by the narrowest level holding measured launches of
+// this candidate, of this provider in this place, or of this provider, and a
+// stage nothing has ever measured keeps the answer the rest of this file derived
+// and says that is what it is.
+//
+// The prior is named on the record rather than left blank because it is a real
+// claim about the evidence: a published boot window, a rate over a byte count,
+// and a workload's own declaration are all somebody's prediction, and none of
+// them is a launch anyone watched. A reader cannot tell the two apart from the
+// seconds, and a calibration reading the record has to know which answers it is
+// allowed to grade.
+func stagePredictor(input SchedulingInput, offer domain.OfferSnapshot) func(domain.LaunchStage, domain.Estimate) domain.Estimate {
+	identity := domain.CandidateIdentityOf(offer, input.Image.Digest)
+	return func(stage domain.LaunchStage, prior domain.Estimate) domain.Estimate {
+		if answer := input.History.Predict(identity, stage); answer.Answered() {
+			return answer.Estimate(input.ModelVersion)
+		}
+		prior.Level = domain.LevelPrior
+		return prior
+	}
+}
+
+// transferRates is what every stage of this launch that had bytes to move was
+// priced at, in the order a launch moves them. A stage with nothing to move
+// records nothing: there was no transfer, so there is no rate it was priced from,
+// and an entry would name a number the decision never divided by.
+//
+// Every stage that did have bytes to move records one, with no exception, which is
+// what lets a rule about who says so read every transfer this fleet ever priced.
+// The exception this function carried for a while was a stage the fleet's own
+// history had answered, and suppressing the rate was the wrong half of that
+// collision to give way: seconds measured over one launch's byte count are not a
+// prediction of another launch's, so the estimator no longer answers a stage
+// priced from bytes at all and this account is complete again.
+func transferRates(content candidateContent, registry, storage, store domain.LinkSpeed) []domain.TransferRate {
+	priced := []domain.TransferRate{
+		domain.TransferRateFor(domain.StageImageFetch, domain.NetworkScopeRegistry, content.image.TransferBytes, registry),
+		// Assembly crosses no link, so it names no scope: the rate is a storage
+		// rate, and a reader checking it against a measurement of a path would be
+		// checking it against a measurement of something else.
+		domain.TransferRateFor(domain.StageUnpack, "", content.image.UnpackBytes, storage),
+		domain.TransferRateFor(domain.StageArtifactFetch, domain.NetworkScopeObjectStore, content.fetch, store),
+	}
+	return slices.DeleteFunc(priced, func(rate domain.TransferRate) bool { return rate.Bytes == 0 })
+}
+
+// containerStartEstimate is what asking this machine's container runtime for a
+// process costs. It is Mercator's own stated assumption rather than anything a
+// provider published, because no offer in any catalog says how long its runtime
+// takes to create a container.
+func containerStartEstimate(modelVersion string) domain.Estimate {
+	return domain.Estimate{
+		Expected:     domain.AssumedContainerStartSeconds,
+		P50:          domain.AssumedContainerStartSeconds,
+		P90:          domain.AssumedContainerStartSeconds * 1.25,
+		Source:       "scheduler",
+		ModelVersion: modelVersion,
+	}
+}
+
+// applicationReadyEstimate is how long the workload said it takes to become
+// ready once its process is running. Only the application knows: readiness is
+// its own semantics, and no machine fact and no provider claim predicts it.
+//
+// A Run that declared nothing is predicted nothing, and the record says which
+// silence that was. A prior of Mercator's here would be a number invented for
+// every workload in the fleet, and unlike a link speed there is no shared
+// physical thing it could be an assumption about.
+func applicationReadyEstimate(input SchedulingInput) domain.Estimate {
+	seconds := input.Workload.Spec.Placement.ExpectedReadySeconds
+	estimate := domain.Estimate{
+		Expected:     seconds,
+		P50:          seconds,
+		P90:          seconds,
+		Source:       "workload.expected_ready",
+		ModelVersion: input.ModelVersion,
+	}
+	if seconds <= 0 {
+		estimate.Source = "workload_states_none"
+	}
+	return estimate
 }
 
 // candidateContent is everything this Run's content amounts to on one
@@ -439,9 +710,10 @@ func contentFor(input SchedulingInput, offer domain.OfferSnapshot) candidateCont
 		fetch:    fetch,
 		evidence: evidence,
 		disk: domain.DiskDemand{
-			FreeBytes:     offer.Resources.EphemeralDiskBytes,
-			ReservedBytes: input.Workload.Spec.Resources.EphemeralDisk.MinBytes,
-			LandBytes:     work.TransferBytes + fetch + caches,
+			FreeBytes:      offer.Resources.EphemeralDiskBytes,
+			FreeBytesKnown: offer.Resources.EphemeralDiskKnown,
+			ReservedBytes:  input.Workload.Spec.Resources.EphemeralDisk.MinBytes,
+			LandBytes:      work.TransferBytes + fetch + caches,
 			EstablishedLandBytes: enumerated(work.TransferBytes, locality != domain.LocalityUnknown) +
 				establishedFetchBytes(evidence) +
 				enumerated(caches, offer.Caches.Known),
@@ -477,22 +749,60 @@ func queueEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Est
 	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds, Source: "offer", ModelVersion: input.ModelVersion}
 }
 
-// provisionEstimate is what the provider published about bringing this machine
-// up, carried through as published. A quantile the provider did not state is its
-// expectation restated: an unstated p90 is not a promise of a short tail, and
-// replacing a published one with a spread of this model's own would enforce the
-// Run's start bound against a quantile Mercator made up while the provider's own
-// answer sat unread on the offer.
-func provisionEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Estimate {
-	estimate := domain.Estimate{Source: "offer", ModelVersion: input.ModelVersion}
+// machineEstimates is what this candidate is predicted to spend becoming a
+// machine Mercator can run a container on: the provider allocating it, the
+// machine booting, and Mercator's node runtime enrolling.
+type machineEstimates struct {
+	acquisition domain.Estimate
+	boot        domain.Estimate
+	agentReady  domain.Estimate
+}
+
+// provisionEstimate is what somebody published about each stage of bringing this
+// machine up. A quantile the provider did not state is its expectation restated:
+// an unstated p90 is not a promise of a short tail, and replacing a published one
+// with a spread of this model's own would enforce the Run's start bound against a
+// quantile Mercator made up while the provider's own answer sat unread on the
+// offer.
+//
+// The published claim is read as a claim about boot, because that is what its
+// only publisher in this tree calls it: Shadeform states a min and max
+// boot_in_sec for an instance type and nothing else about getting one. Acquiring
+// the machine and enrolling Mercator's runtime on it are published by nobody, so
+// they are predicted as nothing and the record says whose silence that was. A
+// prior of Mercator's for either would be a number invented for every listing in
+// every catalog, and a share of the published claim would attribute a provider's
+// boot window to stages the provider never mentioned.
+//
+// The consequence is a machine prediction that is short of the truth by whatever
+// acquisition and enrollment really take, which is a gap the record now makes
+// visible rather than hiding inside one number: each stage has its own actual,
+// and the calibration slice reads them.
+func provisionEstimate(input SchedulingInput, offer domain.OfferSnapshot) machineEstimates {
+	// A machine that already exists and already runs Mercator's runtime owes none
+	// of these three stages, which is a different answer from nobody having
+	// published them and reads differently on the record.
+	source := "unpublished"
+	if offer.Kind != domain.OfferKindProvisionable {
+		source = "machine_exists"
+	}
+	machine := machineEstimates{
+		acquisition: domain.Estimate{Source: source, ModelVersion: input.ModelVersion},
+		boot:        domain.Estimate{Source: source, ModelVersion: input.ModelVersion},
+		agentReady:  domain.Estimate{Source: source, ModelVersion: input.ModelVersion},
+	}
 	if offer.Kind != domain.OfferKindProvisionable || offer.Provisioning == nil {
-		return estimate
+		return machine
 	}
 	published := *offer.Provisioning
-	estimate.Expected = published.Expected
-	estimate.P50 = orExpected(published.P50, published.Expected)
-	estimate.P90 = orExpected(published.P90, published.Expected)
-	return estimate
+	machine.boot = domain.Estimate{
+		Expected:     published.Expected,
+		P50:          orExpected(published.P50, published.Expected),
+		P90:          orExpected(published.P90, published.Expected),
+		Source:       "offer",
+		ModelVersion: input.ModelVersion,
+	}
+	return machine
 }
 
 func orExpected(quantile, expected float64) float64 {
@@ -502,33 +812,31 @@ func orExpected(quantile, expected float64) float64 {
 	return quantile
 }
 
-// startEstimate assembles when this candidate is ready out of the parts it is
-// waiting on, plus the second every launch costs whatever it holds. Quantiles
-// add rather than being scaled off the expectation, because each part's tail
-// belongs to whoever published it: a provider that states an eighteen-minute p90
-// provisioning has said what its own tail is. Summing them is deliberately
-// pessimistic about the joint distribution, which nothing here models, and
-// pessimism about a bound the caller set is the safe direction.
+// startEstimate assembles when this candidate's process begins out of the wait
+// in front of it and the stages between the launch being taken and the container
+// holding a process. Quantiles add rather than being scaled off the expectation,
+// because each part's tail belongs to whoever published it: a provider that
+// states an eighteen-minute p90 provisioning has said what its own tail is.
+// Summing them is deliberately pessimistic about the joint distribution, which
+// nothing here models, and pessimism about a bound the caller set is the safe
+// direction.
 //
-// A measured latency estimate for this offer replaces the derived answer
-// outright, and replaces both halves of it: a sample is a measurement about this
-// machine whatever anyone could enumerate, so there is no unestablished part of
-// it to discount.
-func startEstimate(input SchedulingInput, offer domain.OfferSnapshot, parts ...domain.Estimate) domain.Estimate {
-	if measured, ok := input.LatencyEstimates[offer.ID]; ok && measured.SampleCount > 0 {
-		if measured.ModelVersion == "" {
-			measured.ModelVersion = input.ModelVersion
-		}
-		return measured
-	}
-	start := domain.Estimate{
-		Expected:     domain.LaunchSeconds,
-		P50:          domain.LaunchSeconds,
-		P90:          domain.LaunchSeconds * 1.25,
-		Source:       "scheduler",
-		ModelVersion: input.ModelVersion,
-	}
-	for _, part := range parts {
+// Application readiness is predicted and is not in this sum, because a start is
+// a moment somebody observed and readiness is a later one. The actual this
+// prediction is calibrated against is the container's own start, so folding a
+// stage that happens after it into the same number would compare a prediction
+// with an actual of something else.
+//
+// The sum is the only way this number is ever reached. What replaced it was a
+// measured start for this offer snapshot ID, which nothing ever wrote and which
+// would have been wrong if anything had: a start latency is the sum of seven
+// stages whose costs depend on what the machine happens to hold now, so the
+// measurement of a machine that pulled forty gigabytes last week would be served
+// back as the prediction for the same machine now holding the image. History
+// answers each stage on its own terms instead, and this adds them up.
+func startEstimate(input SchedulingInput, queue domain.Estimate, stages domain.LaunchStageEstimates) domain.Estimate {
+	start := domain.Estimate{Source: "scheduler", ModelVersion: input.ModelVersion}
+	for _, part := range append([]domain.Estimate{queue}, startingStages(stages)...) {
 		start.Expected += part.Expected
 		start.P50 += part.P50
 		start.P90 += part.P90
@@ -536,31 +844,141 @@ func startEstimate(input SchedulingInput, offer domain.OfferSnapshot, parts ...d
 	return start
 }
 
-func costEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Estimate {
-	seconds := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
-	if seconds <= 0 {
-		seconds = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
+// startingStages are the seven stages a launch goes through before its process
+// is running, which is the moment a start latency is measured to.
+func startingStages(stages domain.LaunchStageEstimates) []domain.Estimate {
+	parts := make([]domain.Estimate, 0, len(domain.LaunchStages)-1)
+	for _, stage := range domain.LaunchStages {
+		if stage == domain.StageApplicationReady {
+			continue
+		}
+		parts = append(parts, stages.Stage(stage))
 	}
-	if seconds <= 0 {
-		seconds = 1
+	return parts
+}
+
+// occupancy is when this Run would hold this candidate and for how long. The
+// start it is measured from is the prediction the rest of this file just made,
+// which is what makes the price of a committed second belong to the Run that
+// really spends it: a Run queued behind an hour of work occupies the second hour
+// of a commitment, not the first.
+func occupancy(input SchedulingInput, start domain.Estimate) domain.Occupancy {
+	expected, maximum := runtimeBounds(input.Workload)
+	return domain.Occupancy{
+		At:                input.EvaluatedAt,
+		StartSeconds:      start.Expected,
+		RuntimeSeconds:    expected,
+		MaxRuntimeSeconds: maximum,
 	}
-	billed := math.Max(seconds, float64(offer.Pricing.MinimumChargeSeconds))
+}
+
+// costEstimate is what Mercator's spend changes by if this Run occupies this
+// machine, and the account of what that number is made of. A machine nobody
+// quoted has no such number, and the estimate says so rather than predicting
+// nothing: a rate of zero is a machine somebody says is free, and a machine
+// Mercator would actually pay for is not that.
+//
+// Four terms, because a rate times a runtime is only one of them:
+//
+// Rent for seconds Mercator has already committed to is charged to whoever
+// spends them. The invoice arrives either way, so the money is not what this
+// decision changes; the seconds are, because nothing else can have them
+// afterwards. That is what an owned machine's shadow price states, and it is why
+// an idle owned machine is not free: its seconds are the scarce thing.
+//
+// Rent for seconds beyond that commitment is what this placement is what commits
+// Mercator to, and it is bought in whatever increment the publisher sells. The
+// part of that increment nothing will use is the idle tail, charged here rather
+// than to nobody: an hourly machine asked for twenty minutes costs the hour, and
+// a model that billed the twenty minutes reported two thirds of the bill to
+// nobody.
+//
+// The setup fee is charged to capacity Mercator has to acquire and never to
+// capacity it already holds, because a machine that is already running was
+// already paid for. Charging it to every candidate priced an existing machine as
+// though it were being bought again.
+func costEstimate(input SchedulingInput, offer domain.OfferSnapshot, held domain.Occupancy) (domain.Estimate, []domain.CostTerm, domain.CommittedInterval) {
+	if !offer.Pricing.Known {
+		return domain.Estimate{Source: domain.CostUnpriced, ModelVersion: input.ModelVersion}, nil, domain.CommittedInterval{}
+	}
+	committed := committedInterval(offer.Terms, held)
+	price, rate := offer.Pricing, offer.Pricing.RatePerSecondUSD
+	keepAlive := held.RuntimeSeconds - committed.Seconds
+	// The minimum charge is the smallest allocation this publisher sells, so it
+	// binds only where Mercator is allocating something. A machine it already
+	// holds has already paid whatever minimum its allocation carried.
+	billed := price.BilledSeconds(math.Max(keepAlive, float64(minimumChargeSeconds(offer))))
+	terms := []domain.CostTerm{
+		{Name: domain.CostTermSetupFee, USD: acquisitionFee(offer)},
+		{Name: domain.CostTermCommittedRent, USD: rate * committed.Seconds},
+		{Name: domain.CostTermKeepAlive, USD: rate * keepAlive},
+		{Name: domain.CostTermIdleTail, USD: rate * (billed - keepAlive)},
+	}
+	total := 0.0
+	for _, term := range terms {
+		total += term.USD
+	}
 	return domain.Estimate{
-		Expected:     offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed,
+		Expected:     total,
 		Source:       "price_model",
 		ModelVersion: input.ModelVersion,
+	}, terms, committed
+}
+
+// committedInterval is the already-owed rent this candidate met, and nothing at
+// all for capacity nothing is owed on. The absence is stated as an absence
+// because a commitment recorded with no moment in it would read as an interval
+// that has already lapsed, and those are opposite answers: a machine whose
+// interval ended pays for its next second, and a machine nobody has allocated
+// pays for its first.
+func committedInterval(terms domain.CapacityTerms, held domain.Occupancy) domain.CommittedInterval {
+	if terms.CommittedUntil.IsZero() {
+		return domain.CommittedInterval{}
 	}
+	return domain.CommittedInterval{
+		Until:       terms.CommittedUntil,
+		FromSeconds: held.StartSeconds,
+		Seconds:     terms.CommittedSeconds(held),
+	}
+}
+
+// acquisitionFee is what this publisher charges to hand over a machine, and
+// nothing for a machine Mercator is already holding.
+func acquisitionFee(offer domain.OfferSnapshot) float64 {
+	if offer.Kind != domain.OfferKindProvisionable {
+		return 0
+	}
+	return offer.Pricing.SetupFeeUSD
+}
+
+// minimumChargeSeconds is the shortest allocation this publisher sells, asked
+// only of capacity Mercator would be allocating.
+func minimumChargeSeconds(offer domain.OfferSnapshot) int64 {
+	if offer.Kind != domain.OfferKindProvisionable {
+		return 0
+	}
+	return offer.Pricing.MinimumChargeSeconds
 }
 
 // queueable reports whether a Run may wait behind work already assigned here.
 // Only reusable capacity qualifies: waiting for a one-shot execution to finish
 // buys nothing, because the machine does not survive it.
+//
+// A schedule that can no longer say when its Rental comes free is not something
+// to wait behind either, and it is the one case where the machine's own capacity
+// evidence is the better answer: the Booking on it is past the runtime Mercator
+// enforces, so the wait projects to nothing while the offer says the capacity is
+// occupied. Queueing there would price a busy machine at zero seconds of waiting
+// and hand the arriving Run a latest start already at its deadline.
 func queueable(input SchedulingInput, offer domain.OfferSnapshot) bool {
-	if !offer.Lane.Reusable() {
+	if !offer.Lane.Reusable() || offer.Kind != domain.OfferKindStanding {
 		return false
 	}
 	schedule, ok := input.Schedules[offer.RentalID]
-	return offer.Kind == domain.OfferKindStanding && ok && len(schedule.Bookings) > 0 && len(schedule.Bookings) < domain.RentalScheduleQueueCapacity+1
+	if !ok || len(schedule.Bookings) == 0 || len(schedule.Bookings) > domain.RentalScheduleQueueCapacity {
+		return false
+	}
+	return !schedule.Exhausted(input.EvaluatedAt)
 }
 
 func candidateDisposition(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDisposition {
@@ -574,6 +992,29 @@ func candidateDisposition(input SchedulingInput, offer domain.OfferSnapshot) dom
 		return domain.CandidateDispositionQueue
 	}
 	return domain.CandidateDispositionRunNow
+}
+
+// pricedRankingReason is the decision saying that a price, or the absence of one,
+// decided this placement.
+//
+// The ranking asks whether a candidate has dollars before it compares any, so a
+// machine nobody quoted ranks behind every machine somebody did. That rule is
+// invisible in the score: the score is in dollars and an unpriced candidate has
+// none of the only term that would separate it, so it reads as the cheapest thing
+// in the fleet, and a reader ranking candidates on the number the ranking is
+// stated in sees the winner beaten by the machine that lost. This is the record
+// saying which rule it lost to, exactly as the class states why the costliest
+// machine can win.
+func pricedRankingReason(candidates []domain.CandidateDecision, bestIndex int) string {
+	if !candidates[bestIndex].Priced() {
+		return "UNPRICED_LAST_RESORT"
+	}
+	for _, candidate := range candidates {
+		if candidate.Feasible && !candidate.Priced() {
+			return "PRICED_BEFORE_UNPRICED"
+		}
+	}
+	return ""
 }
 
 func selectionReason(disposition domain.CandidateDisposition) string {
@@ -591,63 +1032,121 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 	}
 }
 
-// pullEstimate prices what this candidate still owes before the image can
-// start, and states how much that answer is worth. Zero seconds is reserved for
-// a host an inventory says holds the image, or for an image nothing could
-// resolve, where the same nothing is charged to every candidate and the
-// comparison is unaffected. A host that will not say what it holds is charged
-// the whole image, because the bytes have to come from somewhere and nothing
-// here says they are already there.
+// imageEstimates prices the two stages this candidate still owes before a
+// container can start on the image, and states how much each answer is worth.
+// They are two stages rather than one because they are different work over
+// different resources: fetching crosses a link from a registry, and unpacking
+// turns bytes already on the disk into a layer chain. A host that fetched the
+// image and never assembled it owes the second and none of the first, and
+// charging it a pull would bill the network twice for bytes that are here.
 //
-// A host that fetched the image and has not assembled it owes local work rather
-// than a transfer, over a different resource at a different rate, so the two
-// are added as what they are. Charging that host a pull would bill the network
-// twice for bytes that are already on the machine.
+// Zero seconds is reserved for a host an inventory says holds the image, or for
+// an image nothing could resolve, where the same nothing is charged to every
+// candidate and the comparison is unaffected. A host that will not say what it
+// holds is charged the whole image, because the bytes have to come from
+// somewhere and nothing here says they are already there.
 //
 // Confidence is about the duration, not the bytes. Bytes counted from a
-// manifest and an inventory that both spoke are certain, so a host that holds
-// everything is certainly zero seconds away from starting. Bytes assumed
-// because a host said nothing are not, and neither is a duration over a rate
-// nothing measured, so either one caps the answer at AssumedLinkConfidence.
+// manifest and an inventory that both spoke are certain, so a host with nothing
+// to do at a stage is certainly zero seconds away from finishing it. Bytes
+// assumed because a host said nothing are not, and neither is a duration over a
+// rate nothing measured, so either one caps that stage's answer at
+// AssumedLinkConfidence.
 //
 // Room is not priced here, or anywhere. A machine short of it is refused rather
 // than charged, because the only content it could give up to make room is
 // content this Run needs back, and deleting that frees exactly what fetching it
 // again consumes.
-func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, content candidateContent, modelVersion string) contentWork {
+func imageEstimates(
+	manifest domain.ImageManifest,
+	offer domain.OfferSnapshot,
+	content candidateContent,
+	registry, storage domain.LinkSpeed,
+	modelVersion string,
+) (fetch, unpack contentWork) {
 	work, locality := content.image, content.locality
-	transfer := work.TransferBytes
-	estimate := domain.Estimate{
-		Source:       pullSource(locality, manifest, offer.Images),
-		ModelVersion: modelVersion,
+	source := pullSource(locality, manifest, offer.Images)
+	return imageStage(
+			transferSeconds(work.TransferBytes, registry),
+			work.TransferBytes,
+			registry,
+			source,
+			locality,
+			modelVersion,
+		),
+		imageStage(
+			storage.TransferSeconds(work.UnpackBytes),
+			work.UnpackBytes,
+			storage,
+			source,
+			locality,
+			modelVersion,
+		)
+}
+
+// transferSeconds is how long bytes this host does not hold take to arrive over
+// this link, plus the half second a transfer costs before any of them move. A
+// host with nothing to fetch pays neither.
+func transferSeconds(bytes int64, link domain.LinkSpeed) float64 {
+	if bytes == 0 {
+		return 0
 	}
-	if transfer == 0 && work.UnpackBytes == 0 {
+	return link.TransferSeconds(bytes) + 0.5
+}
+
+// imageStage is one stage of getting an image ready, priced from the bytes it
+// has to move and the rate they move at.
+func imageStage(seconds float64, bytes int64, rate domain.LinkSpeed, source string, locality domain.LocalityState, modelVersion string) contentWork {
+	estimate := domain.Estimate{Source: source, ModelVersion: modelVersion}
+	if bytes == 0 {
 		if locality != domain.LocalityUnknown {
 			estimate.Confidence = 1
 		}
-		return establishedIfDescribed(estimate, locality)
+		return establishedIfDescribed(estimate, locality, rate)
 	}
-	link := offer.RegistryDownload()
-	seconds := float64(transfer*8)/1_000_000/link.Mbps +
-		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
 	estimate.Expected, estimate.P50, estimate.P90 = seconds, seconds, seconds*1.5
-	estimate.Confidence = link.Confidence
-	if work.UnpackBytes > 0 || locality == domain.LocalityUnknown {
+	estimate.Confidence = rate.Confidence
+	if locality == domain.LocalityUnknown {
 		estimate.Confidence = min(estimate.Confidence, domain.AssumedLinkConfidence)
 	}
-	return establishedIfDescribed(estimate, locality)
+	return establishedIfDescribed(estimate, locality, rate)
 }
 
 // establishedIfDescribed splits one image prediction into the whole price and
 // the part of it somebody established. A host that could not say what it holds
 // is charged this whole image and establishes none of it: nothing said the bytes
 // are here, and nothing said they are not. Every other answer counts bytes a
-// manifest and an inventory both spoke about.
-func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalityState) contentWork {
+// manifest and an inventory both spoke about, for as long as the seconds they
+// buy are established too.
+func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalityState, rate domain.LinkSpeed) contentWork {
 	if locality == domain.LocalityUnknown {
 		return contentWork{predicted: estimate}
 	}
-	return contentWork{predicted: estimate, established: estimate}
+	return contentWork{predicted: estimate, established: establishedOverAMeasuredPath(estimate, rate)}
+}
+
+// establishedOverAMeasuredPath is the second half of the same question, asked of
+// the rate rather than the bytes. Seconds are the product of the two and either
+// one can be a silence, so a byte count a manifest and an inventory both spoke
+// about still buys a duration nobody established when what divides it is
+// Mercator's own fleet-wide prior.
+//
+// It exists because the established half is what a Run's hard start bound is
+// allowed to refuse capacity on, and a machine nothing has measured the path of
+// would otherwise be struck out for a number nothing on it answered for. That is
+// silence about a path becoming infeasibility by arithmetic, which the goal
+// forbids in the same words it forbids it for locality. Priced is as far as
+// either silence may go, and the prediction still charges every one of those
+// seconds, so the unmeasured machine never outranks one that measured a fast
+// path.
+//
+// Nothing to move is nothing to wait for at any rate at all, so a stage with no
+// bytes establishes its zero over a path nobody has ever described.
+func establishedOverAMeasuredPath(estimate domain.Estimate, rate domain.LinkSpeed) domain.Estimate {
+	if estimate.Expected > 0 && !rate.Measured() {
+		return domain.Estimate{}
+	}
+	return estimate
 }
 
 // artifactEstimate prices what this candidate would still have to read out of
@@ -656,36 +1155,38 @@ func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalitySt
 // durable copy is what makes the content consumable at all, and a host-local
 // copy only ever changes how long getting to it takes.
 //
-// The answer reaches the score through this estimate, the start estimate it
-// feeds, and the objective that ranks candidates on it. Nothing populates
-// SchedulingInput.Weights in production, so a locality term routed through
-// ScoreWeights would be multiplied by zero for every Run.
+// The answer reaches the score through this estimate and the start estimate it
+// feeds, which the Run's class prices by the second. It is deliberately not a
+// weighted locality term of its own: what a candidate holds is worth the seconds
+// it saves, and a second is worth what the class says it is worth.
 //
 // Confidence follows the same rule transfers already follow: a host that owes
 // nothing is certainly zero seconds away, and every other answer crosses a link
 // nothing has measured.
-func artifactEstimate(inventory domain.ArtifactInventory, content candidateContent, modelVersion string) contentWork {
+func artifactEstimate(inventory domain.ArtifactInventory, content candidateContent, store domain.LinkSpeed, modelVersion string) contentWork {
 	source := artifactSource(inventory, content.evidence)
 	if len(content.evidence) == 0 {
 		return contentWork{predicted: domain.Estimate{Source: source, ModelVersion: modelVersion}}
 	}
+	answered := objectStoreRead(establishedFetchBytes(content.evidence), store, source, modelVersion)
 	return contentWork{
-		predicted:   objectStoreRead(content.fetch, source, modelVersion),
-		established: objectStoreRead(establishedFetchBytes(content.evidence), source, modelVersion),
+		predicted:   objectStoreRead(content.fetch, store, source, modelVersion),
+		established: establishedOverAMeasuredPath(answered, store),
 	}
 }
 
-// objectStoreRead is what reading these bytes out of the object store costs.
-// Bytes that do not have to move cost nothing and there is no doubt about it;
-// bytes that do cross a link nothing has measured, which is what caps the
-// answer's confidence however exactly the arithmetic on it reads.
-func objectStoreRead(bytes int64, source, modelVersion string) domain.Estimate {
-	seconds := objectStoreSeconds(bytes)
+// objectStoreRead is what reading these bytes out of the object store costs over
+// the path this host reaches it on. Bytes that do not have to move cost nothing
+// and there is no doubt about it; bytes that do are worth exactly what the rate
+// they cross is worth, which is a measurement on a host that published one and
+// Mercator's own assumption on a host that did not.
+func objectStoreRead(bytes int64, store domain.LinkSpeed, source, modelVersion string) domain.Estimate {
+	seconds := store.TransferSeconds(bytes)
 	estimate := domain.Estimate{
 		Expected:     seconds,
 		P50:          seconds,
 		P90:          seconds * 1.5,
-		Confidence:   domain.AssumedLinkConfidence,
+		Confidence:   store.Confidence,
 		Source:       source,
 		ModelVersion: modelVersion,
 	}
@@ -709,10 +1210,6 @@ func establishedFetchBytes(evidence []domain.ArtifactEvidence) int64 {
 	return bytes
 }
 
-func objectStoreSeconds(bytes int64) float64 {
-	return float64(bytes*8) / 1_000_000 / domain.DefaultObjectStoreDownloadMbps
-}
-
 // artifactSource names whose evidence this answer rests on, and when it rests on
 // none, whose silence it was. A host that cannot enumerate its copies and a host
 // that enumerated and holds nothing are priced the same seconds and are
@@ -720,7 +1217,10 @@ func objectStoreSeconds(bytes int64) float64 {
 func artifactSource(inventory domain.ArtifactInventory, evidence []domain.ArtifactEvidence) string {
 	switch {
 	case len(evidence) == 0:
-		return ""
+		// A Run that reads nothing is not a Run whose read nobody could answer for.
+		// The stage costs no seconds either way, and the record has to say which of
+		// the two it was, because a stage with no source is a stage nothing predicted.
+		return "workload_reads_nothing"
 	case inventory.Known:
 		return "artifact_inventory"
 	default:
@@ -752,25 +1252,39 @@ func pullSource(locality domain.LocalityState, manifest domain.ImageManifest, in
 	}
 }
 
-func downloadRequirementSatisfied(now time.Time, req domain.NetworkDownloadRequirement, facts []domain.NetworkFact) bool {
-	if len(facts) == 0 {
-		return req.AllowUnknown
+// downloadFloorViolations is a Run's hard floor on how fast a candidate can reach
+// content, and there are two ways to miss it that a decision must never state as
+// one.
+//
+// A candidate whose published fact answers and falls below the floor was measured
+// too slow, and the record says the number it published. A candidate nobody
+// answered for measured nothing, and what that buys is the Run's own to decide:
+// an unmeasured link is uncertainty, so AllowUnknown admits it, and the record
+// says nobody answered rather than naming a speed nothing published. A number its
+// own publisher disowned and an expired one are silence for that purpose, which is
+// exactly what publishing nothing is, and the two must buy their publisher the
+// same thing.
+func downloadFloorViolations(now time.Time, req domain.NetworkDownloadRequirement, facts domain.NetworkFacts) []domain.Violation {
+	fact, answered := req.Answer(facts, now)
+	switch {
+	case !answered && !req.AllowUnknown:
+		return []domain.Violation{{
+			Code:     "UNKNOWN_FACT",
+			Path:     "network.download",
+			Required: req.MinP10Mbps,
+			Offered:  "unknown",
+			Message:  "Nobody has published a download p10 for this offer's link that its own publisher stands behind, and this Run does not allow an unmeasured link.",
+		}}
+	case answered && fact.ValueMbps < req.MinP10Mbps:
+		return []domain.Violation{{
+			Code:     "NETWORK_FACT_UNSATISFIED",
+			Path:     "network.download",
+			Required: req.MinP10Mbps,
+			Offered:  fact.ValueMbps,
+			Message:  "Offer published a download p10 below the floor this Run states.",
+		}}
 	}
-	for _, fact := range facts {
-		if fact.Scope != req.Scope || fact.Statistic != "p10" {
-			continue
-		}
-		if !fact.ValidUntil.IsZero() && !fact.ValidUntil.After(now) {
-			continue
-		}
-		if req.MaxMeasurementAgeSeconds > 0 && now.Sub(fact.ObservedAt) > time.Duration(req.MaxMeasurementAgeSeconds)*time.Second {
-			continue
-		}
-		if fact.ValueMbps >= req.MinP10Mbps {
-			return true
-		}
-	}
-	return false
+	return nil
 }
 
 func requiresPublicInbound(container domain.ContainerSpec) bool {
@@ -826,25 +1340,4 @@ func sortedOffers(offers []domain.OfferSnapshot) []domain.OfferSnapshot {
 		return out[i].ID < out[j].ID
 	})
 	return out
-}
-
-func connectionIDs(offers []domain.OfferSnapshot) []string {
-	seen := map[string]struct{}{}
-	for _, offer := range offers {
-		if offer.ConnectionID == "" {
-			continue
-		}
-		seen[offer.ConnectionID] = struct{}{}
-	}
-	ids := make([]string, 0, len(seen))
-	for id := range seen {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
-func round(v float64, places int) float64 {
-	factor := math.Pow10(places)
-	return math.Round(v*factor) / factor
 }

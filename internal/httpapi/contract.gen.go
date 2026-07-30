@@ -91,6 +91,7 @@ func (e CacheEvidenceLocality) Valid() bool {
 
 // Defines values for CandidateDecisionDisposition.
 const (
+	LaunchEphemeral      CandidateDecisionDisposition = "launch_ephemeral"
 	ProvisionFreshRental CandidateDecisionDisposition = "provision_fresh_rental"
 	QueueExistingRental  CandidateDecisionDisposition = "queue_existing_rental"
 	RunNowExistingRental CandidateDecisionDisposition = "run_now_existing_rental"
@@ -99,6 +100,8 @@ const (
 // Valid indicates whether the value is a known member of the CandidateDecisionDisposition enum.
 func (e CandidateDecisionDisposition) Valid() bool {
 	switch e {
+	case LaunchEphemeral:
+		return true
 	case ProvisionFreshRental:
 		return true
 	case QueueExistingRental:
@@ -128,6 +131,24 @@ func (e CandidateDecisionImageLocality) Valid() bool {
 	case Partial:
 		return true
 	case Unknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CandidateIdentityLane.
+const (
+	Ephemeral CandidateIdentityLane = "ephemeral"
+	Reusable  CandidateIdentityLane = "reusable"
+)
+
+// Valid indicates whether the value is a known member of the CandidateIdentityLane enum.
+func (e CandidateIdentityLane) Valid() bool {
+	switch e {
+	case Ephemeral:
+		return true
+	case Reusable:
 		return true
 	default:
 		return false
@@ -170,6 +191,30 @@ func (e CleanupErrorDisposition) Valid() bool {
 	}
 }
 
+// Defines values for EstimateLevel.
+const (
+	ExactCandidate    EstimateLevel = "exact_candidate"
+	Prior             EstimateLevel = "prior"
+	Provider          EstimateLevel = "provider"
+	ProviderAndRegion EstimateLevel = "provider_and_region"
+)
+
+// Valid indicates whether the value is a known member of the EstimateLevel enum.
+func (e EstimateLevel) Valid() bool {
+	switch e {
+	case ExactCandidate:
+		return true
+	case Prior:
+		return true
+	case Provider:
+		return true
+	case ProviderAndRegion:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NetworkCapabilitiesInbound.
 const (
 	NetworkCapabilitiesInboundNone       NetworkCapabilitiesInbound = "none"
@@ -190,6 +235,7 @@ func (e NetworkCapabilitiesInbound) Valid() bool {
 
 // Defines values for NetworkDownloadRequirementScope.
 const (
+	NetworkDownloadRequirementScopeObjectStore    NetworkDownloadRequirementScope = "object_store"
 	NetworkDownloadRequirementScopePublicInternet NetworkDownloadRequirementScope = "public_internet"
 	NetworkDownloadRequirementScopeRegistry       NetworkDownloadRequirementScope = "registry"
 )
@@ -197,6 +243,8 @@ const (
 // Valid indicates whether the value is a known member of the NetworkDownloadRequirementScope enum.
 func (e NetworkDownloadRequirementScope) Valid() bool {
 	switch e {
+	case NetworkDownloadRequirementScopeObjectStore:
+		return true
 	case NetworkDownloadRequirementScopePublicInternet:
 		return true
 	case NetworkDownloadRequirementScopeRegistry:
@@ -208,6 +256,7 @@ func (e NetworkDownloadRequirementScope) Valid() bool {
 
 // Defines values for NetworkFactScope.
 const (
+	NetworkFactScopeObjectStore    NetworkFactScope = "object_store"
 	NetworkFactScopePublicInternet NetworkFactScope = "public_internet"
 	NetworkFactScopeRegistry       NetworkFactScope = "registry"
 )
@@ -215,6 +264,8 @@ const (
 // Valid indicates whether the value is a known member of the NetworkFactScope enum.
 func (e NetworkFactScope) Valid() bool {
 	switch e {
+	case NetworkFactScopeObjectStore:
+		return true
 	case NetworkFactScopePublicInternet:
 		return true
 	case NetworkFactScopeRegistry:
@@ -287,24 +338,27 @@ func (e NodeSummaryState) Valid() bool {
 	}
 }
 
-// Defines values for PlacementPolicyObjective.
+// Defines values for PlacementPolicyServiceClass.
 const (
-	Balanced          PlacementPolicyObjective = "balanced"
-	Cheapest          PlacementPolicyObjective = "cheapest"
-	FastestCompletion PlacementPolicyObjective = "fastest_completion"
-	FastestStart      PlacementPolicyObjective = "fastest_start"
+	Batch         PlacementPolicyServiceClass = "batch"
+	Experimental  PlacementPolicyServiceClass = "experimental"
+	Interactive   PlacementPolicyServiceClass = "interactive"
+	Opportunistic PlacementPolicyServiceClass = "opportunistic"
+	Standard      PlacementPolicyServiceClass = "standard"
 )
 
-// Valid indicates whether the value is a known member of the PlacementPolicyObjective enum.
-func (e PlacementPolicyObjective) Valid() bool {
+// Valid indicates whether the value is a known member of the PlacementPolicyServiceClass enum.
+func (e PlacementPolicyServiceClass) Valid() bool {
 	switch e {
-	case Balanced:
+	case Batch:
 		return true
-	case Cheapest:
+	case Experimental:
 		return true
-	case FastestCompletion:
+	case Interactive:
 		return true
-	case FastestStart:
+	case Opportunistic:
+		return true
+	case Standard:
 		return true
 	default:
 		return false
@@ -326,6 +380,63 @@ func (e PortSpecExposure) Valid() bool {
 	case Private:
 		return true
 	case Public:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TransferRateScope.
+const (
+	ObjectStore    TransferRateScope = "object_store"
+	PublicInternet TransferRateScope = "public_internet"
+	Registry       TransferRateScope = "registry"
+)
+
+// Valid indicates whether the value is a known member of the TransferRateScope enum.
+func (e TransferRateScope) Valid() bool {
+	switch e {
+	case ObjectStore:
+		return true
+	case PublicInternet:
+		return true
+	case Registry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TransferRateStage.
+const (
+	Acquisition      TransferRateStage = "acquisition"
+	AgentReady       TransferRateStage = "agent_ready"
+	ApplicationReady TransferRateStage = "application_ready"
+	ArtifactFetch    TransferRateStage = "artifact_fetch"
+	Boot             TransferRateStage = "boot"
+	ContainerStart   TransferRateStage = "container_start"
+	ImageFetch       TransferRateStage = "image_fetch"
+	Unpack           TransferRateStage = "unpack"
+)
+
+// Valid indicates whether the value is a known member of the TransferRateStage enum.
+func (e TransferRateStage) Valid() bool {
+	switch e {
+	case Acquisition:
+		return true
+	case AgentReady:
+		return true
+	case ApplicationReady:
+		return true
+	case ArtifactFetch:
+		return true
+	case Boot:
+		return true
+	case ContainerStart:
+		return true
+	case ImageFetch:
+		return true
+	case Unpack:
 		return true
 	default:
 		return false
@@ -356,6 +467,9 @@ type AdapterListResponse struct {
 
 // AdapterManifest An adapter's self-description for onboarding surfaces. Lives next to the adapter's code; carries no per-connection state and never any secret material.
 type AdapterManifest = adapter.Manifest
+
+// Admission defines model for Admission.
+type Admission = domain.AdmissionDeferral
 
 // ArtifactEvidence What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object.
 type ArtifactEvidence struct {
@@ -412,9 +526,9 @@ type Booking = domain.Booking
 // BookingDecision defines model for BookingDecision.
 type BookingDecision = domain.BookingDecision
 
-// BookingDecisionResponse defines model for BookingDecisionResponse.
+// BookingDecisionResponse Every decision recorded about one Run, oldest first. A decision is appended and never rewritten, so the newest entry is the answer that stands, it names the entry it supersedes and why, and the ones before it are the answers a reader needs to see the Run's history.
 type BookingDecisionResponse struct {
-	Decision BookingDecision `json:"decision"`
+	Decisions []BookingDecision `json:"decisions"`
 }
 
 // CPURequirement defines model for CPURequirement.
@@ -477,7 +591,13 @@ type CandidateDecision struct {
 
 	// CacheEvidence What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name.
 	CacheEvidence []CacheEvidence `json:"cache_evidence,omitempty"`
-	ConnectionId  string          `json:"connection_id,omitempty"`
+
+	// Candidate What Mercator took a candidate to be, as opposed to what the listing was called. A prediction claiming evidence about this exact candidate has to say which candidate it meant, and every field here is a fact a backend published rather than an identifier Mercator minted. A candidate that publishes nothing outliving its listing states only a provider and a lane, which is how the record says no history about it can ever be read again.
+	Candidate CandidateIdentity `json:"candidate,omitempty"`
+
+	// Confidences What each answer this candidate was scored on is worth, one entry per source that stated one. It is the whole input to the score's uncertainty term, recorded so score_usd can be re-derived from this record: a scoring term whose input is not here is a term no reader can check. An answer nobody stated a confidence for is absent rather than zero, because stating no opinion is not the same as stating that an answer is worthless.
+	Confidences  []Confidence `json:"confidences,omitempty"`
+	ConnectionId string       `json:"connection_id,omitempty"`
 
 	// Disk What one Run asked of one candidate's disk: the room the machine said it had left, the room the Run reserved for its own working state, and the content that still had to land there. It is one question over every kind of content at once because the disk is one resource, and a candidate short of room is refused rather than priced: nothing this Run could give up frees a byte it does not need straight back, and the only content that would make room belongs to somebody else.
 	Disk        DiskDemand                   `json:"disk,omitempty"`
@@ -490,7 +610,18 @@ type CandidateDecision struct {
 	NativeRef       string                         `json:"native_ref,omitempty"`
 	OfferSnapshotId string                         `json:"offer_snapshot_id"`
 	Rejections      []Violation                    `json:"rejections,omitempty"`
-	ScoreUsd        float64                        `json:"score_usd,omitempty"`
+
+	// Reliability The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero. The whole history is absent when a publisher has measured nothing, which is every provider in this tree today, so a reader must treat no history and a history of zeroes as different answers.
+	Reliability ReliabilityEvidence `json:"reliability,omitempty"`
+
+	// RentalSchedule One Rental Schedule as a placement decision read it: the version that answered, the Booking holding the Rental, the Bookings already waiting in front of this Run, and the wait that projects from them. A schedule moves, so the wait a Run was priced was read from one version of it at one moment, and a decision that recorded only the seconds leaves nobody able to retrace them.
+	RentalSchedule ScheduleEvidence `json:"rental_schedule,omitempty"`
+
+	// ScoreUsd What this candidate is worth to this Run in dollars, lowest first: the cost it would be billed, plus the dollars its service class says it would rather pay than wait, plus the dollars it would rather pay than act on a doubtful answer. Every quantity it multiplies is recorded beside it, at the weights the decision states, so it can be re-derived rather than trusted. An infeasible candidate scores nothing, because it has no price.
+	ScoreUsd float64 `json:"score_usd,omitempty"`
+
+	// TransferRates The throughput each transfer stage of this launch was priced at and where that number came from, one entry per stage that had bytes to move. A stage with nothing to move records none, because there was no transfer to price, and nothing else suppresses one: every transfer this fleet prices is bytes over a rate, so a transfer is not a stage the estimator answers out of measured launches. The seconds a candidate is charged are bytes over a rate, the bytes are explained by the locality evidence, and this is the other half: a machine priced at a throughput nothing on it ever reported and a machine priced at Mercator's own assumption produce the same seconds and are different claims.
+	TransferRates []TransferRate `json:"transfer_rates,omitempty"`
 }
 
 // CandidateDecisionDisposition defines model for CandidateDecision.Disposition.
@@ -501,14 +632,46 @@ type CandidateDecisionImageLocality string
 
 // CandidateEstimates defines model for CandidateEstimates.
 type CandidateEstimates struct {
-	ArtifactSeconds         Estimate `json:"artifact_seconds"`
-	CostUsd                 Estimate `json:"cost_usd"`
-	EstablishedStartSeconds Estimate `json:"established_start_seconds"`
-	ProvisionSeconds        Estimate `json:"provision_seconds"`
-	PullSeconds             Estimate `json:"pull_seconds"`
-	QueueSeconds            Estimate `json:"queue_seconds"`
-	StartSeconds            Estimate `json:"start_seconds"`
+	// CommittedInterval One machine's already-owed rent as one placement met it: when the interval ends, when this Run would start spending it, and how many of its seconds this Run would take. Capacity nothing is owed on carries none of it.
+	CommittedInterval CommittedInterval `json:"committed_interval,omitempty"`
+
+	// CostTerms What those dollars are made of, one entry per part of the price this candidate was charged for. A machine nobody quoted carries none. The total alone cannot be argued with: a machine charged the shadow price of one Run's seconds and a machine charged the whole hour it is committed to are the same claim to a reader who sees only dollars, and the difference is which term they are in.
+	CostTerms               []CostTerm `json:"cost_terms,omitempty"`
+	CostUsd                 Estimate   `json:"cost_usd"`
+	EstablishedStartSeconds Estimate   `json:"established_start_seconds"`
+	QueueSeconds            Estimate   `json:"queue_seconds"`
+
+	// Stages What this candidate is predicted to spend on each stage of a launch. There are eight of them, and they are eight rather than four because each is answered by a different authority, fails for a different reason, and has an actual of its own.
+	Stages       LaunchStageEstimates `json:"stages"`
+	StartSeconds Estimate             `json:"start_seconds"`
 }
+
+// CandidateIdentity What Mercator took a candidate to be, as opposed to what the listing was called. A prediction claiming evidence about this exact candidate has to say which candidate it meant, and every field here is a fact a backend published rather than an identifier Mercator minted. A candidate that publishes nothing outliving its listing states only a provider and a lane, which is how the record says no history about it can ever be read again.
+type CandidateIdentity struct {
+	// Accelerator How many cards of each accelerator product this capacity holds, canonicalized and counted per product so an inventory grouped two ways is one answer.
+	Accelerator string `json:"accelerator,omitempty"`
+
+	// ImageDigest The content this candidate was asked to run. Stages whose duration is a property of the content are filed with it; stages that are a property of the machine are not.
+	ImageDigest string `json:"image_digest,omitempty"`
+
+	// InstanceType The product name the provider sells this capacity under. Absent for a provider that sells asks against individual machines instead of named products.
+	InstanceType string `json:"instance_type,omitempty"`
+
+	// Lane What this capacity is for: a machine Mercator controls through an enrolled runtime and can hand successive workloads to, or a provider-native one-shot execution that holds nothing once its workload exits. It is part of the identity because the two have different stages to predict and different disks afterwards, so one key over both would report each lane's history as the other's.
+	Lane CandidateIdentityLane `json:"lane,omitempty"`
+
+	// Machine The machine this capacity is, where its backend can name one. It is never the lease and never the route Mercator took to reach the machine.
+	Machine string `json:"machine,omitempty"`
+
+	// Provider The backend the capacity comes from, which is the coarsest thing worth learning about and the only field every candidate has.
+	Provider string `json:"provider,omitempty"`
+
+	// Region Where the machine is, in the provider's own vocabulary. Absent for a provider that publishes no geography at all.
+	Region string `json:"region,omitempty"`
+}
+
+// CandidateIdentityLane What this capacity is for: a machine Mercator controls through an enrolled runtime and can hand successive workloads to, or a provider-native one-shot execution that holds nothing once its workload exits. It is part of the identity because the two have different stages to predict and different disks afterwards, so one key over both would report each lane's history as the other's.
+type CandidateIdentityLane string
 
 // CapabilityProfile defines model for CapabilityProfile.
 type CapabilityProfile struct {
@@ -530,6 +693,9 @@ type CapacityEvidence struct {
 	Confidence float64 `json:"confidence"`
 }
 
+// CapacityTerms What a machine was sold on beyond its rate: the interval Mercator already owes rent for, the kinds of work it may be used for, and the moment it stops being available. Capacity nobody has allocated states none of it, because nothing is owed on a machine that does not exist yet, it is reserved for nobody, and it is available for as long as its listing is.
+type CapacityTerms = domain.CapacityTerms
+
 // CleanupError defines model for CleanupError.
 type CleanupError struct {
 	Code        string                  `json:"code"`
@@ -550,6 +716,16 @@ type CollectionReport struct {
 	ConnectionsFromCache []string `json:"connections_from_cache,omitempty"`
 	ConnectionsQueried   []string `json:"connections_queried,omitempty"`
 	ExcludedConnections  []string `json:"excluded_connections,omitempty"`
+}
+
+// CommittedInterval One machine's already-owed rent as one placement met it: when the interval ends, when this Run would start spending it, and how many of its seconds this Run would take. Capacity nothing is owed on carries none of it.
+type CommittedInterval = domain.CommittedInterval
+
+// Confidence One answer a placement rested on and what its source said it was worth.
+type Confidence struct {
+	// Answer What was being answered, in the vocabulary of whatever answered: the capacity claim, the reliability history, the image transfer, the Artifact read.
+	Answer string  `json:"answer"`
+	Value  float64 `json:"value"`
 }
 
 // ConnectionFailure defines model for ConnectionFailure.
@@ -590,6 +766,9 @@ type ContainerSpec struct {
 	Platform   Platform              `json:"platform"`
 	Ports      []PortSpec            `json:"ports,omitempty"`
 }
+
+// CostTerm One part of what a placement costs and what that part is worth. A price recorded as one number cannot be argued with: rent for seconds Mercator has already bought, rent the placement itself commits it to, and the tail of a billing increment nothing will use are three different claims about one machine.
+type CostTerm = domain.CostTerm
 
 // CreateConnectionRequest defines model for CreateConnectionRequest.
 type CreateConnectionRequest struct {
@@ -676,14 +855,25 @@ type ErrorResponse struct {
 
 // Estimate defines model for Estimate.
 type Estimate struct {
-	Confidence   float64 `json:"confidence,omitempty"`
-	Expected     float64 `json:"expected,omitempty"`
-	ModelVersion string  `json:"model_version,omitempty"`
-	P50          float64 `json:"p50,omitempty"`
-	P90          float64 `json:"p90,omitempty"`
-	SampleCount  int     `json:"sample_count,omitempty"`
-	Source       string  `json:"source,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
+	Expected   float64 `json:"expected,omitempty"`
+
+	// Key The key the samples were read under, where any were. It is recorded so a reader can check what Mercator took the candidate to be against what it then learned about: an answer claiming this exact candidate, filed under a number a marketplace mints per search, is a claim of candidate-specific evidence made out of a key that cannot have any.
+	Key string `json:"key,omitempty"`
+
+	// Level Which evidence answered this estimate: measured launches of this exact candidate, of this provider in this region, of this provider, or none at all. A prior is named rather than left blank so a reader can tell a measurement from a published claim, which the seconds alone cannot say.
+	Level        EstimateLevel `json:"level,omitempty"`
+	ModelVersion string        `json:"model_version,omitempty"`
+	P50          float64       `json:"p50,omitempty"`
+	P90          float64       `json:"p90,omitempty"`
+
+	// SampleCount How many measured launches stand behind this answer. Zero is the answer a prior gives, and it is a different claim from the same seconds read off one launch.
+	SampleCount int    `json:"sample_count,omitempty"`
+	Source      string `json:"source,omitempty"`
 }
+
+// EstimateLevel Which evidence answered this estimate: measured launches of this exact candidate, of this provider in this region, of this provider, or none at all. A prior is named rather than left blank so a reader can tell a measurement from a published claim, which the seconds alone cannot say.
+type EstimateLevel string
 
 // EventListResponse defines model for EventListResponse.
 type EventListResponse struct {
@@ -695,6 +885,9 @@ type ExecutionPolicy struct {
 	MaxPreStartAttempts int   `json:"max_pre_start_attempts"`
 	MaxRuntimeSeconds   int64 `json:"max_runtime_seconds"`
 }
+
+// FleetAnswer defines model for FleetAnswer.
+type FleetAnswer = domain.FleetAnswer
 
 // ImageInventory What this host says it holds. It answers what is here and never what is missing: what a Run would still have to fetch depends on which image is being asked about, and only the scheduler holds both halves.
 type ImageInventory struct {
@@ -722,6 +915,15 @@ type ImageInventory struct {
 
 // InviteNodeRequest defines model for InviteNodeRequest.
 type InviteNodeRequest struct {
+	// AvailableUntil When this machine stops being Mercator's to use. Omitted is a machine with no such moment. Work that could still be running then is refused before it starts, judged against the runtime Mercator enforces rather than the one its caller expects.
+	AvailableUntil time.Time `json:"available_until,omitempty"`
+
+	// BillingIntervalSeconds The block of time this machine is bought in. Work that runs past the end of the interval Mercator has committed to commits it to the next whole one, and the part of that nothing uses is charged to the placement that bought it rather than to nobody. Omitted is a machine bought in no increments at all, which is an operator's own hardware: Mercator holds it continuously, so no second of it is a fresh commitment and there is no tail to charge.
+	BillingIntervalSeconds int64 `json:"billing_interval_seconds,omitempty"`
+
+	// EligibleServiceClasses The kinds of work this machine may be used for. Omitted is a machine held for nobody in particular. Work of any other class is refused this machine outright rather than priced on it.
+	EligibleServiceClasses []ServiceClass `json:"eligible_service_classes,omitempty"`
+
 	// NodeId Node identity to reserve. Generated when omitted.
 	NodeId string `json:"node_id,omitempty"`
 
@@ -731,6 +933,18 @@ type InviteNodeRequest struct {
 	// ShadowPriceUsdPerHour What holding this machine costs. Placement needs a price to weigh a node against fresh capacity; a node invited at zero has unknown pricing and is refused rather than treated as free.
 	ShadowPriceUsdPerHour float32 `json:"shadow_price_usd_per_hour"`
 	WorkspaceId           string  `json:"workspace_id"`
+}
+
+// LaunchStageEstimates What this candidate is predicted to spend on each stage of a launch. There are eight of them, and they are eight rather than four because each is answered by a different authority, fails for a different reason, and has an actual of its own.
+type LaunchStageEstimates struct {
+	AcquisitionSeconds      Estimate `json:"acquisition_seconds"`
+	AgentReadySeconds       Estimate `json:"agent_ready_seconds"`
+	ApplicationReadySeconds Estimate `json:"application_ready_seconds"`
+	ArtifactFetchSeconds    Estimate `json:"artifact_fetch_seconds"`
+	BootSeconds             Estimate `json:"boot_seconds"`
+	ContainerStartSeconds   Estimate `json:"container_start_seconds"`
+	ImageFetchSeconds       Estimate `json:"image_fetch_seconds"`
+	UnpackSeconds           Estimate `json:"unpack_seconds"`
 }
 
 // LifecycleCapabilities defines model for LifecycleCapabilities.
@@ -859,15 +1073,24 @@ type OfferSnapshot = domain.OfferSnapshot
 
 // PlacementPolicy defines model for PlacementPolicy.
 type PlacementPolicy struct {
-	AllowUnknownPricing    bool                     `json:"allow_unknown_pricing,omitempty"`
-	ExpectedRuntimeSeconds float64                  `json:"expected_runtime_seconds,omitempty"`
-	MaxExpectedCostUsd     float64                  `json:"max_expected_cost_usd,omitempty"`
-	MaxP90StartSeconds     float64                  `json:"max_p90_start_seconds,omitempty"`
-	Objective              PlacementPolicyObjective `json:"objective"`
+	// AllowUnknownPricing Whether this Run would rather run on a machine nobody has quoted a price for than not run at all. It admits such a candidate and never prefers one: an unpriced candidate ranks behind every candidate somebody priced, and it cannot clear max_expected_cost_usd, because a bound on dollars is not cleared by a candidate that has none.
+	AllowUnknownPricing bool `json:"allow_unknown_pricing,omitempty"`
+
+	// ExpectedReadySeconds How long this workload takes to become ready for work once its process is running. It is the only prediction of the application-ready stage there is: readiness is the application's own semantics, so the workload is the only authority that can state it, and a Run that states nothing is predicted nothing.
+	ExpectedReadySeconds   float64 `json:"expected_ready_seconds,omitempty"`
+	ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds,omitempty"`
+
+	// Group The family of Runs this one belongs to and the most of that family Mercator may have holding capacity at once. It is a bound on the work rather than a request for a machine: a member whose family is already that wide is queued GROUP_AT_PARALLELISM even where the fleet has capacity standing idle, and the wait ends when a member of the same family finishes. Every member states the width, because a group is a label the work carries rather than an object an operator creates: there is nothing to register before submitting, and a name without a width is refused with RUN_GROUP_INCOMPLETE. The name is scoped to the Run's own workspace, so two tenants naming one sweep are running two.
+	Group              RunGroup `json:"group,omitempty"`
+	MaxExpectedCostUsd float64  `json:"max_expected_cost_usd,omitempty"`
+	MaxP90StartSeconds float64  `json:"max_p90_start_seconds,omitempty"`
+
+	// ServiceClass The kind of work this Run is, which is the only thing that says what waiting is worth to it. Every class declares its own exchange rate, and the score is computed over those rates: interactive prices a second of waiting to the start at twenty times the rent of the machine doing the waiting, standard at that rent, experimental and batch price it to the finish at twice and a fifth of it, and opportunistic prices it at nothing and takes whatever costs least. A class Mercator does not know is refused with SERVICE_CLASS_UNKNOWN rather than ranked on price alone. Omitted means standard.
+	ServiceClass PlacementPolicyServiceClass `json:"service_class"`
 }
 
-// PlacementPolicyObjective defines model for PlacementPolicy.Objective.
-type PlacementPolicyObjective string
+// PlacementPolicyServiceClass The kind of work this Run is, which is the only thing that says what waiting is worth to it. Every class declares its own exchange rate, and the score is computed over those rates: interactive prices a second of waiting to the start at twenty times the rent of the machine doing the waiting, standard at that rent, experimental and batch price it to the finish at twice and a fifth of it, and opportunistic prices it at nothing and takes whatever costs least. A class Mercator does not know is refused with SERVICE_CLASS_UNKNOWN rather than ranked on price alone. Omitted means standard.
+type PlacementPolicyServiceClass string
 
 // PlacementPreviewRequest defines model for PlacementPreviewRequest.
 type PlacementPreviewRequest struct {
@@ -919,11 +1142,16 @@ type QueueSnapshot struct {
 	QueuedWorkSeconds float64 `json:"queued_work_seconds"`
 }
 
-// ReliabilityEvidence defines model for ReliabilityEvidence.
+// QueuedAhead defines model for QueuedAhead.
+type QueuedAhead = domain.QueuedAhead
+
+// ReliabilityEvidence The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero. The whole history is absent when a publisher has measured nothing, which is every provider in this tree today, so a reader must treat no history and a history of zeroes as different answers.
 type ReliabilityEvidence struct {
-	Confidence       float64 `json:"confidence,omitempty"`
-	InterruptionRate float64 `json:"interruption_rate,omitempty"`
-	StartFailureRate float64 `json:"start_failure_rate,omitempty"`
+	// Interruptions One share of a machine's history somebody measured, and how much the publisher of that measurement stands behind it. The confidence is what says the measurement happened at all: a rate of zero stated at a confidence somebody owns is a machine measured and never seen to fail, and a rate nobody stands behind is silence.
+	Interruptions StatedRate `json:"interruptions,omitempty"`
+
+	// StartFailures One share of a machine's history somebody measured, and how much the publisher of that measurement stands behind it. The confidence is what says the measurement happened at all: a rate of zero stated at a confidence somebody owns is a machine measured and never seen to fail, and a rate nobody stands behind is silence.
+	StartFailures StatedRate `json:"start_failures,omitempty"`
 }
 
 // ReplaySinkRequest defines model for ReplaySinkRequest.
@@ -940,7 +1168,7 @@ type ReportRunRequest struct {
 	// ExitCode Required when type is exit and forbidden for every other report type. The broker records the authoritative outcome and requests cleanup.
 	ExitCode *int `json:"exit_code,omitempty"`
 
-	// Type Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code.
+	// Type Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code. The reserved ready kind is the application saying it can do work and requires data.ready_at, the application's own moment: it completes the last stage of a launch, and a readiness with no moment in it leaves that stage with no actual.
 	Type string `json:"type"`
 }
 
@@ -982,6 +1210,14 @@ type ResourceRequirements struct {
 // Run defines model for Run.
 type Run = domain.RunRecord
 
+// RunGroup The family of Runs this one belongs to and the most of that family Mercator may have holding capacity at once. It is a bound on the work rather than a request for a machine: a member whose family is already that wide is queued GROUP_AT_PARALLELISM even where the fleet has capacity standing idle, and the wait ends when a member of the same family finishes. Every member states the width, because a group is a label the work carries rather than an object an operator creates: there is nothing to register before submitting, and a name without a width is refused with RUN_GROUP_INCOMPLETE. The name is scoped to the Run's own workspace, so two tenants naming one sweep are running two.
+type RunGroup struct {
+	Id string `json:"id,omitempty"`
+
+	// MaxParallel How many members of this family may hold capacity at once. Zero is the absence of a family rather than a family of nothing.
+	MaxParallel int `json:"max_parallel,omitempty"`
+}
+
 // RunListResponse defines model for RunListResponse.
 type RunListResponse struct {
 	// NextCursor Opaque cursor for the next page. Omitted on the final page.
@@ -1003,14 +1239,98 @@ type RunResponse struct {
 	RunId string `json:"run_id"`
 }
 
+// RunningBookingEvidence The Booking holding the Rental when a decision was made. Its runtimes are what it has left rather than what its Run declared, because a Booking twenty-nine minutes into half an hour is one minute of waiting.
+type RunningBookingEvidence struct {
+	BookingId string `json:"booking_id"`
+
+	// OverrunSeconds How far past the runtime Mercator enforces this Booking has run. Both remainders above bottom out at zero, so without this the record of a Rental nothing can project is the record a Rental a moment from free writes.
+	OverrunSeconds float64 `json:"overrun_seconds,omitempty"`
+
+	// RemainingExpectedRuntimeSeconds The p50 runtime this Booking has left, which is what a projected start behind it is made of.
+	RemainingExpectedRuntimeSeconds float64 `json:"remaining_expected_runtime_seconds,omitempty"`
+
+	// RemainingMaxRuntimeSeconds The enforced maximum runtime this Booking has left, which is what a latest start for anything waiting behind it is made of.
+	RemainingMaxRuntimeSeconds float64 `json:"remaining_max_runtime_seconds,omitempty"`
+	RunId                      string  `json:"run_id"`
+}
+
+// ScheduleEvidence One Rental Schedule as a placement decision read it: the version that answered, the Booking holding the Rental, the Bookings already waiting in front of this Run, and the wait that projects from them. A schedule moves, so the wait a Run was priced was read from one version of it at one moment, and a decision that recorded only the seconds leaves nobody able to retrace them.
+type ScheduleEvidence struct {
+	// Preceding The Bookings already waiting on this Rental, in the order they will run.
+	Preceding []WaitingBookingEvidence `json:"preceding,omitempty"`
+
+	// ProjectedStartSeconds How long work arriving at this moment waits for this Rental, projected from where the Bookings above actually are.
+	ProjectedStartSeconds float64 `json:"projected_start_seconds"`
+
+	// Running The Booking holding the Rental when a decision was made. Its runtimes are what it has left rather than what its Run declared, because a Booking twenty-nine minutes into half an hour is one minute of waiting.
+	Running RunningBookingEvidence `json:"running,omitempty"`
+
+	// Version The schedule version this decision was weighed against. A Booking the decision creates follows it.
+	Version int64 `json:"version"`
+}
+
+// ScoreWeights The exchange rates one service class declares, which are what a score is computed over. They are recorded on every decision rather than looked up, because a rate that changes would otherwise silently rewrite the arithmetic of every decision already taken. The two reliability terms a score will eventually carry are absent on purpose: probability times the cost of starting again is a derivation over a prediction, and a flat penalty invented for it now would be an unmeasured constant.
+type ScoreWeights struct {
+	CompletionLatencyUsdPerSecond float64 `json:"completion_latency_usd_per_second,omitempty"`
+	StartLatencyUsdPerSecond      float64 `json:"start_latency_usd_per_second,omitempty"`
+
+	// UncertaintyPenaltyUsd What one whole point of doubt costs. A point is one answer worth nothing.
+	UncertaintyPenaltyUsd float64 `json:"uncertainty_penalty_usd,omitempty"`
+}
+
+// ServiceClass The kind of work a Run is, as its caller declared it. It is the only thing that can say what a second of waiting is worth, which is why it decides how a candidate is scored, and it is what capacity reserved for particular work is reserved by.
+type ServiceClass = domain.ServiceClass
+
 // SinkResult defines model for SinkResult.
 type SinkResult = sinks.Result
 
 // SinkStatus defines model for SinkStatus.
 type SinkStatus = sinks.Status
 
+// StatedRate One share of a machine's history somebody measured, and how much the publisher of that measurement stands behind it. The confidence is what says the measurement happened at all: a rate of zero stated at a confidence somebody owns is a machine measured and never seen to fail, and a rate nobody stands behind is silence.
+type StatedRate struct {
+	Confidence float64 `json:"confidence"`
+	Rate       float64 `json:"rate"`
+}
+
+// TransferRate The throughput one stage of a launch was priced at, named by the stage and by the path it crosses. Exactly one of measurement and assumption is stated: a rate is either something somebody measured on this path or the constant Mercator falls back to when nobody did.
+type TransferRate struct {
+	// Assumption The stated constant this rate is when nothing measured the path. Absent when something did.
+	Assumption string `json:"assumption,omitempty"`
+
+	// Bytes What had to move at that rate, so the stage's seconds can be retraced from this record alone.
+	Bytes      int64   `json:"bytes"`
+	Confidence float64 `json:"confidence"`
+	Mbps       float64 `json:"mbps"`
+
+	// Measurement Who measured this path, in their own words. Absent when nothing measured it.
+	Measurement string `json:"measurement,omitempty"`
+
+	// Scope The path this rate describes. Absent for a rate that crosses no path: assembling content already on the disk is priced from a storage rate, and naming a link for it would invite a reader to check it against a measurement of something else.
+	Scope TransferRateScope `json:"scope,omitempty"`
+	Stage TransferRateStage `json:"stage"`
+}
+
+// TransferRateScope The path this rate describes. Absent for a rate that crosses no path: assembling content already on the disk is priced from a storage rate, and naming a link for it would invite a reader to check it against a measurement of something else.
+type TransferRateScope string
+
+// TransferRateStage defines model for TransferRate.Stage.
+type TransferRateStage string
+
 // Violation defines model for Violation.
 type Violation = domain.Violation
+
+// WaitingBookingEvidence A Booking that had not started when a decision was made. It still owes every second its Run declared, which is why these fields carry the declared runtimes rather than remaining ones.
+type WaitingBookingEvidence struct {
+	BookingId string `json:"booking_id"`
+
+	// ExpectedRuntimeSeconds The p50 runtime this Booking's Run declared.
+	ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds,omitempty"`
+
+	// MaxRuntimeSeconds The enforced maximum runtime this Booking's Run declared.
+	MaxRuntimeSeconds float64 `json:"max_runtime_seconds,omitempty"`
+	RunId             string  `json:"run_id"`
+}
 
 // WorkloadRevision defines model for WorkloadRevision.
 type WorkloadRevision = domain.WorkloadRevision

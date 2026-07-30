@@ -39,7 +39,7 @@ func TestARestoredSnapshotIsReadOutOfTheObjectStore(t *testing.T) {
 	}
 	// 40GB across a 500 Mbps link is 640 seconds, which is the read this
 	// candidate owes however much content it is sitting on.
-	if seconds := candidate.Estimates.ArtifactSeconds.Expected; seconds != 640 {
+	if seconds := candidate.Estimates.Stages.ArtifactFetch.Expected; seconds != 640 {
 		t.Errorf("the decision priced %v seconds of Artifact read for a copy of other content", seconds)
 	}
 	if source := artifactReadSource(t, execution, "run-consumer", imagenetArtifact); source != "object_store" {

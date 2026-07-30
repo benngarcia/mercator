@@ -1,0 +1,174 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "An enrolled node an operator holds at 1 USD an hour, billed in whole hours and ten minutes into the hour Mercator has already paid for, against a provider-native one-shot sold at 1.60 an hour by the minute with a 5 cent fee to hand it over. The node is warm and a second from ready; the one-shot boots for half a minute and pulls the 200MB image every time. The half-hour Run is cheapest on the node only while the rest of the node's hour is charged to nobody: ten minutes of it are already owed, twenty more are the placement's own, and the forty the Run will not use are the hour Mercator has to buy whole. That is 1.17 USD against 0.85, so the standard Run takes the one-shot, and a model that billed the half hour at the shadow price sent it to the node for 0.50. The sweep behind it is refused the node outright rather than priced there, because an operator holding a machine for work somebody is watching has said which classes may have it. Then the long Run is where an hourly machine is cheap: fifty-five minutes uses the hour it costs either way, 1.00 against 1.52, and it wins. The last Run is refused that same node while the long one is still on it, because the window the operator's machine is Mercator's for closes at two hours and this Run's turn would end at nearly three.",
+  "classification": "green",
+  "world": {
+    "launch": {
+      "unpack": "1s",
+      "container_start": "1s"
+    },
+    "images": {
+      "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "200MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "node-owned",
+        "provider": "node",
+        "rate_per_hour_usd": 1.0,
+        "cached_images": ["sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b"],
+        "billing": {"granularity": "1h"},
+        "terms": {
+          "committed_for": "10m",
+          "available_for": "2h",
+          "eligible_service_classes": ["interactive", "standard"]
+        }
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "ask-minute",
+        "provider": "simcloud",
+        "lane": "ephemeral",
+        "rate_per_hour_usd": 1.6,
+        "billing": {"granularity": "1m", "setup_fee_usd": 0.05},
+        "provisioning": {"expected": "30s", "acquisition": "0s", "boot": "30s", "agent_ready": "0s"}
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "atlas",
+      "request": {
+        "image": "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+        "service_class": "standard",
+        "expected_runtime": "30m",
+        "max_runtime": "40m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "ask-minute",
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD", "LAUNCH_EPHEMERAL"],
+        "disposition": "terminate",
+        "candidates": {
+          "node-owned": {
+            "feasible": true,
+            "cost": {
+              "usd": {"at_least": 1.16, "at_most": 1.17},
+              "committed_seconds": {"at_least": 598, "at_most": 600},
+              "terms": {
+                "committed_rent": {"at_least": 0.166, "at_most": 0.167},
+                "keep_alive": {"at_least": 0.333, "at_most": 0.334},
+                "idle_tail": {"at_least": 0.666, "at_most": 0.667},
+                "setup_fee": 0
+              }
+            }
+          },
+          "ask-minute": {
+            "feasible": true,
+            "cost": {
+              "usd": 0.85,
+              "terms": {
+                "setup_fee": 0.05,
+                "committed_rent": 0,
+                "keep_alive": 0.8,
+                "idle_tail": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "submit": "sweeper",
+      "request": {
+        "image": "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+        "service_class": "batch",
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "ask-minute",
+        "disposition": "terminate",
+        "candidates": {
+          "node-owned": {
+            "feasible": false,
+            "rejected": [{"code": "CLASS_NOT_ELIGIBLE", "path": "capacity_terms.eligible_classes"}]
+          },
+          "ask-minute": {
+            "feasible": true,
+            "cost": {
+              "usd": {"at_least": 0.316, "at_most": 0.317},
+              "terms": {"idle_tail": 0}
+            }
+          }
+        }
+      }
+    },
+    {
+      "advance": "1h"
+    },
+    {
+      "submit": "nightly",
+      "request": {
+        "image": "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+        "service_class": "standard",
+        "expected_runtime": "55m",
+        "max_runtime": "58m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "node-owned",
+        "disposition": "release",
+        "candidates": {
+          "node-owned": {
+            "feasible": true,
+            "cost": {
+              "usd": 1.0,
+              "committed_seconds": 0,
+              "terms": {
+                "committed_rent": 0,
+                "keep_alive": {"at_least": 0.916, "at_most": 0.917},
+                "idle_tail": {"at_least": 0.083, "at_most": 0.084}
+              }
+            }
+          },
+          "ask-minute": {
+            "feasible": true,
+            "cost": {"usd": {"at_least": 1.516, "at_most": 1.517}}
+          }
+        }
+      }
+    },
+    {
+      "advance": "30m"
+    },
+    {
+      "submit": "overnight",
+      "request": {
+        "image": "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+        "service_class": "standard",
+        "expected_runtime": "55m",
+        "max_runtime": "58m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "ask-minute",
+        "disposition": "terminate",
+        "candidates": {
+          "node-owned": {
+            "feasible": false,
+            "rejected": [{"code": "AVAILABILITY_WINDOW_CLOSES", "path": "capacity_terms.available_until"}]
+          },
+          "ask-minute": {
+            "feasible": true
+          }
+        }
+      }
+    }
+  ]
+}

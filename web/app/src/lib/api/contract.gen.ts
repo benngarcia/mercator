@@ -486,11 +486,82 @@ export interface components {
             /** @enum {string} */
             disposition: "release" | "terminate";
         };
+        Admission: {
+            /**
+             * @description Why this Run is not running. NO_FEASIBLE_OFFER is a wait for capacity to come free, and what holds it is named in behind. NO_CAPACITY_FITS is a wait for capacity to be added, because every machine the fleet published was weighed against this Run and none of them could hold it once what they are spending now came back. CAPACITY_UNSTATED is a wait on a machine that has not said enough for anybody to tell, which is what an enrolled node whose disk probe failed publishes. BEHIND_HIGHER_PRIORITY is work Mercator already owes an answer to outranking this Run. GROUP_AT_PARALLELISM is a Run whose own family is already as wide as its caller declared, which says nothing about capacity at all: the members holding it are named in behind, and no machine coming free ends the wait. The last two end the wait rather than describe it, and the Run is closed with them: QUEUE_DELAY_EXCEEDED is a Run Mercator has already kept waiting longer than its class allows, and DEADLINE_UNREACHABLE is a Run whose class says the answer has stopped being worth having.
+             * @enum {string}
+             */
+            reason: "NO_FEASIBLE_OFFER" | "NO_CAPACITY_FITS" | "CAPACITY_UNSTATED" | "BEHIND_HIGHER_PRIORITY" | "GROUP_AT_PARALLELISM" | "QUEUE_DELAY_EXCEEDED" | "DEADLINE_UNREACHABLE";
+            /** @enum {string} */
+            service_class: "interactive" | "standard" | "batch" | "experimental" | "opportunistic";
+            /**
+             * Format: double
+             * @description What this Run was worth at the moment it was asked: what its class starts at plus everything waiting has added to it. It is recorded rather than derived on read, because it is the number the ordering was decided on, and a reader deriving it from a class table somebody has since edited would be checking today's policy against yesterday's decision.
+             */
+            effective_priority: number;
+            /** Format: double */
+            base_priority: number;
+            /**
+             * Format: double
+             * @description How long this Run had been waiting when it was asked, measured from the first time admission deferred it.
+             */
+            queued_seconds: number;
+            /**
+             * Format: double
+             * @description How much of that wait the caller's own declaration held, which is every interval whose answer was GROUP_AT_PARALLELISM. The maximum queue delay below is charged on the rest of it, because that bound is Mercator's promise about keeping work waiting for capacity and a caller cannot break it by declaring a family narrower than its class's patience. The class deadline is asked of the whole wait, because an answer nobody is waiting for is worth nothing however the waiting was caused.
+             */
+            self_imposed_seconds?: number;
+            /**
+             * Format: double
+             * @description The longest its class allows this Run to be kept waiting for capacity. A wait past it is refused QUEUE_DELAY_EXCEEDED rather than held any longer, and the part of it self_imposed_seconds names is not charged against it.
+             */
+            max_queue_delay_seconds: number;
+            /**
+             * Format: double
+             * @description The shortest wait this Run faces, projected from the Bookings Mercator holds on the capacity that could hold it. Absent where nothing that could hold this Run carried a schedule to project from, which is a wait nobody measured rather than a wait of nothing.
+             */
+            projected_wait_seconds?: number;
+            fleet?: components["schemas"]["FleetAnswer"];
+            behind?: components["schemas"]["QueuedAhead"][];
+        };
+        FleetAnswer: {
+            /** @description How many machines the fleet published that this Run was measured against. */
+            weighed: number;
+            /** @description How many of those could have taken this Run once the capacity they are spending now comes back. A machine that is both busy and too small counts in weighed and never here. */
+            could_hold: number;
+            /** @description How many of them refused this Run only for facts nobody published. A node that could not measure its disk is what this exists for, and counting it among the machines that can never hold the work lets one failed measurement say a whole fleet has nothing. */
+            unstated?: number;
+        };
+        QueuedAhead: {
+            run_id: string;
+            /** @enum {string} */
+            service_class?: "interactive" | "standard" | "batch" | "experimental" | "opportunistic";
+            /**
+             * Format: double
+             * @description What the work ahead was worth at the same moment. It is zero for a Run that is already running, which is not a ranking: work that holds the machine is ahead because it is there rather than because it outranks anybody.
+             */
+            effective_priority?: number;
+        };
         Run: {
             id: string;
             workspace_id: string;
             workload_revision_id: string;
-            phase: string;
+            /**
+             * @description Where this Run is in its lifecycle. "queued" is a Run admission is holding, which is a state rather than a gap: before it, a Run nothing could place read as "requested" for ever and was indistinguishable from one Mercator had not reached yet. A queued Run says why in admission.
+             * @enum {string}
+             */
+            phase: "requested" | "queued" | "launching" | "running" | "cleaning_up" | "closed";
+            /**
+             * @description The kind of work this Run said it is, which is what decides where it sits in the queue and what a second of waiting is worth to it.
+             * @enum {string}
+             */
+            service_class?: "interactive" | "standard" | "batch" | "experimental" | "opportunistic";
+            /**
+             * Format: date-time
+             * @description When admission first told this Run to wait. It never moves once set, because both bounds its class states about waiting are measured from it, and it survives the Run leaving the queue so a reader can still see how long the Run waited.
+             */
+            queued_since?: string;
+            admission?: components["schemas"]["Admission"];
             /** @enum {string} */
             outcome?: "succeeded" | "failed" | "cancelled";
             exit_code?: number;
@@ -499,6 +570,16 @@ export interface components {
             /** @enum {string} */
             disposition?: "release" | "terminate";
             cleanup_error?: components["schemas"]["CleanupError"];
+            /**
+             * Format: date-time
+             * @description When this Run's workload actually began, as the machine holding it reported the moment. Absent until something observed one, and never the moment the launch was accepted: the difference between those two is what a start-latency prediction is calibrated against.
+             */
+            started_at?: string;
+            /**
+             * Format: date-time
+             * @description When this Run's application reported that it can do work, as the application itself stated the moment. Only the workload knows: a provider, a node, and a container runtime can all see a process running, and none of them can see whether it is serving. Absent until a ready report arrives, which is a stage with no actual rather than a workload that was ready the instant it started.
+             */
+            ready_at?: string;
             closed: boolean;
             created_by?: string;
             cancelled_by?: string;
@@ -557,8 +638,9 @@ export interface components {
         PlacementPreviewResponse: {
             decision: components["schemas"]["BookingDecision"];
         };
+        /** @description Every decision recorded about one Run, oldest first. A decision is appended and never rewritten, so the newest entry is the answer that stands, it names the entry it supersedes and why, and the ones before it are the answers a reader needs to see the Run's history. */
         BookingDecisionResponse: {
-            decision: components["schemas"]["BookingDecision"];
+            decisions: components["schemas"]["BookingDecision"][];
         };
         AdapterListResponse: {
             adapters: components["schemas"]["AdapterManifest"][];
@@ -614,7 +696,7 @@ export interface components {
             connection: components["schemas"]["ConnectionRecord"];
         };
         ReportRunRequest: {
-            /** @description Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code. */
+            /** @description Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code. The reserved ready kind is the application saying it can do work and requires data.ready_at, the application's own moment: it completes the last stage of a launch, and a readiness with no moment in it leaves that stage with no actual. */
             type: string;
             data?: {
                 [key: string]: unknown;
@@ -702,7 +784,7 @@ export interface components {
         };
         NetworkDownloadRequirement: {
             /** @enum {string} */
-            scope: "registry" | "public_internet";
+            scope: "registry" | "object_store" | "public_internet";
             /** Format: double */
             min_p10_mbps: number;
             /** Format: int64 */
@@ -715,15 +797,31 @@ export interface components {
             download?: components["schemas"]["NetworkDownloadRequirement"];
         };
         PlacementPolicy: {
-            /** @enum {string} */
-            objective: "cheapest" | "fastest_start" | "fastest_completion" | "balanced";
+            /**
+             * @description The kind of work this Run is, which is the only thing that says what waiting is worth to it. Every class declares its own exchange rate, and the score is computed over those rates: interactive prices a second of waiting to the start at twenty times the rent of the machine doing the waiting, standard at that rent, experimental and batch price it to the finish at twice and a fifth of it, and opportunistic prices it at nothing and takes whatever costs least. A class Mercator does not know is refused with SERVICE_CLASS_UNKNOWN rather than ranked on price alone. Omitted means standard.
+             * @enum {string}
+             */
+            service_class: "interactive" | "standard" | "batch" | "experimental" | "opportunistic";
+            group?: components["schemas"]["RunGroup"];
             /** Format: double */
             max_p90_start_seconds?: number;
             /** Format: double */
             expected_runtime_seconds?: number;
+            /**
+             * Format: double
+             * @description How long this workload takes to become ready for work once its process is running. It is the only prediction of the application-ready stage there is: readiness is the application's own semantics, so the workload is the only authority that can state it, and a Run that states nothing is predicted nothing.
+             */
+            expected_ready_seconds?: number;
             /** Format: double */
             max_expected_cost_usd?: number;
+            /** @description Whether this Run would rather run on a machine nobody has quoted a price for than not run at all. It admits such a candidate and never prefers one: an unpriced candidate ranks behind every candidate somebody priced, and it cannot clear max_expected_cost_usd, because a bound on dollars is not cleared by a candidate that has none. */
             allow_unknown_pricing?: boolean;
+        };
+        /** @description The family of Runs this one belongs to and the most of that family Mercator may have holding capacity at once. It is a bound on the work rather than a request for a machine: a member whose family is already that wide is queued GROUP_AT_PARALLELISM even where the fleet has capacity standing idle, and the wait ends when a member of the same family finishes. Every member states the width, because a group is a label the work carries rather than an object an operator creates: there is nothing to register before submitting, and a name without a width is refused with RUN_GROUP_INCOMPLETE. The name is scoped to the Run's own workspace, so two tenants naming one sweep are running two. */
+        RunGroup: {
+            id?: string;
+            /** @description How many members of this family may hold capacity at once. Zero is the absence of a family rather than a family of nothing. */
+            max_parallel?: number;
         };
         ExecutionPolicy: {
             /** Format: int64 */
@@ -873,6 +971,8 @@ export interface components {
             required?: unknown;
             offered?: unknown;
             message: string;
+            /** @description Whether this refusal names capacity that is spent right now and comes back when the work spending it finishes, rather than what the machine is. It is what decides whether work behind a Run refused everywhere is competing with it for the same machine. */
+            ended_by_waiting?: boolean;
         };
         AcceleratorInventory: {
             vendor: string;
@@ -931,7 +1031,7 @@ export interface components {
         };
         NetworkFact: {
             /** @enum {string} */
-            scope: "registry" | "public_internet";
+            scope: "registry" | "object_store" | "public_internet";
             statistic: string;
             /** Format: double */
             value_mbps: number;
@@ -974,8 +1074,16 @@ export interface components {
             /** Format: double */
             confidence?: number;
             source?: string;
+            /** @description How many measured launches stand behind this answer. Zero is the answer a prior gives, and it is a different claim from the same seconds read off one launch. */
             sample_count?: number;
             model_version?: string;
+            /**
+             * @description Which evidence answered this estimate: measured launches of this exact candidate, of this provider in this region, of this provider, or none at all. A prior is named rather than left blank so a reader can tell a measurement from a published claim, which the seconds alone cannot say.
+             * @enum {string}
+             */
+            level?: "exact_candidate" | "provider_and_region" | "provider" | "prior";
+            /** @description The key the samples were read under, where any were. It is recorded so a reader can check what Mercator took the candidate to be against what it then learned about: an answer claiming this exact candidate, filed under a number a marketplace mints per search, is a claim of candidate-specific evidence made out of a key that cannot have any. */
+            key?: string;
         };
         /** @description What this host says it holds. It answers what is here and never what is missing: what a Run would still have to fetch depends on which image is being asked about, and only the scheduler holds both halves. */
         ImageInventory: {
@@ -1002,17 +1110,67 @@ export interface components {
             /** Format: double */
             confidence: number;
         };
+        /** @description One share of a machine's history somebody measured, and how much the publisher of that measurement stands behind it. The confidence is what says the measurement happened at all: a rate of zero stated at a confidence somebody owns is a machine measured and never seen to fail, and a rate nobody stands behind is silence. */
+        StatedRate: {
+            /** Format: double */
+            rate: number;
+            /** Format: double */
+            confidence: number;
+        };
+        /**
+         * @description The kind of work a Run is, as its caller declared it. It is the only thing that can say what a second of waiting is worth, which is why it decides how a candidate is scored, and it is what capacity reserved for particular work is reserved by.
+         * @enum {string}
+         */
+        ServiceClass: "interactive" | "standard" | "batch" | "experimental" | "opportunistic";
+        /** @description What a machine was sold on beyond its rate: the interval Mercator already owes rent for, the kinds of work it may be used for, and the moment it stops being available. Capacity nobody has allocated states none of it, because nothing is owed on a machine that does not exist yet, it is reserved for nobody, and it is available for as long as its listing is. */
+        CapacityTerms: {
+            /**
+             * Format: date-time
+             * @description When the interval Mercator already owes rent for ends. Rent inside it is money already spent, so the seconds a Run occupies are the cheapest in the fleet and the seconds nothing occupies are the most wasted. Absent is capacity nothing is owed on, which is a different answer from an interval that has already lapsed: a machine whose interval ended pays for its next second.
+             */
+            committed_until?: string;
+            /** @description Which service classes may run here, and absent is capacity held for nobody in particular. It is how reserved capacity is stated, and a class that is not listed is refused the machine outright rather than priced on it, because a reservation is a statement about what the machine is for and no amount of waiting changes it. */
+            eligible_classes?: components["schemas"]["ServiceClass"][];
+            /**
+             * Format: date-time
+             * @description When this capacity stops being Mercator's to use. It is a window somebody declared rather than capacity that can be reclaimed without notice: the moment is known, so work that finishes inside it is never at risk and work that could still be running then is refused before it starts.
+             */
+            available_until?: string;
+        };
+        /** @description One part of what a placement costs and what that part is worth. A price recorded as one number cannot be argued with: rent for seconds Mercator has already bought, rent the placement itself commits it to, and the tail of a billing increment nothing will use are three different claims about one machine. */
+        CostTerm: {
+            /**
+             * @description Which part of the sale this is. setup_fee is what a provider charges to hand over a machine, paid only by capacity Mercator has to acquire. committed_rent is rent for the seconds of this occupancy inside an interval Mercator already owes for, charged to the Run that spends them because nothing else can then have them. keep_alive is rent for the seconds beyond that interval, which this placement is what commits Mercator to. idle_tail is rent for seconds this placement forces Mercator to buy and nothing uses, which is the remainder of the last increment its publisher sells.
+             * @enum {string}
+             */
+            name: "setup_fee" | "committed_rent" | "keep_alive" | "idle_tail";
+            /** Format: double */
+            usd: number;
+        };
+        /** @description One machine's already-owed rent as one placement met it: when the interval ends, when this Run would start spending it, and how many of its seconds this Run would take. Capacity nothing is owed on carries none of it. */
+        CommittedInterval: {
+            /** Format: date-time */
+            until?: string;
+            /**
+             * Format: double
+             * @description How long after the decision this Run would begin occupying the machine. Two Runs on one machine spend disjoint stretches of one interval, and without the offset a record of the seconds each of them spent cannot be told from a record of the same seconds sold twice.
+             */
+            from_seconds?: number;
+            /** Format: double */
+            seconds?: number;
+        };
+        /** @description The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero. The whole history is absent when a publisher has measured nothing, which is every provider in this tree today, so a reader must treat no history and a history of zeroes as different answers. */
         ReliabilityEvidence: {
-            /** Format: double */
-            start_failure_rate?: number;
-            /** Format: double */
-            interruption_rate?: number;
-            /** Format: double */
-            confidence?: number;
+            /** @description How often this machine refuses to start the work it is given. Absent means nobody has measured that, which is what every provider in this tree publishes today. */
+            start_failures?: components["schemas"]["StatedRate"];
+            /** @description How often this machine drops the work it is already running. Absent means nobody has measured that. */
+            interruptions?: components["schemas"]["StatedRate"];
         };
         OfferSnapshot: {
             id: string;
             rental_id?: string;
+            /** @description The machine behind this capacity, named by the handle its backend has for the machine itself. An enrolled node states its node ID and a Docker endpoint states the daemon's own ID; a provider catalog listing states none, because the machine it describes does not exist yet. It is neither the lease nor anything about the route Mercator took to reach the machine: two machines can be invited against one lease, and one machine's endpoint changes whenever an operator changes how Mercator reaches it. */
+            machine_id?: string;
             connection_id: string;
             adapter_type: string;
             /**
@@ -1026,6 +1184,8 @@ export interface components {
              */
             lane: "reusable" | "ephemeral";
             native_ref: string;
+            region?: string;
+            instance_type?: string;
             /** Format: date-time */
             observed_at: string;
             /** Format: date-time */
@@ -1035,37 +1195,83 @@ export interface components {
             capabilities: components["schemas"]["CapabilityProfile"];
             network: components["schemas"]["NetworkFacts"];
             pricing: components["schemas"]["PriceModel"];
+            capacity_terms?: components["schemas"]["CapacityTerms"];
             queue?: components["schemas"]["QueueSnapshot"];
             provisioning?: components["schemas"]["Estimate"];
             images: components["schemas"]["ImageInventory"];
             artifacts: components["schemas"]["ArtifactInventory"];
             caches?: components["schemas"]["CacheInventory"];
             capacity: components["schemas"]["CapacityEvidence"];
-            reliability: components["schemas"]["ReliabilityEvidence"];
+            /** @description Whether the provider of this capacity says it may take the machine back while Mercator is still using it, which is the term a spot ask and an interruptible listing are sold on. It is stated by the backend that sold the capacity rather than inferred from the interruption rate in reliability: a rate is how often a machine has been seen to fail, and work that may not be interrupted has to be refused on what the capacity is. A Run whose service class does not permit interruption is struck out here with INTERRUPTION_NOT_PERMITTED, because nothing Mercator holds survives a machine being reclaimed and there is no decision left once the provider says so. */
+            reclaimable?: boolean;
+            reliability?: components["schemas"]["ReliabilityEvidence"];
         };
         CollectionReport: {
             connections_queried?: string[];
             connections_from_cache?: string[];
             excluded_connections?: string[];
         };
+        /** @description What this candidate is predicted to spend on each stage of a launch. There are eight of them, and they are eight rather than four because each is answered by a different authority, fails for a different reason, and has an actual of its own. */
+        LaunchStageEstimates: {
+            /** @description The provider allocating the machine. No provider in any catalog publishes it, so its source reads "unpublished" for capacity that has to be allocated and "machine_exists" for capacity that is already there. */
+            acquisition_seconds: components["schemas"]["Estimate"];
+            /** @description The machine reaching a usable operating system. This is where a published provisioning claim is recorded, because that is what its publisher calls it. */
+            boot_seconds: components["schemas"]["Estimate"];
+            /** @description Mercator's node runtime enrolling on the machine. Published by nobody. */
+            agent_ready_seconds: components["schemas"]["Estimate"];
+            /** @description Image bytes this host does not hold crossing the link from a registry. */
+            image_fetch_seconds: components["schemas"]["Estimate"];
+            /** @description Content already on this host's disk becoming a layer chain a container can start on. A host holding every byte of an image it never assembled owes this and no transfer. */
+            unpack_seconds: components["schemas"]["Estimate"];
+            /** @description What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from the image fetch because it is a different transfer over different content from a different authority. */
+            artifact_fetch_seconds: components["schemas"]["Estimate"];
+            /** @description The container runtime creating the container and holding a process in it. */
+            container_start_seconds: components["schemas"]["Estimate"];
+            /** @description How long the workload said it takes to become ready once its process is running. It is predicted from the declaration alone, because readiness is the application's own semantics, and it is not part of start_seconds: a start is the moment the process began and readiness is a later one. */
+            application_ready_seconds: components["schemas"]["Estimate"];
+        };
         CandidateEstimates: {
             queue_seconds: components["schemas"]["Estimate"];
-            provision_seconds: components["schemas"]["Estimate"];
-            pull_seconds: components["schemas"]["Estimate"];
-            /** @description What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from pull_seconds because it is a different transfer over different content from a different authority. */
-            artifact_seconds: components["schemas"]["Estimate"];
+            stages: components["schemas"]["LaunchStageEstimates"];
             start_seconds: components["schemas"]["Estimate"];
-            /** @description The part of the start prediction somebody established: queue and provisioning, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess. */
+            /** @description The part of the start prediction somebody established: queue and boot, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess. */
             established_start_seconds: components["schemas"]["Estimate"];
+            /** @description What Mercator's spend changes by if this Run occupies this machine, over the runtime it declared. A machine whose price nobody published has no such number and predicts none: its source reads "unpriced", which is what the ranking reads to place it behind every candidate somebody priced. A rate of zero is a machine somebody says is free, which is a different answer. */
             cost_usd: components["schemas"]["Estimate"];
+            /** @description What those dollars are made of, one entry per part of the price this candidate was charged for. A machine nobody quoted carries none. The total alone cannot be argued with: a machine charged the shadow price of one Run's seconds and a machine charged the whole hour it is committed to are the same claim to a reader who sees only dollars, and the difference is which term they are in. */
+            cost_terms?: components["schemas"]["CostTerm"][];
+            /** @description The interval Mercator already owed rent for on this machine and the seconds of it this placement would spend. Committed rent is money spent once however many candidates are weighed against it, so a reader holding only the dollars cannot tell one Run charged for an hour from four Runs charged for the same hour. */
+            committed_interval?: components["schemas"]["CommittedInterval"];
+        };
+        /** @description What Mercator took a candidate to be, as opposed to what the listing was called. A prediction claiming evidence about this exact candidate has to say which candidate it meant, and every field here is a fact a backend published rather than an identifier Mercator minted. A candidate that publishes nothing outliving its listing states only a provider and a lane, which is how the record says no history about it can ever be read again. */
+        CandidateIdentity: {
+            /**
+             * @description What this capacity is for: a machine Mercator controls through an enrolled runtime and can hand successive workloads to, or a provider-native one-shot execution that holds nothing once its workload exits. It is part of the identity because the two have different stages to predict and different disks afterwards, so one key over both would report each lane's history as the other's.
+             * @enum {string}
+             */
+            lane?: "reusable" | "ephemeral";
+            /** @description The machine this capacity is, where its backend can name one. It is never the lease and never the route Mercator took to reach the machine. */
+            machine?: string;
+            /** @description The backend the capacity comes from, which is the coarsest thing worth learning about and the only field every candidate has. */
+            provider?: string;
+            /** @description Where the machine is, in the provider's own vocabulary. Absent for a provider that publishes no geography at all. */
+            region?: string;
+            /** @description The product name the provider sells this capacity under. Absent for a provider that sells asks against individual machines instead of named products. */
+            instance_type?: string;
+            /** @description How many cards of each accelerator product this capacity holds, canonicalized and counted per product so an inventory grouped two ways is one answer. */
+            accelerator?: string;
+            /** @description The content this candidate was asked to run. Stages whose duration is a property of the content are filed with it; stages that are a property of the machine are not. */
+            image_digest?: string;
         };
         CandidateDecision: {
             offer_snapshot_id: string;
             connection_id?: string;
             adapter_type?: string;
             native_ref?: string;
+            /** @description The recurring thing a launch prediction about this candidate is filed under: the machine where its backend named one, otherwise the product a provider sells, and the content it was asked to run. The identifiers beside it are this listing as this search found it, and how much of a listing recurs differs per backend with nothing in the ID to say which. */
+            candidate?: components["schemas"]["CandidateIdentity"];
             /** @enum {string} */
-            disposition: "run_now_existing_rental" | "queue_existing_rental" | "provision_fresh_rental";
+            disposition: "run_now_existing_rental" | "queue_existing_rental" | "provision_fresh_rental" | "launch_ephemeral";
             feasible: boolean;
             rejections?: components["schemas"]["Violation"][];
             /**
@@ -1078,9 +1284,113 @@ export interface components {
             /** @description What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name. */
             cache_evidence?: components["schemas"]["CacheEvidence"][];
             disk?: components["schemas"]["DiskDemand"];
+            /** @description The risk history this candidate's publisher stated: how often this machine refuses to start, and how often it drops the work it is running. It is recorded, never priced, and never doubted. What a refusal is worth is a probability times a predicted start, nothing here predicts either yet, and a flat penalty invented for it would be an exchange rate this model made up. It is recorded so the account of what was known when the placement was taken is complete. The confidence beside it is deliberately absent from confidences: doubt about an answer the score never reads charges a publisher for having measured its machine, and it made a machine measured and never seen to fail lose to an identical machine nobody had measured. */
+            reliability?: components["schemas"]["ReliabilityEvidence"];
+            /** @description The Broker state this candidate was weighed against, present only for a Rental that has Bookings on it. The queue estimate beside it is the projection; this is what the projection was read from. A Rental nothing is assigned to records none, because an empty schedule offered as evidence reads as a queue that was measured rather than one that does not exist. */
+            rental_schedule?: components["schemas"]["ScheduleEvidence"];
             estimates: components["schemas"]["CandidateEstimates"];
-            /** Format: double */
+            /** @description The throughput each transfer stage of this launch was priced at and where that number came from, one entry per stage that had bytes to move. A stage with nothing to move records none, because there was no transfer to price, and nothing else suppresses one: every transfer this fleet prices is bytes over a rate, so a transfer is not a stage the estimator answers out of measured launches. The seconds a candidate is charged are bytes over a rate, the bytes are explained by the locality evidence, and this is the other half: a machine priced at a throughput nothing on it ever reported and a machine priced at Mercator's own assumption produce the same seconds and are different claims. */
+            transfer_rates?: components["schemas"]["TransferRate"][];
+            /** @description What each answer this candidate was scored on is worth, one entry per source that stated one. It is the whole input to the score's uncertainty term, recorded so score_usd can be re-derived from this record: a scoring term whose input is not here is a term no reader can check. An answer nobody stated a confidence for is absent rather than zero, because stating no opinion is not the same as stating that an answer is worthless. */
+            confidences?: components["schemas"]["Confidence"][];
+            /**
+             * Format: double
+             * @description What this candidate is worth to this Run in dollars, lowest first: the cost it would be billed, plus the dollars its service class says it would rather pay than wait, plus the dollars it would rather pay than act on a doubtful answer. Every quantity it multiplies is recorded beside it, at the weights the decision states, so it can be re-derived rather than trusted. An infeasible candidate scores nothing, because it has no price.
+             */
             score_usd?: number;
+        };
+        /** @description The throughput one stage of a launch was priced at, named by the stage and by the path it crosses. Exactly one of measurement and assumption is stated: a rate is either something somebody measured on this path or the constant Mercator falls back to when nobody did. */
+        TransferRate: {
+            /** @enum {string} */
+            stage: "acquisition" | "boot" | "agent_ready" | "image_fetch" | "unpack" | "artifact_fetch" | "container_start" | "application_ready";
+            /**
+             * @description The path this rate describes. Absent for a rate that crosses no path: assembling content already on the disk is priced from a storage rate, and naming a link for it would invite a reader to check it against a measurement of something else.
+             * @enum {string}
+             */
+            scope?: "registry" | "object_store" | "public_internet";
+            /** Format: double */
+            mbps: number;
+            /**
+             * Format: int64
+             * @description What had to move at that rate, so the stage's seconds can be retraced from this record alone.
+             */
+            bytes: number;
+            /** Format: double */
+            confidence: number;
+            /** @description Who measured this path, in their own words. Absent when nothing measured it. */
+            measurement?: string;
+            /** @description The stated constant this rate is when nothing measured the path. Absent when something did. */
+            assumption?: string;
+        };
+        /** @description One answer a placement rested on and what its source said it was worth. */
+        Confidence: {
+            /** @description What was being answered, in the vocabulary of whatever answered: the capacity claim, the reliability history, the image transfer, the Artifact read. */
+            answer: string;
+            /** Format: double */
+            value: number;
+        };
+        /** @description The exchange rates one service class declares, which are what a score is computed over. They are recorded on every decision rather than looked up, because a rate that changes would otherwise silently rewrite the arithmetic of every decision already taken. The two reliability terms a score will eventually carry are absent on purpose: probability times the cost of starting again is a derivation over a prediction, and a flat penalty invented for it now would be an unmeasured constant. */
+        ScoreWeights: {
+            /** Format: double */
+            start_latency_usd_per_second?: number;
+            /** Format: double */
+            completion_latency_usd_per_second?: number;
+            /**
+             * Format: double
+             * @description What one whole point of doubt costs. A point is one answer worth nothing.
+             */
+            uncertainty_penalty_usd?: number;
+        };
+        /** @description The Booking holding the Rental when a decision was made. Its runtimes are what it has left rather than what its Run declared, because a Booking twenty-nine minutes into half an hour is one minute of waiting. */
+        RunningBookingEvidence: {
+            booking_id: string;
+            run_id: string;
+            /**
+             * Format: double
+             * @description The enforced maximum runtime this Booking has left, which is what a latest start for anything waiting behind it is made of.
+             */
+            remaining_max_runtime_seconds?: number;
+            /**
+             * Format: double
+             * @description The p50 runtime this Booking has left, which is what a projected start behind it is made of.
+             */
+            remaining_expected_runtime_seconds?: number;
+            /**
+             * Format: double
+             * @description How far past the runtime Mercator enforces this Booking has run. Both remainders above bottom out at zero, so without this the record of a Rental nothing can project is the record a Rental a moment from free writes.
+             */
+            overrun_seconds?: number;
+        };
+        /** @description A Booking that had not started when a decision was made. It still owes every second its Run declared, which is why these fields carry the declared runtimes rather than remaining ones. */
+        WaitingBookingEvidence: {
+            booking_id: string;
+            run_id: string;
+            /**
+             * Format: double
+             * @description The enforced maximum runtime this Booking's Run declared.
+             */
+            max_runtime_seconds?: number;
+            /**
+             * Format: double
+             * @description The p50 runtime this Booking's Run declared.
+             */
+            expected_runtime_seconds?: number;
+        };
+        /** @description One Rental Schedule as a placement decision read it: the version that answered, the Booking holding the Rental, the Bookings already waiting in front of this Run, and the wait that projects from them. A schedule moves, so the wait a Run was priced was read from one version of it at one moment, and a decision that recorded only the seconds leaves nobody able to retrace them. */
+        ScheduleEvidence: {
+            /**
+             * Format: int64
+             * @description The schedule version this decision was weighed against. A Booking the decision creates follows it.
+             */
+            version: number;
+            running?: components["schemas"]["RunningBookingEvidence"];
+            /** @description The Bookings already waiting on this Rental, in the order they will run. */
+            preceding?: components["schemas"]["WaitingBookingEvidence"][];
+            /**
+             * Format: double
+             * @description How long work arriving at this moment waits for this Rental, projected from where the Bookings above actually are.
+             */
+            projected_start_seconds: number;
         };
         Booking: {
             id: string;
@@ -1104,11 +1414,17 @@ export interface components {
             evaluated_at: string;
             model_version: string;
             policy: components["schemas"]["PlacementPolicy"];
+            /** @description The exchange rates every candidate below was scored at, which the Run's service class declared. */
+            weights: components["schemas"]["ScoreWeights"];
             collection_report: components["schemas"]["CollectionReport"];
             candidates: components["schemas"]["CandidateDecision"][];
             selected_offer_snapshot_id?: string;
             booking?: components["schemas"]["Booking"];
             selection_reason_codes: string[];
+            /** @description The decision this one replaces. Empty on a Run's first decision, which replaces nothing. */
+            supersedes?: string;
+            /** @description Why this decision replaces the one it names: PREVIOUS_LAUNCH_FAILED when the machine the earlier decision chose refused to start the work, PREVIOUS_DECISION_SELECTED_NOTHING when the earlier decision placed the Run nowhere and the fleet was asked again. */
+            supersedes_reason?: string;
         };
         CloudEvent: {
             specversion: string;
@@ -1155,6 +1471,18 @@ export interface components {
             rental_id?: string;
             /** @description What holding this machine costs. Placement needs a price to weigh a node against fresh capacity; a node invited at zero has unknown pricing and is refused rather than treated as free. */
             shadow_price_usd_per_hour: number;
+            /**
+             * Format: int64
+             * @description The block of time this machine is bought in. Work that runs past the end of the interval Mercator has committed to commits it to the next whole one, and the part of that nothing uses is charged to the placement that bought it rather than to nobody. Omitted is a machine bought in no increments at all, which is an operator's own hardware: Mercator holds it continuously, so no second of it is a fresh commitment and there is no tail to charge.
+             */
+            billing_interval_seconds?: number;
+            /** @description The kinds of work this machine may be used for. Omitted is a machine held for nobody in particular. Work of any other class is refused this machine outright rather than priced on it. */
+            eligible_service_classes?: components["schemas"]["ServiceClass"][];
+            /**
+             * Format: date-time
+             * @description When this machine stops being Mercator's to use. Omitted is a machine with no such moment. Work that could still be running then is refused before it starts, judged against the runtime Mercator enforces rather than the one its caller expects.
+             */
+            available_until?: string;
         };
         NodeBootstrapResponse: {
             control_plane_url: string;
@@ -1849,7 +2177,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Placement decision */
+            /** @description Placement decision chain */
             200: {
                 headers: {
                     [name: string]: unknown;

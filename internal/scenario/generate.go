@@ -224,6 +224,12 @@ func (generator *blueprintGenerator) marketplace(count int) []MarketplaceOfferSp
 		expected := Duration(time.Duration(30+generator.draw("market/"+id+"/provision", 271)) * time.Second)
 		p90 := Duration(expected.Duration() + time.Duration(30+generator.draw("market/"+id+"/p90", 301))*time.Second)
 		minimum := Duration(time.Duration(30+generator.draw("market/"+id+"/minimum", 271)) * time.Second)
+		// A generated machine really spends its stages, drawn independently of the
+		// expectation its provider published: a generator whose actual equalled its
+		// own claim would make every start prediction right by construction.
+		acquisition := Duration(time.Duration(generator.draw("market/"+id+"/acquisition", 61)) * time.Second)
+		boot := Duration(time.Duration(15+generator.draw("market/"+id+"/boot", 121)) * time.Second)
+		agentReady := Duration(time.Duration(5+generator.draw("market/"+id+"/agent", 31)) * time.Second)
 		offers[index] = MarketplaceOfferSpec{
 			ID:             id,
 			Provider:       "generated-cloud",
@@ -234,8 +240,14 @@ func (generator *blueprintGenerator) marketplace(count int) []MarketplaceOfferSp
 				SetupFeeUSD:   generator.price("market/"+id+"/setup", 0, 100),
 				MinimumCharge: &minimum,
 			},
-			Provisioning: ProvisioningSpec{Expected: expected, P90: &p90},
-			Resources:    generatedResources(index + 1),
+			Provisioning: ProvisioningSpec{
+				Expected:    expected,
+				P90:         &p90,
+				Acquisition: &acquisition,
+				Boot:        &boot,
+				AgentReady:  &agentReady,
+			},
+			Resources: generatedResources(index + 1),
 		}
 	}
 	return offers
@@ -249,7 +261,6 @@ func (generator *blueprintGenerator) arrivals(config GeneratorConfig, imageRefs 
 			Type: ArrivalPeriodic,
 			Periodic: &RunFamilySpec{
 				NamePrefix: "periodic",
-				Group:      "generated-periodic",
 				At:         0,
 				Interval:   Duration(time.Minute),
 				Count:      config.RunCount,
@@ -261,7 +272,6 @@ func (generator *blueprintGenerator) arrivals(config GeneratorConfig, imageRefs 
 			Type: ArrivalBurst,
 			Burst: &RunFamilySpec{
 				NamePrefix: "burst",
-				Group:      "generated-burst",
 				At:         Duration(time.Minute),
 				Interval:   0,
 				Count:      config.RunCount,
@@ -280,7 +290,6 @@ func (generator *blueprintGenerator) arrivals(config GeneratorConfig, imageRefs 
 			}
 			runs[index] = RunArrivalSpec{
 				Name:    fmt.Sprintf("generated-%03d", index+1),
-				Group:   "generated-dag",
 				At:      Duration(time.Duration(index/2) * time.Minute),
 				Request: runRequest,
 			}
@@ -297,7 +306,7 @@ func (generator *blueprintGenerator) request(image string) RequestSpec {
 		Resources:       generatedRunResources(),
 		ExpectedRuntime: &expected,
 		MaxRuntime:      &maximum,
-		Objective:       "balanced",
+		ServiceClass:    string(domain.ClassStandard),
 		CacheMounts:     []CacheMountSpec{{Name: "build-cache", CompatibilityKey: "generated-v1", Size: ByteSize(2e9)}},
 		Phases: []WorkloadPhaseSpec{
 			{Name: "prepare", Duration: Duration(2 * time.Minute)},

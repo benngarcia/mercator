@@ -186,14 +186,29 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 		ConnectionID: id.ConnectionID,
 		AdapterType:  "docker",
 		Kind:         domain.OfferKindStanding,
-		NativeRef:    id.NativeRef,
-		ObservedAt:   now,
-		ExpiresAt:    now.Add(time.Hour),
-		Platform:     domain.Platform{OS: "linux", Architecture: arch},
+		// What a Docker endpoint offers is one machine, and the machine is the
+		// daemon: its image store is what a second Run finds warm, so it is the
+		// machine a launch history belongs to. The daemon says which one it is, and
+		// nothing derived from the endpoint can. Every identifier in EndpointIdentity
+		// is built from the label, which is a DOCKER_HOST hostname or a context name:
+		// a rootful and a rootless daemon on this box are both "loopback", two ports
+		// on one host are both its hostname, and moving from a host URL to a context
+		// renames the machine without touching it.
+		//
+		// A daemon that could not be reached states no machine, which is the honest
+		// answer: an endpoint Mercator cannot ask has nothing to file a history
+		// under, and inventing one from the label is how two machines came to share
+		// a history.
+		MachineID:  info.ID,
+		NativeRef:  id.NativeRef,
+		ObservedAt: now,
+		ExpiresAt:  now.Add(time.Hour),
+		Platform:   domain.Platform{OS: "linux", Architecture: arch},
 		Resources: domain.ResourceInventory{
 			CPUMillis:          cpuMillis,
 			MemoryBytes:        memoryBytes,
 			EphemeralDiskBytes: ephemeralDiskBytes,
+			EphemeralDiskKnown: true,
 			Accelerators:       accelerators,
 		},
 		Capabilities: domain.CapabilityProfile{
@@ -229,7 +244,10 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 		// to yet. A silent inventory is the honest answer: claiming it holds
 		// nothing would price every image as a full transfer, and claiming it
 		// holds everything is the error this contract exists to delete.
-		Images:   domain.ImageInventory{Known: false},
+		Images: domain.ImageInventory{Known: false},
+		// This daemon was probed, so the capacity claim is Mercator's own
+		// observation of a machine it can see rather than a catalog listing it was
+		// handed, which is why it carries full confidence.
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }

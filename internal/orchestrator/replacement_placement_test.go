@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 	if record.Closed || record.Phase != "running" {
 		t.Fatalf("replacement should keep the run alive on alternate capacity: %+v", record)
 	}
-	decision, err := orch.GetBookingDecision(ctx, "ws_1", "run_replacement")
+	decision, err := standingDecision(t, orch, ctx, "ws_1", "run_replacement")
 	if err != nil {
 		t.Fatalf("get latest placement: %v", err)
 	}
@@ -118,6 +119,58 @@ func TestAdvanceRunClosesWithRetryExhaustedAfterBoundedAttempts(t *testing.T) {
 	assertClosedReason(t, orch, "run_replacement", "RETRY_EXHAUSTED")
 }
 
+// TestTheChainAReaderGetsHoldsEveryAnswer is the decision record as the one
+// production read path hands it over. A decision is appended and never rewritten,
+// so what a reader gets is a chain, and every account of why a Run went where it
+// did is built on the entries before the last one: which machine was tried first,
+// which machine turned the work away, and in what order.
+//
+// Nothing constrained that. The Lab corpus and the conformance suite both read
+// booking_decided events straight out of the log, so GetBookingDecisions could be
+// collapsed to its last entry with the whole tree green, and a launch-failure trial
+// would show a Run that had only ever been answered once.
+//
+// Three answers rather than two, because two is the length at which a chain that
+// skips a link is indistinguishable from a chain that does not. Two machines refuse
+// the launch and the third takes it, so the middle answer is one a reader has to
+// walk through to get from the first to the last.
+func TestTheChainAReaderGetsHoldsEveryAnswer(t *testing.T) {
+	offers := replacementOffers(t, "two_refusals_then_a_machine")
+	first, next, takes := offers[0], offers[1], offers[2]
+	provider := newReplacementProvider(offers, map[string]error{
+		first.ID: capacityUnavailable(),
+		next.ID:  capacityUnavailable(),
+	})
+	orch := newReplacementOrchestrator(t, provider)
+	createReplacementRun(t, orch, 3)
+
+	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); err != nil {
+		t.Fatalf("advance a Run two machines refused: %v", err)
+	}
+
+	chain, err := orch.GetBookingDecisions(t.Context(), "ws_1", "run_replacement")
+	if err != nil {
+		t.Fatalf("read the decision chain: %v", err)
+	}
+	selected := []string{}
+	for _, decision := range chain {
+		selected = append(selected, decision.SelectedOfferSnapshotID)
+	}
+	if !slices.Equal(selected, []string{first.ID, next.ID, takes.ID}) {
+		t.Fatalf("the chain a reader gets names %v, and the Run was sent to three machines in that order", selected)
+	}
+	for index, decision := range chain[1:] {
+		predecessor := chain[index]
+		if decision.Supersedes != predecessor.ID || decision.SupersedesReason != domain.SupersededLaunchFailed {
+			t.Fatalf("decision %q replaces %q for %q, and the answer recorded before it was %q, refused by the machine it chose",
+				decision.ID, decision.Supersedes, decision.SupersedesReason, predecessor.ID)
+		}
+	}
+	if chain[0].Supersedes != "" || chain[0].SupersedesReason != "" {
+		t.Fatalf("the first answer replaces %q for %q, and nothing came before it", chain[0].Supersedes, chain[0].SupersedesReason)
+	}
+}
+
 func TestAdvanceRunRecordsTheDecisionThatExhaustsEligibleOffers(t *testing.T) {
 	stale := replacementOffers(t, "single_stale")[0]
 	provider := newReplacementProvider([]domain.OfferSnapshot{stale}, map[string]error{
@@ -130,7 +183,7 @@ func TestAdvanceRunRecordsTheDecisionThatExhaustsEligibleOffers(t *testing.T) {
 		t.Fatalf("exhaust eligible offers: %v", err)
 	}
 
-	decision, err := orch.GetBookingDecision(t.Context(), "ws_1", "run_replacement")
+	decision, err := standingDecision(t, orch, t.Context(), "ws_1", "run_replacement")
 	if err != nil {
 		t.Fatalf("get exhausted placement: %v", err)
 	}
@@ -440,6 +493,19 @@ func assertCompleteAttemptHistory(t *testing.T, orch *Orchestrator, runID string
 	}
 }
 
+// standingDecision is the answer that stands: the last entry of the chain
+// Mercator recorded. Every earlier entry is an answer this one replaced and names,
+// so a caller who wants the current answer asks for the chain and takes its end
+// rather than being handed a Run that looks as though it was answered once.
+func standingDecision(t *testing.T, orch *Orchestrator, ctx context.Context, workspaceID, runID string) (domain.BookingDecision, error) {
+	t.Helper()
+	chain, err := orch.GetBookingDecisions(ctx, workspaceID, runID)
+	if err != nil {
+		return domain.BookingDecision{}, err
+	}
+	return chain[len(chain)-1], nil
+}
+
 func bookingDecisionsFromRun(t *testing.T, orch *Orchestrator, runID string) []domain.BookingDecision {
 	t.Helper()
 	events, err := orch.GetRunEvents(t.Context(), "ws_1", runID)
@@ -501,4 +567,16 @@ func replacementEvents(t *testing.T, orch *Orchestrator, runID string) []eventlo
 		t.Fatalf("get run events: %v", err)
 	}
 	return events
+}
+
+// CollectOffers is this double answering as the whole fleet. Every double that
+// states its own offers has to state its own census too: Go resolves an embedded
+// method against the embedded value, so a census inherited from the fake adapter
+// would answer about offers this double does not publish.
+func (p *replacementProvider) CollectOffers(ctx context.Context, req adapter.OfferRequest) (adapter.OfferCollection, error) {
+	offers, err := p.ListOffers(ctx, req)
+	if err != nil {
+		return adapter.OfferCollection{}, err
+	}
+	return adapter.OfferCollection{Offers: offers, Queried: []string{fake.ConnectionID}}, nil
 }

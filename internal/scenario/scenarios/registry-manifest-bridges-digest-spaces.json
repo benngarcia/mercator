@@ -50,6 +50,7 @@
       "submit": "resolved",
       "request": {
         "image": "trainer@sha256:6ce45a60733c41462d62e62fb98fd1622ac468a661f54bff450574cb255cca0b",
+        "service_class": "standard",
         "expected_runtime": "10m",
         "max_runtime": "20m"
       },
@@ -60,17 +61,15 @@
         "candidates": {
           "docker-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "image_inventory",
-            "pull_confidence": 1
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "image_inventory", "confidence": 1}
+            }
           },
           "bare-host": {
             "feasible": true,
-            "pull_seconds": {
-              "at_least": 380
-            },
-            "pull_source": "image_inventory",
-            "pull_confidence": 0.5
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 380}, "source": "image_inventory", "confidence": 0.5}
+            }
           }
         }
       }
@@ -82,6 +81,7 @@
       "submit": "unreadable",
       "request": {
         "image": "mystery@sha256:4a90ab7a93e3324470f02fba88cf9f7b528798a067f860391e0a1aba595abb0f",
+        "service_class": "standard",
         "expected_runtime": "10m",
         "max_runtime": "20m"
       },
@@ -92,15 +92,15 @@
         "candidates": {
           "docker-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_unauthorized",
-            "pull_confidence": 0
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_unauthorized", "confidence": 0}
+            }
           },
           "bare-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_unauthorized",
-            "pull_confidence": 0
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_unauthorized", "confidence": 0}
+            }
           }
         }
       }

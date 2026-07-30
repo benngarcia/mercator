@@ -24,9 +24,15 @@ func TestServiceSeesWorkloadRevisionBeyondOneStreamPage(t *testing.T) {
 		revision := validRevision()
 		revision.ID = fmt.Sprintf("wrev_%04d", i+1)
 		revision.WorkloadID = "wrk_history"
-		data, err := json.Marshal(revisionCreatedData{Revision: revision})
+		// Seeded where the door writes it: the whole revision is the private
+		// payload, because that is the copy an environment value survives in.
+		private, err := json.Marshal(revisionCreatedData{Revision: revision})
 		if err != nil {
 			t.Fatalf("marshal revision %d: %v", i+1, err)
+		}
+		data, err := json.Marshal(publicRevisionCreatedData{Revision: revision.Public()})
+		if err != nil {
+			t.Fatalf("marshal public revision %d: %v", i+1, err)
 		}
 		events[i] = eventlog.NewEvent{
 			ID:            fmt.Sprintf("evt_workload_history_%04d", i+1),
@@ -34,6 +40,7 @@ func TestServiceSeesWorkloadRevisionBeyondOneStreamPage(t *testing.T) {
 			SchemaVersion: 1,
 			OccurredAt:    time.Now().UTC(),
 			Data:          data,
+			PrivateData:   private,
 		}
 	}
 	if _, err := log.Append(ctx, eventlog.AppendRequest{

@@ -6,6 +6,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/scenario"
 )
 
 // prefetchKeyPrefix marks the transfers this world is moving speculatively.
@@ -55,6 +56,8 @@ func (world *simulatedWorld) Prepare(_ context.Context, request adapter.PrepareR
 			receipt.Started = append(receipt.Started, started)
 		case prefetchUnsupported:
 			receipt.Unsupported = append(receipt.Unsupported, started)
+		case prefetchRefused:
+			receipt.Refused = append(receipt.Refused, item.Identity())
 		case prefetchDuplicate:
 			receipt.Duplicate = true
 		}
@@ -69,6 +72,7 @@ const (
 	prefetchStarted prefetchOutcome = iota + 1
 	prefetchDuplicate
 	prefetchUnsupported
+	prefetchRefused
 )
 
 // startPrefetch begins moving one piece of content onto one machine, or says
@@ -76,6 +80,12 @@ const (
 // preparing a one-shot product or a machine that does not exist yet would be
 // warmth with nowhere to survive, which is the same rule every other content
 // path in this world holds.
+//
+// A machine that turns the fetch away leaves the identity askable. That is the
+// whole difference between a refusal and either of the other two answers: nothing
+// is moving, nothing was kept, and the same content asked for again is a first
+// ask rather than a redelivery. So the identity is remembered only once a fetch
+// this world really took on, which is the same rule the operation store holds.
 func (world *simulatedWorld) startPrefetch(item adapter.PrepareItem) (prefetchOutcome, string) {
 	operation := prefetchOperationID(item)
 	if world.prepared[operation] {
@@ -88,6 +98,12 @@ func (world *simulatedWorld) startPrefetch(item adapter.PrepareItem) (prefetchOu
 			"reason": "this machine keeps nothing, so content prepared on it could not outlive one workload",
 		})
 		return prefetchUnsupported, operation
+	}
+	if fault := world.matchOperationFault(prefetchOperation(item), item.RunID, 0); fault != nil && fault.Action == scenario.FaultRejectCommand {
+		world.recordPrefetchEffectWithFault(item, operation, EffectCommandRejected, map[string]any{
+			"reason": "this machine could not fetch the content it was asked for",
+		}, fault.ID)
+		return prefetchRefused, operation
 	}
 	world.prepared[operation] = true
 	if item.Kind == adapter.PrepareImage {
@@ -109,7 +125,7 @@ func (world *simulatedWorld) prefetchImage(item adapter.PrepareItem, operation s
 		return operation
 	}
 	key := prefetchKey(item.OfferSnapshotID, item.Content())
-	completesAt := world.now.Add(transferDuration(bytes, state.offer.RegistryDownloadMbps()))
+	completesAt := world.now.Add(transferDuration(bytes, world.linkMbps(item.OfferSnapshotID, domain.NetworkScopeRegistry)))
 	world.pulls = append(world.pulls, pendingPull{
 		offerID:     item.OfferSnapshotID,
 		runID:       item.RunID,
@@ -144,7 +160,7 @@ func (world *simulatedWorld) prefetchImage(item adapter.PrepareItem, operation s
 func (world *simulatedWorld) prefetchArtifact(item adapter.PrepareItem, operation string) string {
 	version, _ := world.store.entry(item.ArtifactID)
 	key := prefetchKey(item.OfferSnapshotID, item.Content())
-	completesAt := world.now.Add(world.store.transferDuration(item.ArtifactID))
+	completesAt := world.now.Add(world.store.transferDuration(item.ArtifactID, world.linkMbps(item.OfferSnapshotID, domain.NetworkScopeObjectStore)))
 	world.replicating = append(world.replicating, pendingReplica{
 		offerID:     item.OfferSnapshotID,
 		runID:       item.RunID,
@@ -233,6 +249,16 @@ func prefetchOperationID(item adapter.PrepareItem) string {
 }
 
 func (world *simulatedWorld) recordPrefetchEffect(item adapter.PrepareItem, operation string, command EffectCommand, consequence map[string]any) {
+	world.recordPrefetchEffectWithFault(item, operation, command, consequence, "")
+}
+
+func (world *simulatedWorld) recordPrefetchEffectWithFault(
+	item adapter.PrepareItem,
+	operation string,
+	command EffectCommand,
+	consequence map[string]any,
+	faultID string,
+) {
 	world.recordEffect(
 		prefetchOperation(item),
 		operation,
@@ -251,7 +277,7 @@ func (world *simulatedWorld) recordPrefetchEffect(item adapter.PrepareItem, oper
 			"source": item.Source,
 		},
 		consequence,
-		"",
+		faultID,
 	)
 }
 

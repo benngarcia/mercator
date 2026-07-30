@@ -1,8 +1,8 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Mercator schedules the Run on a Rental projected to free in 6 minutes. The running Booking remains active past the latest acceptable start, so reconciliation removes the queued Booking and selects fresh capacity.",
+  "summary": "Mercator schedules the Run on a Rental projected to free in 6 minutes, on a fixture where both machines cost the same so the wait is what decides it. The running Booking remains active past the latest acceptable start, so reconciliation removes the queued Booking and selects fresh capacity.",
   "classification": "target",
-  "missing_capabilities": ["rental_schedule", "schedule_advancement"],
+  "missing_capabilities": ["schedule_advancement"],
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
@@ -35,8 +35,14 @@
       {
         "id": "fresh-4090",
         "provider": "simcloud",
-        "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "5m", "p90": "9m"}
+        "rate_per_hour_usd": 2.5,
+        "provisioning": {
+          "expected": "5m",
+          "p90": "9m",
+          "acquisition": "30s",
+          "boot": "3m45s",
+          "agent_ready": "45s"
+        }
       }
     ]
   },

@@ -1,0 +1,102 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Three Rentals, all holding the whole image, all at one price, and one Run that reads a 40GB dataset. What separates them is what each of them can say about the path to the object store the dataset is durable in: one measured 4 Gbps, one measured 200 Mbps, and one has never measured that path at all, so the same forty gigabytes are eighty seconds of reading on the first, twenty-six minutes on the second, and Mercator's own stated prior on the third. The slow machine is the faster one everywhere else, and says so: it published a 10 Gbps path to the registry, which buys it nothing, because it holds the image already and there is nothing to fetch over that link. A flat constant per scope cannot tell these three machines apart at all, which is what makes this the fixture that says a transfer is priced from the path it crosses: restore the constant and all three price the read at 640 seconds, the placement falls to whichever offer ID sorts first, and the machine that measured a gigabit path wins nothing by having measured it. The unmeasured machine is the fallback half of the same claim, and it is priced rather than refused: silence about a path is doubt and never infeasibility, so it is charged the prior, its estimate is capped at what a guess is worth, and its record names the assumption instead of pretending a measurement. The declaration is single: the world moves the bytes at the rate the path states and the machine publishes that same rate to Mercator, so one statement cannot mean two transfer models.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-near-the-data",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-far-from-the-data",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-nobody-measured-the-path-of",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "paths": [
+      {"from": "rental-near-the-data", "to": "objects.example", "scope": "object_store", "p10_mbps": 4000, "confidence": 0.9},
+      {"from": "rental-far-from-the-data", "to": "objects.example", "scope": "object_store", "p10_mbps": 200, "confidence": 0.9},
+      {"from": "rental-far-from-the-data", "to": "registry.example", "scope": "registry", "p10_mbps": 10000, "confidence": 0.9}
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "service_class": "standard",
+    "expected_runtime": "20m",
+    "max_runtime": "1h",
+    "consumes_artifacts": ["artifact:imagenet:v2.41"]
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-near-the-data",
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
+    "candidates": {
+      "rental-near-the-data": {
+        "feasible": true,
+        "image_locality": "hot",
+        "stages": {
+          "image_fetch": {"seconds": 0, "source": "image_inventory", "confidence": 1},
+          "unpack": {"seconds": 0, "source": "image_inventory", "confidence": 1},
+          "artifact_fetch": {
+            "seconds": 80,
+            "source": "artifact_inventory",
+            "confidence": 0.9,
+            "rate": {"mbps": 4000, "measurement": "blueprint_path"}
+          }
+        },
+        "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+      },
+      "rental-far-from-the-data": {
+        "feasible": true,
+        "image_locality": "hot",
+        "stages": {
+          "image_fetch": {"seconds": 0, "source": "image_inventory", "confidence": 1},
+          "unpack": {"seconds": 0, "source": "image_inventory", "confidence": 1},
+          "artifact_fetch": {
+            "seconds": 1600,
+            "source": "artifact_inventory",
+            "confidence": 0.9,
+            "rate": {"mbps": 200, "measurement": "blueprint_path"}
+          }
+        },
+        "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+      },
+      "rental-nobody-measured-the-path-of": {
+        "feasible": true,
+        "image_locality": "hot",
+        "stages": {
+          "image_fetch": {"seconds": 0, "source": "image_inventory", "confidence": 1},
+          "unpack": {"seconds": 0, "source": "image_inventory", "confidence": 1},
+          "artifact_fetch": {
+            "seconds": 640,
+            "source": "artifact_inventory",
+            "confidence": 0.5,
+            "rate": {"mbps": 500, "assumption": "assumed_object_store_rate"}
+          }
+        },
+        "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+      }
+    }
+  }
+}

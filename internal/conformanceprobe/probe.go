@@ -28,8 +28,13 @@ type report struct {
 	ExitCode *int       `json:"exit_code,omitempty"`
 }
 
+// readyData is what a readiness report carries. The moment is required, because
+// application readiness is the last stage of a launch and the application is the
+// only thing that can say when it happened: a report that said only "ready" left
+// that stage with no actual, which is the untyped callback this field replaced.
 type readyData struct {
-	Scenario string `json:"scenario"`
+	Scenario string    `json:"scenario"`
+	ReadyAt  time.Time `json:"ready_at"`
 }
 
 func Run(ctx context.Context, args []string, env map[string]string, _ io.Writer, stderr io.Writer) int {
@@ -43,7 +48,8 @@ func Run(ctx context.Context, args []string, env map[string]string, _ io.Writer,
 		return 2
 	}
 	reporter := newReporter(config)
-	if err := reporter.post(ctx, report{Type: "ready", Data: &readyData{Scenario: args[0]}}); err != nil {
+	ready := readyData{Scenario: args[0], ReadyAt: time.Now().UTC()}
+	if err := reporter.post(ctx, report{Type: "ready", Data: &ready}); err != nil {
 		if args[0] == "wait-for-cancel" && ctx.Err() != nil {
 			return 0
 		}

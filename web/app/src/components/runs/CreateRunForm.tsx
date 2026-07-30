@@ -42,7 +42,7 @@ const SPEC_TEMPLATE = JSON.stringify(
         ephemeral_disk: { min_bytes: 1073741824 },
       },
       network: { inbound: "none" },
-      placement: { objective: "balanced" },
+      placement: { service_class: "standard" },
       execution: { max_runtime_seconds: 3600, max_pre_start_attempts: 3 },
     },
   },

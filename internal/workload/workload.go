@@ -38,8 +38,22 @@ type workloadCreatedData struct {
 	Name       string `json:"name"`
 }
 
+// revisionCreatedData is the whole revision, environment values included, and it
+// is the private payload of the event. It is what GetRevision and ListRevisions
+// read, because a revision a Run is created from has to be the revision the
+// caller stored.
 type revisionCreatedData struct {
 	Revision domain.WorkloadRevision `json:"revision"`
+}
+
+// publicRevisionCreatedData is what a reader of the public log sees of the same
+// revision: every environment value replaced by its kind. This door wrote the
+// full revision into a public event, so a token a caller put in a container's
+// environment reached every console reader of the workspace over the event
+// stream, while the run door has redacted exactly these values since it had a
+// public payload at all.
+type publicRevisionCreatedData struct {
+	Revision domain.PublicWorkloadRevision `json:"revision"`
 }
 
 func New(log eventlog.WorkspaceEventLog) *Service {
@@ -84,6 +98,14 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 	revision := req.Revision
 	revision.WorkspaceID = req.WorkspaceID
 	revision.WorkloadID = req.WorkloadID
+	// Fill the omissions a minimal create body leaves before validating, which is
+	// the order NormalizeWorkloadRevision documents and the order run intake
+	// already uses. This door stored what it validated, so validating raw input
+	// made the two doors disagree about one body: a revision omitting its service
+	// class was refused here and filled with standard by POST /v1/runs, and a
+	// revision that did get stored raw was served back with no class at all,
+	// which is not a PlacementPolicy the wire contract allows.
+	revision = domain.NormalizeWorkloadRevision(revision)
 	if violations := domain.ValidateWorkloadRevision(revision); len(violations) > 0 {
 		return domain.WorkloadRevision{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
 	}
@@ -99,15 +121,19 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 		if event.Type != EventWorkloadRevisionCreated {
 			continue
 		}
-		var existing revisionCreatedData
-		if err := json.Unmarshal(event.Data, &existing); err != nil {
+		existing, err := storedRevision(event)
+		if err != nil {
 			return domain.WorkloadRevision{}, err
 		}
-		if existing.Revision.ID == revision.ID && event.CommandKey != commandKey {
+		if existing.ID == revision.ID && event.CommandKey != commandKey {
 			return domain.WorkloadRevision{}, fmt.Errorf("workload: revision already exists")
 		}
 	}
-	data, err := json.Marshal(revisionCreatedData{Revision: revision})
+	private, err := json.Marshal(revisionCreatedData{Revision: revision})
+	if err != nil {
+		return domain.WorkloadRevision{}, err
+	}
+	data, err := json.Marshal(publicRevisionCreatedData{Revision: revision.Public()})
 	if err != nil {
 		return domain.WorkloadRevision{}, err
 	}
@@ -129,6 +155,7 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 			OccurredAt:    s.now().UTC(),
 			Visibility:    eventlog.VisibilityPublic,
 			Data:          data,
+			PrivateData:   private,
 		}},
 	})
 	if err != nil {
@@ -160,14 +187,26 @@ func (s *Service) ListRevisions(ctx context.Context, workspaceID, workloadID str
 		if event.Type != EventWorkloadRevisionCreated {
 			continue
 		}
-		var data revisionCreatedData
-		if err := json.Unmarshal(event.Data, &data); err != nil {
+		stored, err := storedRevision(event)
+		if err != nil {
 			return nil, err
 		}
-		revisions = append(revisions, data.Revision)
+		revisions = append(revisions, stored)
 	}
 	sort.Slice(revisions, func(i, j int) bool { return revisions[i].ID < revisions[j].ID })
 	return revisions, nil
+}
+
+// storedRevision is the revision one event recorded. It reads the private
+// payload, which is the only copy that carries what a container's environment is
+// set to: the public one states each value's kind, and a Run created from that
+// would run with every literal replaced by the word "literal".
+func storedRevision(event eventlog.StoredEvent) (domain.WorkloadRevision, error) {
+	var data revisionCreatedData
+	if err := json.Unmarshal(event.PrivateData, &data); err != nil {
+		return domain.WorkloadRevision{}, fmt.Errorf("workload: revision event %q carries no readable revision: %w", event.ID, err)
+	}
+	return data.Revision, nil
 }
 
 func workloadStream(workspaceID, workloadID string) eventlog.StreamKey {

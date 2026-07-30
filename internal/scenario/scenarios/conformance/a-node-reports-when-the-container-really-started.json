@@ -1,0 +1,61 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The same claim as a-start-is-a-moment-somebody-observed, driven through the real orchestrator, event log, and Run projection. One Run of opportunistic work, a Rental holding the whole image at 20 USD an hour, and a machine that does not exist yet at a dollar an hour whose provider publishes five minutes of provisioning that this world really spends: thirty seconds acquiring it, four minutes booting it, and thirty seconds enrolling Mercator's runtime. The Run takes the cheap machine, and the moment its container begins is 588.64 seconds after the launch was accepted, which is provisioning plus 18.04GB of image at the standing assumption about an unmeasured registry link. Mercator predicted 590.14, its own arithmetic over the same content, which is what makes this a calibration record with two numbers in it rather than a tautology. What the fixture holds at L1 that the placement corpus cannot is the Run Bundle: two predicted-versus-actual records per Run rather than one, with the start latency measured against the moment the run stream recorded rather than against the moment Mercator accepted the launch.",
+  "seed": "mercator-lab-observed-start-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 20.0
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-cheap",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 1.0,
+        "provisioning": {
+          "expected": "5m",
+          "p90": "9m",
+          "acquisition": "30s",
+          "boot": "4m",
+          "agent_ready": "30s"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "patient",
+        "candidate": "fresh-cheap",
+        "minimum": "10m",
+        "maximum": "12m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "patient",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "service_class": "opportunistic",
+          "expected_runtime": "10m",
+          "max_runtime": "1h"
+        }
+      }
+    ]
+  }
+}

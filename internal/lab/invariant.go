@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"math"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/janitor"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
@@ -63,7 +67,12 @@ type InvariantObservation struct {
 	// Prewarm is what this world allows the control plane to have in flight for
 	// work it has not admitted. A world that states none allows none, and the
 	// concurrency rule has nothing to say about it.
-	Prewarm                     *scenario.PrewarmSpec
+	Prewarm *scenario.PrewarmSpec
+	// SeededOrphans is the capacity this world began holding that Mercator never
+	// launched. A rule about the orphan policy reads it rather than the fleet as it
+	// stands, because the interesting case is capacity that is no longer here: a
+	// machine converged without a stated rule leaves nothing behind to ask about.
+	SeededOrphans               map[string]bool
 	ProjectionRebuildEquivalent bool
 }
 
@@ -97,6 +106,11 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.no_duplicate_active_execution", check: noDuplicateActiveExecution},
 		invariantRule{id: "safety.exclusive_booking_capacity", check: exclusiveBookingCapacity},
 		invariantRule{id: "safety.monotonic_terminal_state", check: monotonicTerminalState},
+		invariantRule{id: "safety.start_is_observed_not_inferred", check: startIsObservedNotInferred},
+		invariantRule{id: "safety.readiness_is_reported_not_inferred", check: readinessIsReportedNotInferred},
+		invariantRule{id: "safety.prediction_is_recorded_against_its_actual", check: predictionIsRecordedAgainstItsActual},
+		invariantRule{id: "safety.candidate_identity_recurs", check: candidateIdentityRecurs},
+		invariantRule{id: "safety.prediction_states_its_provenance", check: predictionStatesItsProvenance},
 		invariantRule{id: "safety.idempotent_external_commands", check: idempotentExternalCommands},
 		invariantRule{id: "safety.lease_fencing", check: leaseFencing},
 		invariantRule{id: "safety.artifact_dependencies", check: artifactDependencies},
@@ -109,9 +123,24 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
+		invariantRule{id: "safety.transfer_rate_is_attributed", check: transferRateIsAttributed},
 		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},
+		invariantRule{id: "safety.score_is_reproducible_from_the_record", check: scoreIsReproducibleFromTheRecord},
+		invariantRule{id: "safety.doubt_only_the_answers_the_score_reads", check: doubtOnlyTheAnswersTheScoreReads},
+		invariantRule{id: "safety.promised_start_is_still_ahead", check: promisedStartIsStillAhead},
 		invariantRule{id: "safety.prewarm_yields_to_real_work", check: prewarmYieldsToRealWork},
 		invariantRule{id: "safety.prewarm_rate_within_bound", check: prewarmRateWithinBound},
+		invariantRule{id: "safety.service_class_admission_order", check: serviceClassAdmissionOrder},
+		invariantRule{id: "safety.class_bounds_honoured", check: classBoundsHonoured},
+		invariantRule{id: "safety.nothing_waits_behind_an_impossible_ask", check: nothingWaitsBehindAnImpossibleAsk},
+		invariantRule{id: "safety.a_silence_is_not_an_answer_about_capacity", check: aSilenceIsNotAnAnswerAboutCapacity},
+		invariantRule{id: "safety.group_parallelism_respected", check: groupParallelismRespected},
+		invariantRule{id: "safety.interruption_was_permitted", check: interruptionWasPermitted},
+		invariantRule{id: "safety.no_capacity_is_free", check: noCapacityIsFree},
+		invariantRule{id: "safety.committed_cost_is_not_double_counted", check: committedCostIsNotDoubleCounted},
+		invariantRule{id: "safety.decisions_are_never_rewritten", check: decisionsAreNeverRewritten},
+		invariantRule{id: "safety.orphan_policy_is_explicit", check: orphanPolicyIsExplicit},
+		invariantRule{id: "safety.decision_is_reproducible", check: decisionIsReproducible},
 		invariantRule{
 			id:          "liveness.lost_response_reconciliation",
 			assumptions: []string{"the provider preserves operation identity", "provider observation remains available"},
@@ -150,6 +179,27 @@ func DefaultInvariantRegistry() InvariantRegistry {
 			assumptions: []string{"provider observations remain available", "actual runtime is bounded by the World Tape"},
 			bound:       24 * time.Hour,
 			check:       admittedRunProgress,
+		},
+		invariantRule{
+			id: "liveness.aging_prevents_starvation",
+			// The list is what the rule is allowed to assume rather than a summary of
+			// it, in the shape liveness.prefetch_converges states its own. The last
+			// two are what the second half of this rule rests on: a refusal that says
+			// nothing about the fleet cannot be told apart from a fleet too small, and
+			// the promise that half a bound of waiting outranks any arrival is what
+			// makes younger admitted work a violation rather than a policy choice.
+			assumptions: []string{
+				"virtual time advances",
+				"capacity that could hold the Run eventually frees",
+				"a wait names the fleet it was last measured against",
+				"each class ages above every arriving class within half its own maximum queue delay",
+			},
+			// The longest wait any class declares, which is two hours, and well
+			// inside the twenty four hours admitted_run_progress already holds every
+			// execution to. A bound past that one would have lengthened every
+			// execution in the tree to state a rule about the queue.
+			bound: longestClassQueueDelay(),
+			check: agingPreventsStarvation,
 		},
 	)
 	if err != nil {
@@ -269,6 +319,426 @@ func exclusiveBookingCapacity(observation InvariantObservation) error {
 		}
 	}
 	return nil
+}
+
+// predictionIsRecordedAgainstItsActual is ADR 0004's calibration requirement read
+// over the whole launch waterfall rather than over one number. A launch the
+// Effect Ledger accepted spent time on eight stages, and the record has to carry
+// both halves of each: what Mercator predicted that stage would cost, and what it
+// then cost.
+//
+// The two halves are read from independent places, which is what stops the rule
+// being satisfied by the predictor agreeing with itself. The prediction comes off
+// the Booking Decision Mercator wrote; the actual comes off the world's own launch
+// consequence in the ledger. Six of the eight have no other source: Mercator can
+// observe a container starting and an application reporting ready, and nothing in
+// production tells it when a machine finished booting.
+//
+// It is deliberately not stated as accuracy. How close a prediction lands is a
+// calibration metric, and a rule of that shape would fail on a fixture whose world
+// is simply slow, which is a legitimate world and several of these fixtures are
+// exactly that. What is a violation is a stage that happened and was predicted by
+// nothing, or a stage the world spent and the record cannot name.
+func predictionIsRecordedAgainstItsActual(observation InvariantObservation) error {
+	waterfall, err := stageWaterfalls(observation.Effects, observation.MercatorEvents)
+	if err != nil {
+		return err
+	}
+	// Every launch the ledger accepted, and not only those that reported a duration
+	// for something. Reading the accepted launches off the stage durations they
+	// carried left the rule silent for exactly the launch it exists to catch: one
+	// that measured nothing at all, whose eight predictions are then exported
+	// against nothing while the law says it holds.
+	for _, runID := range slices.Sorted(maps.Keys(waterfall.launched)) {
+		spent := waterfall.actual[runID]
+		predicted, decided := waterfall.predicted[runID]
+		if !decided {
+			return fmt.Errorf("Run %q had a launch accepted and no Booking Decision of its own to have predicted it", runID)
+		}
+		for _, stage := range domain.LaunchStages {
+			seconds, simulated := spent[string(stage)]
+			if !simulated && waterfall.unreached[runID][stage] {
+				// A stage this launch never reached has nothing to measure, and the
+				// world said so rather than leaving it to be read off the absence. A
+				// workload that never comes up is the failure mode the readiness stage
+				// exists to expose, and demanding an actual for it would make that
+				// world unstatable.
+				continue
+			}
+			if !simulated {
+				return fmt.Errorf("Run %q launched and the ledger reports no %s actual, so that prediction is measured against nothing", runID, stage)
+			}
+			if predicted.Stage(stage).Source == "" {
+				return fmt.Errorf("Run %q spent %.2fs on the %s stage and nothing in the record predicted it", runID, seconds, stage)
+			}
+		}
+		for _, name := range slices.Sorted(maps.Keys(spent)) {
+			if !slices.Contains(domain.LaunchStages, domain.LaunchStage(name)) {
+				return fmt.Errorf("Run %q spent time on %q, which is not a stage any prediction can be recorded against", runID, name)
+			}
+		}
+	}
+	return nil
+}
+
+// startIsObservedNotInferred is the standing guard on the one thing that makes a
+// stage duration learnable: its actual has to be a moment somebody observed.
+//
+// Four things hold of every Run in the log, and each is read from a different half
+// of the record so no clause can be satisfied by Mercator agreeing with itself.
+// What the run stream records as the moment this workload began must be a moment an
+// observation of that same Run reported: not the moment the launch was accepted,
+// which is when the machine started getting ready, and not the moment Mercator
+// predicted, which is the thing being calibrated. It must be a moment one of those
+// observations established, and this rule decides what that means in its own terms
+// rather than by asking the production predicate: a moment ahead of the read that
+// carried it is a prediction wearing an observation's clothes, and a moment carried
+// by a phase saying the work has not begun is a provider calling a launch a start.
+// A Run whose holder did establish a start must have it recorded, because a stage
+// with an actual that reads as absent is a measurement thrown away. And the clock a
+// Booking's runtime bounds are enforced from must be one of the same two things,
+// because that clock decides when Mercator believes paid capacity came free.
+//
+// Restating the clauses is the point. Delegating them to
+// adapter.ExternalObservation.EstablishedStart made this rule agree with whatever
+// the control plane happened to decide, which is the shape
+// safety.locality_is_never_infeasibility was already corrected for: an
+// executable specification that asks production to confirm its own arithmetic
+// constrains nothing. Deleting the clause about a moment ahead of its read now
+// fails the world that publishes one.
+//
+// The published claim Mercator refused is not a violation of anything: the record
+// keeps what the holder said, and this rule reads it the way the control plane was
+// supposed to rather than blaming Mercator for declining a moment it could not
+// defend.
+//
+// A Run with no start moment at all is not a violation. Acquisition and boot have
+// no production observation until an agent bootstraps on provisioned capacity, and
+// what the record must then say is that the stage is unobserved rather than that it
+// took no time.
+func startIsObservedNotInferred(observation InvariantObservation) error {
+	looked, recorded, err := startMomentsByRun(observation)
+	if err != nil {
+		return err
+	}
+	for runID, moment := range recorded {
+		looks, held := looked[runID]
+		if !held {
+			return fmt.Errorf(
+				"Run %q records a start of %s that no observation of it reported",
+				runID, moment.Format(time.RFC3339Nano),
+			)
+		}
+		if !looks.established(moment) {
+			return fmt.Errorf(
+				"Run %q records a start of %s and its observations established %s",
+				runID, moment.Format(time.RFC3339Nano), looks.describe(),
+			)
+		}
+	}
+	for runID, looks := range looked {
+		if _, held := recorded[runID]; !held && looks.establishedAStart() {
+			return fmt.Errorf(
+				"Run %q was observed starting at %s and its run stream records no start moment",
+				runID, looks.describe(),
+			)
+		}
+	}
+	return bookingClocksAreObserved(observation.RentalSchedules, looked)
+}
+
+// readinessIsReportedNotInferred is the same law over the last stage of a launch,
+// which is the one stage whose actual comes from outside Mercator entirely. A
+// provider, a node, and a container runtime can all see a process running and none
+// of them can see whether it is serving, so the workload is the only authority and
+// its report is the only source. That is exactly why the moment needs a rule: an
+// authority Mercator cannot check is an authority Mercator cannot check.
+//
+// Four clauses, each read from a different half of the record. What the Run
+// projection carries as its readiness must be a moment a readiness report on that
+// same Run stated, so no readiness is Mercator's own arithmetic. It must be no later
+// than the read that carried it, because a workload reads the clock of the host it
+// runs on and a host an hour ahead reports an hour of ready latency nothing
+// measured. It must not precede the start the same Run recorded, because an
+// application cannot serve before the process serving it exists and the two moments
+// come from two authorities that cannot see each other. And a Run whose report
+// stated a moment satisfying both must carry it, because a readiness that reads as
+// absent is the actual for this stage thrown away.
+//
+// The clauses are written out here rather than asked of the production predicate for
+// the reason safety.start_is_observed_not_inferred states one rule up: a
+// specification that asks the code to confirm its own arithmetic constrains nothing.
+//
+// A Run with no readiness at all is not a violation. A workload that never becomes
+// ready is a world this corpus can state, and the record saying nothing about the
+// stage is the honest answer for it.
+func readinessIsReportedNotInferred(observation InvariantObservation) error {
+	reported, err := readinessReportsByRun(observation)
+	if err != nil {
+		return err
+	}
+	for _, run := range observation.Runs {
+		if run.ReadyAt == nil {
+			continue
+		}
+		moment := run.ReadyAt.UTC()
+		if !reported[run.ID].stated(moment) {
+			return fmt.Errorf(
+				"Run %q records an application readiness of %s that no report of it stated, and its reports said %s",
+				run.ID, moment.Format(time.RFC3339Nano), reported[run.ID].describe(),
+			)
+		}
+		if !reported[run.ID].defensible(moment) {
+			return fmt.Errorf(
+				"Run %q records an application readiness of %s that arrived ahead of the read carrying it, and its reports said %s",
+				run.ID, moment.Format(time.RFC3339Nano), reported[run.ID].describe(),
+			)
+		}
+	}
+	return readinessFollowsItsContainer(observation, reported)
+}
+
+// readinessFollowsItsContainer is the pair of clauses that need the start moment
+// beside the readiness: the ordering of the two stages, and the readiness a Run was
+// told about and did not keep.
+func readinessFollowsItsContainer(observation InvariantObservation, reported map[string]readinessClaims) error {
+	_, started, err := startMomentsByRun(observation)
+	if err != nil {
+		return err
+	}
+	for _, run := range observation.Runs {
+		startedAt, observed := started[run.ID]
+		if run.ReadyAt != nil && observed && run.ReadyAt.UTC().Before(startedAt) {
+			return fmt.Errorf(
+				"Run %q records its application serving at %s and its container starting at %s",
+				run.ID, run.ReadyAt.UTC().Format(time.RFC3339Nano), startedAt.Format(time.RFC3339Nano),
+			)
+		}
+		if run.ReadyAt != nil {
+			continue
+		}
+		for _, claim := range reported[run.ID] {
+			if claim.defensible() && !(observed && claim.At.Before(startedAt)) {
+				return fmt.Errorf(
+					"Run %q was told its application was ready at %s by a report read at %s, and its record carries no readiness",
+					run.ID, claim.At.Format(time.RFC3339Nano), claim.ReadAt.Format(time.RFC3339Nano),
+				)
+			}
+		}
+	}
+	return nil
+}
+
+// readinessClaim is one readiness a workload stated and the moment Mercator read it
+// stating so. Both halves travel together because the whole question about a foreign
+// moment is how it compares with the read that carried it.
+type readinessClaim struct {
+	At     time.Time
+	ReadAt time.Time
+}
+
+func (claim readinessClaim) defensible() bool { return !claim.At.After(claim.ReadAt) }
+
+type readinessClaims []readinessClaim
+
+func (claims readinessClaims) stated(moment time.Time) bool {
+	return slices.ContainsFunc(claims, func(claim readinessClaim) bool { return claim.At.Equal(moment) })
+}
+
+func (claims readinessClaims) defensible(moment time.Time) bool {
+	return slices.ContainsFunc(claims, func(claim readinessClaim) bool {
+		return claim.At.Equal(moment) && claim.defensible()
+	})
+}
+
+func (claims readinessClaims) describe() string {
+	if len(claims) == 0 {
+		return "nothing"
+	}
+	described := make([]string, 0, len(claims))
+	for _, claim := range claims {
+		described = append(described, fmt.Sprintf("%s (read at %s)",
+			claim.At.Format(time.RFC3339Nano), claim.ReadAt.Format(time.RFC3339Nano)))
+	}
+	return strings.Join(described, ", ")
+}
+
+// readinessReportsByRun is every readiness a workload reported, by Run, with the
+// moment Mercator appended each report. Reports of any other type carry no readiness
+// and are not claims about one.
+func readinessReportsByRun(observation InvariantObservation) (map[string]readinessClaims, error) {
+	claims := map[string]readinessClaims{}
+	for _, event := range observation.MercatorEvents {
+		if event.Type != orchestrator.EventRunReported {
+			continue
+		}
+		var payload struct {
+			Type string `json:"type"`
+			Data struct {
+				ReadyAt time.Time `json:"ready_at"`
+			} `json:"data"`
+		}
+		runID := strings.TrimPrefix(event.Subject, "runs/")
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			return nil, fmt.Errorf("decode Run %q report: %w", runID, err)
+		}
+		if payload.Type != orchestrator.RunReportReady || payload.Data.ReadyAt.IsZero() {
+			continue
+		}
+		readAt, err := time.Parse(time.RFC3339Nano, event.Time)
+		if err != nil {
+			return nil, fmt.Errorf("decode Run %q report time: %w", runID, err)
+		}
+		claims[runID] = append(claims[runID], readinessClaim{
+			At:     payload.Data.ReadyAt.UTC(),
+			ReadAt: readAt.UTC(),
+		})
+	}
+	return claims, nil
+}
+
+// bookingClocksAreObserved holds the Rental Schedule to the same law as the run
+// stream. A Booking's StartedAt is what its declared runtimes are measured from, so
+// it decides when Mercator thinks a machine came free and when it thinks a workload
+// has overrun: a moment from a host an hour ahead leaves the bound unexpired an
+// hour after the capacity was really spent, with the schedule saying the machine is
+// busy the whole time.
+//
+// Two moments are defensible. The container's own start where an observation
+// established one, and the read that carried an observation of that Run, which is
+// the last instant Mercator can prove the container was up. Anything else is a
+// clock nobody here shares. This is the clause the run stream's version of the law
+// was missing: the same append recorded no start and stamped this field from the
+// same refused moment, and no rule in the corpus read the schedule.
+func bookingClocksAreObserved(schedules map[string]domain.RentalSchedule, looked map[string]runLooks) error {
+	for _, rentalID := range slices.Sorted(maps.Keys(schedules)) {
+		for _, scheduled := range schedules[rentalID].Bookings {
+			if scheduled.StartedAt.IsZero() {
+				continue
+			}
+			runID := scheduled.Booking.RunID
+			looks := looked[runID]
+			if looks.established(scheduled.StartedAt.UTC()) || looks.read(scheduled.StartedAt.UTC()) {
+				continue
+			}
+			return fmt.Errorf(
+				"Rental %q measures Booking %q for Run %q from %s, and that Run's observations established %s",
+				rentalID, scheduled.Booking.ID, runID,
+				scheduled.StartedAt.Format(time.RFC3339Nano), looks.describe(),
+			)
+		}
+	}
+	return nil
+}
+
+// runLooks is every observation of one Run's workload the run stream recorded,
+// kept whole so this rule can ask each one the question the control plane was
+// supposed to ask it.
+type runLooks []adapter.ExternalObservation
+
+// established answers whether this is a moment one of these observations
+// established. The three clauses are stated here, in the Lab's own terms, because
+// a standing law that called the production predicate would pass whenever
+// production and production agreed.
+func (looks runLooks) established(moment time.Time) bool {
+	for _, look := range looks {
+		if established, ok := establishedStart(look); ok && established.Equal(moment) {
+			return true
+		}
+	}
+	return false
+}
+
+// establishedAStart answers whether any of these looks established one at all,
+// which is what makes a missing record a measurement thrown away instead of a
+// claim Mercator was right to decline.
+func (looks runLooks) establishedAStart() bool {
+	for _, look := range looks {
+		if _, ok := establishedStart(look); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// read answers whether this moment is one of the reads that carried these
+// observations. It is the only moment other than an established start that a
+// projection may be measured from, and it is Mercator's own clock on every seam
+// that fills it in.
+func (looks runLooks) read(moment time.Time) bool {
+	for _, look := range looks {
+		if look.ObservedAt.UTC().Equal(moment) {
+			return true
+		}
+	}
+	return false
+}
+
+func (looks runLooks) describe() string {
+	if len(looks) == 0 {
+		return "nothing"
+	}
+	described := make([]string, 0, len(looks))
+	for _, look := range looks {
+		described = append(described, fmt.Sprintf(
+			"%s (%s, read at %s)",
+			startedOrAbsent(look), look.Phase, look.ObservedAt.Format(time.RFC3339Nano),
+		))
+	}
+	return strings.Join(described, ", ")
+}
+
+func startedOrAbsent(look adapter.ExternalObservation) string {
+	if look.StartedAt == nil {
+		return "no start"
+	}
+	return look.StartedAt.Format(time.RFC3339Nano)
+}
+
+// establishedStart is what this Lab holds a start moment to, spelled out rather
+// than delegated: a moment the holder stated, about work it said had begun, no
+// later than the read that carried it. The phases are named one by one for the same
+// reason the comparison is written out here.
+func establishedStart(look adapter.ExternalObservation) (time.Time, bool) {
+	if look.StartedAt == nil || look.StartedAt.IsZero() || look.StartedAt.After(look.ObservedAt) {
+		return time.Time{}, false
+	}
+	switch look.Phase {
+	case adapter.ExternalPhaseRunning, adapter.ExternalPhaseSucceeded, adapter.ExternalPhaseFailed:
+		return look.StartedAt.UTC(), true
+	default:
+		return time.Time{}, false
+	}
+}
+
+// startMomentsByRun is every observation the run stream carried for each Run, and
+// the start each Run's stream recorded. Observations that published no start moment
+// are kept: the read that carried one is what a Booking's clock may fall back to,
+// and a rule that dropped them could not tell that fallback from an invented
+// moment.
+func startMomentsByRun(observation InvariantObservation) (map[string]runLooks, map[string]time.Time, error) {
+	looked := map[string]runLooks{}
+	recorded := map[string]time.Time{}
+	for _, event := range observation.MercatorEvents {
+		runID := strings.TrimPrefix(event.Subject, "runs/")
+		switch event.Type {
+		case orchestrator.EventExternalStateObserved:
+			var look adapter.ExternalObservation
+			if err := json.Unmarshal(event.Data, &look); err != nil {
+				return nil, nil, fmt.Errorf("decode Run %q observation: %w", runID, err)
+			}
+			looked[runID] = append(looked[runID], look)
+		case orchestrator.EventExecutionStarted:
+			var payload struct {
+				StartedAt time.Time `json:"started_at"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				return nil, nil, fmt.Errorf("decode Run %q start moment: %w", runID, err)
+			}
+			recorded[runID] = payload.StartedAt.UTC()
+		}
+	}
+	return looked, recorded, nil
 }
 
 func monotonicTerminalState(observation InvariantObservation) error {
@@ -567,23 +1037,377 @@ func ephemeralCapacityNotReused(observation InvariantObservation) error {
 	return nil
 }
 
+// candidateIdentityRecurs is the law on what a launch history may be filed under.
+// A prediction that reports evidence about this exact candidate is only worth
+// reading if the key it was filed under is the same thing twice, and every way of
+// getting that wrong is silent: two machines that share a key trade each other's
+// pull samples, and a key nothing can recur under reports a single sample as
+// candidate-specific evidence forever.
+//
+// It is stated as a collision against World Truth rather than as a derivation. The
+// world knows which machine is which and what cards each one holds, and it counts
+// them where the key groups them, so a rule that agreed with the key by
+// construction could not have caught either of the two bugs it was written for: an
+// inventory that dropped cards when a probe grouped them differently, and a Docker
+// machine named by the route Mercator took to reach it.
+func candidateIdentityRecurs(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	published := map[string]domain.OfferSnapshot{}
+	for _, offer := range observation.World.Offers {
+		published[offer.ID] = offer
+	}
+	keyed := map[string]keyedCandidate{}
+	for _, decision := range decisions {
+		asked := imageAsked(observation, decision.RunID)
+		for _, candidate := range decision.Candidates {
+			offer, known := published[candidate.OfferSnapshotID]
+			if !known {
+				continue
+			}
+			if err := candidateKeyIsHonest(decision.RunID, candidate, offer); err != nil {
+				return err
+			}
+			key := candidate.Candidate.Candidate(true)
+			if key == "" {
+				continue
+			}
+			held, clash := keyed[key]
+			switch {
+			case clash && !sameCapacity(held.offer, offer):
+				return fmt.Errorf(
+					"Run %q filed candidate %q under the key %q, and %s already holds it: %s",
+					decision.RunID, offer.ID, key, held.offer.ID, describeCapacity(held.offer, offer),
+				)
+			case clash && held.image != asked:
+				return fmt.Errorf(
+					"Run %q filed candidate %q under the content key %q, and it already holds %q: two Runs asked this machine for different content",
+					decision.RunID, offer.ID, key, held.image,
+				)
+			}
+			keyed[key] = keyedCandidate{offer: offer, image: asked}
+		}
+	}
+	return nil
+}
+
+// predictionStatesItsProvenance is the law on what a prediction has to say about
+// itself. Every stage of every recorded candidate names the level its answer came
+// from and how many measured launches stand behind it, and the key it was read
+// under is the key this candidate has at that level: not the listing it arrived
+// on, and not a coarser bucket's name for something else.
+//
+// The last clause is the load-bearing one. A marketplace mints a fresh ask ID
+// for every search of a machine that was already there, so a history filed under
+// the listing accumulates keys holding one sample each and reports every one of
+// them as candidate-specific evidence: the answer is wrong, the sample count is
+// right, and nothing in the record says which. Comparing the key the estimator
+// read against the listing the offer arrived under is what catches it, and the
+// corpus states the world it happens in by publishing one machine under two ask
+// IDs.
+//
+// The other clauses are about the record being readable at all. A stage with no
+// level cannot be told from a stage answered by a constant, a keyed level with
+// no samples is a claim of evidence with none behind it, and a prior carrying
+// samples is the opposite: measured launches filed under an answer that says
+// nobody has watched this happen. And a stage that moves bytes may not be
+// answered from launches at all, which is the clause every other reader of a
+// transfer's seconds rests on.
+func predictionStatesItsProvenance(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	for _, decision := range decisions {
+		for _, candidate := range decision.Candidates {
+			for _, stage := range domain.LaunchStages {
+				if err := stageStatesItsProvenance(decision.RunID, candidate, stage); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// stageStatesItsProvenance holds one stage of one candidate to what its level
+// claims. The key is checked against the candidate's own recorded identity as
+// well as against the listing, because those are the two ways a keyed answer goes
+// wrong: filed under something that does not recur, or filed under a key that is
+// some other candidate's or some other workload's.
+func stageStatesItsProvenance(runID string, candidate domain.CandidateDecision, stage domain.LaunchStage) error {
+	answer := candidate.Estimates.Stages.Stage(stage)
+	switch answer.Level {
+	case "":
+		return fmt.Errorf(
+			"Run %q predicted candidate %q spending %.2fs on %s, and the record does not say what that rests on",
+			runID, candidate.OfferSnapshotID, answer.Expected, stage,
+		)
+	case domain.LevelPrior:
+		if answer.SampleCount != 0 || answer.Key != "" {
+			return fmt.Errorf(
+				"Run %q answered candidate %q's %s stage from the prior, and filed %d samples under %q against it",
+				runID, candidate.OfferSnapshotID, stage, answer.SampleCount, answer.Key,
+			)
+		}
+		return nil
+	case domain.LevelExactCandidate, domain.LevelProviderAndRegion, domain.LevelProvider:
+		if err := aTransferWasNotAnsweredFromLaunches(runID, candidate, stage, answer); err != nil {
+			return err
+		}
+		return keyedAnswerIsHonest(runID, candidate, stage, answer)
+	default:
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage at level %q, which is not a level of the hierarchy",
+			runID, candidate.OfferSnapshotID, stage, answer.Level,
+		)
+	}
+}
+
+func keyedAnswerIsHonest(runID string, candidate domain.CandidateDecision, stage domain.LaunchStage, answer domain.Estimate) error {
+	if answer.SampleCount <= 0 || answer.Key == "" {
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage at level %q from %d samples under %q, which is a claim of evidence with none behind it",
+			runID, candidate.OfferSnapshotID, stage, answer.Level, answer.SampleCount, answer.Key,
+		)
+	}
+	for _, listing := range []string{candidate.OfferSnapshotID, candidate.NativeRef} {
+		if listing != "" && strings.Contains(answer.Key, listing) {
+			return fmt.Errorf(
+				"Run %q answered candidate %q's %s stage under the key %q, which names the listing %q rather than what recurs",
+				runID, candidate.OfferSnapshotID, stage, answer.Key, listing,
+			)
+		}
+	}
+	if answer.Level == domain.LevelExactCandidate && !candidate.Candidate.Recurs() {
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage as this exact candidate under %q, and nothing about this capacity outlives its listing",
+			runID, candidate.OfferSnapshotID, stage, answer.Key,
+		)
+	}
+	own := keyOfLevel(candidate.Candidate, answer.Level, stage)
+	if own == "" {
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage at level %q under %q, and this candidate has no key at that level for evidence to be filed under",
+			runID, candidate.OfferSnapshotID, stage, answer.Level, answer.Key,
+		)
+	}
+	if answer.Key != own {
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage out of %q, and at level %q this candidate is %q",
+			runID, candidate.OfferSnapshotID, stage, answer.Key, answer.Level, own,
+		)
+	}
+	return nil
+}
+
+// keyOfLevel is the key this candidate's own recorded identity has at one level of
+// the hierarchy, restated here rather than read from the estimator: a rule that
+// asked the predictor what the predictor should have used could not fail.
+//
+// Every level is derived, not only the narrowest. A coarse rung answers about
+// other machines by design and about other content never, so the content the
+// stage is about has to reach the key at whichever rung answered, and a rung that
+// dropped it reads back as a region's evidence about a workload nobody has run
+// there.
+func keyOfLevel(identity domain.CandidateIdentity, level domain.PredictionLevel, stage domain.LaunchStage) string {
+	switch level {
+	case domain.LevelExactCandidate:
+		return identity.Candidate(contentStage(stage))
+	case domain.LevelProviderAndRegion:
+		return identity.ProviderAndRegion(contentStage(stage))
+	case domain.LevelProvider:
+		return identity.ProviderKey(contentStage(stage))
+	default:
+		return ""
+	}
+}
+
+// aTransferWasNotAnsweredFromLaunches is the clause every other reader of a
+// transfer's seconds rests on, this rule's neighbours included.
+//
+// A stage that moves bytes is priced from two things and the record explains both:
+// the locality evidence accounts for the byte count, the transfer rate accounts
+// for the throughput, and safety.locality_is_never_infeasibility reads the seconds
+// back as their product when it works out how much of a refusal was charged for
+// content nobody could describe. Measured launches of this candidate are a
+// measurement of some other launch's byte count, because what a machine still has
+// to move is whatever it does not already hold at the moment it is asked. Answered
+// from them, the seconds belong to neither half: a share of the bytes applied to
+// them is a share of a quantity that did not produce them, and a host holding every
+// byte is charged the transfer it performed the last time it held none.
+//
+// So it is refused outright rather than accounted for. The alternative is every
+// rule that reads a transfer's seconds having to ask first whether these ones are a
+// transfer's seconds at all, which is a condition spread across the laws instead of
+// stated once.
+func aTransferWasNotAnsweredFromLaunches(
+	runID string,
+	candidate domain.CandidateDecision,
+	stage domain.LaunchStage,
+	answer domain.Estimate,
+) error {
+	if !pricedFromBytes(stage) {
+		return nil
+	}
+	return fmt.Errorf(
+		"Run %q answered candidate %q's %s stage from %d measured launches under %q, and a transfer's seconds are this launch's own missing bytes over the path they cross",
+		runID, candidate.OfferSnapshotID, stage, answer.SampleCount, answer.Key,
+	)
+}
+
+// pricedFromBytes is which stages of a launch are a byte count over a throughput,
+// stated here rather than read from the estimator. Reading an image out of a
+// registry, assembling it, and reading the Run's declared inputs all are, and each
+// of them is the one kind of stage this Lab holds the record to accounting for in
+// two halves.
+func pricedFromBytes(stage domain.LaunchStage) bool {
+	switch stage {
+	case domain.StageImageFetch, domain.StageUnpack, domain.StageArtifactFetch:
+		return true
+	default:
+		return false
+	}
+}
+
+// contentStage is which stages carry the content in their key, stated here
+// rather than read from the estimator. A rule that asked the predictor which key
+// it should have used would be the predictor agreeing with itself: this is the
+// Lab's own account of which durations are a property of what was pulled and
+// which are a property of the machine.
+//
+// One stage is left. An application coming up is a property of the image, because
+// the application is the image; the transfers are a property of the image too and
+// are not answered from launches at all, so no key of theirs is ever read back.
+func contentStage(stage domain.LaunchStage) bool {
+	return stage == domain.StageApplicationReady
+}
+
+// keyedCandidate is what a candidate key has already been handed out for: the
+// capacity it was filed about and the content that capacity was asked to run.
+type keyedCandidate struct {
+	offer domain.OfferSnapshot
+	image string
+}
+
+// imageAsked is the image Mercator recorded it was asked to run for this Run, read
+// out of its own workload record rather than out of the identity under judgment. A
+// key that carries content has to have been derived from the content this Run
+// named, and asking the identity what content it names would be the derivation
+// agreeing with itself.
+func imageAsked(observation InvariantObservation, runID string) string {
+	workload, known := observation.Workloads[runID]
+	if !known || len(workload.Spec.Containers) == 0 {
+		return ""
+	}
+	return workload.Spec.Containers[0].Image
+}
+
+// candidateKeyIsHonest holds the clauses about one recorded candidate: capacity with
+// nothing published that outlives its listing has no key at all, and a key names the
+// machine its backend published and never the listing search found.
+func candidateKeyIsHonest(runID string, candidate domain.CandidateDecision, offer domain.OfferSnapshot) error {
+	key := candidate.Candidate.Candidate(true)
+	if key == "" {
+		return nil
+	}
+	if nothingOutlivesTheListing(offer) {
+		return fmt.Errorf(
+			"Run %q filed candidate %q under the key %q, and this world publishes nothing about it that outlives the listing",
+			runID, offer.ID, key,
+		)
+	}
+	if candidate.Candidate.Machine != offer.MachineID {
+		return fmt.Errorf(
+			"Run %q filed candidate %q under machine %q, and the machine it is is %q",
+			runID, offer.ID, candidate.Candidate.Machine, offer.MachineID,
+		)
+	}
+	for _, listing := range []string{offer.ID, offer.NativeRef} {
+		if listing == "" || listing == offer.MachineID {
+			continue
+		}
+		if strings.Contains(key, listing) {
+			return fmt.Errorf(
+				"Run %q filed candidate %q under the key %q, which names the listing %q rather than what recurs",
+				runID, offer.ID, key, listing,
+			)
+		}
+	}
+	return nil
+}
+
+// nothingOutlivesTheListing reports whether this world published anything about this
+// capacity that is still true the next time it is offered. A machine handle, a place,
+// a product name, and cards all are; the provider alone is not, because it
+// distinguishes no two of the things it sells from each other.
+//
+// It reads the offer rather than the identity, which is what makes it a rule instead
+// of the derivation agreeing with itself: a Mercator that invented a region, or that
+// kept a key for a one-shot pool naming only its own provider, would be filing
+// history under a name the world never gave it.
+func nothingOutlivesTheListing(offer domain.OfferSnapshot) bool {
+	return offer.MachineID == "" &&
+		offer.Region == "" &&
+		offer.InstanceType == "" &&
+		len(offer.Resources.Accelerators) == 0
+}
+
+// sameCapacity reports whether two offers are the same thing to learn about. It
+// compares the facts a candidate key summarizes, counting the accelerators rather
+// than grouping them: a machine with twice the cards, or with the same cards in two
+// memory sizes, is a different product however a probe reported its inventory.
+//
+// The lane is one of those facts. A world may sell one product both ways, and the
+// reusable listing becomes a machine with an enrolled runtime whose disk outlives
+// the Run while the one-shot holds nothing, so two offers that differ only in their
+// lane are two things to learn about and a shared key is a collision.
+func sameCapacity(first, second domain.OfferSnapshot) bool {
+	firstCards, firstMemory := acceleratorTotals(first)
+	secondCards, secondMemory := acceleratorTotals(second)
+	return first.MachineID == second.MachineID &&
+		first.Lane == second.Lane &&
+		first.AdapterType == second.AdapterType &&
+		first.Region == second.Region &&
+		first.InstanceType == second.InstanceType &&
+		firstCards == secondCards &&
+		firstMemory == secondMemory
+}
+
+// acceleratorTotals is how many cards a machine holds and how much accelerator
+// memory they add up to.
+func acceleratorTotals(offer domain.OfferSnapshot) (cards int, memoryBytes int64) {
+	for _, accelerator := range offer.Resources.Accelerators {
+		cards += accelerator.Count
+		memoryBytes += int64(accelerator.Count) * accelerator.MemoryBytes
+	}
+	return cards, memoryBytes
+}
+
+func describeCapacity(first, second domain.OfferSnapshot) string {
+	firstCards, firstMemory := acceleratorTotals(first)
+	secondCards, secondMemory := acceleratorTotals(second)
+	return fmt.Sprintf(
+		"%s is %s machine %q on %s/%s/%s with %d cards of %d bytes, and %s is %s machine %q on %s/%s/%s with %d cards of %d bytes",
+		first.ID, first.Lane, first.MachineID, first.AdapterType, first.Region, first.InstanceType, firstCards, firstMemory,
+		second.ID, second.Lane, second.MachineID, second.AdapterType, second.Region, second.InstanceType, secondCards, secondMemory,
+	)
+}
+
 // recordedDecisions is every Booking Decision Mercator recorded, in event
 // order. Rules about what Placement decided read this rather than world state:
 // the decision is the thing under judgment, and it is the only place a candidate
 // Mercator refused leaves any trace at all.
 func recordedDecisions(observation InvariantObservation) ([]domain.BookingDecision, error) {
-	var decisions []domain.BookingDecision
-	for _, event := range observation.MercatorEvents {
-		if event.Type != orchestrator.EventBookingDecided {
-			continue
-		}
-		var payload struct {
-			Decision domain.BookingDecision `json:"decision"`
-		}
-		if err := json.Unmarshal(event.Data, &payload); err != nil {
-			return nil, fmt.Errorf("decode Booking Decision from %s: %w", event.ID, err)
-		}
-		decisions = append(decisions, payload.Decision)
+	records, err := recordedDecisionRecords(observation)
+	if err != nil {
+		return nil, err
+	}
+	decisions := make([]domain.BookingDecision, 0, len(records))
+	for _, record := range records {
+		decisions = append(decisions, record.decision)
 	}
 	return decisions, nil
 }
@@ -624,8 +1448,17 @@ var localityPaths = map[string]bool{
 // this rule exists to prevent. So a LATENCY_SLO_EXCEEDED rejection must be
 // justified by the candidate's own established start prediction: queue and
 // provisioning, which the offer stated, plus content some inventory answered
-// about. A measured start latency is established too, because that is a
-// measurement about this offer whatever anyone could enumerate.
+// about crossing a path some machine measured. A measured start latency is
+// established too, because that is a measurement about this offer whatever
+// anyone could enumerate.
+//
+// The path is asked about for the same reason the content is. A transfer is
+// bytes over a rate, and a machine nobody has measured the path of is priced
+// from the fleet-wide prior every silent machine is priced from, so seconds out
+// of that prior refuse capacity for a number nothing on the machine answered
+// for. Counting an exact byte count as established and then dividing it by a
+// guess is how a bound could refuse a silence while the record showed nothing
+// but established content.
 //
 // Stating it against the established estimate rather than against "was anything
 // unknown" is what keeps the rule from buying silence an exemption. A machine
@@ -637,8 +1470,8 @@ var localityPaths = map[string]bool{
 // with the established estimate recorded beside it is asking the scheduler to
 // confirm its own arithmetic: both sides read one number, so the error where that
 // number is the thing computed wrong is invisible. So the second reading
-// recomputes what was discounted from the per-candidate localities and per-kind
-// seconds the decision records independently of the answer it reached.
+// recomputes what was discounted from the localities, the transfer rates, and the
+// per-kind seconds the decision records, independently of the answer it reached.
 func localityIsNeverInfeasibility(observation InvariantObservation) error {
 	decisions, err := recordedDecisions(observation)
 	if err != nil {
@@ -712,18 +1545,58 @@ func silenceWasTakenBackOut(decision domain.BookingDecision, candidate domain.Ca
 	)
 }
 
-// pricedSilenceSeconds is what this candidate was charged for content nothing
-// could describe, recomputed from the localities the decision recorded and the
-// seconds it recorded per kind of content. The Artifact half converts bytes into
-// seconds through the unreadable share of the read itself, so this rule holds no
-// opinion about the rate the scheduler used and cannot be satisfied by agreeing
-// with it.
+// pricedSilenceSeconds is what this candidate was charged for a launch nobody
+// could describe, recomputed from the localities, the rates, and the seconds the
+// decision recorded per kind of content. It holds no opinion about the arithmetic
+// the scheduler did and cannot be satisfied by agreeing with it: the shares are
+// read off the record's own evidence and applied to the record's own seconds.
+//
+// A duration is bytes over a rate and either one can be a silence. Bytes nobody
+// enumerated are the half this rule was written for. Seconds over a rate nothing
+// on the machine published are the other half and are worth no less: the number
+// dividing them is the same fleet-wide prior every silent machine is given, so a
+// bound refusing capacity on them refuses it for a number nobody answered for.
+// The two silences overlap on a stage that suffered both, and a stage is charged
+// once at whichever share of it was larger, because a stage discounted twice
+// would demand a discount larger than the seconds it was charged.
 func pricedSilenceSeconds(candidate domain.CandidateDecision) float64 {
+	stages := candidate.Estimates.Stages
+	unenumerated := imageIsUnknownShare(candidate.ImageLocality)
 	seconds := 0.0
-	if candidate.ImageLocality == domain.LocalityUnknown {
-		seconds += candidate.Estimates.PullSeconds.Expected
+	for _, priced := range []struct {
+		stage    domain.LaunchStage
+		estimate domain.Estimate
+		silent   float64
+	}{
+		{domain.StageImageFetch, stages.ImageFetch, unenumerated},
+		{domain.StageUnpack, stages.Unpack, unenumerated},
+		{domain.StageArtifactFetch, stages.ArtifactFetch, unreadableShare(candidate.ArtifactEvidence)},
+	} {
+		seconds += priced.estimate.Expected * max(priced.silent, guessedRateShare(candidate, priced.stage))
 	}
-	return seconds + candidate.Estimates.ArtifactSeconds.Expected*unreadableShare(candidate.ArtifactEvidence)
+	return seconds
+}
+
+// imageIsUnknownShare is how much of an image a host that cannot enumerate itself
+// is charged for, which is all of it: the whole content is priced because nothing
+// said the bytes are here and nothing said they are not.
+func imageIsUnknownShare(locality domain.LocalityState) float64 {
+	if locality == domain.LocalityUnknown {
+		return 1
+	}
+	return 0
+}
+
+// guessedRateShare is how much of one stage's seconds came out of a rate nobody
+// measured, which is all of them or none: a stage records the one throughput it
+// was priced from, and Mercator's own prior divides every byte of it or none.
+func guessedRateShare(candidate domain.CandidateDecision, stage domain.LaunchStage) float64 {
+	for _, rate := range candidate.TransferRates {
+		if rate.Stage == stage && rate.Assumption != "" {
+			return 1
+		}
+	}
+	return 0
 }
 
 // unreadableShare is how much of what this candidate owes on its declared inputs
@@ -745,6 +1618,128 @@ func unreadableShare(evidence []domain.ArtifactEvidence) float64 {
 // arithmeticTolerance is how far two readings of the same seconds may differ
 // before the difference is a disagreement rather than floating-point noise.
 const arithmeticTolerance = 1e-6
+
+// scoreIsReproducibleFromTheRecord is the standing guard on the score being
+// derivable rather than merely reported. For every candidate of every Booking
+// Decision Mercator recorded, ScoreUSD is the arithmetic over the terms that
+// decision itself carries, at the weights it says it used.
+//
+// What it forbids is a scoring term whose input is nowhere in the record. Such a
+// term is invisible: it moves placements that a reader with the whole decision in
+// front of them cannot explain, and no rule can police a number nobody wrote
+// down. That is not hypothetical. Two definitions of uncertainty ran side by side
+// for a phase, one counting the confidences a candidate's answers carried and the
+// other counting facts read straight off the offer, and they agreed on every
+// decision only because both were multiplied by zero. The first Run scored with a
+// nonzero weight would have made them disagree about every borrowed host, and
+// nothing here would have said so.
+//
+// It says nothing about whether the weights are the right ones. Which rate a class
+// declares is a policy statement, and this rule is about the record being enough
+// to check the arithmetic that rate was used in.
+func scoreIsReproducibleFromTheRecord(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	for _, decision := range decisions {
+		for _, candidate := range decision.Candidates {
+			derived := decision.Weights.ScoreUSD(candidate, decision.Policy.ExpectedRuntimeSeconds)
+			if math.Abs(derived-candidate.ScoreUSD) <= arithmeticTolerance {
+				continue
+			}
+			return fmt.Errorf(
+				"Run %q: candidate %q recorded a score of %.6f USD, and the terms recorded beside it at the weights the decision states derive %.6f: %s",
+				decision.RunID, candidate.OfferSnapshotID, candidate.ScoreUSD, derived, describeScoreTerms(decision, candidate),
+			)
+		}
+	}
+	return nil
+}
+
+// doubtOnlyTheAnswersTheScoreReads is the other half of reproducibility. The rule
+// above asks whether the arithmetic in the record adds up; this asks whether the
+// uncertainty term was entitled to charge for what it charged for.
+//
+// Doubt is charged as one minus a stated confidence, and a silence states nothing
+// and is charged nothing. So an answer the score never reads can only ever move a
+// candidate one way: it penalises the publisher that measured its machine and
+// stood behind the result, leaves alone the publisher that said nothing, and
+// leaves alone too the publisher certain its machine refuses every start. The
+// machine nobody has measured comes out ahead of both, which is the inverse of
+// modelling the unknown as uncertainty.
+//
+// A published reliability history sat in that list for a phase, doubted here and
+// priced nowhere, and no arithmetic check could see it: both models charged the
+// same doubt, so the score reproduced from the record exactly. What catches it is
+// asking what the answer was about, and domain.ScoredAnswers is where the score
+// says which questions it reads.
+func doubtOnlyTheAnswersTheScoreReads(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	scored := domain.ScoredAnswers()
+	for _, decision := range decisions {
+		for _, candidate := range decision.Candidates {
+			for _, confidence := range candidate.Confidences {
+				if slices.Contains(scored, confidence.Answer) {
+					continue
+				}
+				return fmt.Errorf(
+					"Run %q: candidate %q was charged %.3f points of doubt about %q, and the score reads no answer to that; it reads %v",
+					decision.RunID, candidate.OfferSnapshotID, 1-confidence.Value, confidence.Answer, scored,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+// promisedStartIsStillAhead is the guarantee half of a Booking that waits. Such a
+// Booking carries the latest moment it may start, computed from what the Bookings
+// ahead of it have left, and every one of those remainders bottoms out at zero. So
+// a Rental held by a Booking past the runtime Mercator enforces prices no wait at
+// all and hands the arriving Run a deadline that has already arrived: the
+// reconciler that expires missed deadlines removes the Booking on its first pass,
+// the Run is placed again, reads the same zero, and comes back to the same machine
+// that never came free.
+//
+// It is stated over the record rather than over the schedule because a promise can
+// only be judged against the moment it was made, and the decision is where that
+// moment is written down. It says nothing about a deadline that passes later:
+// waiting longer than promised is what expiry exists to answer.
+func promisedStartIsStillAhead(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	for _, decision := range decisions {
+		booking := decision.Booking
+		if booking == nil || booking.LatestStartAt == nil || booking.LatestStartAt.After(decision.EvaluatedAt) {
+			continue
+		}
+		return fmt.Errorf(
+			"Run %q took Booking %q on Rental %q promising a start no later than %s, and the decision that minted it was evaluated at %s",
+			decision.RunID, booking.ID, booking.RentalID,
+			booking.LatestStartAt.Format(time.RFC3339), decision.EvaluatedAt.Format(time.RFC3339),
+		)
+	}
+	return nil
+}
+
+// describeScoreTerms is every quantity the derivation had to work with, so a
+// failure names what the record held rather than only that it disagreed.
+func describeScoreTerms(decision domain.BookingDecision, candidate domain.CandidateDecision) string {
+	return fmt.Sprintf(
+		"cost %.6f USD, start %.2fs, declared runtime %.2fs, uncertainty %.3f points, weights %+v",
+		candidate.Estimates.CostUSD.Expected,
+		candidate.Estimates.StartSeconds.Expected,
+		decision.Policy.ExpectedRuntimeSeconds,
+		candidate.Uncertainty(),
+		decision.Weights,
+	)
+}
 
 // localityProvenance is the standing guard on how a host becomes warm. Content
 // arrives on a machine exactly two ways: the World Tape seeded it there, or a
@@ -776,6 +1771,225 @@ func localityProvenance(observation InvariantObservation) error {
 		}
 	}
 	return nil
+}
+
+// transferRateIsAttributed is the provenance rule for the other half of a
+// transfer prediction. safety.locality_provenance holds that the bytes a
+// candidate is charged are explained; this holds that the rate they were divided
+// by is, because seconds are the product of the two and either one can be
+// invented.
+//
+// Three things fail it. A transfer priced from nothing, naming neither a
+// measurement nor an assumption, is a duration whose reader cannot tell which it
+// was, and the two are different claims about the fleet: one says Mercator
+// measured this machine, the other says Mercator guessed the same way it guesses
+// about every machine. A transfer priced at a throughput presented as measured,
+// on a host that published no such fact, is worse: it is a number with a
+// measurement's standing and nobody behind it, and it is exactly what a
+// prediction slice reaching for a faster answer would write. And a transfer
+// priced from an assumption may not be worth what a measurement is worth, which
+// is the clause that keeps the first two from being bookkeeping: naming the
+// assumption honestly and then charging no doubt for it produces exactly the
+// ranking a fabricated measurement would.
+//
+// It is stated over what the decision recorded rather than over the arithmetic.
+// A rule that recomputed the seconds would be a second implementation of the
+// predictor agreeing with the first; this asks the record the question an
+// operator asks, which is who says so.
+func transferRateIsAttributed(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	for _, decision := range decisions {
+		for _, candidate := range decision.Candidates {
+			if err := everyTransferNamesItsRate(decision, candidate); err != nil {
+				return err
+			}
+			for _, rate := range candidate.TransferRates {
+				if err := ratePricedFromSomething(decision, candidate, rate); err != nil {
+					return err
+				}
+				if err := measuredRateWasReported(decision, candidate, rate, observation.World.PublishedPaths); err != nil {
+					return err
+				}
+				if err := assumedRateIsWorthAGuess(decision, candidate, rate); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// everyTransferNamesItsRate is what stops the three clauses below from being
+// silent by omission. Each of them is stated over the rates a decision recorded,
+// so a decision that recorded none says nothing they can adjudicate, and a
+// prediction reaching for a faster answer has an easier way out than inventing a
+// measurement: charge the seconds and leave the throughput off the record.
+//
+// A stage that moved bytes always spent time doing it, and a stage that moved none
+// spent none, so seconds are the question asked here rather than a byte count this
+// rule would have to be told. A transfer charged seconds with no rate beside them
+// is a duration whose second half nobody wrote down, and the reader that suffers is
+// safety.locality_is_never_infeasibility: it works out how much of a refusal was
+// charged for content nobody could describe, and an unattributed rate reads there
+// as a rate somebody measured.
+func everyTransferNamesItsRate(decision domain.BookingDecision, candidate domain.CandidateDecision) error {
+	priced := map[domain.LaunchStage]bool{}
+	for _, rate := range candidate.TransferRates {
+		priced[rate.Stage] = true
+	}
+	for _, stage := range domain.LaunchStages {
+		seconds := candidate.Estimates.Stages.Stage(stage).Expected
+		if !pricedFromBytes(stage) || seconds <= 0 || priced[stage] {
+			continue
+		}
+		return fmt.Errorf(
+			"Run %q: candidate %q was charged %.2fs on its %s stage, and the record names no throughput it was divided by",
+			decision.RunID, candidate.OfferSnapshotID, seconds, stage,
+		)
+	}
+	return nil
+}
+
+func ratePricedFromSomething(decision domain.BookingDecision, candidate domain.CandidateDecision, rate domain.TransferRate) error {
+	if rate.Attributed() {
+		return nil
+	}
+	return fmt.Errorf(
+		"Run %q: candidate %q was charged %d bytes at %.2f Mbps on its %s stage, and the record names %s",
+		decision.RunID, candidate.OfferSnapshotID, rate.Bytes, rate.Mbps, rate.Stage, describeRateProvenance(rate),
+	)
+}
+
+// measuredRateWasReported holds the second clause: a rate the record presents as
+// measured has to be a number some machine in this world really published, at the
+// scope it was priced over, and one its publisher stood behind when the placement
+// was taken. A disowned or expired fact is silence for every other reader here, so
+// it may not become a measurement by being divided by.
+//
+// It is asked of what the world published and at the decision's own moment, which
+// is both the only moment the record carries and the moment production priced the
+// rate at. OfferSnapshot.DownloadRate takes it from the same field, so a rate this
+// finds unpublished is one the scheduler had no standing fact for either. It read
+// the offer's observation moment instead for a while, and a fact that lapsed in
+// between was priced as a measurement here and reported as a fabrication there,
+// against a decision taken by the scheduler's own documented rule.
+//
+// Capacity is retired while the decisions taken about it stay written down, so a
+// rule stated against the fleet as it stands now would turn a correct placement
+// into a violation the moment the losing machine's lease elapsed, and would report
+// it in the words of the thing it exists to catch. A measurement nobody ever
+// published still fails here, because this world remembers every fact it handed to
+// Mercator and no machine's silence becomes a publication by being forgotten.
+func measuredRateWasReported(
+	decision domain.BookingDecision,
+	candidate domain.CandidateDecision,
+	rate domain.TransferRate,
+	published map[string][]domain.NetworkFact,
+) error {
+	if rate.Measurement == "" {
+		return nil
+	}
+	reported := domain.NetworkFacts{Download: published[candidate.OfferSnapshotID]}
+	fact, answered := reported.DownloadP10(rate.Scope, decision.EvaluatedAt)
+	if !answered || fact.ValueMbps != rate.Mbps {
+		return fmt.Errorf(
+			"Run %q: candidate %q priced its %s stage at %.2f Mbps measured by %q, and %s published about its %q path when the decision was taken",
+			decision.RunID, candidate.OfferSnapshotID, rate.Stage, rate.Mbps, rate.Measurement,
+			describeReportedPath(fact, answered), rate.Scope,
+		)
+	}
+	return nil
+}
+
+// assumedRateIsWorthAGuess holds the third clause: a transfer nobody measured is
+// worth at most domain.AssumedLinkConfidence, and so is every reading of it the
+// decision published. Nothing on the path answered, so the seconds are the
+// fleet-wide constant divided into bytes, and confidence is the one field that
+// says so.
+//
+// It is the clause that gives the other two teeth. A prediction that named its
+// assumption truthfully and then presented the duration as certain would rank an
+// unmeasured machine exactly where a machine that measured a gigabit path ranks,
+// which is the outcome a fabricated measurement buys and the one the whole slice
+// exists to stop. A prediction reaching for that is far likelier to arrive by
+// raising an assumption's confidence than by inventing a source, because raising
+// it looks like a tuning constant.
+//
+// The doubt the score charged is asked about by name rather than inferred from
+// the estimate, because the decision carries the two separately and only one of
+// them is what the ranking reads.
+//
+// Zero bytes is not judged here and cannot be: a stage with nothing to move
+// records no rate at all, and a host an inventory says holds the content is
+// certainly zero seconds from finishing.
+func assumedRateIsWorthAGuess(decision domain.BookingDecision, candidate domain.CandidateDecision, rate domain.TransferRate) error {
+	if rate.Assumption == "" {
+		return nil
+	}
+	part, worth, overconfident := overconfidentGuess(rate, candidate, rate.Stage)
+	if !overconfident {
+		return nil
+	}
+	return fmt.Errorf(
+		"Run %q: candidate %q priced its %s stage from %q, which nothing on this machine measured, and %s is worth %.2f where a duration over an unmeasured rate is worth at most %.2f",
+		decision.RunID, candidate.OfferSnapshotID, rate.Stage, rate.Assumption, part, worth, domain.AssumedLinkConfidence,
+	)
+}
+
+// overconfidentGuess names which reading of an unmeasured transfer claims more
+// than a guess is worth. There are three of them and they are three separate
+// mistakes.
+//
+// The rate is what a future caller of this model will divide by. The stage
+// estimate is the answer this decision published about the duration, and a tree
+// that stopped carrying the rate's confidence onto it would pass a rule that read
+// only the rate. And the confidence the decision listed for that stage is what
+// the score itself charges doubt from: domain.CandidateDecision.Confidences is
+// what Uncertainty reads, it is built separately from the estimate rather than
+// derived from it, and a rule stated over the estimate alone leaves the ranking
+// reachable by editing the one function named for the score's own input.
+func overconfidentGuess(rate domain.TransferRate, candidate domain.CandidateDecision, stage domain.LaunchStage) (string, float64, bool) {
+	if rate.Confidence > domain.AssumedLinkConfidence {
+		return "the rate itself", rate.Confidence, true
+	}
+	if estimate := candidate.Estimates.Stages.Stage(stage); estimate.Confidence > domain.AssumedLinkConfidence {
+		return "the estimate it produced", estimate.Confidence, true
+	}
+	if scored := scoredConfidence(candidate, stage); scored > domain.AssumedLinkConfidence {
+		return "the doubt the score charged for it", scored, true
+	}
+	return "", 0, false
+}
+
+// scoredConfidence is what this decision told its own score one stage's duration
+// was worth. An answer nobody stated a confidence for is not listed at all and is
+// charged no doubt, which is a silence rather than a claim of certainty, so it is
+// not judged here: what a stage costs when nothing answered about it is the
+// business of the rules about locality.
+func scoredConfidence(candidate domain.CandidateDecision, stage domain.LaunchStage) float64 {
+	for _, confidence := range candidate.Confidences {
+		if confidence.Answer == stage.ConfidenceAnswer() {
+			return confidence.Value
+		}
+	}
+	return 0
+}
+
+func describeRateProvenance(rate domain.TransferRate) string {
+	if rate.Measurement != "" && rate.Assumption != "" {
+		return fmt.Sprintf("both the measurement %q and the assumption %q, which is a decision that cannot have been taken twice", rate.Measurement, rate.Assumption)
+	}
+	return "neither a measurement nor an assumption it was priced from"
+}
+
+func describeReportedPath(fact domain.NetworkFact, answered bool) string {
+	if !answered {
+		return "nothing its publisher stood behind was"
+	}
+	return fmt.Sprintf("%.2f Mbps was", fact.ValueMbps)
 }
 
 // onlyKeptCapacityHoldsWhatItRan holds the line the lane split draws. It names
@@ -1176,6 +2390,12 @@ func secretsAbsent(observation InvariantObservation) error {
 	return nil
 }
 
+// admittedRunProgress is a Run Mercator accepted reaching an answer. It used to
+// exempt anything in phase "queued", which was free while nothing could reach
+// that phase and would have become a licence to starve the moment something
+// could. The exemption is gone rather than narrowed, and what replaced it is
+// liveness.aging_prevents_starvation: a queued Run is held to its own class's
+// maximum queue delay, which is a much earlier bound than this one.
 func admittedRunProgress(observation InvariantObservation) error {
 	bound := 24 * time.Hour
 	if observation.Now.Sub(observation.StartedAt) <= bound {
@@ -1189,9 +2409,7 @@ func admittedRunProgress(observation InvariantObservation) error {
 		if arrival.Name == "" {
 			continue
 		}
-		if run.Phase != "queued" {
-			return fmt.Errorf("Run %q exceeded %s without terminal or explicit queued state", run.ID, bound)
-		}
+		return fmt.Errorf("Run %q exceeded %s without reaching a terminal state", run.ID, bound)
 	}
 	return nil
 }
@@ -1224,6 +2442,15 @@ func staleLeaseExpiry(observation InvariantObservation) error {
 	return nil
 }
 
+// orphanConvergence is the projection rule. Every execution this world is
+// running is work Mercator launched, so a Run this control plane can no longer
+// name is a projection that lost an execution rather than a provider that gained
+// one, and the machine goes on running with nothing that will ever come for it.
+//
+// It reads executions and never the capacity a world declared orphaned. Those are
+// deliberately different facts: an execution is Mercator's own and carries the
+// identities Mercator minted for it, and capacity nobody recognises is the
+// opposite statement, answered by the policy rule below.
 func orphanConvergence(observation InvariantObservation) error {
 	runs := runsByID(observation.Runs)
 	for _, execution := range observation.World.ActiveExecutions {
@@ -1232,6 +2459,82 @@ func orphanConvergence(observation InvariantObservation) error {
 		}
 	}
 	return nil
+}
+
+// orphanPolicyIsExplicit is the rule that makes reconciliation able to choose.
+// Capacity Mercator does not recognise is either taken back into the fleet or
+// destroyed, and whichever it was, the record names the policy that decided and
+// the reason it applied.
+//
+// It is the half orphanConvergence has nothing to say about. That rule asks that
+// no execution outlive the Run it belonged to, which is silent on what ought to
+// happen to capacity that was never Mercator's execution at all, so the two are
+// stated apart and a world holding an orphan is answered by this one.
+//
+// A machine still standing has not been decided about yet, which is not a
+// violation: a control plane that has not swept is a control plane that has not
+// looked. Converging one without a stated rule is the violation, and so is a
+// decision naming no policy, no reason, or an outcome that is neither of the two
+// an operator can act on.
+func orphanPolicyIsExplicit(observation InvariantObservation) error {
+	decided, err := recordedOrphanDecisions(observation.MercatorEvents)
+	if err != nil {
+		return err
+	}
+	held := map[string]bool{}
+	for _, orphan := range observation.World.Orphans {
+		held[orphan.LaunchKey] = true
+	}
+	for _, identity := range slices.Sorted(maps.Keys(observation.SeededOrphans)) {
+		if held[identity] {
+			continue
+		}
+		if _, decision := decided[identity]; !decision {
+			return fmt.Errorf(
+				"orphaned capacity %q is gone from this world and no decision names the policy that took it",
+				identity,
+			)
+		}
+	}
+	for _, identity := range slices.Sorted(maps.Keys(decided)) {
+		if err := statesItsPolicy(identity, decided[identity]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func statesItsPolicy(identity string, decision janitor.OrphanConvergence) error {
+	switch {
+	case decision.Policy == "":
+		return fmt.Errorf("the decision about orphaned capacity %q names no policy", identity)
+	case decision.Outcome != janitor.OrphanAdopted && decision.Outcome != janitor.OrphanTerminated:
+		return fmt.Errorf(
+			"orphaned capacity %q was converged as %q, which is neither adopting it nor terminating it",
+			identity, decision.Outcome,
+		)
+	case decision.Reason == "":
+		return fmt.Errorf("the decision about orphaned capacity %q gives no reason the policy applied", identity)
+	default:
+		return nil
+	}
+}
+
+// recordedOrphanDecisions is every policy decision Mercator's public record holds
+// about capacity it did not recognise, by the identity it decided about.
+func recordedOrphanDecisions(events []eventlog.CloudEvent) (map[string]janitor.OrphanConvergence, error) {
+	decided := map[string]janitor.OrphanConvergence{}
+	for _, event := range events {
+		if event.Type != janitor.EventOrphanConverged {
+			continue
+		}
+		var convergence janitor.OrphanConvergence
+		if err := json.Unmarshal(event.Data, &convergence); err != nil {
+			return nil, fmt.Errorf("decode orphan convergence %s: %w", event.ID, err)
+		}
+		decided[convergence.LaunchKey] = convergence
+	}
+	return decided, nil
 }
 
 func supersededBookingRelease(observation InvariantObservation) error {

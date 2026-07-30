@@ -7,6 +7,7 @@ import type {
 } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { duration, usd } from "@/lib/format";
+import { orderCandidates, priced } from "@/lib/placement";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -42,7 +43,17 @@ function EstimateCell({
   if (!estimate) {
     return <span className="text-muted-foreground">—</span>;
   }
-  const { p50, p90, expected, confidence } = estimate;
+  const { p50, p90, expected, confidence, source } = estimate;
+  // A machine nobody quoted has no dollars, which is a different answer from a
+  // dash. The placement ranked it behind everything somebody priced, and a reader
+  // comparing the rows has to be able to see why.
+  if (source === "unpriced") {
+    return (
+      <span className="font-mono text-[0.6875rem] text-muted-foreground">
+        unpriced
+      </span>
+    );
+  }
   const allEmpty =
     p50 === undefined && p90 === undefined && expected === undefined;
   if (allEmpty) {
@@ -69,17 +80,58 @@ function EstimateCell({
   );
 }
 
+// ESTIMATE_COLUMNS is the wait in front of a candidate, the eight stages of its
+// launch, the start they add up to, and the price. Every stage is its own column
+// because every stage is its own prediction: a reader who could see only one
+// number for a machine coming up could not tell a marketplace with no stock from
+// a host that never booted.
 const ESTIMATE_COLUMNS: Array<{
-  key: keyof CandidateDecision["estimates"];
+  key: string;
   label: string;
   kind: EstimateKind;
+  read: (estimates: CandidateDecision["estimates"]) => Estimate | undefined;
 }> = [
-  { key: "queue_seconds", label: "Queue", kind: "duration" },
-  { key: "provision_seconds", label: "Provision", kind: "duration" },
-  { key: "pull_seconds", label: "Pull", kind: "duration" },
-  { key: "artifact_seconds", label: "Inputs", kind: "duration" },
-  { key: "start_seconds", label: "Start", kind: "duration" },
-  { key: "cost_usd", label: "Cost", kind: "usd" },
+  { key: "queue", label: "Queue", kind: "duration", read: (e) => e?.queue_seconds },
+  {
+    key: "acquisition",
+    label: "Acquire",
+    kind: "duration",
+    read: (e) => e?.stages?.acquisition_seconds,
+  },
+  { key: "boot", label: "Boot", kind: "duration", read: (e) => e?.stages?.boot_seconds },
+  {
+    key: "agent_ready",
+    label: "Agent",
+    kind: "duration",
+    read: (e) => e?.stages?.agent_ready_seconds,
+  },
+  {
+    key: "image_fetch",
+    label: "Fetch",
+    kind: "duration",
+    read: (e) => e?.stages?.image_fetch_seconds,
+  },
+  { key: "unpack", label: "Unpack", kind: "duration", read: (e) => e?.stages?.unpack_seconds },
+  {
+    key: "artifact_fetch",
+    label: "Inputs",
+    kind: "duration",
+    read: (e) => e?.stages?.artifact_fetch_seconds,
+  },
+  {
+    key: "container_start",
+    label: "Container",
+    kind: "duration",
+    read: (e) => e?.stages?.container_start_seconds,
+  },
+  {
+    key: "application_ready",
+    label: "Ready",
+    kind: "duration",
+    read: (e) => e?.stages?.application_ready_seconds,
+  },
+  { key: "start", label: "Start", kind: "duration", read: (e) => e?.start_seconds },
+  { key: "cost", label: "Cost", kind: "usd", read: (e) => e?.cost_usd },
 ];
 
 // Total column count drives the expansion row's colSpan.
@@ -166,9 +218,19 @@ function CandidateRow({ candidate, selected }: CandidateRowProps) {
             className={cn(
               "font-mono text-[0.8125rem] tabular",
               selected ? "font-semibold text-primary" : "text-foreground",
+              // A score with no price in it is not a total. It states the waiting
+              // and the doubt, and the machine it belongs to was ranked behind
+              // every machine somebody quoted whatever it adds up to.
+              !priced(candidate) && "text-muted-foreground",
             )}
+            title={
+              priced(candidate)
+                ? undefined
+                : "no price: waiting and doubt only, ranked behind every priced candidate"
+            }
           >
             {candidate.score_usd === undefined ? "—" : usd(candidate.score_usd)}
+            {priced(candidate) ? null : "*"}
           </span>
         </TableCell>
 
@@ -176,7 +238,7 @@ function CandidateRow({ candidate, selected }: CandidateRowProps) {
         {ESTIMATE_COLUMNS.map((col) => (
           <TableCell key={col.key} className="py-2 text-right">
             <EstimateCell
-              estimate={candidate.estimates?.[col.key]}
+              estimate={col.read(candidate.estimates)}
               kind={col.kind}
             />
           </TableCell>
@@ -210,18 +272,12 @@ export function CandidateTable({
   selectedOfferId,
   className,
 }: CandidateTableProps) {
-  // Order: selected first, then feasible by score ascending (cheapest best),
-  // then infeasible last.
-  const ordered = React.useMemo(() => {
-    return [...candidates].sort((a, b) => {
-      if (a.offer_snapshot_id === selectedOfferId) return -1;
-      if (b.offer_snapshot_id === selectedOfferId) return 1;
-      if (a.feasible !== b.feasible) return a.feasible ? -1 : 1;
-      const as = a.score_usd ?? Number.POSITIVE_INFINITY;
-      const bs = b.score_usd ?? Number.POSITIVE_INFINITY;
-      return as - bs;
-    });
-  }, [candidates, selectedOfferId]);
+  // Order: the placement's own ranking, which asks whether a candidate has
+  // dollars before it compares any. See lib/placement.
+  const ordered = React.useMemo(
+    () => orderCandidates(candidates, selectedOfferId),
+    [candidates, selectedOfferId],
+  );
 
   return (
     <div
@@ -296,5 +352,7 @@ function dispositionLabel(disposition: CandidateDecision["disposition"]): string
       return "Queue";
     case "provision_fresh_rental":
       return "Fresh";
+    case "launch_ephemeral":
+      return "One-shot";
   }
 }

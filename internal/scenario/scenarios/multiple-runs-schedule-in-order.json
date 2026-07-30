@@ -1,8 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
   "summary": "A warm Rental has one short running Booking and fresh capacity is slow. Two arriving Runs both receive durable queued Bookings in submission order because the full ordered wait remains faster than provisioning.",
-  "classification": "target",
-  "missing_capabilities": ["rental_schedule"],
+  "classification": "green",
   "world": {
     "images": {
       "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
@@ -35,7 +34,13 @@
         "id": "fresh-slow",
         "provider": "simcloud",
         "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "30m", "p90": "45m"}
+        "provisioning": {
+          "expected": "30m",
+          "p90": "45m",
+          "acquisition": "3m",
+          "boot": "22m30s",
+          "agent_ready": "4m30s"
+        }
       }
     ]
   },

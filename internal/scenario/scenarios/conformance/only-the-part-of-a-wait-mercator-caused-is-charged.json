@@ -1,0 +1,57 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One machine sold on terms that let its provider take it back, and a family of two whose caller said one of them may run at once. The first member takes the machine and the second is held on GROUP_AT_PARALLELISM. An hour and a minute in, a minute past the whole queue delay this class states, the provider takes the machine back: the first member is interrupted and gives up the family's place, and the fleet the second member is then measured against is empty. So one wait changes hands at a moment nothing else happens, which is the moment the bound has to survive. The member is not refused, because Mercator had kept it waiting for capacity for no time at all, and it is not exempt for ever either: from the handover the wait is Mercator's fleet, and an hour of that is the whole of what this class allows, so the member is refused QUEUE_DELAY_EXCEEDED then. The refusal states both numbers, the whole two hours and the hour and a minute the caller's own declaration held, which is what makes a bound of an hour and a wait of two hours readable as one decision.",
+  "seed": "mercator-lab-divided-wait-v1",
+  "world": {
+    "images": {
+      "sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "2GB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-spot",
+        "reclaimable": true,
+        "cached_images": ["sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11"],
+        "rate_per_hour_usd": 1.0
+      }
+    ],
+    "preemptions": [
+      {"rental": "rental-spot", "at": "1h1m"}
+    ],
+    "runtime_models": [
+      {"candidate": "rental-spot", "minimum": "3h", "maximum": "3h"}
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "sweep-1",
+        "at": "0s",
+        "request": {
+          "image": "sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11",
+          "service_class": "batch",
+          "group": {"id": "sweep", "max_parallel": 1},
+          "expected_runtime": "3h",
+          "max_runtime": "4h"
+        }
+      },
+      {
+        "name": "sweep-2",
+        "at": "0s",
+        "request": {
+          "image": "sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11",
+          "service_class": "batch",
+          "group": {"id": "sweep", "max_parallel": 1},
+          "expected_runtime": "3h",
+          "max_runtime": "4h"
+        }
+      }
+    ]
+  }
+}

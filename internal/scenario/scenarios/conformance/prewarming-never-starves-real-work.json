@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "One machine and four Runs. The first is admitted and spends ten minutes fetching the forty gigabytes it runs, and the second is queued behind it, so Mercator knows where that Run is going and can get the machine ready. It does not start until the admitted Run's own fetch is finished: a node performs its commands in order and a link carries what it carries, so preparing speculatively while a Run is waiting to start is Mercator delaying its own work. One piece of content moves at a time and no sooner than a minute after the last, which is the whole of the restraint Mercator has, because nothing below the control plane refuses a transfer. A third Run arrives once the machine holds both, and its Booking Decision prices that host at zero pull seconds and a checked copy of the dataset, on a machine that has executed neither. The fourth arrives wanting sixty gigabytes nothing else needs, and its caller withdraws it eight minutes in: the preparation stops and the room goes back to the machine, because content is prepared for work that is going to happen and this work is not.",
+  "summary": "One machine and four Runs. The first is admitted and spends ten minutes fetching the forty gigabytes it runs, and the second is queued behind it, so Mercator knows where that Run is going and can get the machine ready. It does not start until the admitted Run's own fetch is finished: a node performs its commands in order and a link carries what it carries, so preparing speculatively while a Run is waiting to start is Mercator delaying its own work. One piece of content moves at a time and no sooner than a minute after the last, which is the whole of the restraint Mercator has, because nothing below the control plane refuses a transfer. A third Run arrives twenty-six minutes in, once the machine holds both, and its Booking Decision prices that host at zero pull seconds and a checked copy of the dataset, on a machine that has executed neither. What decides that moment is Mercator's own prediction of when the admitted Run's forty gigabytes have landed and been applied, because nothing speculative moves until then. The fourth arrives wanting sixty gigabytes nothing else needs, and its caller withdraws it eight minutes in: the preparation stops and the room goes back to the machine, because content is prepared for work that is going to happen and this work is not.",
   "seed": "mercator-lab-prewarm-yields-v1",
   "world": {
     "prewarm": {
@@ -98,7 +98,7 @@
       },
       {
         "name": "curious",
-        "at": "25m",
+        "at": "26m",
         "request": {
           "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
           "consumes_artifacts": ["artifact:corpus:v7"],

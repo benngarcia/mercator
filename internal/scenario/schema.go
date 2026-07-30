@@ -42,6 +42,15 @@ type Outcome string
 const (
 	OutcomePlace Outcome = "place"
 	OutcomeFail  Outcome = "fail"
+	// OutcomeDefer is a Run admission told to wait. It is a different sentence
+	// from "fail": a Run nothing would take recorded nothing at all and was
+	// retried for ever, so a corpus that could say only "no offer was selected"
+	// could not tell that apart from a Run that is queued and will run.
+	OutcomeDefer Outcome = "defer"
+	// OutcomeRefuse is a Run admission would not queue, because the moment its
+	// class says it must have started by is already behind the wait in front of
+	// it.
+	OutcomeRefuse Outcome = "refuse"
 )
 
 type BookingState string
@@ -110,6 +119,44 @@ const (
 	CapabilityInvariants Capability = "invariants"
 	// CapabilityLabUI is the Lab-backed normal HTTP/SSE and console path.
 	CapabilityLabUI Capability = "lab_ui"
+	// CapabilityMeasuredTransferRates is a transfer priced from the throughput
+	// somebody measured on the path it crosses, rather than from one constant per
+	// scope. It names what a fixture declaring paths to an object store is red
+	// for while every Artifact read in the tree costs the same seconds on every
+	// machine in the fleet.
+	CapabilityMeasuredTransferRates Capability = "measured_transfer_rates"
+	// CapabilityLearnedStageHistory is a launch stage predicted from what earlier
+	// launches of the same candidate really spent, answered at a declared level of
+	// a hierarchy and carrying the number of samples behind it. It names what a
+	// fixture about machines this fleet has already measured is red for while
+	// every stage in the tree is predicted from a published claim or a stated
+	// constant, whatever the fleet has watched that exact machine do.
+	CapabilityLearnedStageHistory Capability = "learned_stage_history"
+	// CapabilityAppendedDecisions is a Booking Decision that is added and never
+	// written over: a Run that found nothing has a decision recorded for it at
+	// all, and a re-decision names the one it stands in for and why. It names what
+	// a fixture about a chain of decisions is red for while a re-placement leaves
+	// readers to take the last record silently and a Run nothing could place
+	// records no decision.
+	CapabilityAppendedDecisions Capability = "appended_decisions"
+	// CapabilityRefusedQueueDelay is admission refusing a Run it has kept waiting
+	// longer than its class allows, rather than going on holding it. It names what
+	// a fixture about a maximum queue delay is red for while the class deadline is
+	// the only bound admission acts on: a class that declares no deadline waits for
+	// ever, and every class that declares one waits far past the bound it stated
+	// before anything ends the wait.
+	CapabilityRefusedQueueDelay Capability = "refused_queue_delay"
+	// CapabilityRunGroups is admission holding a family of Runs to the width its
+	// caller declared. It names what a fixture about a sweep is red for while a
+	// group is a word the arrival plan writes and nothing reads: every member of
+	// every family is placed the moment a machine can take it, whatever the caller
+	// said about how wide the family may run.
+	CapabilityRunGroups Capability = "run_groups"
+	// CapabilityInterruptionPermission is Mercator refusing to put work on capacity
+	// its provider can take back unless the work's class permits that. It names
+	// what a fixture about reclaimable capacity is red for while no offer states
+	// the term it was sold on and no class states whether it may be lost.
+	CapabilityInterruptionPermission Capability = "interruption_permission"
 )
 
 var knownCapabilities = map[Capability]bool{
@@ -129,6 +176,12 @@ var knownCapabilities = map[Capability]bool{
 	CapabilityRunBundle:              true,
 	CapabilityInvariants:             true,
 	CapabilityLabUI:                  true,
+	CapabilityMeasuredTransferRates:  true,
+	CapabilityLearnedStageHistory:    true,
+	CapabilityAppendedDecisions:      true,
+	CapabilityRefusedQueueDelay:      true,
+	CapabilityRunGroups:              true,
+	CapabilityInterruptionPermission: true,
 }
 
 // MaxQueuedBookings bounds every RentalSchedule: at most this many queued
@@ -163,13 +216,110 @@ type WorldSpec struct {
 	RentalSchedules []RentalScheduleSpec   `json:"rental_schedules,omitempty"`
 	Hosts           []HostSpec             `json:"hosts,omitempty"`
 	Marketplace     []MarketplaceOfferSpec `json:"marketplace,omitempty"`
-	Paths           []PathSpec             `json:"paths,omitempty"`
+	Paths           PathSpecs              `json:"paths,omitempty"`
 	RuntimeModels   []RuntimeModelSpec     `json:"runtime_models,omitempty"`
 	// Prewarm is what this world's control plane is allowed to have in flight
 	// for work it has not admitted. It is stated in the Blueprint because it is
 	// the whole difference between preparation that shortens a queued Run's
 	// start and preparation that starves the Run already running.
 	Prewarm *PrewarmSpec `json:"prewarm,omitempty"`
+	// Launch is what this world spends on the stages of a launch that nothing
+	// else in a fixture can state. A machine's provisioning states its own three;
+	// a path states what a transfer costs; these three are the rest.
+	Launch LaunchSpec `json:"launch,omitzero"`
+	// Preemptions is capacity this world's provider takes back, and the moment it
+	// does. It is the world acting on its own account rather than work arriving,
+	// which is why it is stated here and not in the arrival plan: nothing Mercator
+	// does causes it, and whatever was running there is gone.
+	//
+	// Each one may only name a Rental the fixture declared reclaimable, because
+	// that is the term the capacity was sold on. A world that took back a machine
+	// nobody sold that way would be describing a provider breaking its contract,
+	// which is a different fixture from the one this vocabulary is for.
+	Preemptions []PreemptionSpec `json:"preemptions,omitempty"`
+	// Orphans is capacity this world's provider is already holding that Mercator
+	// never launched. It is stated rather than produced, because nothing Mercator
+	// does creates one: what creates one is a control plane that lost a record, and
+	// a Blueprint saying so is the only honest way to put a world in that state.
+	Orphans []OrphanSpec `json:"orphans,omitempty"`
+}
+
+// OrphanSpec is one thing a provider is holding that the control plane does not
+// recognise. Its shape is the whole of what the orphan policy has to decide from:
+// which machine it is on, and whether it still carries a Run identity Mercator can
+// find in its own record.
+type OrphanSpec struct {
+	// ID is the launch key this capacity answers to, which is what a reclaim is
+	// addressed by and what the decision about it is filed under.
+	ID string `json:"id"`
+	// Rental is the machine it is running on, which has to be one this world
+	// declared: an execution on a machine that does not exist is not a world.
+	Rental string `json:"rental"`
+	// Run is the Run identity the capacity still carries, by this Blueprint's own
+	// name for that Run. An orphan naming one is capacity Mercator can account for
+	// out of its own record; an orphan naming nothing is capacity nothing can ever
+	// be bound to, and those are the two shapes the policy chooses between.
+	Run string `json:"run,omitempty"`
+}
+
+// PreemptionSpec is one machine going back to the provider that sold it.
+type PreemptionSpec struct {
+	Rental string   `json:"rental"`
+	At     Duration `json:"at"`
+}
+
+// LaunchSpec is what a launch costs in this world after its content has arrived.
+// Each stage is stated as a duration rather than derived from a rate, because a
+// world that computed the same arithmetic the predictor computes would make the
+// prediction right by construction, and a stage whose actual agrees with its
+// prediction by construction can never be calibrated.
+//
+// Each is a pointer because a stage a fixture did not mention and a stage a
+// fixture says costs nothing are different sentences, and the second is the one
+// this record exists to catch: a container that starts instantly collapses the
+// observed start onto the moment the last byte landed.
+type LaunchSpec struct {
+	// Unpack is how long a machine here takes to turn content on its disk into a
+	// layer chain a container can start on. The world spends it on every launch
+	// that had content to fetch or content it holds unassembled, because bytes
+	// that arrive have to be applied before anything runs on them.
+	Unpack *Duration `json:"unpack,omitempty"`
+	// ContainerStart is how long a container runtime here takes to create the
+	// container and hold a process in it.
+	ContainerStart *Duration `json:"container_start,omitempty"`
+	// ApplicationReady is how long a workload here takes to report that it can do
+	// work, measured from its process starting. It is the world's own answer and
+	// never the Run's declaration: a fixture states both, and the gap between
+	// them is what a calibration reads.
+	ApplicationReady *Duration `json:"application_ready,omitempty"`
+	// ApplicationNeverReady is a world where the workload's process runs and the
+	// application behind it never reports that it can do work. It is the failure
+	// mode the readiness stage exists to expose, and it is stated rather than
+	// derived because an omitted duration already means something here: every other
+	// stage reads silence as a world that spends nothing on it, and a readiness of
+	// nothing is a legitimate world where a process is serving the instant it
+	// exists. Without this, no fixture could say a workload started and never came
+	// up, and the guard that skips a launch which has not become ready was
+	// unreachable in both worlds.
+	ApplicationNeverReady bool `json:"application_never_ready,omitempty"`
+}
+
+// ApplicationBecomesReady is whether the applications in this world ever report
+// they can do work. A world that says they never do measures no readiness at all,
+// which is a different record from one measuring zero seconds of it.
+func (spec LaunchSpec) ApplicationBecomesReady() bool { return !spec.ApplicationNeverReady }
+
+// UnpackSpend is what assembling content costs here.
+func (spec LaunchSpec) UnpackSpend() time.Duration { return stated(spec.Unpack) }
+
+// ContainerStartSpend is what creating a container and starting its process
+// costs here.
+func (spec LaunchSpec) ContainerStartSpend() time.Duration { return stated(spec.ContainerStart) }
+
+// ApplicationReadySpend is how long after its process starts a workload here
+// reports itself ready.
+func (spec LaunchSpec) ApplicationReadySpend() time.Duration {
+	return stated(spec.ApplicationReady)
 }
 
 // PrewarmSpec bounds speculative preparation. Both bounds are the control
@@ -375,8 +525,13 @@ type LayerSpec struct {
 // broker state; the machine itself receives only the running Booking through
 // its standard Docker endpoint.
 type RentalSpec struct {
-	ID     string `json:"id"`
-	Region string `json:"region,omitempty"`
+	ID string `json:"id"`
+	// Provider is the backend this machine came from. It is stated where a fixture is
+	// about what a launch history may be filed under, because a candidate key names
+	// the provider and a fixture that let the harness name it would assert a
+	// different key in each simulated world.
+	Provider string `json:"provider,omitempty"`
+	Region   string `json:"region,omitempty"`
 	// IdleLeaseExpiresIn bounds how long the rental survives idle, measured
 	// from the world clock's start. Omitted means the lease outlives the
 	// scenario.
@@ -403,8 +558,124 @@ type RentalSpec struct {
 	// owns it.
 	CacheMounts    []HeldCacheSpec `json:"cache_mounts,omitempty"`
 	RatePerHourUSD float64         `json:"rate_per_hour_usd"`
-	Billing        BillingSpec     `json:"billing,omitempty"`
-	Resources      *ResourcesSpec  `json:"resources,omitempty"`
+	// Unpriced states that nobody has quoted a price for this machine, which is
+	// what an enrolled node whose operator configured no shadow price publishes.
+	// It is not a rate of zero: a rate of zero is a machine somebody says is free,
+	// and this is a machine nobody can say anything about the cost of. A fixture
+	// states it instead of a rate, never beside one.
+	Unpriced bool `json:"unpriced,omitempty"`
+	// Reclaimable states that whoever sold this machine may take it back while
+	// Mercator is still using it, which is the term a spot ask and an interruptible
+	// listing are sold on. It is what lets a fixture put work on capacity that can
+	// disappear, and the only capacity this world's own preemptions may name: a
+	// world that reclaimed a machine nobody sold on those terms would be asserting
+	// a provider breaking its own contract.
+	Reclaimable bool        `json:"reclaimable,omitempty"`
+	Billing     BillingSpec `json:"billing,omitempty"`
+	// Terms is what this machine was sold on beyond its price: what Mercator
+	// already owes on it, what it is held for, and how long it stays Mercator's.
+	// Only an allocation somebody already made can carry them, which is why they
+	// are stated here and not on a listing for a machine nobody has allocated.
+	Terms     CapacityTermsSpec `json:"terms,omitzero"`
+	Resources *ResourcesSpec    `json:"resources,omitempty"`
+	// CapacityConfidence is how sure whoever published this machine's capacity
+	// claim was of it. Omitted means certain, which is what every simulated
+	// provider says about a machine it can see. A fixture states less when the
+	// world under test is one where the answers a placement rests on are worth
+	// different amounts, which is the only way the uncertainty term can be shown
+	// pricing anything.
+	CapacityConfidence *float64 `json:"capacity_confidence,omitempty"`
+	// ClockAhead is how far this machine's wall clock runs ahead of the control
+	// plane's. It is the one world fact that makes a moment a machine states
+	// uncheckable: the host reads its container's start off the same clock it reads
+	// its own now from, so the two agree with each other and with nothing Mercator
+	// knows. Omitted means the machine keeps Mercator's clock, which is what every
+	// other machine in this corpus does and why no fixture could state the world
+	// where a start moment arrives ahead of the read that carried it.
+	//
+	// It is stated in one direction on purpose. A clock behind Mercator's hands over
+	// a start earlier than the truth, which nothing can detect and the record already
+	// names where it lands (start_before_launch_accepted); a clock ahead hands over a
+	// moment in Mercator's future, which is refusable and has to be refused twice, on
+	// the run stream and on the Booking's runtime clock.
+	ClockAhead *Duration `json:"clock_ahead,omitempty"`
+}
+
+// Skew is how far ahead of Mercator this machine's clock reads, and nothing where
+// the fixture said the machine keeps the same clock.
+func (spec RentalSpec) Skew() time.Duration { return stated(spec.ClockAhead) }
+
+// ReliabilitySpec is a published risk history, in the terms the one production
+// publisher of it states: rates in [0,1] and how much their publisher stands
+// behind them. It is a fact about the machine rather than world truth, which is
+// why it carries a confidence and why a fixture may state a history that is
+// wrong about what the world then does.
+//
+// It hangs off a marketplace listing and not off a Rental, because that is where
+// the fact comes from in production: Vast publishes reliability2 on an unrented
+// ask, before anything is rented, and the two builders of standing reusable
+// offers, an enrolled node's own projection and the local Docker daemon, publish
+// no history at all. A Rental is a machine Mercator holds through a node it
+// enrolled, and how often that machine refuses to start a container is a
+// lifecycle fact the node owns rather than a history its provider published, so
+// it comes back on RentalSpec in the slice that has a writer for it. Stating it
+// here is also the only way the corpus can see a rate matter: expected redo cost
+// is a probability times a predicted start, and a warm Rental's predicted start
+// is about a second.
+//
+// Each rate is stated or omitted, and omitted is what production mostly does: the
+// one publisher in this tree measures interruptions and nothing about refused
+// starts. A rate a fixture leaves out is unmeasured, and a rate it states as zero
+// is a machine measured and never seen to fail, which are two different worlds a
+// fixture has to be able to tell apart.
+//
+// Nothing prices either rate yet. They are here because a decision that records no
+// risk at all cannot be the input to a slice that prices one.
+type ReliabilitySpec struct {
+	StartFailureRate *float64 `json:"start_failure_rate,omitempty"`
+	InterruptionRate *float64 `json:"interruption_rate,omitempty"`
+	// Confidence is how much the publisher stands behind the rates it stated. A
+	// fixture states it because a measurement over three starts and one over three
+	// thousand are different answers, and because it is what carries a stated rate
+	// of zero as a measurement rather than as an absence.
+	Confidence float64 `json:"confidence"`
+}
+
+// Evidence is the risk record this declaration states, in the vocabulary an
+// offer carries it in. Whichever rates the fixture stated are stated at the
+// confidence it declared, and the rest are silence.
+func (spec ReliabilitySpec) Evidence() domain.ReliabilityEvidence {
+	return domain.ReliabilityEvidence{
+		StartFailures: statedRate(spec.StartFailureRate, spec.Confidence),
+		Interruptions: statedRate(spec.InterruptionRate, spec.Confidence),
+	}
+}
+
+func statedRate(rate *float64, confidence float64) domain.StatedRate {
+	if rate == nil {
+		return domain.StatedRate{}
+	}
+	return domain.StatedRate{Rate: *rate, Confidence: confidence}
+}
+
+// Risk is what the provider of this listing publishes about how the machine
+// behind it behaves, and nothing where no fixture stated a history. Silence is
+// not a clean record: a machine nobody has measured has published no rate to
+// read, and reading it as zero failures would be a claim its provider never made.
+func (spec MarketplaceOfferSpec) Risk() domain.ReliabilityEvidence {
+	if spec.Reliability == nil {
+		return domain.ReliabilityEvidence{}
+	}
+	return spec.Reliability.Evidence()
+}
+
+// Confidence is how sure this machine's publisher is of its capacity claim, and
+// certainty where the fixture stated nothing.
+func (spec RentalSpec) Confidence() float64 {
+	if spec.CapacityConfidence == nil {
+		return 1
+	}
+	return *spec.CapacityConfidence
 }
 
 // HeldCacheSpec is one mutable cache a machine was found holding. The workspace
@@ -491,8 +762,32 @@ func (p QueuedBookingSpec) expected() Duration {
 }
 
 type MarketplaceOfferSpec struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider,omitempty"`
+	ID string `json:"id"`
+	// Machine is the handle this marketplace has for the hardware behind the
+	// listing, where it publishes one. A marketplace that sells asks against
+	// machines somebody already owns has such a handle and numbers the ask itself
+	// afresh on every search, which is the whole reason a launch history needs a
+	// key of its own: two IDs here naming one machine is a world where filing
+	// history under the listing loses half of it. A catalog selling a product that
+	// does not exist yet states none, which is what every listing in this corpus
+	// said before this field existed.
+	Machine string `json:"machine,omitempty"`
+	// ApplicationReady is how long a workload takes to report that it can do work
+	// on this machine, once its process is running. It overrides the world's own
+	// answer, because a stage predicted per candidate needs a world where two
+	// candidates spend different amounts on it: one figure for the whole fleet
+	// makes every level of a hierarchy answer the same seconds, and a fixture
+	// could then not tell an estimate keyed on the machine from one keyed on
+	// nothing at all.
+	ApplicationReady *Duration `json:"application_ready,omitempty"`
+	Provider         string    `json:"provider,omitempty"`
+	// InstanceType is the product name this listing's provider sells it under, for a
+	// provider that sells named products. A marketplace that sells asks against
+	// individual machines states none and is told apart by its region and its cards,
+	// which is the shape Vast has; a catalog naming a product and no place at all is
+	// the shape RunPod has. Both are worlds a fixture has to be able to build,
+	// because a launch history has a different set of levels to fall through in each.
+	InstanceType string `json:"instance_type,omitempty"`
 	// Lane is what this offer becomes once allocated. "reusable" capacity is
 	// held across Runs through an enrolled node; "ephemeral" is a
 	// provider-native one-shot product that holds nothing afterwards.
@@ -505,6 +800,13 @@ type MarketplaceOfferSpec struct {
 	Billing        BillingSpec          `json:"billing,omitempty"`
 	Provisioning   ProvisioningSpec     `json:"provisioning"`
 	Resources      *ResourcesSpec       `json:"resources,omitempty"`
+	// Reliability is the history this listing's provider publishes about the
+	// machine behind it: how often it refuses to start the work it is given, and
+	// how often it drops the work it is running. Omitted means nobody has measured
+	// this machine, which is what every simulated provider but one says today, and
+	// what makes silence and a clean record two different worlds a fixture must be
+	// able to tell apart.
+	Reliability *ReliabilitySpec `json:"reliability,omitempty"`
 	// Facts are the hardware facts providers owe on the offer (SSH root
 	// access, working NVIDIA driver). Omitted map entries are unknown facts;
 	// an offer missing or failing one must be rejected loudly. Target
@@ -512,16 +814,209 @@ type MarketplaceOfferSpec struct {
 	Facts map[string]bool `json:"facts,omitempty"`
 }
 
+// BillingSpec is how a machine in this world is charged for, beside the rate that
+// says how much. A fixture that states none of it describes a publisher billing
+// continuously with nothing to pay up front, which is what every machine in this
+// corpus was before there was a vocabulary for the rest.
 type BillingSpec struct {
 	SetupFeeUSD   float64   `json:"setup_fee_usd,omitempty"`
 	MinimumCharge *Duration `json:"minimum_charge,omitempty"`
+	// Granularity is the block of time this publisher sells. A machine billed by
+	// the minute charges a whole minute for a second of use, and a machine billed
+	// by the hour charges the hour, which is the difference between a twenty-minute
+	// Run costing twenty minutes and costing sixty. Omitted is continuous billing.
+	//
+	// It is the one part of a price model every adapter in the tree has always
+	// written and nothing has ever read, so no fixture could state a world where
+	// the increment mattered and the whole idle tail of an interval was charged to
+	// nobody.
+	Granularity *Duration `json:"granularity,omitempty"`
 }
 
+// PriceModel is what this machine's publisher charges, as the fixture states it.
+// It is built here rather than in each simulated world because it is a
+// translation of the Blueprint's own words and not a model of anything: two
+// worlds spelling it separately meant a fixture's billing terms reached one of
+// them and were silently dropped by the other.
+func (spec BillingSpec) PriceModel(ratePerHourUSD float64) domain.PriceModel {
+	price := domain.PriceModel{
+		Currency:         "USD",
+		RatePerSecondUSD: ratePerHourUSD / 3600,
+		SetupFeeUSD:      spec.SetupFeeUSD,
+		Known:            true,
+	}
+	if spec.MinimumCharge != nil {
+		price.MinimumChargeSeconds = int64(spec.MinimumCharge.Duration().Seconds())
+	}
+	if spec.Granularity != nil {
+		price.GranularitySeconds = int64(spec.Granularity.Duration().Seconds())
+	}
+	return price
+}
+
+// CapacityTermsSpec is what a machine in this world was sold on beyond its price:
+// the interval Mercator already owes rent for, the classes of work it is held
+// for, and how long it stays Mercator's to use. Every duration is measured from
+// the world's own start.
+//
+// It hangs off a Rental and off nothing else, because those are the terms of an
+// allocation somebody already made. A marketplace listing is a machine that does
+// not exist yet: nothing is owed on it, it is reserved for nobody, and it is
+// available for as long as the catalog lists it.
+type CapacityTermsSpec struct {
+	// CommittedFor is how long from the world's start Mercator already owes rent on
+	// this machine, whatever it does with it. It is what makes a Run that fits
+	// inside the interval cheap and a Run that overruns it expensive: the seconds
+	// past the end are a fresh increment Mercator has to buy whole.
+	CommittedFor *Duration `json:"committed_for,omitempty"`
+	// EligibleClasses is the kinds of work this machine is held for. Empty is a
+	// machine held for nobody in particular, which is every machine in this corpus
+	// until a fixture says otherwise.
+	EligibleClasses []domain.ServiceClass `json:"eligible_service_classes,omitempty"`
+	// AvailableFor is how long from the world's start this capacity stays
+	// Mercator's. It is a moment somebody declared rather than capacity that can
+	// vanish without notice, so work that would still be running then is refused
+	// before it starts.
+	AvailableFor *Duration `json:"available_for,omitempty"`
+}
+
+// Terms is the sale this declaration describes, resolved against the world clock.
+func (spec CapacityTermsSpec) Terms(start time.Time) domain.CapacityTerms {
+	terms := domain.CapacityTerms{EligibleClasses: spec.EligibleClasses}
+	if spec.CommittedFor != nil {
+		terms.CommittedUntil = start.Add(spec.CommittedFor.Duration())
+	}
+	if spec.AvailableFor != nil {
+		terms.AvailableUntil = start.Add(spec.AvailableFor.Duration())
+	}
+	return terms
+}
+
+// validate refuses terms no world could hold. A commitment or a window that has
+// already elapsed at the world's own start is capacity nothing could ever be
+// placed on, which is a fixture asserting a refusal by arithmetic rather than a
+// world; a class nothing can price is a reservation for work Mercator would turn
+// away at the door.
+func (spec CapacityTermsSpec) validate(owner string) error {
+	for field, duration := range map[string]*Duration{"committed_for": spec.CommittedFor, "available_for": spec.AvailableFor} {
+		if duration != nil && duration.Duration() <= 0 {
+			return fmt.Errorf("%s: terms.%s must be a positive duration from the world's start", owner, field)
+		}
+	}
+	for _, class := range spec.EligibleClasses {
+		if !class.Known() {
+			return fmt.Errorf("%s: terms.eligible_service_classes names %q, which Mercator cannot price", owner, class)
+		}
+	}
+	return nil
+}
+
+// PathSpec is one path between a machine in this world and infrastructure of one
+// kind, stated once and read twice. The rate is what this world really moves
+// content at over that path, and it is also what the machine publishes about
+// itself, which is why it carries a confidence: how fast the path is and how much
+// its publisher stands behind having measured it are different statements, and a
+// fixture that disowns its own number leaves Mercator predicting from an
+// assumption while the world still spends the seconds the path really costs.
+//
+// One declaration for both halves is deliberate. A simulated world with a
+// transfer model of its own and a fixture-declared publication would let one
+// Blueprint mean two different worlds, and calibration against a world whose
+// rate is Mercator's own constant is calibration against arithmetic.
 type PathSpec struct {
 	From    string  `json:"from"`
 	To      string  `json:"to"`
 	Scope   string  `json:"scope"`
 	P10Mbps float64 `json:"p10_mbps"`
+	// StatedConfidence is how much the publisher of this measurement stands behind
+	// it. Omitted means fully, which is what a simulated host that measured its
+	// own link says. Zero is the case worth stating: a publisher that disowns its
+	// own number has measured nothing, and Mercator has to read that as the
+	// silence it is rather than as a fast answer nobody has to doubt.
+	StatedConfidence *float64 `json:"confidence,omitempty"`
+	// MeasuredAgo is how long before this world began the machine last crossed
+	// this path. Omitted means as this world began, which is every machine that
+	// has no reason to say otherwise.
+	//
+	// It is what lets one Blueprint hold a machine that measured lately beside one
+	// that measured a week ago, which is the only thing a Run's
+	// max_measurement_age can tell apart. It states no expiry and adds none: the
+	// publisher stands behind the number either way, and how old a reading a Run
+	// will act on is the Run's own policy rather than the path's.
+	MeasuredAgo Duration `json:"measured_ago,omitempty"`
+}
+
+// Confidence is how much this measurement's publisher stands behind it, and
+// certainty where the fixture stated nothing.
+func (spec PathSpec) Confidence() float64 {
+	if spec.StatedConfidence == nil {
+		return 1
+	}
+	return *spec.StatedConfidence
+}
+
+// PathSpecs is every path one world declared. It is a type of its own so the
+// lookup below is stated once: two simulated worlds asking the same question two
+// ways is how a declaration reaches one transfer model and misses the other.
+type PathSpecs []PathSpec
+
+// LinkMbps is how fast this world moves content of one kind onto one machine, and
+// whether the fixture said at all.
+//
+// A path nobody declared is not a rate of zero: the caller states what its own
+// world does over a path a fixture said nothing about, which is the one place a
+// simulated world is allowed a constant of its own.
+func (paths PathSpecs) LinkMbps(offerID string, scope domain.NetworkScope) (float64, bool) {
+	for _, path := range paths {
+		if path.From == offerID && domain.NetworkScope(path.Scope) == scope {
+			return path.P10Mbps, true
+		}
+	}
+	return 0, false
+}
+
+// PathFactSource names who measured a path a Blueprint declared. Both simulated
+// worlds publish it, because it is one declaration: a fixture asserting where a
+// rate came from would otherwise be asserting which harness it happened to run
+// in.
+const PathFactSource = "blueprint_path"
+
+// PublishedFacts is what one machine tells Mercator about the paths it crosses.
+// It is built here rather than in each world for the reason LinkMbps is stated
+// here: a declaration that reached one world's offers and not the other's would
+// make one Blueprint two fixtures.
+//
+// How much a publisher stands behind its own measurement is the fixture's to
+// state. Stamping certainty here made every declared path one Mercator had to act
+// on, so no Blueprint could state the machine that publishes a number its own
+// publisher disowns.
+//
+// A declared path carries no expiry, because a fixture states a path this world
+// has and a machine that keeps crossing it keeps measuring it. It carried one for
+// a day, and the day was an arbitrary constant with a defect behind it: a machine
+// is seeded once and its facts are stamped once, so an execution driven past the
+// expiry watched every declared path go silent while both worlds went on moving
+// bytes at the rate the fixture declared, and every measured rate already recorded
+// against those machines became a number nothing published. A fixture that wants
+// Mercator to read silence states a confidence of zero, which is silence at the
+// moment it is read and stays that way.
+func (paths PathSpecs) PublishedFacts(offerID string, at time.Time) domain.NetworkFacts {
+	facts := domain.NetworkFacts{}
+	for _, path := range paths {
+		if path.From != offerID {
+			continue
+		}
+		facts.Download = append(facts.Download, domain.NetworkFact{
+			Scope:       domain.NetworkScope(path.Scope),
+			Statistic:   "p10",
+			ValueMbps:   path.P10Mbps,
+			Source:      PathFactSource,
+			SampleCount: 1,
+			ObservedAt:  at.Add(-path.MeasuredAgo.Duration()),
+			Confidence:  path.Confidence(),
+		})
+	}
+	return facts
 }
 
 type RuntimeModelSpec struct {
@@ -531,9 +1026,55 @@ type RuntimeModelSpec struct {
 	Maximum   Duration `json:"maximum"`
 }
 
+// ProvisioningSpec is bringing one machine up, said twice on purpose. Expected
+// and P90 are what the provider published about it, which is a claim Mercator
+// predicts from. The three stages are what the world spends doing it, which is
+// what a prediction is calibrated against. They are stated separately because a
+// fixture whose actual is derived from the published claim proves nothing about
+// either: this offer's provisioning was a claim the world never spent at all, so
+// every stage before a container existed cost zero seconds and the three
+// earliest stages of a launch had no ground truth to be predicted against.
 type ProvisioningSpec struct {
 	Expected Duration  `json:"expected"`
 	P90      *Duration `json:"p90,omitempty"`
+	// Acquisition is the provider allocating the machine, Boot is it reaching a
+	// usable operating system, and AgentReady is Mercator's node runtime
+	// enrolling on it. They are three stages rather than one number because each
+	// is a separate prediction with its own fallback level, and because they fail
+	// for different reasons: a marketplace with no stock, a host that never came
+	// up, and a machine Mercator cannot reach.
+	//
+	// Each is a pointer because a stage a fixture did not mention and a stage a
+	// fixture says costs nothing are different sentences, and the second is the
+	// one this whole record exists to catch: a machine that boots instantly
+	// collapses the observed start onto the accepted launch. Read as one value,
+	// silence would restore the world the stages were added to end.
+	Acquisition *Duration `json:"acquisition,omitempty"`
+	Boot        *Duration `json:"boot,omitempty"`
+	AgentReady  *Duration `json:"agent_ready,omitempty"`
+}
+
+// Spend is how long this world takes to make the machine, which is the sum of
+// the stages it goes through. It is deliberately not derived from Expected: the
+// provider's expectation is a claim, and a world that spent exactly what was
+// claimed would make the prediction right by construction.
+func (spec ProvisioningSpec) Spend() time.Duration {
+	return spec.AcquisitionSpend() + spec.BootSpend() + spec.AgentReadySpend()
+}
+
+// AcquisitionSpend, BootSpend, and AgentReadySpend are what this world takes over
+// each stage on its own. They are read one at a time because each has its own
+// prediction to be measured against: a record that carried only the sum could not
+// say whether a machine was slow to come out of a marketplace or slow to boot.
+func (spec ProvisioningSpec) AcquisitionSpend() time.Duration { return stated(spec.Acquisition) }
+func (spec ProvisioningSpec) BootSpend() time.Duration        { return stated(spec.Boot) }
+func (spec ProvisioningSpec) AgentReadySpend() time.Duration  { return stated(spec.AgentReady) }
+
+func stated(duration *Duration) time.Duration {
+	if duration == nil {
+		return 0
+	}
+	return duration.Duration()
 }
 
 // ResourcesSpec describes machine inventory (rentals, marketplace offers) or
@@ -544,20 +1085,84 @@ type ResourcesSpec struct {
 	CPUMillis int64    `json:"cpu_millis,omitempty"`
 	Memory    ByteSize `json:"memory,omitempty"`
 	// Disk separates a machine with no room from a machine whose fixture did
-	// not mention its disk, because zero is a state real capacity is in: an
-	// enrolled node that could not measure its disk offers exactly none, and it
-	// is the case an operator most needs the corpus to hold. Read as one value,
-	// a fixture that writes "0GB" to model that machine gets the 200GB default
-	// and states the opposite of what it meant. Zero CPU and zero memory
-	// describe no machine any offer can carry, so they stay a single number.
+	// not mention its disk, because zero is a state real capacity is in. Read as
+	// one value, a fixture that writes "0GB" to model a full machine gets the
+	// 200GB default and states the opposite of what it meant. Zero CPU and zero
+	// memory describe no machine any offer can carry, so they stay a single
+	// number.
 	Disk *ByteSize `json:"disk,omitempty"`
-	GPU  *GPUSpec  `json:"gpu,omitempty"`
+	// DiskUnmeasured is a machine that could not measure its disk at all, which
+	// is the third state and not a machine with no room. An enrolled node whose
+	// probe fails reports exactly this, keeps reporting everything else, and is
+	// struck out of every placement by the disk floor each Run declares. What the
+	// corpus needs it for is the wait: a machine that answered nothing is not a
+	// machine that can never hold the work, and reading it as one let one failed
+	// measurement say a whole fleet has nothing to offer.
+	DiskUnmeasured bool     `json:"disk_unmeasured,omitempty"`
+	GPU            *GPUSpec `json:"gpu,omitempty"`
 }
 
 type GPUSpec struct {
 	Model  string   `json:"model"`
 	Count  int      `json:"count,omitempty"`
 	Memory ByteSize `json:"memory,omitempty"`
+	// Entries is how many inventory entries this machine reports these cards
+	// across, which is a fact about the machine and not about the schema: a probe
+	// groups nvidia-smi's output by the raw name and memory total the driver
+	// printed, so a host holding two spellings of one card publishes it twice. An
+	// offer carries whatever grouping its probe produced, so a world that could
+	// only state one entry per product could not state the machine that made a
+	// candidate key drop half a machine's cards.
+	//
+	// Omitted is one entry, which is what every cleanly grouped machine reports.
+	// The cards divide evenly across the entries, because a fixture splitting
+	// seven cards three ways is describing no machine.
+	Entries int `json:"entries,omitempty"`
+}
+
+// gpu is the accelerator a spec states, and nothing where the fixture stated no
+// resources at all.
+func (spec *ResourcesSpec) gpu() *GPUSpec {
+	if spec == nil {
+		return nil
+	}
+	return spec.GPU
+}
+
+// entries is how many inventory entries this machine splits its cards across,
+// and how many cards each of them names.
+func (spec GPUSpec) entries() (count, perEntry int) {
+	cards := spec.Count
+	if cards == 0 {
+		cards = 1
+	}
+	if spec.Entries <= 1 {
+		return 1, cards
+	}
+	return spec.Entries, cards / spec.Entries
+}
+
+// validate refuses an inventory no machine could report.
+func (spec GPUSpec) validate(owner string) error {
+	if spec.Entries < 0 {
+		return fmt.Errorf("%s reports its cards across %d entries", owner, spec.Entries)
+	}
+	if spec.Entries <= 1 {
+		return nil
+	}
+	if spec.Count%spec.Entries != 0 {
+		return fmt.Errorf(
+			"%s splits %d cards across %d entries, and no machine reports a fraction of a card",
+			owner, spec.Count, spec.Entries,
+		)
+	}
+	if spec.Count == 0 {
+		return fmt.Errorf(
+			"%s splits its cards across %d entries without saying how many it holds",
+			owner, spec.Entries,
+		)
+	}
+	return nil
 }
 
 type RequestSpec struct {
@@ -565,12 +1170,65 @@ type RequestSpec struct {
 	Resources       *ResourcesSpec `json:"resources,omitempty"`
 	MaxRuntime      *Duration      `json:"max_runtime,omitempty"`
 	ExpectedRuntime *Duration      `json:"expected_runtime,omitempty"`
-	Objective       string         `json:"objective,omitempty"`
+	// ExpectedReady is how long this workload says it takes to become ready for
+	// work once its process is running. It is the only prediction of the
+	// application-ready stage there is, because readiness is the application's own
+	// semantics. What the world then spends is WorldSpec.launch.application_ready,
+	// and the two are stated separately so neither derives the other.
+	ExpectedReady *Duration `json:"expected_ready,omitempty"`
+	// MaxPreStartAttempts is the complete pre-start bound: how many times Mercator
+	// hands this Run to a machine, the initial attempt included, so the refusals a
+	// Run survives are one fewer. The API has carried the bound since launches
+	// could fail and no Blueprint could state it, so every Run in this corpus was
+	// normalised to one attempt and closed the moment any machine turned it away.
+	//
+	// Which meant the corpus could state a machine that refuses a start and could
+	// never state the redo that follows one. A Run placed again on another machine
+	// is the whole consequence a refusal has, and the term that will price a
+	// published refusal rate is a probability times the start of exactly that
+	// redo, so the successor slice had no world to be falsified in.
+	MaxPreStartAttempts int `json:"max_pre_start_attempts,omitempty"`
+	// ServiceClass is the kind of work this Run says it is, and the only thing
+	// that says what waiting is worth to it. It is a string rather than the domain
+	// type so a fixture can state a class Mercator does not know, which is a world
+	// the corpus has to be able to build: the refusal is the behaviour under test.
+	ServiceClass string `json:"service_class,omitempty"`
+	// Group is the family this Run arrived with and how wide the family may run at
+	// once. It is stated on the request rather than beside the arrival because it
+	// is part of what the caller submits: the width is a bound on the work, so it
+	// travels into the workload the way the class does, and a family stated where
+	// only the harness could see it is a family production never hears about.
+	//
+	// It is the domain's own type, so a fixture states a half-declared group and
+	// the refusal is the behaviour under test, exactly as an unknown class is.
+	Group domain.RunGroup `json:"group,omitzero"`
+	// AllowUnknownPricing says this Run would rather run on a machine nobody has
+	// quoted a price for than not run at all. It is what admits such a machine as
+	// a candidate, and it is never a preference for one: an unpriced candidate is
+	// ranked behind every candidate somebody priced.
+	AllowUnknownPricing bool `json:"allow_unknown_pricing,omitempty"`
 	// MaxStartLatency is the p90 start latency this Run refuses to exceed. It
 	// is the only hard bound in the request that image locality feeds, which is
 	// what makes it the one place a candidate can be struck out for what it was
 	// found to hold.
 	MaxStartLatency *Duration `json:"max_start_latency,omitempty"`
+	// MaxCost is the most this Run's caller will spend running it once, over the
+	// runtime the Run declared. It is the bound the class cannot argue with: a
+	// class states what a second of waiting is worth and can therefore always be
+	// talked into a costlier machine, and this is the number that says how far.
+	//
+	// The corpus could state no such bound, so COST_LIMIT_EXCEEDED was enforced in
+	// production and reachable by no Blueprint, and everything this corpus could
+	// say about money was which machine won on price.
+	MaxCostUSD *float64 `json:"max_cost_usd,omitempty"`
+	// Download is the floor this Run states on how fast a candidate reaches
+	// content over one link, and what it says about running on a machine nobody
+	// measured. The corpus could state no download floor at all, so no Blueprint
+	// could reach the half of that rule which decides feasibility, and a machine
+	// whose measurement its own publisher disowned could be struck out where an
+	// identical silent machine was admitted with nothing in the tree able to
+	// say so.
+	Download *DownloadRequirementSpec `json:"download,omitempty"`
 	// CacheMounts declare mutable, application-owned caches by their
 	// workspace-scoped names.
 	CacheMounts []CacheMountSpec `json:"cache_mounts,omitempty"`
@@ -579,6 +1237,41 @@ type RequestSpec struct {
 	ConsumesArtifacts []string            `json:"consumes_artifacts,omitempty"`
 	ProducesArtifacts []string            `json:"produces_artifacts,omitempty"`
 	Phases            []WorkloadPhaseSpec `json:"phases,omitempty"`
+}
+
+// DownloadRequirementSpec is a Run's hard floor on how fast a candidate reaches
+// content over one link, stated in the same terms a host publishes: the scope of
+// the link and its pessimistic quantile.
+type DownloadRequirementSpec struct {
+	Scope      string  `json:"scope"`
+	MinP10Mbps float64 `json:"min_p10_mbps"`
+	// MaxMeasurementAge is how old a reading this Run will act on. The API has
+	// carried it since the floor existed and no Blueprint could state it, so the
+	// half of the rule that asks when a machine last measured its path was
+	// reachable only from Go: a node that summarised a window of transfers under
+	// the wrong date answered every fixture in this corpus and failed the one
+	// reader the date is for.
+	//
+	// A world's declared paths are dated at its start, so a fixture states this
+	// bound and then advances past it. That is the machine it describes: one that
+	// measured its link when this world began and has measured nothing since.
+	MaxMeasurementAge Duration `json:"max_measurement_age,omitempty"`
+	// AllowUnknown says this Run would rather run on a machine nobody has
+	// measured than not run at all. It is what a fixture states to put the two
+	// silences beside each other: a host that published nothing and a host whose
+	// published number its own publisher disowned have to buy their publisher the
+	// same thing.
+	AllowUnknown bool `json:"allow_unknown,omitempty"`
+}
+
+// Requirement is this floor in the control plane's own vocabulary.
+func (spec DownloadRequirementSpec) Requirement() *domain.NetworkDownloadRequirement {
+	return &domain.NetworkDownloadRequirement{
+		Scope:                    domain.NetworkScope(spec.Scope),
+		MinP10Mbps:               spec.MinP10Mbps,
+		MaxMeasurementAgeSeconds: int64(spec.MaxMeasurementAge.Duration().Seconds()),
+		AllowUnknown:             spec.AllowUnknown,
+	}
 }
 
 // CacheMountSpec is one mutable cache a Run declares. Its identity is the name,
@@ -633,9 +1326,141 @@ type ExpectSpec struct {
 	// Disposition asserts the recorded cleanup intent on the launch intent:
 	// "release" for standing rentals, "terminate" for provisioned hosts.
 	Disposition string `json:"disposition,omitempty"`
+	// StartLatency asserts how long this Run waited between its launch being
+	// accepted and its workload actually beginning, read out of Mercator's own run
+	// stream. It is the only way this corpus can say that a start is a moment
+	// somebody observed rather than the moment the launch was taken: a fixture that
+	// says the world spends five minutes making a machine and then asserts nothing
+	// here would go green against a control plane that recorded the acceptance as
+	// the start.
+	StartLatency *Bound `json:"start_latency_seconds,omitempty"`
+	// NoStartObserved asserts that nothing reported a start moment for this Run, so
+	// the record states the stage absent. It is its own field rather than a bound of
+	// zero because those are different sentences, and the difference is the whole
+	// point: zero is a workload that began the instant its launch was taken, and
+	// this is a workload nobody saw begin.
+	NoStartObserved bool `json:"no_start_observed,omitempty"`
+	// ReadyLatency asserts how long after its process started this Run's
+	// application reported that it can do work, read out of Mercator's own run
+	// stream. It is the actual of the last launch stage, and the only way this
+	// corpus can say that a running workload is not a ready one.
+	ReadyLatency *Bound `json:"ready_latency_seconds,omitempty"`
+	// NoReadyReported asserts that this Run's application has said nothing about
+	// its own readiness, so the record states the stage absent. It is its own field
+	// rather than a bound of zero for the reason NoStartObserved is: zero is a
+	// workload that was serving the instant its process appeared, and this is a
+	// workload that has not spoken.
+	NoReadyReported bool `json:"no_ready_reported,omitempty"`
 	// Candidates assert the per-candidate evidence the decision weighed,
 	// keyed by rental or marketplace offer ID.
 	Candidates map[string]CandidateExpectation `json:"candidates,omitempty"`
+	// Deferral asserts what admission recorded about this Run waiting. It is
+	// how the corpus states the queue: a Run that waits and never says why is
+	// the state this stage was built to replace.
+	Deferral *DeferralExpectation `json:"deferral,omitempty"`
+	// Decision asserts the record of the decisions themselves rather than what one
+	// of them chose: how many this Run holds, and which one the newest replaces.
+	// It is stated apart from the outcome because a decision is appended and never
+	// rewritten, so a Run answered twice holds two records and a fixture has to be
+	// able to say so.
+	Decision *DecisionExpectation `json:"decision,omitempty"`
+}
+
+// DecisionExpectation is what the record must say about this Run's chain of
+// Booking Decisions.
+type DecisionExpectation struct {
+	// Recorded is how many Booking Decisions this Run's stream holds. A Run
+	// decided twice holds two, because a changed answer appends: reading only the
+	// newest is what let a re-decision look like the only decision ever taken.
+	Recorded int `json:"recorded"`
+	// Supersedes is the one-based position in that chain of the decision the
+	// newest one replaces, and it is omitted for a first decision, which replaces
+	// nothing. A fixture names a position rather than an ID because Mercator
+	// hashes decision IDs and no fixture should predict one: the runner reads the
+	// ID off the record at that position and holds the newest decision to naming
+	// exactly it.
+	Supersedes int `json:"supersedes,omitempty"`
+	// SupersedesReason is the code the newest decision gives for replacing its
+	// predecessor. A supersession with no reason is a rewrite with more steps in
+	// it, so a fixture that states a predecessor states this too.
+	SupersedesReason string `json:"supersedes_reason,omitempty"`
+}
+
+// validate refuses a chain assertion nothing could check: a position outside the
+// chain it indexes, a predecessor with no reason for being replaced, and a
+// reason with no predecessor to explain.
+func (expect DecisionExpectation) validate() error {
+	if expect.Recorded <= 0 {
+		return fmt.Errorf("a decision expectation states how many decisions the record holds")
+	}
+	if expect.Supersedes < 0 || expect.Supersedes >= expect.Recorded {
+		return fmt.Errorf("superseded position %d is not one of the %d decisions before the newest", expect.Supersedes, expect.Recorded)
+	}
+	if (expect.Supersedes == 0) != (expect.SupersedesReason == "") {
+		return fmt.Errorf("a superseding decision names both the decision it replaces and why")
+	}
+	return nil
+}
+
+// DeferralExpectation is one recorded moment a Run was told to wait, or refused
+// the wait.
+type DeferralExpectation struct {
+	// Reason is the code admission recorded: why this Run is not running.
+	Reason string `json:"reason"`
+	// Behind names the Runs the record says this one is waiting behind, by the
+	// fixture's own names for them. It is a whole-set assertion, because a
+	// deferral naming half of what a Run waits for is a queue an operator
+	// cannot read.
+	Behind []string `json:"behind,omitempty"`
+	// Priority asserts what the record says this Run was worth at that moment,
+	// which is the number the ordering was decided on and the only visible
+	// evidence that waiting promoted it at all.
+	Priority *Bound `json:"effective_priority,omitempty"`
+	// QueuedSeconds asserts how long the record says it had been waiting.
+	QueuedSeconds *Bound `json:"queued_seconds,omitempty"`
+	// Fleet asserts the answer the fleet gave about this Run, which is the evidence
+	// the reason is derived from and the classification the queue is ordered on.
+	Fleet *FleetExpectation `json:"fleet,omitempty"`
+	// ProjectedWait asserts the wait the record says this Run faces, projected
+	// from the Bookings Mercator holds on capacity that could hold it. Zero states
+	// that nothing projected one, which is what a fixture needs to say about a Run
+	// no machine can take: it is the number the deadline rule refuses a Run on, and
+	// a projection off a machine that could never run the work refuses it for
+	// somebody else's runtime.
+	ProjectedWait *Bound `json:"projected_wait_seconds,omitempty"`
+}
+
+// FleetExpectation is the fleet's answer a fixture asserts a wait rests on: how
+// many machines the record says this Run was measured against, and how many of
+// them could have taken it once the capacity they are spending came back.
+//
+// Absent states the opposite: this wait rests on no answer about capacity at all,
+// because the fleet was never asked. A fixture says that by asking for the answer
+// to be missing rather than by asking for two zeroes, because a fleet that
+// published nothing an ask matches also weighed nothing and those are the opposite
+// statements. Reading them as one number is what let the strongest refusal a fleet
+// can give be recorded as an ordinary wait for a machine to come free.
+type FleetExpectation struct {
+	Absent    bool   `json:"absent,omitempty"`
+	Weighed   *Bound `json:"weighed,omitempty"`
+	CouldHold *Bound `json:"could_hold,omitempty"`
+	// Unstated is how many of the machines weighed refused this Run only for facts
+	// nobody published. A node that could not measure its disk is the case, and it
+	// is a third count because it is a third answer: not capacity to wait for, not
+	// capacity that can never hold the work, and counting it as either lets one
+	// failed measurement say a whole fleet has nothing.
+	Unstated *Bound `json:"unstated,omitempty"`
+}
+
+// validate refuses a fleet assertion that says both things at once.
+func (expect FleetExpectation) validate() error {
+	if expect.Absent && (expect.Weighed != nil || expect.CouldHold != nil || expect.Unstated != nil) {
+		return fmt.Errorf("a wait resting on no fleet answer has no machines to count")
+	}
+	if !expect.Absent && expect.Weighed == nil && expect.CouldHold == nil && expect.Unstated == nil {
+		return fmt.Errorf("a fleet assertion states the machines weighed, the machines that could hold, the machines that said too little, or that there is no answer")
+	}
+	return nil
 }
 
 type BookingExpectation struct {
@@ -649,34 +1474,62 @@ type BookingExpectation struct {
 }
 
 type CandidateExpectation struct {
-	Feasible *bool `json:"feasible,omitempty"`
+	// Candidate asserts the key a launch history about this candidate is filed
+	// under, as the decision recorded it: the machine where its backend named one,
+	// otherwise the provider, place, product, and cards that recur about the listing.
+	// It carries no image, because a fixture about what recurs is not about content.
+	//
+	// A fixture states the whole key rather than the parts, so a listing whose facts
+	// stopped being published fails here instead of quietly dropping a level. The
+	// empty string is a real assertion, and it says this candidate cannot recur and
+	// nothing may ever claim evidence about it.
+	Candidate *string `json:"candidate,omitempty"`
+	// Content asserts the key a history about this candidate running this Run's
+	// image is filed under: the candidate key with the content on the end, for the
+	// stages whose duration is a property of what was pulled rather than of the
+	// machine.
+	//
+	// The empty string is a real assertion here too, and it says the content is not
+	// known: a registry that would not answer leaves Mercator unable to name what it
+	// is about to run, and a content key naming no content would file every image in
+	// the fleet whose manifest was unreadable under one name per machine.
+	Content  *string `json:"content,omitempty"`
+	Feasible *bool   `json:"feasible,omitempty"`
 	// Disposition asserts what Placement recorded this candidate as: reusing,
 	// queueing on, or provisioning a Rental, or launching a one-shot ephemeral
 	// execution that holds nothing afterwards.
-	Disposition      domain.CandidateDisposition `json:"disposition,omitempty"`
-	Rejected         []RejectionSpec             `json:"rejected,omitempty"`
-	QueueSeconds     *Bound                      `json:"queue_seconds,omitempty"`
-	ProvisionSeconds *Bound                      `json:"provision_seconds,omitempty"`
-	PullSeconds      *Bound                      `json:"pull_seconds,omitempty"`
-	// PullSource and PullConfidence assert how much the transfer answer is
-	// worth. Zero seconds means "nothing to fetch" when the source is
-	// image_inventory and "nobody could say" when it is unknown, and only
-	// these two fields tell them apart.
-	PullSource     string   `json:"pull_source,omitempty"`
-	PullConfidence *float64 `json:"pull_confidence,omitempty"`
+	Disposition  domain.CandidateDisposition `json:"disposition,omitempty"`
+	Rejected     []RejectionSpec             `json:"rejected,omitempty"`
+	QueueSeconds *Bound                      `json:"queue_seconds,omitempty"`
+	// Stages asserts what this candidate was predicted to spend on each stage of
+	// the launch, named by the stage. One vocabulary replaces the five fields
+	// that stated four quantities between them: a fixture states the stages it is
+	// about and says nothing about the rest, and a stage added to the record
+	// cannot be added without a way to state it.
+	//
+	// The key is the domain's own stage type and is checked against the eight at
+	// load. An unchecked key was worse than no assertion: LaunchStageEstimates
+	// answers about a stage nobody named with a zero Estimate, so a misspelled
+	// stage asserted zero seconds from no source and passed, taking the assertion
+	// the fixture was written for with it.
+	Stages map[domain.LaunchStage]StageExpectation `json:"stages,omitempty"`
 	// ImageLocality asserts how much of the Run's image this candidate was
 	// found to have: hot, partial, cold, or unknown. It is the qualitative half
-	// of the pull answer, and the only one that separates a machine that has to
+	// of the image answer, and the only one that separates a machine that has to
 	// fetch from one that only has to finish unpacking.
 	ImageLocality domain.LocalityState `json:"image_locality,omitempty"`
-	// ArtifactSeconds asserts what this candidate would still spend reading the
-	// Run's declared inputs out of the object store. It is the quantitative half
-	// of Artifact locality, and the only field that separates a host holding a
-	// checked copy from one that has to read the whole thing.
-	ArtifactSeconds *Bound `json:"artifact_seconds,omitempty"`
 	// Schedule asserts the ordered broker-owned schedule evidence weighed for
 	// this Rental candidate.
 	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`
+	// NoSchedule asserts this candidate recorded no schedule at all, which is what
+	// capacity with nothing assigned to it must record: a machine that does not
+	// exist yet has no Rental to hold a queue, and a Rental nothing is waiting for
+	// has no queue to have been read. Recording an empty schedule for either would
+	// publish a version of zero and a wait of nothing as a queue that was measured.
+	// It is a field of its own rather than an empty Schedule because a fixture that
+	// says nothing about the schedule asserts nothing about it, and this asserts
+	// the absence.
+	NoSchedule bool `json:"no_rental_schedule,omitempty"`
 	// Artifacts asserts what this candidate was recorded as holding of each
 	// Artifact the Run reads: "hit", "miss", or "unknown" for a machine that
 	// could not enumerate its copies at all.
@@ -688,6 +1541,148 @@ type CandidateExpectation struct {
 	// what a warm cache saves is work inside the application and nothing here
 	// has measured that.
 	Caches map[string]string `json:"cache_evidence,omitempty"`
+	// Uncertainty asserts how far the answers this candidate was scored on fell
+	// short of certainty, in points. One point is one answer worth nothing. It is
+	// stated separately from the score because it is the term a fixture is usually
+	// about: a machine nobody could ask and a machine that answered and holds
+	// nothing owe the same seconds, and this is what says whether the silence was
+	// charged once or twice.
+	Uncertainty *Bound `json:"uncertainty,omitempty"`
+	// Cost asserts what this candidate would be billed and which parts of a sale
+	// that price is made of. It is stated apart from the score because the score
+	// folds waiting and doubt in beside the dollars, and a fixture about what
+	// capacity costs has to be able to pin the dollars alone.
+	Cost *CostExpectation `json:"cost,omitempty"`
+	// ScoreUSD asserts what this candidate was worth to this Run, in dollars. It
+	// is the whole arithmetic in one number, which is what makes a fixture able to
+	// state that a class's exchange rate was applied rather than merely that the
+	// winner came out right.
+	ScoreUSD *Bound `json:"score_usd,omitempty"`
+	// StartFailureRate and InterruptionRate assert the risk history the decision
+	// recorded for this candidate. They are exact rather than bounded, because
+	// they are a published fact carried through rather than an arithmetic answer:
+	// a rate that arrives changed arrived from somewhere else. Zero is worth
+	// asserting, and it is why they are pointers: a machine whose provider has
+	// measured it and never seen it fail states nothing to fear, and a machine
+	// nobody has measured states nothing at all.
+	StartFailureRate *float64 `json:"start_failure_rate,omitempty"`
+	InterruptionRate *float64 `json:"interruption_rate,omitempty"`
+	// RiskConfidence asserts how much the publisher of that history stands behind
+	// it, and it is asked of every rate the record states. It is the one part of the
+	// history the score used to read, and a corpus that asserted the rates and not
+	// the confidence beside them left the number that mattered unpinned.
+	RiskConfidence *float64 `json:"risk_confidence,omitempty"`
+	// NoRiskHistory asserts that the decision recorded nothing about how this
+	// machine behaves. It is what a fixture states for a machine nobody measured,
+	// and it is not the same claim as two rates of zero.
+	NoRiskHistory bool `json:"no_risk_history,omitempty"`
+}
+
+// StageExpectation is what one launch stage's prediction has to say. Seconds is
+// the answer, Source is whose evidence it rests on, and Confidence is what that
+// evidence is worth. The three travel together because zero seconds means two
+// opposite things: nothing to do when an inventory answered, and nobody could say
+// when it did not, and only the source and the confidence beside it tell them
+// apart.
+// CostExpectation is what a candidate's price has to be and what it has to be
+// made of. The terms are stated by the name the record files each under, and a
+// term stated at zero is a real assertion: a machine charged nothing for the tail
+// of an increment is one whose Run ends where the increment does, which is a
+// different world from one that pays for the rest of the hour.
+type CostExpectation struct {
+	USD *Bound `json:"usd,omitempty"`
+	// Terms asserts what each named part of this price came to. Every term a
+	// priced candidate carries is checked against the domain's own list at load, so
+	// a fixture cannot assert a term nothing writes and read the silence as
+	// agreement.
+	Terms map[string]Bound `json:"terms,omitempty"`
+	// Unpriced asserts that nobody quoted this machine, so it carries no dollars
+	// and no terms at all. It is its own field because a price of zero and the
+	// absence of a price are the opposite claims, and this corpus has fixtures
+	// about both.
+	Unpriced bool `json:"unpriced,omitempty"`
+	// CommittedSeconds asserts how many seconds of an interval Mercator already
+	// owes rent for this placement would spend. It is the one input to the cost
+	// that two candidates can be wrong about together: an interval charged twice
+	// adds up on every candidate's record and looks right on each of them.
+	CommittedSeconds *Bound `json:"committed_seconds,omitempty"`
+}
+
+// validate refuses a cost assertion no record could satisfy. A fixture naming a
+// term the price is not made of is asserting an arithmetic that does not exist,
+// and one that says a machine is unpriced and then states its dollars is stating
+// two worlds.
+func (spec *CostExpectation) validate(owner string) error {
+	if spec == nil {
+		return nil
+	}
+	if spec.Unpriced && (spec.USD != nil || len(spec.Terms) > 0 || spec.CommittedSeconds != nil) {
+		return fmt.Errorf("%s: a candidate nobody quoted has no dollars, so cost states unpriced or states an amount", owner)
+	}
+	for name := range spec.Terms {
+		if !slices.Contains(domain.CostTermNames(), name) {
+			return fmt.Errorf("%s: cost term %q is not one a price is made of, which is %v", owner, name, domain.CostTermNames())
+		}
+	}
+	return nil
+}
+
+type StageExpectation struct {
+	Seconds    *Bound   `json:"seconds,omitempty"`
+	Source     string   `json:"source,omitempty"`
+	Confidence *float64 `json:"confidence,omitempty"`
+	// Level asserts which key answered this stage: the exact candidate, the
+	// provider and region, the provider, or the prior Mercator falls back to when
+	// no history exists at all. It is stated beside the seconds because the
+	// seconds alone cannot say where they came from, and the whole point of a
+	// hierarchy is that an answer says how far it had to fall to be found.
+	Level string `json:"level,omitempty"`
+	// Samples asserts how many measured launches stand behind that answer. Zero
+	// is a real assertion and it is the one a prior makes: an answer from nothing
+	// measured and an answer from one launch are different claims, and a record
+	// that stated only the seconds would read the same for both.
+	Samples *int `json:"samples,omitempty"`
+	// Rate asserts the throughput a transfer stage was priced at and where that
+	// number came from. It is stated apart from the seconds because the seconds
+	// are a product of two things a fixture cares about separately: a candidate
+	// can owe the right bytes and be charged them at a rate nothing on it ever
+	// reported, and the seconds alone cannot say which of the two a fixture
+	// pinned.
+	Rate *TransferRateExpectation `json:"rate,omitempty"`
+}
+
+// TransferRateExpectation is what one transfer stage's rate has to say. Exactly
+// one of Measurement and Assumption is stated, because a rate is either
+// something somebody measured on this path or the constant Mercator falls back
+// to when nobody did, and a fixture that named both would be asserting a
+// provenance the record cannot hold.
+type TransferRateExpectation struct {
+	Mbps float64 `json:"mbps"`
+	// Measurement names the published fact this rate came from, in the words of
+	// whoever published it.
+	Measurement string `json:"measurement,omitempty"`
+	// Assumption names the stated constant this rate is when nothing measured
+	// the path.
+	Assumption string `json:"assumption,omitempty"`
+}
+
+// validate refuses a rate assertion that could not fail. A fixture stating
+// neither provenance asserts a bare number, which the seconds beside it already
+// pin; a fixture stating both asserts a record no decision can write.
+func (spec *TransferRateExpectation) validate() error {
+	if spec == nil {
+		return nil
+	}
+	switch {
+	case spec.Mbps <= 0:
+		return fmt.Errorf("a transfer rate assertion needs a positive mbps")
+	case spec.Measurement == "" && spec.Assumption == "":
+		return fmt.Errorf("a transfer rate is either a measurement or an assumption, and this names neither")
+	case spec.Measurement != "" && spec.Assumption != "":
+		return fmt.Errorf("a transfer rate names one provenance, and this names both %q and %q", spec.Measurement, spec.Assumption)
+	default:
+		return nil
+	}
 }
 
 type ScheduleEvidenceExpectation struct {
@@ -703,6 +1698,11 @@ type RunningBookingEvidence struct {
 	RemainingMaxRuntime Duration `json:"remaining_max_runtime"`
 	// RemainingExpectedRuntime is the recorded p50; defaults to the max bound.
 	RemainingExpectedRuntime *Duration `json:"remaining_expected_runtime,omitempty"`
+	// Overrun is how far past the runtime Mercator enforces the record says this
+	// Booking has run. It is the only field that separates a Rental with nothing
+	// left to project from a Rental a moment from free, because both remaining
+	// runtimes above read zero on each. Omitted asserts none.
+	Overrun *Duration `json:"overrun,omitempty"`
 }
 
 func (e RunningBookingEvidence) expectedRemaining() Duration {
@@ -874,6 +1874,19 @@ func (b Bound) MarshalJSON() ([]byte, error) {
 	return json.Marshal(bare(b))
 }
 
+// String is what this bound asks for, so a failure about a record that states
+// nothing at all can say what was wanted.
+func (b Bound) String() string {
+	parts := make([]string, 0, 3)
+	for label, value := range map[string]*float64{"exactly": b.Exactly, "at least": b.AtLeast, "at most": b.AtMost} {
+		if value != nil {
+			parts = append(parts, fmt.Sprintf("%s %v", label, *value))
+		}
+	}
+	slices.Sort(parts)
+	return strings.Join(parts, " and ")
+}
+
 // Check reports "" when actual satisfies the bound, else a description.
 func (b Bound) Check(actual float64) string {
 	if b.Exactly != nil && math.Abs(actual-*b.Exactly) > 1e-6 {
@@ -1037,10 +2050,7 @@ func (sc Scenario) validateScheduleTimeline() error {
 			request = &original
 		}
 		for rentalID, candidate := range step.Expect.Candidates {
-			if candidate.Schedule == nil {
-				continue
-			}
-			if err := validateScheduleEvidence(schedules[rentalID], elapsed, *candidate.Schedule); err != nil {
+			if err := validateCandidateSchedule(schedules[rentalID], elapsed, candidate); err != nil {
 				return fmt.Errorf("timeline[%d]: candidate %q: %w", i, rentalID, err)
 			}
 		}
@@ -1128,6 +2138,23 @@ func validateBookingDecision(schedule RentalScheduleSpec, elapsed time.Duration,
 	return nil
 }
 
+// validateCandidateSchedule proves the fixture's two schedule claims about one
+// candidate are the ones its own world supports: evidence has to match the
+// schedule this Rental holds at this point in the timeline, and an assertion that
+// nothing was recorded has to be made about a Rental holding nothing.
+func validateCandidateSchedule(schedule RentalScheduleSpec, elapsed time.Duration, candidate CandidateExpectation) error {
+	if candidate.NoSchedule && candidate.Schedule != nil {
+		return fmt.Errorf("a candidate cannot both record a schedule and record none")
+	}
+	if candidate.NoSchedule && schedule.Running != nil {
+		return fmt.Errorf("no schedule is expected, and this Rental holds Booking %q", schedule.Running.BookingID)
+	}
+	if candidate.Schedule == nil {
+		return nil
+	}
+	return validateScheduleEvidence(schedule, elapsed, *candidate.Schedule)
+}
+
 func validateScheduleEvidence(schedule RentalScheduleSpec, elapsed time.Duration, expect ScheduleEvidenceExpectation) error {
 	if expect.Version != schedule.Version {
 		return fmt.Errorf("schedule version is %d, want %d", expect.Version, schedule.Version)
@@ -1136,7 +2163,8 @@ func validateScheduleEvidence(schedule RentalScheduleSpec, elapsed time.Duration
 		expect.Running.BookingID != schedule.Running.BookingID ||
 		expect.Running.RunID != schedule.Running.RunID ||
 		expect.Running.RemainingMaxRuntime.Duration() != schedule.runningMaxRemaining(elapsed) ||
-		expect.Running.expectedRemaining().Duration() != schedule.runningExpectedRemaining(elapsed) {
+		expect.Running.expectedRemaining().Duration() != schedule.runningExpectedRemaining(elapsed) ||
+		durationValue(expect.Running.Overrun) != schedule.runningOverrun(elapsed) {
 		return fmt.Errorf("RunningBooking evidence does not match the current schedule")
 	}
 	if len(expect.Preceding) != len(schedule.Queued) {
@@ -1197,6 +2225,18 @@ func (schedule RentalScheduleSpec) runningMaxRemaining(elapsed time.Duration) ti
 	return max(0, schedule.Running.RemainingMaxRuntime.Duration()-elapsed)
 }
 
+// runningOverrun is how far past its enforced maximum the running Booking has
+// gone by this point in the timeline. It is the arithmetic the remaining runtimes
+// stop being able to express: both bottom out at zero, so a fixture asserting a
+// machine nothing can project from and one asserting a machine a moment from
+// free would state the same evidence.
+func (schedule RentalScheduleSpec) runningOverrun(elapsed time.Duration) time.Duration {
+	if schedule.Running == nil {
+		return 0
+	}
+	return max(0, elapsed-schedule.Running.RemainingMaxRuntime.Duration())
+}
+
 func (schedule RentalScheduleSpec) runningExpectedRemaining(elapsed time.Duration) time.Duration {
 	if schedule.Running == nil {
 		return 0
@@ -1253,6 +2293,12 @@ func (step StepSpec) validate(submitted map[string]bool) error {
 }
 
 func (w WorldSpec) validate() error {
+	// A world cannot both time the readiness of its applications and say they never
+	// become ready. Reading one of the two silently would make the fixture's own
+	// sentence undecidable.
+	if w.Launch.ApplicationNeverReady && w.Launch.ApplicationReady != nil {
+		return fmt.Errorf("launch states application_ready and application_never_ready, which are two different worlds")
+	}
 	for ref, image := range w.Images {
 		if !ociImageRefPattern.MatchString(ref) {
 			return fmt.Errorf("image %q must be digest-pinned", ref)
@@ -1331,6 +2377,9 @@ func (w WorldSpec) validate() error {
 		if err := validateArtifactReplicas("rental "+rental.ID, rental.ArtifactReplicas, artifacts); err != nil {
 			return err
 		}
+		if err := validateInventory("rental "+rental.ID, rental.Resources); err != nil {
+			return err
+		}
 		cacheMounts := map[string]bool{}
 		for _, held := range rental.CacheMounts {
 			if !domain.ValidCacheName(held.Name) {
@@ -1346,10 +2395,16 @@ func (w WorldSpec) validate() error {
 			}
 			cacheMounts[identity] = true
 		}
-		if rental.RatePerHourUSD <= 0 {
+		if rental.Unpriced && rental.RatePerHourUSD != 0 {
+			return fmt.Errorf("rental %q is unpriced and states a rate_per_hour_usd of %v", rental.ID, rental.RatePerHourUSD)
+		}
+		if !rental.Unpriced && rental.RatePerHourUSD <= 0 {
 			return fmt.Errorf("rental %q needs a positive rate_per_hour_usd", rental.ID)
 		}
 		if err := rental.Billing.validate("rental " + rental.ID); err != nil {
+			return err
+		}
+		if err := rental.Terms.validate("rental " + rental.ID); err != nil {
 			return err
 		}
 	}
@@ -1385,6 +2440,9 @@ func (w WorldSpec) validate() error {
 		if err := validateArtifactReplicas("host "+host.ID, host.ArtifactReplicas, artifacts); err != nil {
 			return err
 		}
+		if err := validateInventory("host "+host.ID, host.Resources); err != nil {
+			return err
+		}
 		if host.RatePerHourUSD <= 0 {
 			return fmt.Errorf("host %q needs a positive rate_per_hour_usd", host.ID)
 		}
@@ -1409,17 +2467,56 @@ func (w WorldSpec) validate() error {
 		if offer.Provisioning.Expected.Duration() <= 0 {
 			return fmt.Errorf("marketplace offer %q needs a provisioning estimate", offer.ID)
 		}
+		// Every stage is stated, including a stage this fixture wants to cost
+		// nothing. Zero is a world worth writing down and silence is how the whole
+		// of provisioning came to be free: an offer publishing ten minutes of
+		// provisioning that the world spent none of put its execution straight into
+		// running, so a Run's start was the moment its launch was accepted and the
+		// three earliest stages of every launch had no actual at all.
+		for stage, spent := range map[string]*Duration{
+			"acquisition": offer.Provisioning.Acquisition,
+			"boot":        offer.Provisioning.Boot,
+			"agent_ready": offer.Provisioning.AgentReady,
+		} {
+			if spent == nil {
+				return fmt.Errorf("marketplace offer %q does not say what it spends on %s", offer.ID, stage)
+			}
+			if spent.Duration() < 0 {
+				return fmt.Errorf("marketplace offer %q spends %v on %s", offer.ID, spent.Duration(), stage)
+			}
+		}
+		if err := validateReliability("marketplace offer "+offer.ID, offer.Reliability); err != nil {
+			return err
+		}
+		if err := validateInventory("marketplace offer "+offer.ID, offer.Resources); err != nil {
+			return err
+		}
 	}
 	pathIDs := map[string]bool{}
 	for _, path := range w.Paths {
 		if !ids[path.From] || path.To == "" || path.Scope == "" || path.P10Mbps <= 0 {
 			return fmt.Errorf("paths need a known source, destination, scope, and positive p10_mbps")
 		}
+		// A confidence outside the unit interval is not a statement about how much
+		// a publisher stands behind their measurement, and a fixture that made one
+		// would be asserting about a fact Mercator refuses to read at all.
+		if path.MeasuredAgo.Duration() < 0 {
+			return fmt.Errorf("path %q was measured %s before this world began, and a world begins after its own machines have run", path.From+"/"+path.To, path.MeasuredAgo.Duration())
+		}
+		if path.Confidence() < 0 || path.Confidence() > 1 {
+			return fmt.Errorf("path %q states confidence %v, which is not a share of certainty", path.From+"/"+path.To, path.Confidence())
+		}
 		key := path.From + "/" + path.To + "/" + path.Scope
 		if pathIDs[key] {
 			return fmt.Errorf("duplicate path %q", key)
 		}
 		pathIDs[key] = true
+	}
+	if err := w.validatePreemptions(); err != nil {
+		return err
+	}
+	if err := w.validateOrphans(ids); err != nil {
+		return err
 	}
 	runtimeModels := map[string]bool{}
 	for _, model := range w.RuntimeModels {
@@ -1431,6 +2528,96 @@ func (w WorldSpec) validate() error {
 			return fmt.Errorf("duplicate runtime model %q", key)
 		}
 		runtimeModels[key] = true
+	}
+	return nil
+}
+
+// validatePreemptions refuses a world that takes back capacity nobody sold on
+// those terms. A provider reclaims what it sold as reclaimable, so a fixture
+// preempting an ordinary Rental would be describing a broken contract rather than
+// the interruption this vocabulary is for, and every rule about which work may be
+// interrupted would then be stated over a world that cannot happen.
+// validateOrphans refuses capacity this world could not be holding: one on a
+// machine nobody declared, and two under one identity. Both are fixtures that
+// would state a world and then quietly describe a different one.
+func (w WorldSpec) validateOrphans(machines map[string]bool) error {
+	seen := map[string]bool{}
+	for _, orphan := range w.Orphans {
+		switch {
+		case orphan.ID == "":
+			return fmt.Errorf("orphaned capacity needs an id, which is the identity a reclaim is addressed by")
+		case seen[orphan.ID]:
+			return fmt.Errorf("duplicate orphaned capacity %q", orphan.ID)
+		case !machines[orphan.Rental]:
+			return fmt.Errorf("orphaned capacity %q is on unknown machine %q", orphan.ID, orphan.Rental)
+		}
+		seen[orphan.ID] = true
+	}
+	return nil
+}
+
+func (w WorldSpec) validatePreemptions() error {
+	reclaimable := map[string]bool{}
+	for _, rental := range w.Rentals {
+		reclaimable[rental.ID] = rental.Reclaimable
+	}
+	preempted := map[string]bool{}
+	for _, preemption := range w.Preemptions {
+		declared, exists := reclaimable[preemption.Rental]
+		switch {
+		case !exists:
+			return fmt.Errorf("preemption names unknown Rental %q", preemption.Rental)
+		case !declared:
+			return fmt.Errorf("preemption takes back Rental %q, which this world does not sell as reclaimable", preemption.Rental)
+		case preempted[preemption.Rental]:
+			return fmt.Errorf("Rental %q is preempted twice, and a machine goes back to its provider once", preemption.Rental)
+		case preemption.At.Duration() < 0:
+			return fmt.Errorf("Rental %q is preempted before this world began", preemption.Rental)
+		}
+		preempted[preemption.Rental] = true
+	}
+	return nil
+}
+
+// validateInventory refuses hardware no machine could report.
+func validateInventory(owner string, resources *ResourcesSpec) error {
+	if resources == nil {
+		return nil
+	}
+	// A machine that states its room and states that nobody measured it is two
+	// fixtures in one, and the world would have to pick which half to publish.
+	if resources.DiskUnmeasured && resources.Disk != nil {
+		return fmt.Errorf("%s states a disk and states that nobody measured it", owner)
+	}
+	if resources.GPU == nil {
+		return nil
+	}
+	return resources.GPU.validate(owner)
+}
+
+// validateReliability refuses a history no provider could publish. A rate outside
+// the unit interval is not a share of this machine's starts; a history nobody
+// stands behind is not a measurement, because a rate at zero confidence would
+// reach the record as a fact nobody owns, which is the disowned measurement this
+// corpus already refuses to state for a link; and a history that states no rate at
+// all measured nothing, so a fixture that means silence omits the whole block.
+func validateReliability(owner string, spec *ReliabilitySpec) error {
+	if spec == nil {
+		return nil
+	}
+	for answer, rate := range map[string]*float64{
+		"start_failure_rate": spec.StartFailureRate,
+		"interruption_rate":  spec.InterruptionRate,
+	} {
+		if rate != nil && (*rate < 0 || *rate > 1) {
+			return fmt.Errorf("%s states %s %v, which is not a share of its starts", owner, answer, *rate)
+		}
+	}
+	if spec.StartFailureRate == nil && spec.InterruptionRate == nil {
+		return fmt.Errorf("%s publishes a reliability history that states no rate, and a machine nobody measured publishes no history at all", owner)
+	}
+	if spec.Confidence <= 0 || spec.Confidence > 1 {
+		return fmt.Errorf("%s publishes a reliability history at confidence %v, and a history nobody stands behind is not one", owner, spec.Confidence)
 	}
 	return nil
 }
@@ -1469,6 +2656,12 @@ func (billing BillingSpec) validate(owner string) error {
 	}
 	if billing.MinimumCharge != nil && billing.MinimumCharge.Duration() <= 0 {
 		return fmt.Errorf("%s minimum charge must be positive", owner)
+	}
+	// A publisher that sells blocks of no time is billing continuously, which a
+	// fixture states by saying nothing. Stating a zero here would be a fixture
+	// asserting an increment and getting continuous billing.
+	if billing.Granularity != nil && billing.Granularity.Duration() <= 0 {
+		return fmt.Errorf("%s billing granularity must be positive, and a publisher selling no increment states none", owner)
 	}
 	return nil
 }
@@ -1542,8 +2735,16 @@ func (schedule RentalScheduleSpec) validate(start time.Time) error {
 		}
 		return nil
 	}
-	if schedule.Version == 0 {
-		return fmt.Errorf("rental %q: a nonempty RentalSchedule needs a positive version", rentalID)
+	// A version counts every transition this schedule has seen, and each Booking
+	// on it took one to get there, so a fixture may state more than it holds and
+	// never fewer. Stating fewer is a history Mercator cannot have had, and the
+	// arriving Run's Booking would be minted at a version one of these already
+	// consumed.
+	if occupants := uint64(1 + len(schedule.Queued)); schedule.Version < occupants {
+		return fmt.Errorf(
+			"rental %q: a RentalSchedule holding %d Bookings is at version %d, and each of them took a transition to get there",
+			rentalID, occupants, schedule.Version,
+		)
 	}
 	ids := map[string]bool{}
 	runs := map[string]bool{}
@@ -1661,6 +2862,26 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 			return fmt.Errorf("request produces Artifact %q, which the world says was published before it started", artifactID)
 		}
 	}
+	if gpu := req.Resources.gpu(); gpu != nil && gpu.Entries != 0 {
+		return fmt.Errorf(
+			"request asks for %d cards across %d inventory entries, and a workload states what it needs rather than how a machine reported it",
+			gpu.Count, gpu.Entries,
+		)
+	}
+	// A budget of nothing is not a Run that may spend nothing: it is a fixture
+	// whose bound refuses every machine anybody quoted, which is a world it can
+	// state on purpose and never by leaving a number out.
+	if budget := req.MaxCostUSD; budget != nil && *budget <= 0 {
+		return fmt.Errorf("request states a max_cost_usd of %v, and a bound on spending is a positive number of dollars", *budget)
+	}
+	if download := req.Download; download != nil {
+		if download.Scope == "" || download.MinP10Mbps <= 0 {
+			return fmt.Errorf("a download floor names the scope of the link and a positive min_p10_mbps")
+		}
+		if download.MaxMeasurementAge.Duration() < 0 {
+			return fmt.Errorf("a download floor states a positive max_measurement_age or none at all")
+		}
+	}
 	cacheMounts := map[string]bool{}
 	for _, mount := range req.CacheMounts {
 		if !domain.ValidCacheName(mount.Name) {
@@ -1698,8 +2919,30 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 		if expect.Offer != "" || expect.Booking != nil {
 			return fmt.Errorf("outcome \"fail\" selects no offer and creates no Booking")
 		}
+	case OutcomeDefer, OutcomeRefuse:
+		if expect.Offer != "" || expect.Booking != nil {
+			return fmt.Errorf("outcome %q selects no offer and creates no Booking", expect.Outcome)
+		}
+		if expect.Deferral == nil {
+			return fmt.Errorf("outcome %q states what admission recorded, so it needs a deferral", expect.Outcome)
+		}
 	default:
-		return fmt.Errorf("outcome must be \"place\" or \"fail\", got %q", expect.Outcome)
+		return fmt.Errorf("outcome must be \"place\", \"fail\", \"defer\", or \"refuse\", got %q", expect.Outcome)
+	}
+	if expect.Deferral != nil {
+		if expect.Deferral.Reason == "" {
+			return fmt.Errorf("a deferral states the reason admission recorded")
+		}
+		if fleet := expect.Deferral.Fleet; fleet != nil {
+			if err := fleet.validate(); err != nil {
+				return err
+			}
+		}
+	}
+	if expect.Decision != nil {
+		if err := expect.Decision.validate(); err != nil {
+			return err
+		}
 	}
 	if booking := expect.Booking; booking != nil {
 		if booking.BookingID == "" || booking.RentalID == "" || booking.ScheduleVersion == 0 {
@@ -1743,6 +2986,21 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 			if _, stated := CacheExpectations[want]; !stated {
 				return fmt.Errorf("candidate %q cache %q expects \"hit\", \"miss\", or \"unknown\", got %q", id, name, want)
 			}
+		}
+		// A stage nobody named is the one assertion that could not fail: the record
+		// answers about an unknown stage with a zero Estimate from no source, so a
+		// misspelled key asserted nothing and silently replaced the assertion the
+		// fixture was written for.
+		for stage, want := range candidate.Stages {
+			if !slices.Contains(domain.LaunchStages, stage) {
+				return fmt.Errorf("candidate %q states stage %q, which is not one of %v", id, stage, domain.LaunchStages)
+			}
+			if err := want.Rate.validate(); err != nil {
+				return fmt.Errorf("candidate %q stage %q: %w", id, stage, err)
+			}
+		}
+		if err := candidate.Cost.validate("candidate " + id); err != nil {
+			return err
 		}
 		if candidate.Schedule != nil {
 			if !slices.ContainsFunc(w.Rentals, func(r RentalSpec) bool { return r.ID == id }) {

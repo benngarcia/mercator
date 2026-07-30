@@ -94,7 +94,7 @@ func TestARunHeldByAdmissionIsVisible(t *testing.T) {
 	if held.Phase != "requested" {
 		t.Fatalf("the Run waiting on a publication is %q, and Mercator has accepted it and not placed it", held.Phase)
 	}
-	if _, err := execution.runtime.orchestrator.GetBookingDecision(
+	if _, err := execution.runtime.orchestrator.GetBookingDecisions(
 		context.Background(),
 		labWorkspace,
 		"run-checkpoint-consumer",
@@ -213,7 +213,7 @@ func TestTheMachineThatWroteTheContentStillReadsTheObjectStore(t *testing.T) {
 	}
 	// 10GB at 500 Mbps is 160 seconds, which is the read this candidate owes on
 	// content it produced itself.
-	if seconds := candidate.Estimates.ArtifactSeconds.Expected; seconds != 160 {
+	if seconds := candidate.Estimates.Stages.ArtifactFetch.Expected; seconds != 160 {
 		t.Errorf("the decision priced %v seconds of read on content this machine wrote, want 160", seconds)
 	}
 }
@@ -255,7 +255,7 @@ func TestOneRunsReadIsNoCopyForTheNextRun(t *testing.T) {
 		t.Fatalf("the host that read this Artifact for the previous Run records %+v of it", candidate.ArtifactEvidence)
 	}
 	// 2GB at 500 Mbps is 32 seconds, which is the read this machine owes again.
-	if seconds := candidate.Estimates.ArtifactSeconds.Expected; seconds != 32 {
+	if seconds := candidate.Estimates.Stages.ArtifactFetch.Expected; seconds != 32 {
 		t.Errorf("the decision priced %v seconds to read 2GB the previous Run read here already, want 32", seconds)
 	}
 }
@@ -322,7 +322,7 @@ func TestTheDecisionRecordsWhatEachCandidateHoldsOfTheRunsInputs(t *testing.T) {
 	}
 	// 5GB and 2GB at 500 Mbps is 80 + 32 seconds, which is what this candidate
 	// still owes on content none of which was ever checked here.
-	if seconds := candidate.Estimates.ArtifactSeconds.Expected; seconds != 112 {
+	if seconds := candidate.Estimates.Stages.ArtifactFetch.Expected; seconds != 112 {
 		t.Errorf("the decision priced %v seconds of Artifact fetch, and 7GB crosses a 500 Mbps link in 112s", seconds)
 	}
 

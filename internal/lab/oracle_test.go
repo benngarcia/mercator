@@ -3,6 +3,8 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"slices"
 	"testing"
 	"time"
@@ -12,8 +14,32 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
-func TestSmallWorldReferenceSolverAgreesWithProductionFeasibilityAndWinner(t *testing.T) {
+// TestSmallWorldReferenceSolverAgreesWithProductionOnEveryCandidate is the
+// oracle law, and it is stated over every candidate rather than over the winner.
+//
+// Comparing feasible sets and winners only catches a disagreement large enough
+// to move a placement, which in a world of two machines means a disagreement
+// worth more than the gap between them. Every drift this corpus has found so far
+// was smaller than that when it landed and larger later: two definitions of
+// uncertainty agreed on every winner for a phase because both were multiplied by
+// zero, and an Artifact read nobody priced changed no winner until a fixture put
+// forty gigabytes on one side. A model that agrees candidate by candidate about
+// each stage of the prediction, the dollars, the doubt, and what it recorded has
+// nowhere left to hide one.
+func TestSmallWorldReferenceSolverAgreesWithProductionOnEveryCandidate(t *testing.T) {
 	input := smallSchedulingInput(t)
+	// One machine publishes a risk history, so the agreement covers the answers a
+	// decision records without scoring as well as the ones it scores. A term read
+	// off an offer by one model and recorded by neither is how the two definitions
+	// of uncertainty came apart.
+	for index := range input.Offers {
+		if input.Offers[index].ID == "fresh-4090" {
+			input.Offers[index].Reliability = domain.ReliabilityEvidence{
+				StartFailures: domain.StatedRate{Rate: 0.4, Confidence: 0.9},
+				Interruptions: domain.StatedRate{Rate: 0.25, Confidence: 0.9},
+			}
+		}
+	}
 	production, err := scheduler.New().Evaluate(context.Background(), input)
 	if err != nil {
 		t.Fatalf("evaluate production scheduler: %v", err)
@@ -35,6 +61,96 @@ func TestSmallWorldReferenceSolverAgreesWithProductionFeasibilityAndWinner(t *te
 	if !equalStrings(reference.FeasibleOfferIDs, productionFeasible) {
 		t.Fatalf("reference feasible = %v, production feasible = %v", reference.FeasibleOfferIDs, productionFeasible)
 	}
+	for _, candidate := range production.Candidates {
+		offer := offerFor(t, input, candidate.OfferSnapshotID)
+		assertModelsAgreeAboutCandidate(t, candidate, referenceCandidate(input, offer))
+	}
+}
+
+// assertModelsAgreeAboutCandidate holds the two models to the same account of one
+// candidate: every stage of the prediction it was scored on, the dollars it
+// costs, the doubt it carries, and the risk history the record states beside
+// them. Each quantity is named, so a failure says which answer the models
+// disagree about rather than that they disagree.
+//
+// The score is compared only where both models have something to rank. An
+// infeasible candidate is not for sale, so production scores it nothing while
+// this reference model prices only what it would use.
+func assertModelsAgreeAboutCandidate(t *testing.T, production, reference domain.CandidateDecision) {
+	t.Helper()
+	for _, stage := range []struct {
+		answer                string
+		production, reference domain.Estimate
+	}{
+		{"queue_seconds", production.Estimates.QueueSeconds, reference.Estimates.QueueSeconds},
+		{"start_seconds", production.Estimates.StartSeconds, reference.Estimates.StartSeconds},
+		{"established_start_seconds", production.Estimates.EstablishedStartSeconds, reference.Estimates.EstablishedStartSeconds},
+		{"cost_usd", production.Estimates.CostUSD, reference.Estimates.CostUSD},
+	} {
+		if !sameEstimate(stage.production, stage.reference) {
+			t.Errorf("candidate %q: %s: production predicted %s, the reference model %s",
+				production.OfferSnapshotID, stage.answer, describeEstimate(stage.production), describeEstimate(stage.reference))
+		}
+	}
+	// Every stage of the launch, read through the one list that names them, so a
+	// stage added to the record cannot be added without both models being held to
+	// it.
+	for _, stage := range domain.LaunchStages {
+		predicted, referenced := production.Estimates.Stages.Stage(stage), reference.Estimates.Stages.Stage(stage)
+		if !sameEstimate(predicted, referenced) {
+			t.Errorf("candidate %q: %s: production predicted %s, the reference model %s",
+				production.OfferSnapshotID, stage, describeEstimate(predicted), describeEstimate(referenced))
+		}
+	}
+	// Every part of the price, and not only the total. A model that agreed about the
+	// dollars and disagreed about which term they are in would be two models with
+	// compensating errors, which is exactly what one independent model is for: an
+	// hour of committed rent read as an hour of keep-alive adds up to the same money
+	// and says the opposite thing about what the decision changed.
+	for _, term := range domain.CostTermNames() {
+		predicted, chargedByProduction := production.Estimates.CostTermUSD(term)
+		referenced, chargedByReference := reference.Estimates.CostTermUSD(term)
+		if chargedByProduction != chargedByReference || math.Abs(predicted-referenced) > 1e-6 {
+			t.Errorf("candidate %q: production priced %s at %.6f USD (charged=%v), the reference model %.6f (charged=%v)",
+				production.OfferSnapshotID, term, predicted, chargedByProduction, referenced, chargedByReference)
+		}
+	}
+	if production.Estimates.Committed != reference.Estimates.Committed {
+		t.Errorf("candidate %q: production met the commitment %+v, the reference model %+v",
+			production.OfferSnapshotID, production.Estimates.Committed, reference.Estimates.Committed)
+	}
+	if production.Priced() != reference.Priced() {
+		t.Errorf("candidate %q: production says priced=%v and the reference model %v, over cost %+v and %+v",
+			production.OfferSnapshotID, production.Priced(), reference.Priced(), production.Estimates.CostUSD, reference.Estimates.CostUSD)
+	}
+	if production.Reliability != reference.Reliability {
+		t.Errorf("candidate %q: production recorded risk %+v, the reference model %+v",
+			production.OfferSnapshotID, production.Reliability, reference.Reliability)
+	}
+	if production.Uncertainty() != reference.Uncertainty() {
+		t.Errorf("candidate %q: production counted %v points of doubt over %+v, the reference model %v over %+v",
+			production.OfferSnapshotID, production.Uncertainty(), production.Confidences,
+			reference.Uncertainty(), reference.Confidences)
+	}
+	if production.Feasible && math.Abs(production.ScoreUSD-reference.ScoreUSD) > 1e-6 {
+		t.Errorf("candidate %q: production scored %.6f USD, the reference model %.6f",
+			production.OfferSnapshotID, production.ScoreUSD, reference.ScoreUSD)
+	}
+}
+
+// sameEstimate compares what two models predicted, quantiles and confidence
+// included. It reads no source or model version: those name who answered, and
+// two independent models are meant to name themselves.
+func sameEstimate(left, right domain.Estimate) bool {
+	return math.Abs(left.Expected-right.Expected) < 1e-6 &&
+		math.Abs(left.P50-right.P50) < 1e-6 &&
+		math.Abs(left.P90-right.P90) < 1e-6 &&
+		math.Abs(left.Confidence-right.Confidence) < 1e-6
+}
+
+func describeEstimate(estimate domain.Estimate) string {
+	return fmt.Sprintf("expected %.4f, p50 %.4f, p90 %.4f, confidence %.4f",
+		estimate.Expected, estimate.P50, estimate.P90, estimate.Confidence)
 }
 
 // TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes keeps the two
@@ -68,12 +184,19 @@ func TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes(t *testing.T) {
 	if warm.ImageLocality != domain.LocalityPartial {
 		t.Fatalf("image locality = %q, want partial: the bytes are here and the chain is not", warm.ImageLocality)
 	}
-	if reference.PullSeconds.Expected != warm.Estimates.PullSeconds.Expected {
-		t.Fatalf("reference priced %v seconds of image work, production priced %v",
-			reference.PullSeconds.Expected, warm.Estimates.PullSeconds.Expected)
+	if reference.Stages.Unpack.Expected != warm.Estimates.Stages.Unpack.Expected {
+		t.Fatalf("reference priced %v seconds of assembly, production priced %v",
+			reference.Stages.Unpack.Expected, warm.Estimates.Stages.Unpack.Expected)
 	}
-	if warm.Estimates.PullSeconds.Expected == 0 {
+	if warm.Estimates.Stages.Unpack.Expected == 0 {
 		t.Fatal("assembling 18GB was priced at nothing by both models, so neither is accounting for it")
+	}
+	// The other half of the same claim: this host owes assembly and no transfer, so
+	// a model folding the two together would price the network for bytes that are
+	// already on the disk.
+	if warm.Estimates.Stages.ImageFetch.Expected != 0 {
+		t.Fatalf("a host holding every byte was priced %v seconds of transfer",
+			warm.Estimates.Stages.ImageFetch.Expected)
 	}
 }
 
@@ -104,11 +227,11 @@ func TestTheReferenceModelPricesArtifactLocalityTheSameWayProductionDoes(t *test
 	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityCold {
 		t.Fatalf("the decision recorded %+v, and this host holds no copy of the dataset", warm.ArtifactEvidence)
 	}
-	if reference.ArtifactSeconds.Expected != warm.Estimates.ArtifactSeconds.Expected {
+	if reference.Stages.ArtifactFetch.Expected != warm.Estimates.Stages.ArtifactFetch.Expected {
 		t.Fatalf("reference priced %v seconds of Artifact fetch, production priced %v",
-			reference.ArtifactSeconds.Expected, warm.Estimates.ArtifactSeconds.Expected)
+			reference.Stages.ArtifactFetch.Expected, warm.Estimates.Stages.ArtifactFetch.Expected)
 	}
-	if warm.Estimates.ArtifactSeconds.Expected == 0 {
+	if warm.Estimates.Stages.ArtifactFetch.Expected == 0 {
 		t.Fatal("reading 40GB out of the object store was priced at nothing by both models, so neither is accounting for it")
 	}
 }
@@ -150,6 +273,74 @@ func TestBothModelsRefuseAHostTheContentDoesNotFitOn(t *testing.T) {
 	// changes what a candidate with space is worth.
 	if roomy := candidateFor(t, production, "fresh-4090"); !roomy.Feasible {
 		t.Fatalf("a machine with room was refused beside the one without: %+v", roomy.Rejections)
+	}
+}
+
+// TestBothModelsPriceDoubtTheSameWay is the two uncertainty definitions collapsed
+// into one, held by the only thing that can hold it: an independent model scoring
+// the same candidates and getting the same dollars.
+//
+// They disagreed for a phase and nothing could say so. The scheduler counted the
+// capacity and reliability confidences a candidate was given; the reference model
+// counted those plus a full point for an unenumerated image inventory and another
+// for unknown pricing. Both were multiplied by zero in every Run either model ever
+// scored, so the disagreement was invisible until a class declared a rate, at
+// which point it would have moved the winner on every machine Mercator borrows a
+// slot on.
+//
+// Every candidate here is a machine with something to be unsure about: one that
+// cannot be asked what it holds, one whose publisher is 70 percent sure of its
+// capacity, and one that answered and owes a transfer over a link nothing has
+// measured plus the assembly of what it fetches over a rate nothing has measured
+// either. The Run is interactive, so a point of doubt is 0.60 USD and a term
+// deleted from either model shows up in the dollars.
+func TestBothModelsPriceDoubtTheSameWay(t *testing.T) {
+	input := smallSchedulingInput(t)
+	input.Workload.Spec.Placement.Class = domain.ClassInteractive
+	borrowed := offerFor(t, input, "rental-warm")
+	borrowed.ID, borrowed.RentalID, borrowed.NativeRef = "borrowed-host", "", "borrowed-host"
+	borrowed.Kind, borrowed.Lane = domain.OfferKindStanding, domain.LaneEphemeral
+	// Nothing of Mercator's runs there, so nothing enumerates it.
+	borrowed.Images = domain.ImageInventory{}
+	doubted := offerFor(t, input, "rental-warm")
+	doubted.ID, doubted.RentalID, doubted.NativeRef = "doubted-rental", "doubted-rental", "doubted-rental"
+	doubted.Capacity.Confidence = 0.7
+	input.Offers = append(input.Offers, borrowed, doubted)
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+
+	doubtful := 0
+	for _, candidate := range production.Candidates {
+		reference := referenceCandidate(input, offerFor(t, input, candidate.OfferSnapshotID))
+		if candidate.Uncertainty() > 0 {
+			doubtful++
+		}
+		if candidate.Uncertainty() != reference.Uncertainty() {
+			t.Errorf("candidate %q: production counted %v points of doubt over %+v, the reference model %v over %+v",
+				candidate.OfferSnapshotID, candidate.Uncertainty(), candidate.Confidences,
+				reference.Uncertainty(), reference.Confidences)
+		}
+		if math.Abs(candidate.ScoreUSD-reference.ScoreUSD) > 1e-6 {
+			t.Errorf("candidate %q: production scored %.6f USD, the reference model %.6f",
+				candidate.OfferSnapshotID, candidate.ScoreUSD, reference.ScoreUSD)
+		}
+	}
+	if doubtful != len(production.Candidates) {
+		t.Fatalf("only %d of %d candidates carry any doubt, so agreeing about it proves less than it should",
+			doubtful, len(production.Candidates))
+	}
+	// A machine nobody can ask owes the whole image and the assembly of it, and
+	// neither the link nor the unpack rate has been measured, so it carries half a
+	// point for each. It is the same point the machine beside it would carry for
+	// having answered and held nothing, which is the rule: silence costs what
+	// absence costs and never more.
+	borrowedCandidate := candidateFor(t, production, "borrowed-host")
+	if borrowedCandidate.Uncertainty() != 2*domain.AssumedLinkConfidence {
+		t.Fatalf("the machine nobody can ask carries %v points of doubt, and the answers it is unsure of are a transfer and an assembly over two unmeasured rates: %+v",
+			borrowedCandidate.Uncertainty(), borrowedCandidate.Confidences)
 	}
 }
 
@@ -225,49 +416,15 @@ func TestNeitherModelPricesAnUncheckedCopyAsWarmth(t *testing.T) {
 			candidate := candidateFor(t, production, "rental-warm")
 			reference := referenceEstimates(input, holder)
 
-			if owes := candidate.Estimates.ArtifactSeconds.Expected > 0; owes != copyOnDisk.owes {
+			if owes := candidate.Estimates.Stages.ArtifactFetch.Expected > 0; owes != copyOnDisk.owes {
 				t.Errorf("production priced %s at %v seconds, and owing a fetch should be %v",
-					copyOnDisk.name, candidate.Estimates.ArtifactSeconds.Expected, copyOnDisk.owes)
+					copyOnDisk.name, candidate.Estimates.Stages.ArtifactFetch.Expected, copyOnDisk.owes)
 			}
-			if reference.ArtifactSeconds.Expected != candidate.Estimates.ArtifactSeconds.Expected {
+			if reference.Stages.ArtifactFetch.Expected != candidate.Estimates.Stages.ArtifactFetch.Expected {
 				t.Errorf("reference priced %v seconds, production priced %v",
-					reference.ArtifactSeconds.Expected, candidate.Estimates.ArtifactSeconds.Expected)
+					reference.Stages.ArtifactFetch.Expected, candidate.Estimates.Stages.ArtifactFetch.Expected)
 			}
 		})
-	}
-}
-
-// TestBothModelsPriceUncertaintyFromTheSameFacts closes a divergence the dead
-// weight was hiding. The reference model counted an offer nobody could enumerate
-// and an offer with no price as uncertainty and the scheduler did not, and the
-// two agreed on the score only because ScoreWeights.UncertaintyPenaltyUSD
-// multiplies the term by zero in every deployment. Phase 4 populates those
-// weights, and a disagreement waiting for that is a disagreement about which
-// machine to use.
-func TestBothModelsPriceUncertaintyFromTheSameFacts(t *testing.T) {
-	input := smallSchedulingInput(t)
-	input.Weights = scheduler.ScoreWeights{UncertaintyPenaltyUSD: 1}
-	// Every kind of not-knowing at once: a capacity claim published at partial
-	// confidence, reliability likewise, no inventory at all, and no price.
-	silent := offerFor(t, input, "rental-warm")
-	silent.Capacity = domain.CapacityEvidence{Available: true, Confidence: 0.4}
-	silent.Reliability = domain.ReliabilityEvidence{Confidence: 0.5}
-	silent.Images = domain.ImageInventory{}
-	silent.Pricing.Known = false
-	input.Workload.Spec.Placement.AllowUnknownPricing = true
-	input.Offers = []domain.OfferSnapshot{silent}
-
-	production, err := scheduler.New().Evaluate(context.Background(), input)
-	if err != nil {
-		t.Fatalf("evaluate production scheduler: %v", err)
-	}
-	candidate := candidateFor(t, production, silent.ID)
-
-	if penalty := silent.UncertaintyPenalty(); penalty != 3.1 {
-		t.Fatalf("this offer is worth %v of uncertainty, and the case needs every term to fire", penalty)
-	}
-	if got := referenceScore(input, silent); got != candidate.ScoreUSD {
-		t.Fatalf("reference scored %v and production scored %v, so the two models disagree about what nobody knows", got, candidate.ScoreUSD)
 	}
 }
 
@@ -303,7 +460,7 @@ func TestNeitherModelTurnsArtifactSilenceIntoInfeasibility(t *testing.T) {
 		t.Fatalf("this machine was predicted to start in %.2fs, which is inside the bound, so the case proves nothing",
 			candidate.Estimates.StartSeconds.P90)
 	}
-	if candidate.Estimates.ArtifactSeconds.Expected == 0 {
+	if candidate.Estimates.Stages.ArtifactFetch.Expected == 0 {
 		t.Fatal("a machine that cannot say which copies it holds was priced nothing to read them")
 	}
 	if !candidate.Feasible {
@@ -330,23 +487,46 @@ func labArtifactVersion(publishedAt time.Time) domain.ArtifactVersion {
 	}
 }
 
-// TestNeitherModelTurnsSilenceIntoInfeasibility is the rule at the one place an
-// image locality answer can strike a candidate out. A Run that refuses to wait
-// gets to refuse a machine that was found to be slow; a machine nobody could
-// ask has not been found to be anything. Pricing its silence as the whole image
-// is what stops it outranking a host that is provably ready, and pricing is as
-// far as it may go: the goal is explicit that unknown locality is uncertainty
-// and never a hard constraint. Both models have to say so, because a reference
-// model that struck out the silent candidate would make the production
-// scheduler's refusal to look like a bug.
+// measuredRegistryPath is one machine standing behind a reading of its own link
+// to the registry. It is the rate Mercator would have assumed about a machine
+// that said nothing, on purpose: the seconds are then the same seconds either
+// way, so what a case using it turns on is that a machine published them rather
+// than that this model guessed them.
+func measuredRegistryPath(at time.Time) domain.NetworkFacts {
+	return domain.NetworkFacts{Download: []domain.NetworkFact{{
+		Scope:      domain.NetworkScopeRegistry,
+		Statistic:  "p10",
+		ValueMbps:  domain.DefaultRegistryDownloadMbps,
+		Source:     "node_image_pull",
+		ObservedAt: at.Add(-time.Minute),
+		ValidUntil: at.Add(time.Hour),
+		Confidence: 0.9,
+	}}}
+}
+
+// TestNeitherModelTurnsSilenceIntoInfeasibility is the rule at the one place a
+// start prediction can strike a candidate out. A Run that refuses to wait gets to
+// refuse a machine that was found to be slow, and a machine is only found to be
+// slow when both halves of the finding are somebody's: the bytes it has to move
+// and the rate they move at. A host nobody could ask what it holds has not been
+// found to be anything, and neither has a host that enumerated itself perfectly
+// over a path nothing has ever measured, because what turns its exact byte count
+// into minutes is the fleet-wide prior every silent machine is given. Pricing
+// either silence as the whole fetch is what stops it outranking a host that is
+// provably ready, and pricing is as far as it may go: the goal is explicit that
+// unknown locality is uncertainty and never a hard constraint. Both models have
+// to say so, because a reference model that struck out the silent candidate would
+// make the production scheduler's refusal look like a bug.
 func TestNeitherModelTurnsSilenceIntoInfeasibility(t *testing.T) {
 	for _, machine := range []struct {
 		name      string
 		inventory domain.ImageInventory
+		measured  bool
 		feasible  bool
 	}{
-		{"a Rental that enumerated itself and holds none of the image", domain.ImageInventory{Known: true}, false},
-		{"a machine nothing of Mercator's runs on", domain.ImageInventory{}, true},
+		{"a Rental that enumerated itself, holds none of the image, and measured its link", domain.ImageInventory{Known: true}, true, false},
+		{"a Rental that enumerated itself and holds none of the image over a path nobody measured", domain.ImageInventory{Known: true}, false, true},
+		{"a machine nothing of Mercator's runs on", domain.ImageInventory{}, true, true},
 	} {
 		t.Run(machine.name, func(t *testing.T) {
 			input := smallSchedulingInput(t)
@@ -354,6 +534,10 @@ func TestNeitherModelTurnsSilenceIntoInfeasibility(t *testing.T) {
 			silent := offerFor(t, input, "rental-warm")
 			silent.Images = machine.inventory
 			silent.Images.ObservedAt = input.EvaluatedAt
+			silent.Network = domain.NetworkFacts{}
+			if machine.measured {
+				silent.Network = measuredRegistryPath(input.EvaluatedAt)
+			}
 			input.Offers = []domain.OfferSnapshot{silent}
 
 			production, err := scheduler.New().Evaluate(context.Background(), input)
@@ -506,20 +690,29 @@ func smallSchedulingInput(t *testing.T) scheduler.SchedulingInput {
 		t.Fatalf("load Blueprint: %v", err)
 	}
 	request := blueprint.Arrivals.Runs[0].Request
+	// A Run always states a class by the time Placement sees one: intake fills the
+	// omission and refuses a word it cannot price. The small world states standard,
+	// which prices a second of waiting at what the machine doing the waiting costs.
 	workload := scenario.WorkloadForRun(labWorkspace, "run-reference", request)
+	workload.Spec.Placement.Class = domain.ClassStandard
 	now := blueprint.World.Start()
-	warm := labOffer("rental-warm", domain.OfferKindStanding, domain.LaneReusable, 2.5, request.Resources)
+	warm := labOffer("rental-warm", domain.OfferKindStanding, domain.LaneReusable, labCandidate{machine: "rental-warm"}, 2.5, scenario.BillingSpec{}, request.Resources)
 	warm.ObservedAt = now
 	warm.ExpiresAt = now.Add(time.Minute)
 	// The warm host holds the 18GB base layer and not the 80MB top layer.
 	warm.Images = domain.ImageInventory{Known: true, ObservedAt: now, LayerDigests: []string{baseLayerDigest}}
-	fresh := labOffer("fresh-4090", domain.OfferKindProvisionable, domain.LaneReusable, 4, request.Resources)
+	fresh := labOffer("fresh-4090", domain.OfferKindProvisionable, domain.LaneReusable, labCandidate{}, 4, scenario.BillingSpec{}, request.Resources)
 	fresh.ObservedAt = now
 	fresh.ExpiresAt = now.Add(time.Minute)
 	// A machine that does not exist yet has nothing on it to enumerate, so it
 	// says nothing rather than claiming it looked and found nothing.
 	fresh.Images = domain.ImageInventory{}
-	fresh.Provisioning = &domain.Estimate{Expected: 240}
+	// The provider states its own quantiles, tail included. A model that scaled a
+	// spread off the expectation instead would enforce a Run's start bound against
+	// a number Mercator made up while the provider's own answer sat unread on the
+	// offer, and with the expectation alone stated here neither model could be
+	// caught doing it.
+	fresh.Provisioning = &domain.Estimate{Expected: 240, P50: 210, P90: 480}
 	return scheduler.SchedulingInput{
 		RunID:    "run-reference",
 		Workload: workload,
@@ -591,4 +784,50 @@ func heldEverySpace(offer domain.OfferSnapshot) domain.OfferSnapshot {
 	offer.Images.LayerDiffIDs = []string{baseLayerDiffID}
 	offer.Images.ImageDigests = []string{warmImageDigest}
 	return offer
+}
+
+// TestBothModelsRefuseToPriceAMachineNobodyQuoted is the one term of the score
+// that had no answer at all. A machine whose price nobody published was scored as
+// costing zero dollars, and both models did it, so they agreed about a candidate
+// they were both wrong about: a Run allowing unknown pricing took the unquoted
+// machine over one somebody quoted, every time, because nothing is cheaper than
+// nothing.
+//
+// The absence is now stated in the record as the source of the cost estimate, and
+// both models state it, which is what lets the ranking read it. The reference
+// model used to charge a full point of doubt for unknown pricing instead. That
+// point was deleted with the inventory point beside it, and only the inventory one
+// was double counted; the answer here is not more doubt about a number, it is that
+// there is no number.
+func TestBothModelsRefuseToPriceAMachineNobodyQuoted(t *testing.T) {
+	input := smallSchedulingInput(t)
+	input.Workload.Spec.Placement.AllowUnknownPricing = true
+	unquoted := offerFor(t, input, "rental-warm")
+	unquoted.ID, unquoted.RentalID, unquoted.NativeRef = "rental-unquoted", "rental-unquoted", "rental-unquoted"
+	unquoted.Pricing = domain.PriceModel{Currency: "USD"}
+	unquoted.Capabilities.Pricing = domain.PricingCapabilities{}
+	input.Offers = append(input.Offers, unquoted)
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+	reference, err := SolveSmallWorld(input)
+	if err != nil {
+		t.Fatalf("solve the small world: %v", err)
+	}
+
+	if production.SelectedOfferSnapshotID != reference.SelectedOfferID {
+		t.Fatalf("production placed on %q and the reference model on %q", production.SelectedOfferSnapshotID, reference.SelectedOfferID)
+	}
+	if production.SelectedOfferSnapshotID == "rental-unquoted" {
+		t.Fatalf("both models chose the machine nobody priced over one somebody did")
+	}
+	candidate := candidateFor(t, production, "rental-unquoted")
+	if candidate.Priced() {
+		t.Errorf("the unquoted candidate records cost %+v, which reads as a price somebody stated", candidate.Estimates.CostUSD)
+	}
+	if referenceCandidate(input, unquoted).Priced() {
+		t.Errorf("the reference model prices the unquoted machine at %+v", referenceCandidate(input, unquoted).Estimates.CostUSD)
+	}
 }

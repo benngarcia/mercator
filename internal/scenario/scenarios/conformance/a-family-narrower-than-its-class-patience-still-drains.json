@@ -1,0 +1,48 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "A family of three whose caller said one of them may run at once, on two idle machines warm for the image, where a member takes forty minutes. The family therefore takes two hours to drain and the class its members declared states that Mercator may keep work waiting an hour, so the third member is held by its own siblings for longer than that bound. It waits and then runs, because the maximum queue delay is Mercator's promise about how long it may make work wait for capacity and this wait is the caller's own declaration: the second machine is standing idle throughout, and the width is the whole reason it is not being used. Charging that promise against the caller closed the later members of every family narrower than its class's patience, as failed Runs, with a reason saying Mercator had broken a promise it never made. This is the execution rather than the moment, because only an execution reaches the sweep that asks a held member again after its class's hour has gone.",
+  "seed": "mercator-lab-family-patience-v1",
+  "world": {
+    "images": {
+      "sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "4GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-1",
+        "cached_images": ["sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11"],
+        "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "rental-2",
+        "cached_images": ["sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11"],
+        "rate_per_hour_usd": 2.1
+      }
+    ],
+    "runtime_models": [
+      {"candidate": "rental-1", "minimum": "40m", "maximum": "40m30s"},
+      {"candidate": "rental-2", "minimum": "40m", "maximum": "40m30s"}
+    ]
+  },
+  "arrivals": {
+    "type": "burst",
+    "burst": {
+      "name_prefix": "member",
+      "at": "0s",
+      "count": 3,
+      "request": {
+        "image": "sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11",
+        "service_class": "batch",
+        "group": {"id": "sweep", "max_parallel": 1},
+        "expected_runtime": "40m",
+        "max_runtime": "50m"
+      }
+    }
+  }
+}

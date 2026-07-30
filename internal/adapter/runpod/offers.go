@@ -63,16 +63,25 @@ func appendCloudOffer(offers []domain.OfferSnapshot, g gpuType, cloud string, pr
 		return offers
 	}
 	return append(offers, domain.OfferSnapshot{
-		ID:         "off_runpod_" + offerSlug(cloud) + "_" + offerSlug(g.ID),
-		Kind:       domain.OfferKindProvisionable,
-		NativeRef:  offerNativeRef(g.ID, cloud),
-		ObservedAt: now,
-		ExpiresAt:  now.Add(5 * time.Minute),
-		Platform:   domain.Platform{OS: "linux", Architecture: "amd64"},
+		ID:   "off_runpod_" + offerSlug(cloud) + "_" + offerSlug(g.ID),
+		Kind: domain.OfferKindProvisionable,
+		// The product is the GPU type inside a cloud tier, which is what a launch
+		// is placed against and what recurs listing to listing. No region is
+		// stated because this catalog publishes no geography: RunPod names a
+		// security tier and never a datacenter, and stating the tier as a region
+		// would file a history about a place under a word about access control.
+		// The prediction falls back from this product straight to the provider,
+		// which is the honest set of levels a catalog this shape supports.
+		InstanceType: cloud + "/" + g.ID,
+		NativeRef:    offerNativeRef(g.ID, cloud),
+		ObservedAt:   now,
+		ExpiresAt:    now.Add(5 * time.Minute),
+		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
 		Resources: domain.ResourceInventory{
 			CPUMillis:          8000,
 			MemoryBytes:        16 * gib,
 			EphemeralDiskBytes: int64(diskGB) * gib,
+			EphemeralDiskKnown: true,
 			Accelerators: []domain.AcceleratorInventory{{
 				Vendor:         "NVIDIA",
 				Model:          g.DisplayName,
@@ -94,7 +103,12 @@ func appendCloudOffer(offers []domain.OfferSnapshot, g gpuType, cloud string, pr
 			GranularitySeconds: 1,
 			Known:              true,
 		},
-		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+		// A catalog listing says this machine type can be had. Its publisher states no
+		// confidence in that, and neither does Mercator on their behalf: capacity that
+		// may be gone by launch, asserted certain, is a claim nobody made. What would
+		// state it here is a measurement of how often provisioning this listing
+		// actually succeeds, which nothing collects yet.
+		Capacity: domain.CapacityEvidence{Available: true},
 		// RunPod pulls the image fresh on the provisioned host. We don't know
 		// the host's cache state, but the fact must be KNOWN (not "unknown")
 		// or the scheduler policy rejects the offer with UNKNOWN_FACT. Report

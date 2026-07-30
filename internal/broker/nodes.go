@@ -140,16 +140,12 @@ func (b *Broker) Prepare(ctx context.Context, request adapter.PrepareRequest) (a
 // image, so an identity carrying either would have the node fetch the same bytes
 // again.
 //
-// What that identity answers is a redelivery of the same desire, and only that.
-// A node has applied an identity, is still working on it, or refused it, and the
-// operation store dedupes on the identity with no regard for which: a pull that
-// failed on the machine is answered Duplicate from then on, so this control plane
-// never asks that host for that content again while the node's own agent is
-// deliberately not remembering it so that a retry can happen. The defect is
-// recorded in docs/project/capacity-broker-migration.md under the prewarming
-// slice. It is not repaired here, because making a refusal reissuable changes
-// what an operation identity promises and needs a world that can refuse a fetch
-// before it has a specification that could fail on it.
+// What that identity answers is a redelivery of a desire the machine can still
+// act on. A node has applied the identity, is still working on it, or refused it,
+// and only the first two are answered Duplicate: a pull that failed left nothing
+// on the machine, so the same content asked for again reaches the runtime rather
+// than being answered out of the record of the failure. That is what makes the
+// node agent's own refusal to remember a failed pull mean something.
 func (b *Broker) prepareOnNode(ctx context.Context, request adapter.PrepareRequest, item adapter.PrepareItem) (capability.OperationReceipt, error) {
 	ref, err := b.nodeRef(ctx, request.WorkspaceID, item.NativeRef)
 	if err != nil {
@@ -193,12 +189,33 @@ func (b *Broker) observeOnNode(ctx context.Context, req adapter.ObserveRequest, 
 	if err != nil {
 		return adapter.ExternalObservation{}, err
 	}
+	if observation.ReceivedAt.IsZero() {
+		return adapter.ExternalObservation{}, fmt.Errorf(
+			"broker: node %q reported Run %q with no moment Mercator received it, so nothing in the report can be placed on Mercator's clock",
+			nodeID, runID,
+		)
+	}
 	return adapter.ExternalObservation{
 		ExternalID: nodeID + "/" + runID,
 		LaunchKey:  req.LaunchKey,
 		Phase:      externalPhase(observation),
-		ObservedAt: observation.ObservedAt,
-		ExitCode:   observation.ExitCode,
+		// The read moment is when Mercator accepted the node's report, on Mercator's
+		// own clock, and never the node's ObservedAt. Both moments a node states come
+		// off one foreign clock, so copying them through handed the start rule two
+		// numbers that agree with each other whatever that clock reads: a host an hour
+		// ahead had its start adopted, filed an hour of start latency against an
+		// acceptance the control plane had stamped, and set its Booking's runtime
+		// clock an hour into Mercator's future. This moment is at or after the node's
+		// own look in real time, so a start dated ahead of it is a start ahead of
+		// Mercator, which is the only comparison a control plane can make without a
+		// clock it shares with the machine.
+		ObservedAt: observation.ReceivedAt,
+		// The node owns container lifecycle, so the moment its runtime says the
+		// process began is the authority on when this workload started. It was
+		// written by the contract and read by nobody until now, which left the run
+		// stream with no start moment on the only reusable lane there is.
+		StartedAt: observation.StartedAt,
+		ExitCode:  observation.ExitCode,
 	}, nil
 }
 

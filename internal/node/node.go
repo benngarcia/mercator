@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 // State is what the control plane believes about a node right now.
@@ -76,6 +77,71 @@ type Record struct {
 	// capacity; a node with none has unknown pricing and is refused rather than
 	// treated as free.
 	ShadowPriceUSDPerHour float64 `json:"shadow_price_usd_per_hour,omitempty"`
+	// Purchase is what an operator says this machine is bought on beyond its price:
+	// the block of time it is billed in, the kinds of work they hold it for, and the
+	// moment it stops being Mercator's.
+	Purchase Purchase `json:"purchase,omitzero"`
+}
+
+// Purchase is the sale one enrolled machine sits under, as its operator stated it.
+// It is one type rather than three fields because it is one statement: an operator
+// answering "what am I buying, for whom, and until when" answers all of it at once,
+// and it is what Placement reads as the terms of the capacity.
+//
+// Every part of it is optional and every absence is an answer rather than a
+// default. No increment is a machine bought in no blocks at all, which is an
+// operator's own hardware: Mercator holds it continuously, so no second of it is a
+// fresh commitment and there is no tail of a block to charge. No classes is a
+// machine held for nobody in particular. No moment is a machine with no window.
+type Purchase struct {
+	// BillingIntervalSeconds is the block of time this machine is bought in. It is
+	// what makes an hour Mercator has committed to an hour it pays for whether or not
+	// a Run uses the rest of it: work that runs past the end of one block commits
+	// Mercator to the next whole one, and the part of that nothing uses is charged to
+	// the placement that bought it rather than to nobody.
+	BillingIntervalSeconds int64 `json:"billing_interval_seconds,omitempty"`
+	// EligibleClasses is the kinds of work this machine may be used for. Placement
+	// refuses every other class outright rather than pricing it, because a
+	// reservation is a statement about what the machine is for and no amount of
+	// waiting changes it.
+	EligibleClasses []domain.ServiceClass `json:"eligible_classes,omitempty"`
+	// AvailableUntil is the moment this machine stops being Mercator's to use. It is
+	// a window somebody stated rather than capacity that can vanish without notice,
+	// so work that could still be running then is refused before it starts and work
+	// that finishes inside it is never at risk.
+	AvailableUntil time.Time `json:"available_until,omitzero"`
+}
+
+// Terms is what this machine was sold to Mercator on, as the offer built from
+// this record publishes them. They are derived from the operator's own
+// configuration and from the moment Mercator started paying, because a billing
+// interval is a repeating block anchored to the beginning of the lease and
+// nothing else in the record can say where the current one ends.
+func (record Record) Terms(now time.Time) domain.CapacityTerms {
+	return domain.CapacityTerms{
+		CommittedUntil:  record.CommittedUntil(now),
+		EligibleClasses: record.Purchase.EligibleClasses,
+		AvailableUntil:  record.Purchase.AvailableUntil,
+	}
+}
+
+// CommittedUntil is the end of the billing interval this machine is inside right
+// now, and nothing for a machine bought in no increments: Mercator holds such a
+// machine continuously, so there is no interval whose end is a decision.
+//
+// The intervals are counted from enrollment, because that is the moment Mercator
+// started paying for this generation of this machine. A node that has not
+// enrolled is not being paid for and is not offered either.
+func (record Record) CommittedUntil(now time.Time) time.Time {
+	if record.Purchase.BillingIntervalSeconds <= 0 || record.EnrolledAt.IsZero() {
+		return time.Time{}
+	}
+	interval := time.Duration(record.Purchase.BillingIntervalSeconds) * time.Second
+	elapsed := now.Sub(record.EnrolledAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return record.EnrolledAt.Add((elapsed/interval + 1) * interval)
 }
 
 // Ref is this record's address in the capability contract.
@@ -208,6 +274,26 @@ type Operation struct {
 	Failure string `json:"failure,omitempty"`
 }
 
+// Reissuable reports whether this identity may be asked of the machine again.
+// Only a refusal ever is: a pending command is still in flight and an applied one
+// already happened, and answering either with anything but Duplicate is how a
+// workload gets launched twice.
+//
+// A refusal is reissuable only for a command that cannot have changed the machine
+// on its way to failing, which is the distinction CommandKind already draws. A
+// pull that failed left nothing, so the same content can be asked for again; a
+// launch that failed may have created the container, so its identity is spent
+// whatever the machine said about it.
+//
+// Without this the identity was terminal in either direction: a node whose pull
+// failed answered Duplicate for that content from then on, delivered nothing, and
+// never appeared as applied, so the content was neither there nor askable while the
+// node agent was deliberately not remembering the failure so that a retry could
+// happen.
+func (operation Operation) Reissuable() bool {
+	return operation.State == OperationRefused && !operation.Kind.MayLeaveEffectOnFailure()
+}
+
 // Result is what a node reports back about one operation.
 type Result struct {
 	OperationID string `json:"operation_id"`
@@ -245,6 +331,23 @@ const (
 	// directly, independently of anything the application reports.
 	EventWorkload EventKind = "workload"
 )
+
+// receive stamps the moment the control plane accepted this report onto the
+// workload observation it carries, replacing whatever a node put there: the stamp
+// is Mercator's own clock and a node has no standing to state it. The observation
+// is copied rather than written through, so the sender's own record of what it
+// reported stays what it reported.
+//
+// A heartbeat needs no stamp. The registry dates the lease it renews with its own
+// clock already, and no rule compares a fact against Mercator's frame.
+func (event *Event) receive(at time.Time) {
+	if event.Workload == nil {
+		return
+	}
+	received := *event.Workload
+	received.ReceivedAt = at
+	event.Workload = &received
+}
 
 func (event Event) Validate() error {
 	switch {

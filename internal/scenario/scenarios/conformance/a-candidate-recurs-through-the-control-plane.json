@@ -1,0 +1,102 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "What a launch history may be filed under, at L1. Five candidates arrive for one Run: two asks a marketplace numbered differently for the same product in the same place, a third ask there whose cards hold half the memory, a fourth whose probe reported its eight cards as two entries of four, a fifth holding four of that same product, a sixth selling one of those products as a one-shot execution rather than as a machine, a machine Mercator keeps through its own runtime, and a one-shot pool publishing nothing that outlives its listing. Under the real control plane the decision records what it took each candidate to be, and the two asks have to key as one candidate, the half-memory ask as another, the split inventory as the same product as the ask that reported its cards whole, the four-card machine as another, the one-shot listing as something other than the rental of the same cards in the same place, the enrolled machine as itself, and the pool as nothing at all. This is the Blueprint the world's own statement of these facts is falsifiable through: stop publishing the provider, the region, or the machine and the whole simulated fleet collapses onto one key, which is the world every earlier Blueprint here was written in and the reason no rule about candidate identity could be broken in it.",
+  "seed": "mercator-lab-candidate-identity-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2": {
+        "layers": [
+          {
+            "digest": "sha256:1f5a1b0d90ba2d7c2d1e0f19e4c6a2b9de8fd0c3a6b1e2f4c5d6a7b8c9d0e1f2",
+            "size": "400MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "enrolled-a100",
+        "provider": "simnode",
+        "region": "US-CA",
+        "rate_per_hour_usd": 1.0,
+        "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB"}}
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "ask-4417",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 3.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "ask-90218",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 3.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "ask-51120",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB"}}
+      },
+      {
+        "id": "ask-2211",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB", "entries": 2}}
+      },
+      {
+        "id": "ask-2212",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "resources": {"gpu": {"model": "A100", "count": 4, "memory": "80GB"}}
+      },
+      {
+        "id": "ask-4417-oneshot",
+        "provider": "simvast",
+        "lane": "ephemeral",
+        "region": "US-CA",
+        "rate_per_hour_usd": 3.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB"}}
+      },
+      {
+        "id": "oneshot-pool",
+        "provider": "simpool",
+        "lane": "ephemeral",
+        "rate_per_hour_usd": 5.0,
+        "provisioning": {"expected": "1m", "p90": "2m", "acquisition": "6s", "boot": "45s", "agent_ready": "9s"}
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "keyed",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2",
+          "service_class": "standard",
+          "expected_runtime": "10m",
+          "max_runtime": "30m"
+        }
+      }
+    ]
+  }
+}

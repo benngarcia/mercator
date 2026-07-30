@@ -27,6 +27,11 @@ func TestGetRunRejectsInvalidPersistedEvents(t *testing.T) {
 		{name: "unknown external phase", eventType: EventExternalStateObserved, schemaVersion: 1, data: json.RawMessage(`{"launch_key":"launch_1","phase":"future","observed_at":"2026-07-18T12:00:00Z"}`)},
 		{name: "unknown outcome", eventType: EventRunOutcomeRecorded, schemaVersion: 1, data: json.RawMessage(`{"outcome":"future"}`)},
 		{name: "unknown cleanup disposition", eventType: EventCleanupFailed, schemaVersion: 1, data: json.RawMessage(`{"code":"ADAPTER_ERROR","message":"Adapter operation failed.","retryable":true,"launch_key":"launch_1","disposition":"future"}`)},
+		// A decision that replaces another names it and says why. A reason with no
+		// predecessor explains nothing, and a predecessor with no reason is a rewrite
+		// with more steps in it, so neither is a record this reduces.
+		{name: "supersession with no predecessor", eventType: EventBookingDecided, schemaVersion: 1, data: json.RawMessage(`{"decision":{"id":"dec_1","run_id":"run_1","evaluated_at":"2026-07-26T12:00:00Z","model_version":"latency-v1","selection_reason_codes":["NO_FEASIBLE_OFFERS"],"supersedes_reason":"PREVIOUS_LAUNCH_FAILED"}}`)},
+		{name: "supersession with no reason", eventType: EventBookingDecided, schemaVersion: 1, data: json.RawMessage(`{"decision":{"id":"dec_1","run_id":"run_1","evaluated_at":"2026-07-26T12:00:00Z","model_version":"latency-v1","selection_reason_codes":["NO_FEASIBLE_OFFERS"],"supersedes":"dec_0"}}`)},
 	}
 
 	for _, test := range tests {

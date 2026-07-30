@@ -1,0 +1,103 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The same claim as history-answers-for-the-machine-it-was-measured-on, driven through the real orchestrator, event log, Run projection and Effect Ledger. Two idle Rentals hold the image assembled and one Run goes to the cheaper of them, declaring it will be ready in two minutes; the application on that machine takes three quarters of a minute, which is what the world spends and what the workload then reports. Half an hour later a second Run of the same image arrives, and the machine that ran the first is predicted from its own launch rather than from the second Run's declaration, at the exact candidate, with the count of launches behind it. Two Rentals nobody has measured say what the rungs below that are worth: one in the measured machine's own region falls to what this provider has done in this place, and one in another region falls past that to what it has done anywhere, for the same seconds at less confidence. The middle rung is here because these machines publish a region, so this is also where a region has to survive every step between the offer that states it and the decision that records it. It is the target ontology and says so: the enrolled machines production offers in this lane state no place, and this world's provider keeps capacity and states one, which is what the schema has allowed a rental to say since it was authored. A third Run then asks the same three machines about a second image nothing here has launched, and all three fall to what that Run declared about itself: readiness is the workload's own semantics, and a rung answering it names the content or it is answering out of somebody else's work. Both coarse rungs are in this world twice over for that reason, once where they answer and once where they have to be silent, because two rungs that carried only the place would have served this image's readiness out of the other image's launch. What this holds at L1 that the placement corpus cannot is where the measurement came from: the moments are the ones the control plane adopted through its own Run stream, and the identity is the one its own Booking Decision recorded, so a prediction here is answered by Mercator reading Mercator rather than by a harness handing it an answer.",
+  "seed": "mercator-lab-learned-history-v1",
+  "world": {
+    "images": {
+      "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "500MB"}
+        ]
+      },
+      "reporter@sha256:4c8e1f0a7b2d5e9c3f6a0b4d8e2c5f9a1b6d0e4c8f2a5b9d3e7c1f0a6b4d8e2c": {
+        "layers": [
+          {"digest": "sha256:7b3e0c9a2f5d8b1e4c7a0f3d6b9e2c5a8f1d4b7e0c3a6f9d2b5e8c1a4f7d0b3e", "size": "500MB"}
+        ]
+      }
+    },
+    "launch": {
+      "container_start": "20s",
+      "application_ready": "45s"
+    },
+    "rentals": [
+      {
+        "id": "rental-measured",
+        "region": "US-CA",
+        "cached_images": ["server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e", "reporter@sha256:4c8e1f0a7b2d5e9c3f6a0b4d8e2c5f9a1b6d0e4c8f2a5b9d3e7c1f0a6b4d8e2c"],
+        "rate_per_hour_usd": 4.0
+      },
+      {
+        "id": "rental-spare",
+        "region": "US-CA",
+        "cached_images": ["server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e", "reporter@sha256:4c8e1f0a7b2d5e9c3f6a0b4d8e2c5f9a1b6d0e4c8f2a5b9d3e7c1f0a6b4d8e2c"],
+        "rate_per_hour_usd": 4.5
+      },
+      {
+        "id": "rental-elsewhere",
+        "region": "EU-DE",
+        "cached_images": ["server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e", "reporter@sha256:4c8e1f0a7b2d5e9c3f6a0b4d8e2c5f9a1b6d0e4c8f2a5b9d3e7c1f0a6b4d8e2c"],
+        "rate_per_hour_usd": 5.0
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "measures",
+        "candidate": "rental-measured",
+        "minimum": "9m",
+        "maximum": "10m"
+      },
+      {
+        "run": "learns",
+        "candidate": "rental-measured",
+        "minimum": "9m",
+        "maximum": "10m"
+      },
+      {
+        "run": "asks-about-other-content",
+        "candidate": "rental-measured",
+        "minimum": "9m",
+        "maximum": "10m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "measures",
+        "at": "0s",
+        "request": {
+          "image": "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e",
+          "service_class": "standard",
+          "expected_runtime": "10m",
+          "max_runtime": "30m",
+          "expected_ready": "2m"
+        }
+      },
+      {
+        "name": "learns",
+        "at": "30m",
+        "request": {
+          "image": "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e",
+          "service_class": "standard",
+          "expected_runtime": "10m",
+          "max_runtime": "30m",
+          "expected_ready": "2m"
+        }
+      },
+      {
+        "name": "asks-about-other-content",
+        "at": "50m",
+        "request": {
+          "image": "reporter@sha256:4c8e1f0a7b2d5e9c3f6a0b4d8e2c5f9a1b6d0e4c8f2a5b9d3e7c1f0a6b4d8e2c",
+          "service_class": "standard",
+          "expected_runtime": "10m",
+          "max_runtime": "30m",
+          "expected_ready": "2m"
+        }
+      }
+    ]
+  }
+}

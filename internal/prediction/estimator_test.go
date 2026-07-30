@@ -1,0 +1,267 @@
+package prediction_test
+
+import (
+	"testing"
+
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/prediction"
+)
+
+// TestAMachineRepublishedUnderANewListingKeepsItsLaunches is the case the whole
+// key exists for. A marketplace mints an ask ID per search, so the machine
+// measured yesterday arrives today under a number nothing has ever seen, and its
+// own launches have to answer for it anyway.
+func TestAMachineRepublishedUnderANewListingKeepsItsLaunches(t *testing.T) {
+	yesterday := marketplaceAsk("off_vast_11111", "machine-77")
+	today := marketplaceAsk("off_vast_99999", "machine-77")
+	history := prediction.NewHistory([]prediction.Observation{
+		readiness(yesterday, 30),
+		readiness(yesterday, 50),
+	})
+
+	answer := history.Predict(domain.CandidateIdentityOf(today, "sha256:image"), domain.StageApplicationReady)
+
+	if answer.Level != domain.LevelExactCandidate || answer.SampleCount != 2 {
+		t.Fatalf("the machine's own two launches answered %+v", answer)
+	}
+	if answer.P50 != 40 || answer.P90 != 48 {
+		t.Fatalf("two launches of 30s and 50s produced p50 %v and p90 %v", answer.P50, answer.P90)
+	}
+}
+
+// TestAnUnmeasuredMachineFallsThroughTheDeclaredLevels walks the ladder. The
+// candidate has no launches of its own, so the answer comes from the province it
+// is in, then from its provider, and a provider nobody has measured is answered
+// by nothing at all.
+func TestAnUnmeasuredMachineFallsThroughTheDeclaredLevels(t *testing.T) {
+	measured := marketplaceAsk("off_vast_11111", "machine-77")
+	history := prediction.NewHistory([]prediction.Observation{readiness(measured, 60)})
+
+	neighbour := marketplaceAsk("off_vast_22222", "machine-88")
+	elsewhere := marketplaceAsk("off_vast_33333", "machine-91")
+	elsewhere.Region = "EU-DE"
+	stranger := marketplaceAsk("off_pool_44444", "machine-92")
+	stranger.AdapterType = "simpool"
+
+	for name, expected := range map[string]struct {
+		offer domain.OfferSnapshot
+		level domain.PredictionLevel
+	}{
+		"a machine in the same place":    {neighbour, domain.LevelProviderAndRegion},
+		"a machine of the same provider": {elsewhere, domain.LevelProvider},
+		"a machine of another provider":  {stranger, domain.LevelPrior},
+	} {
+		t.Run(name, func(t *testing.T) {
+			answer := history.Predict(
+				domain.CandidateIdentityOf(expected.offer, "sha256:image"),
+				domain.StageApplicationReady,
+			)
+			if answer.Level != expected.level {
+				t.Fatalf("answered at %q from %d samples, want %q", answer.Level, answer.SampleCount, expected.level)
+			}
+		})
+	}
+}
+
+// TestCapacityThatCannotRecurIsNeverAnExactCandidate is the reading half of the
+// same key. A one-shot pool publishing nothing but its provider gets no key of
+// its own, so what it did is still worth knowing about that provider's one-shot
+// lane and can never be reported as evidence about this exact candidate.
+func TestCapacityThatCannotRecurIsNeverAnExactCandidate(t *testing.T) {
+	pool := domain.OfferSnapshot{ID: "off_pool_7f3a", AdapterType: "simpool", Lane: domain.LaneEphemeral}
+	identity := domain.CandidateIdentityOf(pool, "sha256:image")
+
+	history := prediction.NewHistory([]prediction.Observation{{
+		Candidate: identity, Stage: domain.StageApplicationReady, Seconds: 60,
+	}})
+
+	answer := history.Predict(identity, domain.StageApplicationReady)
+	if answer.Level != domain.LevelProvider {
+		t.Fatalf("a one-shot execution of this provider was answered %+v", answer)
+	}
+	if answer.Key != identity.ProviderKey(true) {
+		t.Fatalf("the answer was read under %q, and this listing recurs as %q", answer.Key, identity.ProviderKey(true))
+	}
+}
+
+// TestOneMachinesStagesAreLearnedApart is why a bucket carries the stage. The
+// stages of a launch are different work with different causes, so a machine
+// measured coming up says nothing about what it spends creating a container.
+func TestOneMachinesStagesAreLearnedApart(t *testing.T) {
+	ask := marketplaceAsk("off_vast_11111", "machine-77")
+	history := prediction.NewHistory([]prediction.Observation{readiness(ask, 60)})
+
+	identity := domain.CandidateIdentityOf(ask, "sha256:image")
+	if answer := history.Predict(identity, domain.StageContainerStart); answer.Answered() {
+		t.Fatalf("a readiness measurement answered the container start: %+v", answer)
+	}
+}
+
+// TestAContentStageIsLearnedPerImageAndAMachineStageIsNot holds the other half of
+// the key. What a machine spends pulling is a property of what it pulled; what it
+// spends booting is not, and splitting the second per image would leave one
+// machine's boot history in as many buckets as the fleet has images.
+func TestAContentStageIsLearnedPerImageAndAMachineStageIsNot(t *testing.T) {
+	ask := marketplaceAsk("off_vast_11111", "machine-77")
+	trained := domain.CandidateIdentityOf(ask, "sha256:trainer")
+	scored := domain.CandidateIdentityOf(ask, "sha256:scorer")
+	history := prediction.NewHistory([]prediction.Observation{
+		{Candidate: trained, Stage: domain.StageApplicationReady, Seconds: 60},
+		{Candidate: trained, Stage: domain.StageBoot, Seconds: 200},
+	})
+
+	if answer := history.Predict(scored, domain.StageApplicationReady); answer.Answered() {
+		t.Fatalf("another image's readiness answered for this one: %+v", answer)
+	}
+	if answer := history.Predict(scored, domain.StageBoot); answer.Level != domain.LevelExactCandidate || answer.P50 != 200 {
+		t.Fatalf("the machine's own boot did not answer for a second image: %+v", answer)
+	}
+}
+
+// TestNoRungOfTheLadderAnswersContentItDoesNotName is the same law read down the
+// whole ladder rather than at the machine.
+//
+// A coarse rung generalizes over machines, which is what it is for, and never over
+// content. One measured launch of a 70B model server took fifteen minutes to come
+// up; a static page asked for on the machine beside it is not fifteen minutes from
+// ready, and the start bound of the Run asking for it is what such an answer gets
+// measured against. The machine stages of the same unmeasured candidate still fall
+// through the same rungs, because what a machine spends booting is the machine's.
+func TestNoRungOfTheLadderAnswersContentItDoesNotName(t *testing.T) {
+	measured := marketplaceAsk("off_vast_11111", "machine-77")
+	weights := domain.CandidateIdentityOf(measured, "sha256:llm-70b")
+	history := prediction.NewHistory([]prediction.Observation{
+		{Candidate: weights, Stage: domain.StageApplicationReady, Seconds: 900},
+		{Candidate: weights, Stage: domain.StageBoot, Seconds: 200},
+	})
+
+	elsewhere := marketplaceAsk("off_vast_33333", "machine-91")
+	elsewhere.Region = "EU-DE"
+
+	for name, offer := range map[string]domain.OfferSnapshot{
+		"a machine in the same place":    marketplaceAsk("off_vast_22222", "machine-88"),
+		"a machine of the same provider": elsewhere,
+	} {
+		t.Run(name, func(t *testing.T) {
+			other := domain.CandidateIdentityOf(offer, "sha256:tiny-http")
+
+			ready := history.Predict(other, domain.StageApplicationReady)
+			if ready.Answered() {
+				t.Fatalf("a 70B model server's readiness answered for a static page: %+v", ready)
+			}
+			if boot := history.Predict(other, domain.StageBoot); !boot.Answered() || boot.P50 != 200 {
+				t.Fatalf("the machine stage this candidate has neighbours for was answered %+v", boot)
+			}
+		})
+	}
+}
+
+// TestTheSameContentOnAMachineNobodyMeasuredIsAnsweredFromItsNeighbours is what
+// the rung above is for, stated here so the rule above cannot be satisfied by a
+// ladder that answers nothing.
+//
+// The image is the same image, and the machine beside the one that ran it is the
+// best evidence there is about how long it takes to come up. The key names the
+// place and the content both, so a reader can check the answer against the claim.
+func TestTheSameContentOnAMachineNobodyMeasuredIsAnsweredFromItsNeighbours(t *testing.T) {
+	measured := marketplaceAsk("off_vast_11111", "machine-77")
+	history := prediction.NewHistory([]prediction.Observation{{
+		Candidate: domain.CandidateIdentityOf(measured, "sha256:llm-70b"),
+		Stage:     domain.StageApplicationReady,
+		Seconds:   900,
+	}})
+
+	neighbour := domain.CandidateIdentityOf(marketplaceAsk("off_vast_22222", "machine-88"), "sha256:llm-70b")
+
+	answer := history.Predict(neighbour, domain.StageApplicationReady)
+
+	if answer.Level != domain.LevelProviderAndRegion || answer.SampleCount != 1 || answer.P50 != 900 {
+		t.Fatalf("the same image on the machine beside the measured one was answered %+v", answer)
+	}
+	if answer.Key != "lane=ephemeral;provider=simvast;region=US-CA;image=sha256:llm-70b" {
+		t.Fatalf("the region rung answered under %q, and it has to name the place and the content", answer.Key)
+	}
+}
+
+// TestContentNobodyCouldNameIsAnsweredAtNoLevel is the silence a registry leaves.
+// An image whose manifest could not be read has no content key at any rung, so
+// every unresolved image in the fleet stays out of one bucket that would be read
+// back as measured evidence about the rest of them.
+func TestContentNobodyCouldNameIsAnsweredAtNoLevel(t *testing.T) {
+	ask := marketplaceAsk("off_vast_11111", "machine-77")
+	history := prediction.NewHistory([]prediction.Observation{readiness(ask, 60)})
+
+	unresolved := domain.CandidateIdentityOf(ask, "")
+
+	if answer := history.Predict(unresolved, domain.StageApplicationReady); answer.Answered() {
+		t.Fatalf("an image nothing could name was answered %+v", answer)
+	}
+}
+
+// TestATransferIsNotAnsweredFromTheSecondsAnotherLaunchSpent is the boundary of
+// what this package will answer. A transfer is a byte count over a throughput and
+// the byte count belongs to the launch rather than to the machine: what a host
+// still has to move is whatever it does not already hold when it is asked, so the
+// machine that pulled forty gigabytes yesterday holds them today and moves nothing.
+//
+// The key names the machine and the image and can name neither the bytes nor the
+// path, so a measured transfer of one byte count would be served back as the price
+// of another and, at zero bytes, as the price of a transfer that will not happen.
+// It is filed nowhere and answers nothing until the key says what a transfer is.
+func TestATransferIsNotAnsweredFromTheSecondsAnotherLaunchSpent(t *testing.T) {
+	ask := marketplaceAsk("off_vast_11111", "machine-77")
+	identity := domain.CandidateIdentityOf(ask, "sha256:image")
+	history := prediction.NewHistory([]prediction.Observation{
+		{Candidate: identity, Stage: domain.StageImageFetch, Seconds: 900},
+		{Candidate: identity, Stage: domain.StageUnpack, Seconds: 120},
+		{Candidate: identity, Stage: domain.StageArtifactFetch, Seconds: 920},
+	})
+
+	for _, transfer := range []domain.LaunchStage{
+		domain.StageImageFetch, domain.StageUnpack, domain.StageArtifactFetch,
+	} {
+		t.Run(string(transfer), func(t *testing.T) {
+			answer := history.Predict(identity, transfer)
+
+			if answer.Answered() || answer.Level != domain.LevelPrior {
+				t.Fatalf("a measured %s answered for a launch owing other bytes: %+v", transfer, answer)
+			}
+		})
+	}
+}
+
+// TestALaunchWithNoReadinessMeasuresNothing holds what an Observation is made
+// of. A workload that never reported it could do work leaves the stage with no
+// actual, and a zero there teaches a fleet that every application is serving the
+// instant its process exists.
+func TestALaunchWithNoReadinessMeasuresNothing(t *testing.T) {
+	ask := marketplaceAsk("off_vast_11111", "machine-77")
+	launch := prediction.Launch{Candidate: domain.CandidateIdentityOf(ask, "sha256:image")}
+
+	if observations := launch.Observations(); len(observations) != 0 {
+		t.Fatalf("a launch nobody timed measured %+v", observations)
+	}
+}
+
+func marketplaceAsk(offerID, machineID string) domain.OfferSnapshot {
+	return domain.OfferSnapshot{
+		ID:          offerID,
+		NativeRef:   offerID,
+		MachineID:   machineID,
+		AdapterType: "simvast",
+		Region:      "US-CA",
+		Kind:        domain.OfferKindProvisionable,
+		Lane:        domain.LaneEphemeral,
+		Resources: domain.ResourceInventory{Accelerators: []domain.AcceleratorInventory{{
+			Vendor: "NVIDIA", CanonicalModel: "nvidia-a100", Count: 8, MemoryBytes: 80_000_000_000,
+		}}},
+	}
+}
+
+func readiness(offer domain.OfferSnapshot, seconds float64) prediction.Observation {
+	return prediction.Observation{
+		Candidate: domain.CandidateIdentityOf(offer, "sha256:image"),
+		Stage:     domain.StageApplicationReady,
+		Seconds:   seconds,
+	}
+}

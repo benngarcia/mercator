@@ -1,0 +1,96 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "Four machines and two Runs. The cheap machine holds the image and takes the work. The other three are each holding something the control plane never launched, and the control plane restarts into that state without recognising any of them. One still carries a Run identity Mercator minted, and Mercator's own record of that launch says the capacity is handed back by releasing its slot, so the machine outlives the workload: it is adopted, the slot goes back, and the machine is still in the fleet afterwards. One carries the identity of a Run the provider refused to start until its attempts ran out, so that Run ended with nobody ever asking for its capacity back, which is the ordinary end of a launch that gives up. Its launch recorded the same release, so its machine is kept as well, and a policy that read the cleanup request instead would destroy a rented machine every time a launch ran out of attempts. The last carries no work anybody can account for, so nothing will ever be bound to it and nothing will ever collect it: it is terminated, and the machine stops existing rather than being left to bill for a slot no Run can be placed on. The record names the policy that decided each of them and the reason it applied, which is the whole claim: a reconciliation that can only fail is not a policy, and a machine destroyed by no stated rule is a machine an operator cannot argue with.",
+  "seed": "mercator-lab-orphan-policy-v1",
+  "world": {
+    "launch": {
+      "unpack": "1s",
+      "container_start": "1s"
+    },
+    "images": {
+      "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "200MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "keeper",
+        "rate_per_hour_usd": 1.0,
+        "cached_images": [
+          "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b"
+        ]
+      },
+      {
+        "id": "stranded",
+        "rate_per_hour_usd": 9.0
+      },
+      {
+        "id": "forgotten",
+        "rate_per_hour_usd": 9.0
+      },
+      {
+        "id": "abandoned",
+        "rate_per_hour_usd": 9.0
+      }
+    ],
+    "orphans": [
+      {"id": "orphan-of-ghost", "rental": "stranded", "run": "ghost"},
+      {"id": "orphan-of-refused", "rental": "abandoned", "run": "refused"},
+      {"id": "orphan-nobody-claims", "rental": "forgotten"}
+    ],
+    "runtime_models": [
+      {
+        "run": "ghost",
+        "candidate": "keeper",
+        "minimum": "10m",
+        "maximum": "10m"
+      },
+      {
+        "run": "refused",
+        "candidate": "keeper",
+        "minimum": "10m",
+        "maximum": "10m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "ghost",
+        "at": "0s",
+        "request": {
+          "image": "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+          "expected_runtime": "10m",
+          "max_runtime": "30m"
+        }
+      },
+      {
+        "name": "refused",
+        "at": "0s",
+        "request": {
+          "image": "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+          "expected_runtime": "10m",
+          "max_runtime": "30m",
+          "max_pre_start_attempts": 1
+        }
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "restart-into-capacity-it-does-not-recognise",
+      "trigger": {"event": "compute.run.requested.v1"},
+      "action": "restart_control_plane"
+    },
+    {
+      "id": "the-machine-refuses-the-start-until-the-attempts-run-out",
+      "trigger": {"operation": "provider.launch", "run": "refused"},
+      "action": "reject_command"
+    }
+  ]
+}

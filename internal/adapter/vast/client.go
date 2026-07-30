@@ -43,11 +43,20 @@ type offer struct {
 	CPURAMMb          float64  `json:"cpu_ram"`
 	DiskSpaceGB       float64  `json:"disk_space"`
 	DPHTotal          *float64 `json:"dph_total"`
-	Reliability       float64  `json:"reliability2"`
-	Verification      string   `json:"verification"`
-	MachineID         int64    `json:"machine_id"`
-	Geolocation       string   `json:"geolocation"`
-	StaticIP          bool     `json:"static_ip"`
+	// Reliability is Vast's uptime score for the machine behind this ask, and it
+	// is a pointer for the reason the price above is: an ask that omits or nulls it
+	// has published nothing, and read as zero that machine drops every run.
+	Reliability  *float64 `json:"reliability2"`
+	Verification string   `json:"verification"`
+	// Rented is whether somebody is on this machine right now. It is read rather
+	// than filtered out server-side, because an ask this adapter never returned is
+	// an ask Mercator cannot tell apart from hardware nobody sells: the search is
+	// how the fleet answers, and a fleet that answered with nothing is the
+	// strongest thing it can say.
+	Rented bool `json:"rented"`
+	MachineID    int64    `json:"machine_id"`
+	Geolocation  string   `json:"geolocation"`
+	StaticIP     bool     `json:"static_ip"`
 }
 
 // instance is one row from the instances endpoints. extra_env round-trips the

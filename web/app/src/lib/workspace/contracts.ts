@@ -50,12 +50,19 @@ const NetworkRequirements = Schema.Struct({
     }),
   ),
 });
+// PlacementPolicy carries the class of work a Run is, which is the only thing
+// that says what waiting is worth to it, beside the hard bounds it refuses to
+// cross. The class replaced a placement objective outright: an objective named a
+// quantity to minimise and never what a second of it cost, so the console shows
+// the class and the rates it declares rather than a word nothing was computed
+// from.
 const PlacementPolicy = Schema.Struct({
-  objective: Schema.Literals([
-    "cheapest",
-    "fastest_start",
-    "fastest_completion",
-    "balanced",
+  service_class: Schema.Literals([
+    "interactive",
+    "standard",
+    "batch",
+    "experimental",
+    "opportunistic",
   ]),
   max_p90_start_seconds: Schema.optionalKey(Schema.Number),
   expected_runtime_seconds: Schema.optionalKey(Schema.Number),
@@ -75,6 +82,13 @@ const ArtifactReplica = Schema.Struct({
   size_bytes: Schema.Number,
   state: Schema.Literals(["verified", "unverified"]),
   verified_at: Schema.optionalKey(Schema.String),
+});
+// One share of a machine's history somebody measured, and how much the publisher
+// of that measurement stands behind it. An unmeasured rate is absent rather than
+// zero, which is why each one is an optional key of the history.
+const StatedRate = Schema.Struct({
+  rate: Schema.Number,
+  confidence: Schema.Number,
 });
 const WorkloadRevision = Schema.Struct({
   id: Schema.String,
@@ -206,11 +220,16 @@ export const OfferSnapshot = Schema.Struct({
     available: Schema.Boolean,
     confidence: Schema.Number,
   }),
-  reliability: Schema.Struct({
-    start_failure_rate: Schema.optionalKey(Schema.Number),
-    interruption_rate: Schema.optionalKey(Schema.Number),
-    confidence: Schema.optionalKey(Schema.Number),
-  }),
+  // Absent when this machine's publisher has measured nothing, which is every
+  // provider in this tree today. No history and a history of zeroes are
+  // different answers, so the whole object is an optional key rather than a
+  // required one holding two absent rates.
+  reliability: Schema.optionalKey(
+    Schema.Struct({
+      start_failures: Schema.optionalKey(StatedRate),
+      interruptions: Schema.optionalKey(StatedRate),
+    }),
+  ),
 });
 
 const Violation = Schema.Struct({
@@ -220,19 +239,52 @@ const Violation = Schema.Struct({
   offered: Schema.optionalKey(Schema.Unknown),
   message: Schema.String,
 });
+// Confidence is one answer a placement rested on and what its source said it was
+// worth. The uncertainty term of a score is the shortfall summed over exactly
+// these, which is what lets a reader re-derive a score rather than trust it.
+const Confidence = Schema.Struct({
+  answer: Schema.String,
+  value: Schema.Number,
+});
+// ScoreWeights is the exchange rates a service class declares. Every decision
+// records the ones it was scored at, because a rate that changed would otherwise
+// silently rewrite the arithmetic of every decision already taken.
+const ScoreWeights = Schema.Struct({
+  start_latency_usd_per_second: Schema.optionalKey(Schema.Number),
+  completion_latency_usd_per_second: Schema.optionalKey(Schema.Number),
+  uncertainty_penalty_usd: Schema.optionalKey(Schema.Number),
+});
+// LaunchStageEstimates is the eight stages of a launch, each with its own
+// distribution. They are eight rather than four because each is answered by a
+// different authority and has an actual of its own.
+const LaunchStageEstimates = Schema.Struct({
+  acquisition_seconds: Estimate,
+  boot_seconds: Estimate,
+  agent_ready_seconds: Estimate,
+  image_fetch_seconds: Estimate,
+  unpack_seconds: Estimate,
+  artifact_fetch_seconds: Estimate,
+  container_start_seconds: Estimate,
+  application_ready_seconds: Estimate,
+});
 const CandidateEstimateSet = Schema.Struct({
   queue_seconds: Estimate,
-  provision_seconds: Estimate,
-  pull_seconds: Estimate,
-  artifact_seconds: Estimate,
+  stages: LaunchStageEstimates,
   start_seconds: Estimate,
   established_start_seconds: Estimate,
   cost_usd: Estimate,
 });
+// CandidateDisposition is what Placement recorded a candidate as. The three
+// Rental dispositions reuse, queue on, or provision capacity Mercator keeps;
+// launch_ephemeral is a one-shot execution that holds nothing once its workload
+// exits. Leaving it out made the common case undecodable: every candidate on a
+// provider-native execution product failed this schema, which is the whole
+// ephemeral lane.
 const CandidateDisposition = Schema.Literals([
   "run_now_existing_rental",
   "queue_existing_rental",
   "provision_fresh_rental",
+  "launch_ephemeral",
 ]);
 export const Booking = Schema.Struct({
   id: Schema.String,
@@ -251,6 +303,7 @@ export const BookingDecision = Schema.Struct({
   evaluated_at: Schema.String,
   model_version: Schema.String,
   policy: PlacementPolicy,
+  weights: ScoreWeights,
   collection_report: Schema.Struct({
     connections_queried: Schema.optionalKey(mutableArray(Schema.String)),
     connections_from_cache: Schema.optionalKey(mutableArray(Schema.String)),
@@ -266,12 +319,20 @@ export const BookingDecision = Schema.Struct({
       feasible: Schema.Boolean,
       rejections: Schema.optionalKey(mutableArray(Violation)),
       estimates: CandidateEstimateSet,
+      confidences: Schema.optionalKey(mutableArray(Confidence)),
       score_usd: Schema.optionalKey(Schema.Number),
     }),
   ),
   selected_offer_snapshot_id: Schema.optionalKey(Schema.String),
   booking: Schema.optionalKey(Booking),
   selection_reason_codes: mutableArray(Schema.String),
+  // The record this answer stands in for, and why. The panel that shows a Run's
+  // decisions reads both, and the live stream dropped them on decode, so a
+  // supersession only ever rendered for a console that had refetched the chain
+  // over REST: a page watching a Run be re-placed showed two answers with nothing
+  // saying that either replaced anything.
+  supersedes: Schema.optionalKey(Schema.String),
+  supersedes_reason: Schema.optionalKey(Schema.String),
 });
 
 export const CloudEvent = Schema.Struct({
@@ -307,6 +368,10 @@ export const BookingDecidedData = Schema.Struct({ decision: BookingDecision });
 export const BookingDispatchedData = Schema.Struct({ booking: Booking });
 export const LaunchIntentData = Schema.Struct({ disposition: Schema.String });
 export const ObservedRunData = Schema.Struct({ phase: Schema.String });
+export const ExecutionStartedData = Schema.Struct({
+  launch_key: Schema.String,
+  started_at: Schema.String,
+});
 export const OutcomeData = Schema.Struct({
   outcome: Schema.optionalKey(Schema.String),
 });

@@ -1,0 +1,54 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One interactive Run and the two machines from the-service-class-decides-what-wins, with a bound on what the Run may cost. The warm machine holds the whole image and is a second from ready at 4 USD an hour, and interactive work prices a second of waiting at twenty times the rent, so its class buys that machine every time: twenty minutes there is 1.33 USD against 0.67 on the cold one, and the cold one is five minutes of pulling away. The caller allowed one dollar. So the machine the class would have paid for is refused COST_LIMIT_EXCEEDED and the Run lands on the cheap slow one, which is the whole of what a maximum cost is for: a class states an exchange rate and can always be talked into a costlier machine, and this is the number that says how far. The corpus could state no such bound until now, so the refusal was enforced in production and reachable by nothing here, and everything this corpus could say about money was which machine won on price.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 4.0
+      },
+      {
+        "id": "rental-cold",
+        "rate_per_hour_usd": 2.0
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "service_class": "interactive",
+    "expected_runtime": "20m",
+    "max_runtime": "1h",
+    "max_cost_usd": 1.0
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-cold",
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_INTERACTIVE"],
+    "disposition": "release",
+    "candidates": {
+      "rental-warm": {
+        "feasible": false,
+        "rejected": [{"code": "COST_LIMIT_EXCEEDED", "path": "placement.max_expected_cost_usd"}],
+        "stages": {
+          "image_fetch": {"seconds": 0}
+        }
+      },
+      "rental-cold": {
+        "feasible": true,
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 285, "at_most": 292}}
+        }
+      }
+    }
+  }
+}

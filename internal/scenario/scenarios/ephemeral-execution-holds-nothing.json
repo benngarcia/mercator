@@ -29,7 +29,13 @@
         "provider": "simcloud",
         "lane": "ephemeral",
         "rate_per_hour_usd": 1.0,
-        "provisioning": {"expected": "1m", "p90": "2m"},
+        "provisioning": {
+          "expected": "1m",
+          "p90": "2m",
+          "acquisition": "6s",
+          "boot": "45s",
+          "agent_ready": "9s"
+        },
         "resources": {"memory": "16GB"}
       }
     ]
@@ -50,7 +56,9 @@
         "candidates": {
           "held-4090": {
             "feasible": true,
-            "pull_seconds": {"at_least": 200}
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 200}}
+            }
           },
           "oneshot-container": {
             "feasible": false
@@ -77,7 +85,9 @@
           "oneshot-container": {
             "feasible": true,
             "disposition": "launch_ephemeral",
-            "pull_seconds": {"at_least": 200}
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 200}}
+            }
           }
         }
       }
@@ -100,11 +110,15 @@
           "oneshot-container": {
             "feasible": true,
             "disposition": "launch_ephemeral",
-            "pull_seconds": {"at_least": 200}
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 200}}
+            }
           },
           "held-4090": {
             "feasible": true,
-            "pull_seconds": 0
+            "stages": {
+              "image_fetch": {"seconds": 0}
+            }
           }
         }
       }

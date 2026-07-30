@@ -55,17 +55,44 @@ try {
   await page.goto(`${baseURL}/canvas?workspace_id=ws_lab`, {
     waitUntil: "domcontentloaded",
   });
-  await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
-  await page.getByLabel("Workspace events live").waitFor();
+  // The first wait is the one that reports what the console did rather than what
+  // it failed to show. A canvas that throws while rendering, or whose event
+  // decoder refuses a payload, draws no heading at all, and a timeout naming the
+  // heading says only that the page is blank. Everything this page told us on the
+  // way is already collected, so it is attached here instead of being discovered
+  // by a person reading a trace.
+  try {
+    await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+    await page.getByLabel("Workspace events live").waitFor();
+  } catch (error) {
+    const reported = browserFailures.length
+      ? browserFailures.map((line) => `  - ${line}`).join("\n")
+      : "  - the page reported nothing: no console error, no uncaught exception, no failed request";
+    throw new Error(
+      `the console never drew the workspace canvas.\nWhat the page reported:\n${reported}\n\n${error.message}`,
+    );
+  }
   await assertCheckpoint("producer-placement-visible");
 
   await drive({ kind: "step" });
-  await drive({ kind: "advance", duration: "30m" });
-  await page
+  // When the consumer is placed is the world's answer too, for the same reason
+  // its closing is below. It waits for its producer to publish and then queues
+  // behind it on the one machine holding an input, so how long that takes is
+  // decided by the class of work the Blueprint says these Runs are and by what
+  // reading an Artifact costs. A single half-hour advance encoded one of those
+  // answers as a deadline and broke when the class weights started firing.
+  const decidedConsumer = page
     .locator("li")
     .filter({ hasText: "Booking decided" })
-    .filter({ hasText: "runs/run-consumer" })
-    .waitFor();
+    .filter({ hasText: "runs/run-consumer" });
+  for (
+    let advances = 0;
+    advances < 8 && (await decidedConsumer.count()) === 0;
+    advances += 1
+  ) {
+    await drive({ kind: "advance", duration: "30m" });
+  }
+  await decidedConsumer.waitFor();
   await assertCheckpoint("consumer-artifact-locality-visible");
 
   await restart();

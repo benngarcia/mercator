@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/node"
+	"github.com/benngarcia/mercator/internal/nodeagent"
 )
 
 func TestAnInvitedMachineEnrollsAndReceivesASession(t *testing.T) {
@@ -100,6 +102,43 @@ func TestRepeatingAnOperationIDDeliversNothingAndReportsDuplicate(t *testing.T) 
 	case command := <-session.Commands():
 		t.Fatalf("a repeated operation ID must deliver nothing, got %+v", command)
 	default:
+	}
+}
+
+// TestAContentRequestTheNodeRefusedReachesItAgain is the whole of what a refusal
+// means. The machine could not pull the image and said so, which left nothing on
+// its disk, so the control plane asking for that content again is a fresh command
+// rather than a redelivery. The identity is the machine and the content, so the
+// second ask carries the same one, and the record of the failure is what used to
+// answer it.
+func TestAContentRequestTheNodeRefusedReachesItAgain(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+	if _, err := registry.PrepareImage(context.Background(), prepareCommand(bootstrap, enrollment, "op-prepare-1")); err != nil {
+		t.Fatalf("first preparation: %v", err)
+	}
+	receiveCommand(t, session)
+	if err := registry.RecordResult(context.Background(), bootstrap.NodeID, enrollment.SessionToken, node.Result{
+		OperationID: "op-prepare-1",
+		Applied:     false,
+		Failure:     "pull failed: registry unreachable",
+	}); err != nil {
+		t.Fatalf("report the refusal: %v", err)
+	}
+
+	receipt, err := registry.PrepareImage(context.Background(), prepareCommand(bootstrap, enrollment, "op-prepare-1"))
+	if err != nil {
+		t.Fatalf("second preparation: %v", err)
+	}
+
+	if receipt.Duplicate {
+		t.Fatal("content the node refused must be askable again, not answered as a duplicate")
+	}
+	command := receiveCommand(t, session)
+	if command.OperationID != "op-prepare-1" || command.Kind != node.CommandPrepareImage {
+		t.Fatalf("delivered command = %+v, want the preparation asked for again", command)
 	}
 }
 
@@ -201,6 +240,70 @@ func TestAWorkloadTheNodeNeverMentionedIsAbsentRatherThanExited(t *testing.T) {
 	}
 	if observation.Phase.Exited() {
 		t.Fatal("an absent workload must never read as exited")
+	}
+}
+
+// TestAReportedWorkloadIsDatedByTheClockMercatorKeeps is the moment that makes a
+// node's report comparable with anything. Every moment in the report is the node's
+// own clock, and this machine's is an hour ahead: it says it looked at 13:00 and
+// that its container started at 12:59, which are consistent with each other and
+// with nothing the control plane knows. The registry stamps when it accepted the
+// report, so a rule downstream has one moment in Mercator's frame to measure the
+// node's claims against.
+//
+// The node's own stamp is replaced rather than kept where it is absent, because a
+// moment a machine can set is a moment a machine can set wrong.
+func TestAReportedWorkloadIsDatedByTheClockMercatorKeeps(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	ahead := clock.Now().Add(time.Hour)
+	startedAhead := ahead.Add(-time.Minute)
+
+	report(t, registry, bootstrap.NodeID, enrollment.SessionToken, node.Event{
+		ID:         "evt-running",
+		Kind:       node.EventWorkload,
+		ObservedAt: ahead,
+		Workload: &capability.WorkloadObservation{
+			RunID: "run-1", AttemptID: "attempt-1", Phase: capability.WorkloadPhaseRunning,
+			ObservedAt: ahead, StartedAt: &startedAhead, ReceivedAt: ahead,
+		},
+	})
+
+	observation, err := registry.ObserveWorkload(context.Background(), capability.WorkloadRef{
+		NodeRef: nodeRef(bootstrap), RunID: "run-1", AttemptID: "attempt-1",
+	})
+	if err != nil {
+		t.Fatalf("observe workload: %v", err)
+	}
+	if !observation.ReceivedAt.Equal(clock.Now()) {
+		t.Fatalf("the stored report says Mercator received it at %s, and Mercator's clock read %s",
+			observation.ReceivedAt.Format(time.RFC3339Nano), clock.Now().Format(time.RFC3339Nano))
+	}
+	if !observation.ObservedAt.Equal(ahead) {
+		t.Fatalf("the node said it looked at %s and the record kept %s",
+			ahead.Format(time.RFC3339Nano), observation.ObservedAt.Format(time.RFC3339Nano))
+	}
+}
+
+// TestAnAbsentWorkloadIsDatedByTheRegistryThatLooked keeps the one observation the
+// control plane makes for itself inside the same rule. Nothing was reported, so
+// both moments are Mercator's own: it looked now, and it learned now.
+func TestAnAbsentWorkloadIsDatedByTheRegistryThatLooked(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enroll(t, registry, bootstrap)
+
+	observation, err := registry.ObserveWorkload(context.Background(), capability.WorkloadRef{
+		NodeRef: nodeRef(bootstrap), RunID: "run-unknown", AttemptID: "attempt-1",
+	})
+	if err != nil {
+		t.Fatalf("observe workload: %v", err)
+	}
+
+	if !observation.ReceivedAt.Equal(clock.Now()) {
+		t.Fatalf("an absence Mercator observed itself is dated %s, and its clock read %s",
+			observation.ReceivedAt.Format(time.RFC3339Nano), clock.Now().Format(time.RFC3339Nano))
 	}
 }
 
@@ -413,6 +516,49 @@ func TestASessionCredentialFromASupersededEnrollmentIsRejected(t *testing.T) {
 	}
 }
 
+// TestADrainedRegistryOpensNoFurtherSession is the half of the drain that makes it
+// final. Ending the open sessions is what lets a shutdown finish; refusing the next
+// one is what stops it being undone while the shutdown waits.
+//
+// The window is the ordinary case rather than a race. http.Server closes its
+// listeners and keeps every already-open keep-alive connection usable, and an agent
+// posts its events and opens its session over one http.Transport, so a session
+// request landing on a connection the sweep did not close starts a fresh long-lived
+// read that Shutdown then waits out. That is the whole fifteen seconds the
+// production binary allows and then exit 1 on a deadline it could not have met, and
+// nothing in the tree asked for it: the flag and the refusal could both be deleted
+// with every package green.
+func TestADrainedRegistryOpensNoFurtherSession(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+
+	registry.Drain()
+
+	if _, err := registry.OpenSession(context.Background(), bootstrap.NodeID, enrollment.SessionToken); err == nil {
+		t.Fatal("a control plane that has drained opened a node another long-lived read")
+	}
+}
+
+// TestADrainEndsTheSessionANodeIsHoldingOpen is the other half, stated at the object
+// that owns the sessions. The daemon case holds the same fact through a real
+// shutdown; this one holds it here, so a registry that stopped ending them fails
+// without an HTTP server in the way.
+func TestADrainEndsTheSessionANodeIsHoldingOpen(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+
+	registry.Drain()
+
+	select {
+	case <-session.Done():
+	default:
+		t.Fatal("a drained control plane left a node holding its session open")
+	}
+}
+
 // Helpers below keep each case to arrange, act, assert.
 
 const (
@@ -495,6 +641,18 @@ func nodeRef(bootstrap capability.NodeBootstrap) capability.NodeRef {
 	}
 }
 
+func prepareCommand(bootstrap capability.NodeBootstrap, enrollment capability.Enrollment, operationID string) capability.PrepareImageCommand {
+	command := capability.PrepareImageCommand{
+		ManifestDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Reference:      "trainer@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Unpack:         true,
+	}
+	command.NodeRef = nodeRef(bootstrap)
+	command.OperationID = operationID
+	command.FencingToken = enrollment.FencingToken
+	return command
+}
+
 func launchCommand(bootstrap capability.NodeBootstrap, enrollment capability.Enrollment, operationID string) capability.LaunchWorkloadCommand {
 	command := capability.LaunchWorkloadCommand{
 		RunID:          "run-1",
@@ -570,5 +728,62 @@ func TestANodeDeclaresOnlyWhatItsRuntimePerforms(t *testing.T) {
 	}
 	if support.GarbageCollection {
 		t.Error("the node declares garbage_collection, and nothing on the machine reclaims a byte")
+	}
+}
+
+// TestAPathANodeMeasuredReachesTheOfferItPrices is the last step of the only
+// measurement of a link anything in this tree makes. An enrolled node times its
+// own Artifact reads and reports what it found; unless the offer carries it,
+// Placement still prices every read in the fleet at Mercator's fleet-wide guess,
+// and the measurement is a number in a heartbeat that changes nothing.
+//
+// The rate the offer answers with is what decides a placement, so this asserts
+// the answer rather than the field: DownloadRate is the one rule both the
+// prediction and a Run's hard floor read, and a fact that reached the offer and
+// not that answer would be published and still unread.
+func TestAPathANodeMeasuredReachesTheOfferItPrices(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+
+	report(t, registry, bootstrap.NodeID, enrollment.SessionToken, node.Event{
+		ID:         "evt-heartbeat-measured-path",
+		Kind:       node.EventHeartbeat,
+		ObservedAt: clock.Now(),
+		Facts: &capability.NodeFacts{
+			ObservedAt: clock.Now(),
+			Host: capability.HostFacts{
+				OS:               "linux",
+				ContainerRuntime: "docker",
+				Network: []domain.NetworkFact{{
+					Scope:       domain.NetworkScopeObjectStore,
+					Statistic:   "p10",
+					ValueMbps:   1750,
+					Source:      nodeagent.ArtifactCopySource,
+					SampleCount: 3,
+					ObservedAt:  clock.Now(),
+					ValidUntil:  clock.Now().Add(time.Hour),
+					Confidence:  0.9,
+				}},
+			},
+		},
+	})
+
+	offers, err := registry.Offers(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("list node offers: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("offers = %d, want the one enrolled node", len(offers))
+	}
+	rate := offers[0].DownloadRate(domain.NetworkScopeObjectStore, offers[0].ObservedAt)
+	if rate.Mbps != 1750 || rate.Measurement != nodeagent.ArtifactCopySource {
+		t.Fatalf("the offer prices an Artifact read at %+v, and this node measured 1750 Mbps itself", rate)
+	}
+	// The registry path this node never crossed. A node that measured one link is
+	// not a node that measured them all, and the answer for the other is the
+	// standing assumption saying so.
+	if registryRate := offers[0].DownloadRate(domain.NetworkScopeRegistry, offers[0].ObservedAt); registryRate.Assumption != domain.AssumptionRegistryRate {
+		t.Fatalf("the offer prices an image pull at %+v, and nothing has measured this node's link to a registry", registryRate)
 	}
 }

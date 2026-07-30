@@ -16,11 +16,6 @@ import (
 // (provider failure, or a fail-closed partial aggregation).
 var ErrOfferQuery = errors.New("orchestrator: offer query failed")
 
-// ErrNoFeasibleOffers marks a complete placement evaluation that could not
-// select an Offer. Replacement placement treats this as retry exhaustion once
-// at least one stale Offer has already completed an attempt.
-var ErrNoFeasibleOffers = errors.New("orchestrator: no feasible offers")
-
 // PreviewPlacement evaluates placement for a workload without recording a run.
 // It uses the same offer query and scheduler path as live placement (decide).
 func (o *Orchestrator) PreviewPlacement(ctx context.Context, workspaceID, runID string, workload domain.WorkloadRevision) (domain.BookingDecision, error) {
@@ -36,8 +31,18 @@ func (o *Orchestrator) PreviewPlacement(ctx context.Context, workspaceID, runID 
 	if violations := domain.ValidateWorkloadRevision(workload); len(violations) > 0 {
 		return domain.BookingDecision{}, &ValidationError{Violations: violations}
 	}
-	decision, _, _, err := o.evaluatePlacement(ctx, runID, workload, nil)
+	decision, _, _, err := o.evaluatePlacement(ctx, runID, workload, placementRequest{})
 	return decision, err
+}
+
+// placementRequest is what one evaluation knows about the Run's own history:
+// which offers an earlier attempt already proved unusable, and which decision
+// this evaluation is standing in for. A preview knows neither, because it is
+// about a workload rather than about a Run that has been answered before.
+type placementRequest struct {
+	excludedOfferSnapshotIDs []string
+	supersedes               string
+	supersedesReason         string
 }
 
 // manifestBudget is how long Placement waits for a registry. Resolution is an
@@ -77,8 +82,8 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Violations[0].Code, e.Violations[0].Message)
 }
 
-func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string, attemptNumber int, excludedOfferSnapshotIDs []string) (domain.BookingDecision, attemptData, domain.OfferSnapshot, domain.RentalSchedule, error) {
-	decision, offers, schedules, err := o.evaluatePlacement(ctx, runID, requested.Workload, excludedOfferSnapshotIDs)
+func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string, attemptNumber int, request placementRequest) (domain.BookingDecision, attemptData, domain.OfferSnapshot, domain.RentalSchedule, error) {
+	decision, offers, schedules, err := o.evaluatePlacement(ctx, runID, requested.Workload, request)
 	if err != nil {
 		return domain.BookingDecision{}, attemptData{}, domain.OfferSnapshot{}, domain.RentalSchedule{}, err
 	}
@@ -98,30 +103,42 @@ func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested
 
 // evaluatePlacement is the shared placement path for preview and live decide:
 // fail-closed offer list, then scheduler.Evaluate.
-func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, workload domain.WorkloadRevision, excludedOfferSnapshotIDs []string) (domain.BookingDecision, []domain.OfferSnapshot, map[string]domain.RentalSchedule, error) {
+func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, workload domain.WorkloadRevision, request placementRequest) (domain.BookingDecision, []domain.OfferSnapshot, map[string]domain.RentalSchedule, error) {
 	schedules, err := o.schedules.List(ctx, workload.WorkspaceID)
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
 	}
-	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{
+	collected, err := o.adapter.CollectOffers(ctx, adapter.OfferRequest{
 		WorkspaceID: workload.WorkspaceID,
 		Resources:   workload.Spec.Resources,
 	})
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, fmt.Errorf("%w: %v", ErrOfferQuery, err)
 	}
+	offers := collected.Offers
 	artifacts, err := o.consumedArtifacts(ctx, workload.WorkspaceID, workload)
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, err
 	}
+	history, err := o.launchHistory(ctx, workload.WorkspaceID)
+	if err != nil {
+		return domain.BookingDecision{}, nil, nil, fmt.Errorf("orchestrator: read the launch history: %w", err)
+	}
 	decision, err := o.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
-		RunID:                    runID,
-		Workload:                 workload,
-		Image:                    o.imageManifest(ctx, workload),
-		Artifacts:                artifacts,
-		Offers:                   offers,
+		RunID:     runID,
+		Workload:  workload,
+		Image:     o.imageManifest(ctx, workload),
+		Artifacts: artifacts,
+		Offers:    offers,
+		Collection: domain.CollectionReport{
+			ConnectionsQueried:  collected.Queried,
+			ExcludedConnections: collected.Excluded,
+		},
 		Schedules:                schedules,
-		ExcludedOfferSnapshotIDs: excludedOfferSnapshotIDs,
+		ExcludedOfferSnapshotIDs: request.excludedOfferSnapshotIDs,
+		Supersedes:               request.supersedes,
+		SupersedesReason:         request.supersedesReason,
+		History:                  history,
 		ModelVersion:             "latency-v1",
 		EvaluatedAt:              o.now().UTC(),
 	})

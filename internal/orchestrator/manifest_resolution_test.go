@@ -88,7 +88,7 @@ func TestPlacementRecordsWhyAManifestCouldNotBeRead(t *testing.T) {
 			if len(decision.Candidates) == 0 {
 				t.Fatal("placement evaluated no candidates")
 			}
-			pull := decision.Candidates[0].Estimates.PullSeconds
+			pull := decision.Candidates[0].Estimates.Stages.ImageFetch
 			if pull.Source != testCase.want || pull.Confidence != 0 {
 				t.Fatalf("pull estimate = %+v, want source %q carrying no confidence", pull, testCase.want)
 			}

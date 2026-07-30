@@ -280,7 +280,7 @@ func rentalOffer(id string) domain.OfferSnapshot {
 		ID:        id,
 		Kind:      domain.OfferKindStanding,
 		Lane:      domain.LaneReusable,
-		Resources: domain.ResourceInventory{EphemeralDiskBytes: 200 << 30},
+		Resources: domain.ResourceInventory{EphemeralDiskBytes: 200 << 30, EphemeralDiskKnown: true},
 	}
 }
 

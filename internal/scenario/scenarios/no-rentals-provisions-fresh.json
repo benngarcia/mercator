@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "No rentals exist. The broker collects marketplace offers, weighs boot time and pull cost against price, provisions the best one, and records the terminate disposition: today's full decide-and-provision path.",
+  "summary": "No rentals exist. The broker collects marketplace offers, weighs boot time and pull cost against price, provisions the best one, and records the terminate disposition: today's full decide-and-provision path. Neither candidate is a machine that exists, so neither records a Rental Schedule: evidence for capacity with no Rental behind it would publish a queue read off a schedule that does not exist.",
   "classification": "green",
   "world": {
     "images": {
@@ -16,13 +16,25 @@
         "id": "fresh-quick",
         "provider": "simcloud",
         "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "4m", "p90": "8m"}
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m",
+          "agent_ready": "36s"
+        }
       },
       {
         "id": "fresh-cheap",
         "provider": "simcloud",
         "rate_per_hour_usd": 1.8,
-        "provisioning": {"expected": "10m", "p90": "18m"}
+        "provisioning": {
+          "expected": "10m",
+          "p90": "18m",
+          "acquisition": "1m",
+          "boot": "7m30s",
+          "agent_ready": "1m30s"
+        }
       }
     ]
   },
@@ -34,15 +46,18 @@
   "expect": {
     "outcome": "place",
     "offer": "fresh-quick",
-    "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
     "disposition": "terminate",
     "candidates": {
       "fresh-quick": {
         "feasible": true,
-        "provision_seconds": 240,
-        "pull_seconds": {"at_least": 200}
+        "no_rental_schedule": true,
+        "stages": {
+          "boot": {"seconds": 240},
+          "image_fetch": {"seconds": {"at_least": 200}}
+        }
       },
-      "fresh-cheap": {"feasible": true, "provision_seconds": 600}
+      "fresh-cheap": {"feasible": true, "stages": {"boot": {"seconds": 600}}, "no_rental_schedule": true}
     }
   }
 }

@@ -201,9 +201,12 @@ func TestWhatANodeHoldsDecidesWhatItStillHasToDo(t *testing.T) {
 			inventory:    domain.ImageInventory{Known: true, ImageDigests: []string{trainerV2}},
 			wantLocality: domain.LocalityHot,
 		},
-		"a host holding the shared base fetches only the top layer": {
+		// The top layer has to arrive and then be applied, so a partial host owes
+		// both over the same bytes. Charging the transfer alone said a machine about
+		// to fetch a layer owed no assembly of it.
+		"a host holding the shared base fetches the top layer and applies it": {
 			inventory:    domain.ImageInventory{Known: true, LayerDigests: []string{baseLayer}},
-			wantWork:     domain.ImageWork{TransferBytes: 80_000_000},
+			wantWork:     domain.ImageWork{TransferBytes: 80_000_000, UnpackBytes: 80_000_000},
 			wantLocality: domain.LocalityPartial,
 		},
 		"a host that fetched the image and never assembled it unpacks and fetches nothing": {
@@ -220,9 +223,9 @@ func TestWhatANodeHoldsDecidesWhatItStillHasToDo(t *testing.T) {
 			wantWork:     domain.ImageWork{UnpackBytes: 80_000_000},
 			wantLocality: domain.LocalityPartial,
 		},
-		"a host holding nothing fetches all of it": {
+		"a host holding nothing fetches all of it and applies all of it": {
 			inventory:    domain.ImageInventory{Known: true},
-			wantWork:     domain.ImageWork{TransferBytes: 18_080_000_000},
+			wantWork:     domain.ImageWork{TransferBytes: 18_080_000_000, UnpackBytes: 18_080_000_000},
 			wantLocality: domain.LocalityCold,
 		},
 		// Silence is not warmth. The image has to arrive from somewhere and
@@ -230,7 +233,7 @@ func TestWhatANodeHoldsDecidesWhatItStillHasToDo(t *testing.T) {
 		// nobody can describe owes what a host holding nothing owes.
 		"a host that cannot say owes the whole image rather than nothing": {
 			inventory:    domain.ImageInventory{Known: false},
-			wantWork:     domain.ImageWork{TransferBytes: 18_080_000_000},
+			wantWork:     domain.ImageWork{TransferBytes: 18_080_000_000, UnpackBytes: 18_080_000_000},
 			wantLocality: domain.LocalityUnknown,
 		},
 	}
@@ -282,6 +285,181 @@ func TestAnUnresolvedManifestLeavesEveryCandidateIndistinguishable(t *testing.T)
 }
 
 const nodeWorkspace = "ws_offers"
+
+// TestANodeOffersTheRoomItActuallyHas is the capacity half of the same defect.
+// A node offer asserted that capacity was available, at full confidence, for
+// every machine inside its lease, including one the machine itself said was mid
+// workload. The reusable lane is the only source of standing offers in
+// production and every rule Placement has about waiting is written against an
+// offer that says it is occupied, so none of them were reachable: a node was
+// read as idle this instant, its queue priced at no waiting at all, and a
+// Booking behind it promised a start the machine had already missed.
+//
+// This runtime runs one workload at a time, so one container is the whole
+// machine.
+func TestTwoMachinesOnOneLeaseOfferTwoMachines(t *testing.T) {
+	registry, clock := newRegistry(t)
+	enrollOn(t, registry, clock, "nod_first", "rnt_shared")
+	enrollOn(t, registry, clock, "nod_second", "rnt_shared")
+
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("offers: %v", err)
+	}
+
+	if len(offers) != 2 {
+		t.Fatalf("the workspace offered %d machines, want the two enrolled nodes", len(offers))
+	}
+	first := domain.CandidateIdentityOf(offers[0], "sha256:image")
+	second := domain.CandidateIdentityOf(offers[1], "sha256:image")
+	if first.Machine != offers[0].ID || second.Machine != offers[1].ID {
+		t.Fatalf("a node offer named a machine that is not the node: %q and %q", first.Machine, second.Machine)
+	}
+	if first.Candidate(true) == second.Candidate(true) {
+		t.Fatalf("two machines sharing a lease share the key %q", first.Candidate(true))
+	}
+}
+
+// TestAnEnrolledMachineStatesNoPlaceAndSaysSo is the ladder an enrolled machine
+// really has, stated where the offer is built rather than assumed from a fixture.
+//
+// The region a machine sits in is its operator's to state and nothing enrols one,
+// so this projection publishes none. A launch history of a node therefore has two
+// rungs and not three: this machine, and then every machine this control plane has
+// enrolled. The middle rung is a target the Lab's worlds can already describe and
+// production cannot reach, and the test that says so is here so a reader of those
+// worlds is not left thinking a backend states a place today.
+//
+// What may not happen instead is a region guessed from the endpoint Mercator
+// reaches the machine through. A blank region is a rung skipped, which the estimator
+// already handles; a guessed one is two machines filed as neighbours because of how
+// an operator's network is addressed.
+func TestAnEnrolledMachineStatesNoPlaceAndSaysSo(t *testing.T) {
+	registry, clock := newRegistry(t)
+	enrollOn(t, registry, clock, "nod_first", "rnt_first")
+
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("offers: %v", err)
+	}
+
+	if len(offers) != 1 {
+		t.Fatalf("the workspace offered %d machines, want the one enrolled node", len(offers))
+	}
+	if offers[0].Region != "" {
+		t.Fatalf("an enrolled machine published the region %q, and nothing enrols one", offers[0].Region)
+	}
+	identity := domain.CandidateIdentityOf(offers[0], "sha256:image")
+	if identity.ProviderAndRegion(true) != "" {
+		t.Fatalf("a machine in no stated place has the region key %q", identity.ProviderAndRegion(true))
+	}
+	if identity.Candidate(true) == "" || identity.ProviderKey(true) == "" {
+		t.Fatalf("the two rungs this machine does have are %q and %q",
+			identity.Candidate(true), identity.ProviderKey(true))
+	}
+}
+
+// enrollOn brings one named machine up on a stated lease, which is what makes two
+// machines on one lease a world a test can build.
+func enrollOn(t *testing.T, registry *node.Registry, clock *testClock, nodeID, rentalID string) {
+	t.Helper()
+	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
+		WorkspaceID: nodeWorkspace, NodeID: nodeID, RentalID: rentalID, Generation: 1,
+		ShadowPriceUSDPerHour: 2,
+	})
+	if err != nil {
+		t.Fatalf("invite %s: %v", nodeID, err)
+	}
+	if _, err := registry.Enroll(context.Background(), capability.EnrollmentRequest{
+		NodeID:          bootstrap.NodeID,
+		RentalID:        bootstrap.RentalID,
+		Generation:      bootstrap.Generation,
+		EnrollmentToken: bootstrap.EnrollmentToken,
+		AgentVersion:    "test",
+		Facts: capability.NodeFacts{
+			ObservedAt: clock.Now(),
+			Host:       capability.HostFacts{OS: "linux", Architecture: "amd64", ContainerRuntime: "docker"},
+		},
+	}); err != nil {
+		t.Fatalf("enroll %s: %v", nodeID, err)
+	}
+}
+
+func TestANodeOffersTheRoomItActuallyHas(t *testing.T) {
+	registry, session := readyNodeReporting(t, nil, domain.ArtifactInventory{}, domain.CacheInventory{})
+	if !capacityOf(t, registry).Available {
+		t.Fatal("a node running nothing offered no capacity")
+	}
+
+	reportWorkload(t, registry, session, "evt-running", capability.WorkloadPhaseRunning, nil)
+
+	capacity := capacityOf(t, registry)
+	if capacity.Available {
+		t.Fatal("a node executing a workload offered capacity for another")
+	}
+	if capacity.Confidence != 1 {
+		t.Fatalf("the offer states %v confidence in a machine Mercator can see, want the full point it owns",
+			capacity.Confidence)
+	}
+}
+
+// TestANodeWhoseWorkloadExitedOffersItsCapacityBack is the other direction, and
+// the reason the claim is read off the node's own report rather than off anything
+// Mercator intended: the slot is free when the container is gone, which the
+// machine says before the control plane has finished the Booking that put it
+// there.
+func TestANodeWhoseWorkloadExitedOffersItsCapacityBack(t *testing.T) {
+	registry, session := readyNodeReporting(t, nil, domain.ArtifactInventory{}, domain.CacheInventory{})
+	reportWorkload(t, registry, session, "evt-running", capability.WorkloadPhaseRunning, nil)
+
+	exited := 0
+	reportWorkload(t, registry, session, "evt-exited", capability.WorkloadPhaseExited, &exited)
+
+	if !capacityOf(t, registry).Available {
+		t.Fatal("a node whose container exited still offered no capacity")
+	}
+}
+
+func capacityOf(t *testing.T, registry *node.Registry) domain.CapacityEvidence {
+	t.Helper()
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("list node offers: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("the workspace offered %d machines, want the one enrolled node", len(offers))
+	}
+	return offers[0].Capacity
+}
+
+// reportWorkload is the node saying what its container is doing, over the same
+// authenticated path its agent reports through.
+func reportWorkload(
+	t *testing.T,
+	registry *node.Registry,
+	session capability.Enrollment,
+	eventID string,
+	phase capability.WorkloadPhase,
+	exitCode *int,
+) {
+	t.Helper()
+	observed := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	err := registry.RecordEvents(context.Background(), session.NodeID, session.SessionToken, []node.Event{{
+		ID:         eventID,
+		Kind:       node.EventWorkload,
+		ObservedAt: observed,
+		Workload: &capability.WorkloadObservation{
+			RunID:      "run-holding-the-machine",
+			AttemptID:  "attempt-1",
+			Phase:      phase,
+			ObservedAt: observed,
+			ExitCode:   exitCode,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("record %s: %v", phase, err)
+	}
+}
 
 // TestANodeOffersTheCopiesItHolds is the Artifact half of the same contract, and
 // the same defect one layer along: the node reported its copies and the offer
@@ -452,20 +630,25 @@ func readyNode(t *testing.T, held []capability.ImageLocality) *node.Registry {
 
 func readyNodeHoldingCaches(t *testing.T, caches domain.CacheInventory) *node.Registry {
 	t.Helper()
-	return readyNodeReporting(t, nil, domain.ArtifactInventory{}, caches)
+	registry, _ := readyNodeReporting(t, nil, domain.ArtifactInventory{}, caches)
+	return registry
 }
 
 func readyNodeHolding(t *testing.T, images []capability.ImageLocality, copies domain.ArtifactInventory) *node.Registry {
 	t.Helper()
-	return readyNodeReporting(t, images, copies, domain.CacheInventory{})
+	registry, _ := readyNodeReporting(t, images, copies, domain.CacheInventory{})
+	return registry
 }
 
+// readyNodeReporting is one enrolled machine and the session it reports through,
+// because what a node is running is a fact it states rather than one anybody can
+// state for it.
 func readyNodeReporting(
 	t *testing.T,
 	images []capability.ImageLocality,
 	copies domain.ArtifactInventory,
 	caches domain.CacheInventory,
-) *node.Registry {
+) (*node.Registry, capability.Enrollment) {
 	t.Helper()
 	registry, clock := newRegistry(t)
 	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
@@ -489,8 +672,122 @@ func readyNodeReporting(
 			Caches:     caches,
 		},
 	}
-	if _, err := registry.Enroll(context.Background(), request); err != nil {
+	enrollment, err := registry.Enroll(context.Background(), request)
+	if err != nil {
 		t.Fatalf("enroll node: %v", err)
 	}
-	return registry
+	return registry, enrollment
+}
+
+// TestANodeOffersTheTermsItWasBoughtOn is the economics half of a node offer. A
+// machine an operator holds is not one number: it is bought in blocks of time, it
+// may be held for particular work, and it may go back to its owner at a stated
+// moment. All three reach Placement through the offer, and none of them could be
+// stated before.
+//
+// The committed interval is the part that has to be derived rather than repeated.
+// An operator states how long a block is; where the current block ends is a
+// question about the clock, counted from the moment Mercator started paying for
+// this machine.
+func TestANodeOffersTheTermsItWasBoughtOn(t *testing.T) {
+	registry, clock := newRegistry(t)
+	enrolledAt := clock.Now()
+	inviteWithTerms(t, registry, node.Invitation{
+		WorkspaceID:           nodeWorkspace,
+		NodeID:                "nod_terms",
+		RentalID:              "rnt_terms",
+		Generation:            1,
+		ShadowPriceUSDPerHour: 1.5,
+		Purchase: node.Purchase{
+			BillingIntervalSeconds: 3600,
+			EligibleClasses:        []domain.ServiceClass{domain.ClassInteractive, domain.ClassStandard},
+			AvailableUntil:         enrolledAt.Add(6 * time.Hour),
+		},
+	}, clock)
+
+	// A minute in, which is as far as a node can be carried without another
+	// heartbeat: the machine has to still be inside its lease to be offered at all.
+	clock.Advance(time.Minute)
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("read offers: %v", err)
+	}
+
+	if len(offers) != 1 {
+		t.Fatalf("one enrolled machine published %d offers", len(offers))
+	}
+	terms := offers[0].Terms
+	if want := enrolledAt.Add(time.Hour); !terms.CommittedUntil.Equal(want) {
+		t.Fatalf("a minute into an hourly machine's first hour, the offer says Mercator owes rent until %s, and the hour ends at %s",
+			terms.CommittedUntil, want)
+	}
+	if terms.Admits(domain.ClassBatch) || !terms.Admits(domain.ClassStandard) {
+		t.Fatalf("a machine held for %v admits batch work: %v", terms.EligibleClasses, terms.Admits(domain.ClassBatch))
+	}
+	if !terms.AvailableUntil.Equal(enrolledAt.Add(6 * time.Hour)) {
+		t.Fatalf("the window this machine is Mercator's for closes at %s", terms.AvailableUntil)
+	}
+	// The increment reaches the price model too, because that is what a placement's
+	// dollars are rounded up to. An operator who says the machine is bought by the
+	// hour has said that twenty minutes of it costs an hour.
+	if offers[0].Pricing.GranularitySeconds != 3600 {
+		t.Fatalf("the price of an hourly machine is billed in blocks of %ds", offers[0].Pricing.GranularitySeconds)
+	}
+	if offers[0].Pricing.BilledSeconds(1200) != 3600 {
+		t.Fatalf("twenty minutes on an hourly machine is billed as %.0fs", offers[0].Pricing.BilledSeconds(1200))
+	}
+}
+
+// TestAMachineBoughtInNoIncrementsOwesNoInterval is the other answer, and it is an
+// answer rather than a default. An operator's own hardware is not bought in blocks:
+// Mercator holds it continuously, so no second of it is a fresh commitment, there
+// is no tail of an increment to charge, and the offer says so by stating no
+// interval at all.
+func TestAMachineBoughtInNoIncrementsOwesNoInterval(t *testing.T) {
+	registry, clock := newRegistry(t)
+	inviteWithTerms(t, registry, node.Invitation{
+		WorkspaceID:           nodeWorkspace,
+		NodeID:                "nod_owned",
+		RentalID:              "rnt_owned",
+		Generation:            1,
+		ShadowPriceUSDPerHour: 1.5,
+	}, clock)
+
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("read offers: %v", err)
+	}
+
+	if !offers[0].Terms.CommittedUntil.IsZero() {
+		t.Fatalf("a machine bought in no increments owes rent until %s", offers[0].Terms.CommittedUntil)
+	}
+	if offers[0].Pricing.GranularitySeconds != 0 {
+		t.Fatalf("a machine bought in no increments is billed in blocks of %ds", offers[0].Pricing.GranularitySeconds)
+	}
+	if offers[0].Pricing.BilledSeconds(1200) != 1200 {
+		t.Fatalf("twenty minutes on a continuously held machine is billed as %.0fs", offers[0].Pricing.BilledSeconds(1200))
+	}
+}
+
+// inviteWithTerms enrolls one machine on the terms an operator stated for it, so a
+// case about economics states the sale rather than only the price.
+func inviteWithTerms(t *testing.T, registry *node.Registry, invitation node.Invitation, clock *testClock) {
+	t.Helper()
+	bootstrap, err := registry.Invite(context.Background(), invitation)
+	if err != nil {
+		t.Fatalf("invite node: %v", err)
+	}
+	if _, err := registry.Enroll(context.Background(), capability.EnrollmentRequest{
+		NodeID:          bootstrap.NodeID,
+		RentalID:        bootstrap.RentalID,
+		Generation:      bootstrap.Generation,
+		EnrollmentToken: bootstrap.EnrollmentToken,
+		AgentVersion:    "test",
+		Facts: capability.NodeFacts{
+			ObservedAt: clock.Now(),
+			Host:       capability.HostFacts{OS: "linux", Architecture: "amd64", ContainerRuntime: "docker"},
+		},
+	}); err != nil {
+		t.Fatalf("enroll node: %v", err)
+	}
 }

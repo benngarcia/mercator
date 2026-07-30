@@ -53,6 +53,7 @@
       "submit": "reads-the-dataset",
       "request": {
         "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
         "expected_runtime": "20m",
         "max_runtime": "1h",
         "consumes_artifacts": ["artifact:imagenet:v2.41"]
@@ -60,7 +61,7 @@
       "expect": {
         "outcome": "place",
         "offer": "rental-roomy",
-        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
         "disposition": "release",
         "candidates": {
           "rental-unmeasured": {
@@ -76,9 +77,10 @@
           "rental-roomy": {
             "feasible": true,
             "image_locality": "partial",
-            "pull_seconds": {"at_least": 1, "at_most": 2},
-            "pull_source": "image_inventory",
-            "artifact_seconds": {"at_least": 639, "at_most": 641},
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 1, "at_most": 2}, "source": "image_inventory"},
+              "artifact_fetch": {"seconds": {"at_least": 639, "at_most": 641}}
+            },
             "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
           }
         }
@@ -91,6 +93,7 @@
       "submit": "needs-the-room",
       "request": {
         "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
         "resources": {"disk": "100GB"},
         "expected_runtime": "20m",
         "max_runtime": "1h"
@@ -98,7 +101,7 @@
       "expect": {
         "outcome": "place",
         "offer": "rental-roomy",
-        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
         "candidates": {
           "rental-unmeasured": {
             "feasible": false,
@@ -111,7 +114,9 @@
           "rental-roomy": {
             "feasible": true,
             "image_locality": "hot",
-            "pull_seconds": 0
+            "stages": {
+              "image_fetch": {"seconds": 0}
+            }
           }
         }
       }
@@ -123,6 +128,7 @@
       "submit": "reserves-room-and-reads",
       "request": {
         "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
         "resources": {"disk": "150GB"},
         "expected_runtime": "20m",
         "max_runtime": "1h",
@@ -131,7 +137,7 @@
       "expect": {
         "outcome": "place",
         "offer": "rental-vast",
-        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
         "candidates": {
           "rental-unmeasured": {
             "feasible": false,

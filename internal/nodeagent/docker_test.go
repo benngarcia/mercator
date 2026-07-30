@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -675,7 +676,14 @@ esac
 	if facts.Host.Disk.TotalBytes != total {
 		t.Errorf("disk total = %d, and the filesystem holding %s has %d", facts.Host.Disk.TotalBytes, root, total)
 	}
-	if facts.Host.Disk.FreeBytes != free {
+	// Free space moves. Anything else on this machine writing to the same
+	// filesystem changes it between the node's read and this one, and on a busy
+	// host that happens within the same millisecond: this case failed on a
+	// twenty-four core Linux box running the rest of the suite beside it, twelve
+	// kilobytes apart. What the case is about is which filesystem was measured,
+	// and the total above establishes that exactly, so the free bytes are held to
+	// the same filesystem's answer rather than to the same instant of it.
+	if drift := facts.Host.Disk.FreeBytes - free; drift < -total/100 || drift > total/100 {
 		t.Errorf("disk free = %d, and the filesystem holding %s has %d available", facts.Host.Disk.FreeBytes, root, free)
 	}
 }
@@ -752,6 +760,13 @@ func TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet(t *testing.T) {
 func TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt(t *testing.T) {
 	requireDocker(t)
 	pull(t, "busybox:1.37")
+	// A run this case was interrupted through, by a signal or a timeout or a reboot,
+	// leaves its probe container behind holding the half gigabyte it wrote. Taking
+	// that away is a release of exactly the space this case is about, so it happens
+	// before anything is measured: done inside the window it counted the leftover as
+	// used, freed it, and then reported that a 512MiB write moved the number by
+	// nothing while the node's measurement was correct both times.
+	removeTheProbeContainer(t)
 	runtime := NewDockerRuntime("")
 	before, err := runtime.Facts(context.Background())
 	if err != nil {
@@ -767,31 +782,52 @@ func TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt(t *testing.T) {
 	if after.Host.Disk.TotalBytes != before.Host.Disk.TotalBytes {
 		t.Fatalf("the filesystem changed size under the case: %d then %d", before.Host.Disk.TotalBytes, after.Host.Disk.TotalBytes)
 	}
-	// Other things write to a working machine while a case runs, so this asserts
-	// that the room fell by roughly what the workload wrote rather than by
-	// exactly it.
+	// The claim is that this node's own number answers to this node's own workload,
+	// so the bound is stated in one direction only. An upper bound on how far the
+	// room fell is an assertion that nothing else on the machine wrote during the
+	// window: a neighbouring container retaining 300MiB chunks fails 700MiB reliably,
+	// and the suite runs one package pulling images beside this one, so the whole of
+	// `go test ./...` turned on what the rest of the host was doing. What it would
+	// have caught beyond the two checks above is nothing, because the filesystem this
+	// reports is pinned by its total size here and against a container's own root in
+	// the case before it.
+	//
+	// The bound that remains is an assertion in the other direction, that nothing
+	// released more than 112MiB in the same fraction of a second, and that is stated
+	// rather than pretended away: it is the claim itself, and a case with no bound
+	// asserts nothing. The one release this case used to cause is now outside the
+	// window, and anything else freeing half a gigabyte of the docker root in 0.7
+	// seconds is a neighbour tearing down its own world.
 	taken := before.Host.Disk.FreeBytes - after.Host.Disk.FreeBytes
-	if taken < 400<<20 || taken > 700<<20 {
+	if taken < 400<<20 {
 		t.Fatalf("a workload wrote 512MiB and the room this node reports fell by %d bytes", taken)
 	}
 }
+
+// probeContainer is the one container these disk cases create, named so a run that
+// died before its cleanup leaves something a later run can find and take away.
+const probeContainer = "mercator-disk-conformance"
 
 // writeHalfAGigabyte is one container of this daemon's filling its own writable
 // layer, left behind until the case ends so the bytes are still there to be
 // measured.
 func writeHalfAGigabyte(t *testing.T) {
 	t.Helper()
-	name := "mercator-disk-conformance"
-	_ = exec.Command("docker", "rm", "--force", name).Run()
-	t.Cleanup(func() {
-		if output, err := exec.Command("docker", "rm", "--force", name).CombinedOutput(); err != nil {
-			t.Errorf("remove the probe container: %v\n%s", err, output)
-		}
-	})
-	output, err := exec.Command("docker", "run", "--name", name, "--network=none", "busybox:1.37",
+	t.Cleanup(func() { removeTheProbeContainer(t) })
+	output, err := exec.Command("docker", "run", "--name", probeContainer, "--network=none", "busybox:1.37",
 		"dd", "if=/dev/zero", "of=/half-a-gigabyte", "bs=1M", "count=512").CombinedOutput()
 	if err != nil {
 		t.Fatalf("fill a container's writable layer: %v\n%s", err, output)
+	}
+}
+
+// removeTheProbeContainer takes the probe container away, whether this run created
+// it or an interrupted earlier one did. A container that was never there is removed
+// successfully, so a failure here is a daemon that could not do it.
+func removeTheProbeContainer(t *testing.T) {
+	t.Helper()
+	if output, err := exec.Command("docker", "rm", "--force", probeContainer).CombinedOutput(); err != nil {
+		t.Fatalf("remove the probe container: %v\n%s", err, output)
 	}
 }
 
@@ -848,4 +884,176 @@ func writeScript(t *testing.T, path, script string) {
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write the stand-in daemon: %v", err)
 	}
+}
+
+// TestTheNodeReportsWhenTheContainerStarted is the live half of the observed-start
+// claim: the moment this node reports has to be the daemon's own, read back off a
+// container on this machine's Docker daemon rather than stamped by the agent when
+// it looked.
+//
+// The node owns container lifecycle, so its runtime is the authority on when a
+// workload's process began, and until this seam existed the control plane had no
+// start moment at all on the only reusable lane there is. Two things are held.
+// The moment matches State.StartedAt exactly, which is the only place the daemon
+// says it and is a field `docker ps` carries in no format. And it is strictly
+// earlier than the moment the node observed, which is what makes it a measurement
+// of the container rather than of the poll.
+func TestTheNodeReportsWhenTheContainerStarted(t *testing.T) {
+	requireDocker(t)
+	pull(t, "busybox:latest")
+	runtime := NewDockerRuntime("")
+	container := "mercator-run-observed-start-1"
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "--force", container).Run() })
+	command := capability.LaunchWorkloadCommand{
+		RunID:     "run-observed-start",
+		AttemptID: "1",
+		BookingID: "bkg-run-observed-start",
+		Workload: domain.WorkloadSpec{Containers: []domain.ContainerSpec{{
+			Name:  "main",
+			Image: "busybox:latest",
+			Args:  []string{"sleep", "30"},
+		}}},
+	}
+	command.WorkspaceID = "ws_alpha"
+	if err := runtime.LaunchWorkload(context.Background(), command); err != nil {
+		t.Fatalf("launch the workload: %v", err)
+	}
+
+	observation := observationFor(t, runtime, "run-observed-start")
+
+	if observation.StartedAt == nil {
+		t.Fatalf("the node reports no start moment for a container this daemon is running: %+v", observation)
+	}
+	daemonMoment := containerStartedAt(t, container)
+	if !observation.StartedAt.Equal(daemonMoment) {
+		t.Fatalf("the node reports a start of %s and the daemon says %s",
+			observation.StartedAt.Format(time.RFC3339Nano), daemonMoment.Format(time.RFC3339Nano))
+	}
+	if !observation.StartedAt.Before(observation.ObservedAt) {
+		t.Fatalf("the container started at %s and the node looked at %s, so the reported moment is the poll rather than the process",
+			observation.StartedAt.Format(time.RFC3339Nano), observation.ObservedAt.Format(time.RFC3339Nano))
+	}
+}
+
+// TestAContainerTheDaemonWillNotDescribeReportsNoStartMoment is the lesson the
+// image read and the cache read already carry, applied to the one read this seam
+// added. The daemon prints the containers it could describe and exits non-zero for
+// the one that vanished between the listing and the inspect, which is what `docker
+// container prune` on a working machine looks like from here. Failing the whole
+// observation would cost Mercator the exit code of every other workload on this
+// node, and inventing a moment for the unreadable one would put a number in the
+// calibration set that nothing measured. The stage is reported absent.
+func TestAContainerTheDaemonWillNotDescribeReportsNoStartMoment(t *testing.T) {
+	daemon := standInDaemon(t, `#!/bin/sh
+case "$1 $2" in
+  "ps --all") echo '{"Names":"mercator-run-alpha-1","State":"running","Status":"Up 2 minutes","Labels":"mercator.run=run-alpha,mercator.attempt=1","Mounts":""}'
+              echo '{"Names":"mercator-run-pruned-1","State":"running","Status":"Up 2 minutes","Labels":"mercator.run=run-pruned,mercator.attempt=1","Mounts":""}' ;;
+  "inspect --format") echo '"/mercator-run-alpha-1" "2030-01-01T00:00:00Z"'
+                      echo 'Error: No such object: mercator-run-pruned-1' >&2
+                      exit 1 ;;
+esac
+`)
+
+	observations, err := NewDockerRuntime(daemon).Observe(context.Background())
+
+	if err != nil {
+		t.Fatalf("one unreadable container cost this node every exit code it holds: %v", err)
+	}
+	if len(observations) != 2 {
+		t.Fatalf("the node reports %d workloads, and this daemon listed two", len(observations))
+	}
+	byRun := map[string]capability.WorkloadObservation{}
+	for _, observation := range observations {
+		byRun[observation.RunID] = observation
+	}
+	described := byRun["run-alpha"]
+	if described.StartedAt == nil || !described.StartedAt.Equal(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("the container the daemon described reports %v as its start", described.StartedAt)
+	}
+	if pruned := byRun["run-pruned"]; pruned.StartedAt != nil {
+		t.Fatalf("a container the daemon would not describe reports a start of %s", pruned.StartedAt.Format(time.RFC3339Nano))
+	}
+}
+
+// TestACreatedContainerHasNotStartedYet is the absence this record has to be able
+// to state. Docker writes "0001-01-01T00:00:00Z" into State.StartedAt for a
+// container it has never given a process, and reporting that as the instant a
+// workload began would put the start of the epoch into a calibration set.
+func TestACreatedContainerHasNotStartedYet(t *testing.T) {
+	daemon := standInDaemon(t, `#!/bin/sh
+case "$1 $2" in
+  "ps --all") echo '{"Names":"mercator-run-created-1","State":"created","Status":"Created","Labels":"mercator.run=run-created,mercator.attempt=1","Mounts":""}' ;;
+  "inspect --format") echo '"/mercator-run-created-1" "0001-01-01T00:00:00Z"' ;;
+esac
+`)
+
+	observations, err := NewDockerRuntime(daemon).Observe(context.Background())
+
+	if err != nil {
+		t.Fatalf("observe workloads: %v", err)
+	}
+	if len(observations) != 1 || observations[0].Phase != capability.WorkloadPhaseCreated {
+		t.Fatalf("the node reports %+v, and this container was created and never run", observations)
+	}
+	if observations[0].StartedAt != nil {
+		t.Fatalf("a container that never ran reports a start of %s", observations[0].StartedAt.Format(time.RFC3339Nano))
+	}
+}
+
+// TestARuntimeThatStatesAnUnreadableStartMomentFailsTheRead is the other half of
+// the case above, and the two are different worlds. A container the daemon will not
+// describe at all is one line missing from a read that answered for everything
+// else. A container whose moment is stated in a form this agent cannot parse is a
+// runtime whose moments Mercator does not understand, and every container on that
+// machine has the same problem: reading it as absent published no start for the
+// whole node, degraded every start-latency row on the only reusable lane there is,
+// and failed nothing. This daemon states Go's default time form, which is what some
+// compat runtimes emit and what `docker inspect -f {{.Created}}` prints for other
+// object shapes.
+func TestARuntimeThatStatesAnUnreadableStartMomentFailsTheRead(t *testing.T) {
+	daemon := standInDaemon(t, `#!/bin/sh
+case "$1 $2" in
+  "ps --all") echo '{"Names":"mercator-run-alpha-1","State":"running","Status":"Up 2 minutes","Labels":"mercator.run=run-alpha,mercator.attempt=1","Mounts":""}' ;;
+  "inspect --format") echo '"/mercator-run-alpha-1" "2026-07-26 12:27:41.876718458 +0000 UTC"' ;;
+esac
+`)
+
+	_, err := NewDockerRuntime(daemon).Observe(context.Background())
+
+	if err == nil {
+		t.Fatal("a runtime stating a moment this agent cannot read was read anyway, and every start on it reported absent")
+	}
+	if !strings.Contains(err.Error(), "State.StartedAt") {
+		t.Fatalf("the error does not name the field the runtime stated unreadably: %v", err)
+	}
+}
+
+func observationFor(t *testing.T, runtime *DockerRuntime, runID string) capability.WorkloadObservation {
+	t.Helper()
+	observations, err := runtime.Observe(context.Background())
+	if err != nil {
+		t.Fatalf("observe workloads: %v", err)
+	}
+	for _, observation := range observations {
+		if observation.RunID == runID {
+			return observation
+		}
+	}
+	t.Fatalf("this daemon reports no workload for %q: %+v", runID, observations)
+	return capability.WorkloadObservation{}
+}
+
+// containerStartedAt is the daemon's own answer, read independently of the code
+// under test so the case compares two reads rather than one read with itself.
+func containerStartedAt(t *testing.T, container string) time.Time {
+	t.Helper()
+	output, err := exec.Command("docker", "inspect", container, "--format", "{{.State.StartedAt}}").CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker inspect %s: %v\n%s", container, err, output)
+	}
+	moment, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(output)))
+	if err != nil {
+		t.Fatalf("parse the daemon's start moment %q: %v", output, err)
+	}
+	return moment.UTC()
 }

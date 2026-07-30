@@ -47,6 +47,11 @@ type Registry struct {
 
 	mu       sync.Mutex
 	sessions map[string]*Session
+	// draining is set once this control plane has begun shutting down, and it is
+	// what makes Drain final. An agent redials every few milliseconds, so a drain
+	// that only ended the sessions it happened to find would be raced by the next
+	// one and the shutdown it was called for would wait on that instead.
+	draining bool
 }
 
 // Option configures a Registry.
@@ -120,6 +125,10 @@ type Invitation struct {
 	// a price to weigh a node against fresh capacity, and a node without one is
 	// refused rather than treated as free.
 	ShadowPriceUSDPerHour float64
+	// Purchase is the rest of what this machine is bought on: the block of time it
+	// is billed in, the kinds of work its operator holds it for, and the moment it
+	// stops being Mercator's.
+	Purchase Purchase
 }
 
 // Invite reserves a node identity and mints the bootstrap material a machine
@@ -151,6 +160,7 @@ func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (ca
 		EnrollmentTokenID:     TokenID(token),
 		EnrollmentExpires:     expires,
 		ShadowPriceUSDPerHour: invitation.ShadowPriceUSDPerHour,
+		Purchase:              invitation.Purchase,
 	}
 	if err := registry.store.Invite(ctx, record); err != nil {
 		return capability.NodeBootstrap{}, err
@@ -259,11 +269,15 @@ func (registry *Registry) ObserveWorkload(ctx context.Context, ref capability.Wo
 		return capability.WorkloadObservation{}, err
 	}
 	if !found {
+		// Absence is the registry's own observation and not the node's, so both
+		// moments are the control plane's clock: it looked now, and it learned now.
+		now := registry.now().UTC()
 		return capability.WorkloadObservation{
 			RunID:      ref.RunID,
 			AttemptID:  ref.AttemptID,
 			Phase:      capability.WorkloadPhaseAbsent,
-			ObservedAt: registry.now().UTC(),
+			ObservedAt: now,
+			ReceivedAt: now,
 		}, nil
 	}
 	return observation, nil

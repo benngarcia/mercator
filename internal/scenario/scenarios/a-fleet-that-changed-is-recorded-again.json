@@ -1,0 +1,64 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Two machines neither of which can hold the Run that arrives, and one of them on an idle lease that runs out. The ask is for 900GB, rental-stays has 200GB and rental-leaves has 100GB, so the wait is one for capacity to be added and the record says so: two machines weighed, none that could hold it, nothing in front of it. Four minutes later the idle lease on rental-leaves expires, the machine is gone, and the same Run is asked again. Nothing about the wait changed. The reason is the same word, and a Run in this wait has an empty list of work ahead of it by construction, because there is no machine here to be waiting behind. What changed is the fleet, and the fleet is the evidence. Admission suppressed a restated wait by comparing the reason and the list of work ahead of it, so on this history the second decision was thrown away with the deferral it explained, and the record still named a machine that no longer exists while naming nothing about the fleet as it now is. That is an audit hole and it is also a blind spot: every law about Placement is stated over the decisions Mercator recorded, so a candidate that first appears on a tick like this one, struck out for something those laws forbid, is a candidate they never see. Suppression is stated over the fleet's own verdict now, which is the machines weighed and what each of them was refused for. The numbers beside them are left out on purpose: a projected start a minute nearer than it was last tick is the same answer about the same fleet, and comparing a decision whole would record one on every tick of the sweep.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-stays",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "200GB"},
+        "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "rental-leaves",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "100GB"},
+        "rate_per_hour_usd": 1.0,
+        "idle_lease_expires_in": "3m"
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "asks-for-a-machine-nobody-has",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "resources": {"disk": "900GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_CAPACITY_FITS",
+          "behind": [],
+          "fleet": {"weighed": 2, "could_hold": 0},
+          "projected_wait_seconds": 0
+        }
+      }
+    },
+    {"advance": "4m"},
+    {
+      "reconcile": "asks-for-a-machine-nobody-has",
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_CAPACITY_FITS",
+          "behind": [],
+          "fleet": {"weighed": 1, "could_hold": 0},
+          "projected_wait_seconds": 0
+        }
+      }
+    }
+  ]
+}

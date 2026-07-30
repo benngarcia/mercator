@@ -37,6 +37,11 @@ type DockerRuntime struct {
 	// than anything Docker manages. A runtime given none replicates nothing and
 	// reports no Artifact inventory, which is silence rather than an empty disk.
 	artifactRoot string
+	// network is what this node has measured about the paths it crosses. It is
+	// the runtime's own state rather than something read off the host at report
+	// time, because a throughput is only knowable while a transfer is happening
+	// and the transfers are this process's own work.
+	network *pathMeasurements
 }
 
 // RuntimeOption configures the Docker runtime.
@@ -55,7 +60,7 @@ func NewDockerRuntime(binary string, options ...RuntimeOption) *DockerRuntime {
 	if binary == "" {
 		binary = "docker"
 	}
-	runtime := &DockerRuntime{binary: binary, now: time.Now, labelPrefix: "mercator."}
+	runtime := &DockerRuntime{binary: binary, now: time.Now, labelPrefix: "mercator.", network: newPathMeasurements()}
 	for _, option := range options {
 		option(runtime)
 	}
@@ -77,6 +82,11 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 		CPUMillis:        int64(info.NCPU) * 1000,
 		MemoryBytes:      info.MemTotal,
 		Disk:             docker.diskFacts(info.DockerRootDir),
+		// What this node has measured about the paths it crosses, which is the
+		// field phase 2 declared and nothing wrote. A machine that has moved no
+		// content publishes nothing here, and Placement prices that silence with
+		// its own stated assumption rather than mistaking it for a slow link.
+		Network: docker.network.facts(facts.ObservedAt),
 	}
 	if slices.Contains(info.runtimeNames(), "nvidia") {
 		facts.Host.AcceleratorToolkit = "nvidia-container-toolkit"
@@ -185,10 +195,25 @@ func (docker *DockerRuntime) StopWorkload(ctx context.Context, command capabilit
 }
 
 // Observe reports every Mercator container this daemon knows about, running or
-// exited. It is the node's own authority: the control plane learns that a
-// process ended here, whatever the application did or did not report.
+// exited, and when each of them really started. It is the node's own authority:
+// the control plane learns that a process began and ended here, whatever the
+// application did or did not report.
+//
+// The start moment is a second read, because `docker ps` does not carry it in any
+// format: the daemon reports `State.StartedAt` only on inspect. It is one inspect
+// for the whole list rather than one per container, and a container the daemon
+// will not describe is reported with no start moment rather than with a guess. A
+// moment the daemon does state and this runtime cannot read fails the whole read
+// instead, which is the same answer the Docker adapter gives to the same daemon:
+// reporting it absent would publish no start for any container on this machine and
+// degrade every start-latency row on the only reusable lane there is, with nothing
+// anywhere saying that is what happened.
 func (docker *DockerRuntime) Observe(ctx context.Context) ([]capability.WorkloadObservation, error) {
 	containers, err := docker.containers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	started, err := docker.startMoments(ctx, containers)
 	if err != nil {
 		return nil, err
 	}
@@ -200,6 +225,9 @@ func (docker *DockerRuntime) Observe(ctx context.Context) ([]capability.Workload
 			Phase:      dockerPhase(container.State),
 			ObservedAt: docker.now().UTC(),
 		}
+		if moment, known := started[container.Names]; known {
+			observation.StartedAt = &moment
+		}
 		if observation.Phase.Exited() {
 			code := container.exitCode()
 			observation.ExitCode = &code
@@ -207,6 +235,73 @@ func (docker *DockerRuntime) Observe(ctx context.Context) ([]capability.Workload
 		observations = append(observations, observation)
 	}
 	return observations, nil
+}
+
+// startMoments is when each of these containers began, keyed by the name the
+// listing gave it. It is the one fact in this report that has to come from
+// inspect, and it is asked once for the whole list.
+//
+// A read that answers for some containers and not others keeps what came back:
+// the daemon prints the objects it could describe and exits non-zero for the rest,
+// which is the same shape the cache volume read has, and a container pruned
+// between the two calls must not cost Mercator the exits of every other workload
+// on this machine. A container with no start moment is reported without one, which
+// is what an absent stage is: nothing here invents a moment from the launch.
+//
+// A moment stated unreadably is the other case, and it fails. A missing line is a
+// container that was not there to describe; an unreadable value is a runtime whose
+// moments this agent does not understand, and every container on that machine has
+// the same problem, so tolerating it bought silence over the whole lane rather than
+// resilience over one container.
+func (docker *DockerRuntime) startMoments(ctx context.Context, containers []dockerContainer) (map[string]time.Time, error) {
+	if len(containers) == 0 {
+		return nil, nil
+	}
+	args := []string{"inspect", "--format", `{{json .Name}} {{json .State.StartedAt}}`}
+	for _, container := range containers {
+		args = append(args, container.Names)
+	}
+	out, _ := docker.run(ctx, args...)
+	moments := make(map[string]time.Time, len(containers))
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		name, startedAt, err := parseStartMoment(line)
+		if err != nil {
+			return nil, err
+		}
+		if name == "" || startedAt.IsZero() {
+			continue
+		}
+		moments[name] = startedAt
+	}
+	return moments, nil
+}
+
+// parseStartMoment reads one line of the inspect above as the container it names
+// and the moment that container states. It answers three different things.
+//
+// A line that is not one of these objects at all names no container: that is the
+// shape a container pruned between the two calls leaves, and the caller skips it.
+// The epoch, which the daemon writes as "0001-01-01T00:00:00Z", is a container that
+// was made and never ran, so it names a container with no start rather than a start
+// in year one. A moment stated in any other form is an error, because reading it as
+// the epoch would report every container on this machine as never started.
+func parseStartMoment(line string) (string, time.Time, error) {
+	rawName, rawMoment, found := strings.Cut(strings.TrimSpace(line), " ")
+	if !found {
+		return "", time.Time{}, nil
+	}
+	var name, moment string
+	if json.Unmarshal([]byte(rawName), &name) != nil || json.Unmarshal([]byte(rawMoment), &moment) != nil {
+		return "", time.Time{}, nil
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, moment)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf(
+			"docker inspect: container %s states State.StartedAt as %q, which is not a moment this runtime can read: %w",
+			name, moment, err,
+		)
+	}
+	return strings.TrimPrefix(name, "/"), startedAt.UTC(), nil
 }
 
 // cacheLabel names one part of a cache's identity in the daemon's own label

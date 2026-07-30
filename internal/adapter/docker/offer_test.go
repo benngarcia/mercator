@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +79,72 @@ func TestStandingOfferUsesProbedCapacity(t *testing.T) {
 	}
 	if offer.Resources.EphemeralDiskBytes != 500*1024*1024*1024 {
 		t.Errorf("EphemeralDiskBytes = %d, want 500GiB (probed free disk)", offer.Resources.EphemeralDiskBytes)
+	}
+}
+
+// TestTwoDaemonsOnOneBoxAreTwoMachines is why the offer states the daemon's own
+// ID. A rootful daemon on /var/run/docker.sock and a rootless one on
+// /run/user/1000/docker.sock are two machines with two image stores, and every
+// identifier derived from the endpoint calls them both "loopback": so does every
+// pair of ports on one host, because the label drops the port. A launch history
+// keyed on that label served one daemon's warm-pull timings as evidence about the
+// other, which holds none of those layers.
+func TestTwoDaemonsOnOneBoxAreTwoMachines(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	rootful := HostInfo{ID: "daemon-rootful", NCPU: 4, MemTotalBytes: 1 << 30}
+	rootless := HostInfo{ID: "daemon-rootless", NCPU: 4, MemTotalBytes: 1 << 30}
+
+	first := StandingOffer(DeriveIdentity("unix:///var/run/docker.sock", ""), "", rootful, 0, nil, now)
+	second := StandingOffer(DeriveIdentity("unix:///run/user/1000/docker.sock", ""), "", rootless, 0, nil, now)
+
+	if first.ID != second.ID {
+		t.Fatalf("this case is about two endpoints one label cannot tell apart; got %q and %q", first.ID, second.ID)
+	}
+	firstKey := domain.CandidateIdentityOf(aggregated(first), "sha256:image").Candidate(true)
+	secondKey := domain.CandidateIdentityOf(aggregated(second), "sha256:image").Candidate(true)
+	if firstKey == secondKey {
+		t.Fatalf("two daemons on one box share the candidate key %q", firstKey)
+	}
+}
+
+// TestOneDaemonReachedTwoWaysIsOneMachine is the other direction, and the reason
+// no identifier built from the endpoint may stand in for the machine: an operator
+// who moves this host from a DOCKER_HOST URL to a docker context has changed
+// nothing about it, and a key that changed with them would orphan every sample the
+// machine had accumulated.
+func TestOneDaemonReachedTwoWaysIsOneMachine(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	info := HostInfo{ID: "daemon-a", NCPU: 4, MemTotalBytes: 1 << 30}
+
+	byHost := StandingOffer(DeriveIdentity("tcp://10.0.0.5:2375", ""), "", info, 0, nil, now)
+	byContext := StandingOffer(DeriveIdentity("", "gpu-ws"), "", info, 0, nil, now)
+
+	byHostKey := domain.CandidateIdentityOf(aggregated(byHost), "sha256:image").Candidate(true)
+	byContextKey := domain.CandidateIdentityOf(aggregated(byContext), "sha256:image").Candidate(true)
+	// The machine is named, before the two are compared. Two keys that agree because
+	// neither exists is the way this case passes while saying nothing.
+	if !strings.Contains(byHostKey, "machine="+info.ID) {
+		t.Fatalf("key %q does not name the daemon %q that answered", byHostKey, info.ID)
+	}
+	if byHostKey != byContextKey {
+		t.Fatalf("one machine keyed two ways:\n%s\n%s", byHostKey, byContextKey)
+	}
+}
+
+// TestAnUnreachableDaemonNamesNoMachine holds the loud half. A probe that failed
+// yields a zero HostInfo, and an endpoint Mercator could not ask has nothing to
+// file a history under: inventing one from the endpoint label is exactly the
+// collision above.
+func TestAnUnreachableDaemonNamesNoMachine(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+
+	offer := StandingOffer(DeriveIdentity("tcp://10.0.0.5:2375", ""), "", HostInfo{}, 0, nil, now)
+
+	if offer.MachineID != "" {
+		t.Fatalf("an endpoint that answered nothing named the machine %q", offer.MachineID)
+	}
+	if key := domain.CandidateIdentityOf(aggregated(offer), "sha256:image").Candidate(true); key != "" {
+		t.Fatalf("an endpoint that answered nothing produced the key %q", key)
 	}
 }
 
@@ -246,6 +313,7 @@ func TestGPUSpecSchedulesOnGPUDockerOfferAndRejectsCPUOnlyOffer(t *testing.T) {
 			Image:    "ghcr.io/acme/train@sha256:0000000000000000000000000000000000000000000000000000000000000000",
 			Platform: domain.Platform{OS: "linux", Architecture: "amd64"},
 		}},
+		Placement: domain.PlacementPolicy{Class: domain.ClassStandard},
 		Resources: domain.ResourceRequirements{
 			CPU:          domain.CPURequirement{MinMillis: 1000},
 			Memory:       domain.MemoryRequirement{MinBytes: 1 << 30},
@@ -306,8 +374,20 @@ func TestStandingOfferPublishesNoThroughputNothingMeasured(t *testing.T) {
 	if len(offer.Network.Download) != 0 {
 		t.Fatalf("offer publishes %+v, want no throughput fact until something measures this link", offer.Network.Download)
 	}
-	link := offer.RegistryDownload()
+	link := offer.DownloadRate(domain.NetworkScopeRegistry, now)
 	if link.Confidence != domain.AssumedLinkConfidence {
 		t.Fatalf("registry link = %+v, want the standing assumption at %v confidence", link, domain.AssumedLinkConfidence)
 	}
+}
+
+// aggregated is the offer as a scheduler receives it. The Broker stamps the adapter
+// type from the connection the offer came through and the lane from the Declaration
+// the backend negotiated, which is ephemeral for a Docker endpoint until an agent
+// enrolls on the machine behind it. Capacity nobody classified has no key at any
+// level, so a case deriving a key from an unstamped offer would be comparing two
+// empty strings.
+func aggregated(offer domain.OfferSnapshot) domain.OfferSnapshot {
+	offer.AdapterType = "docker"
+	offer.Lane = domain.LaneEphemeral
+	return offer
 }

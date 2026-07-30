@@ -35,8 +35,17 @@ var (
 )
 
 const (
-	EventRunRequested            = "compute.run.requested.v1"
-	EventBookingDecided          = "compute.run.booking_decided.v1"
+	EventRunRequested   = "compute.run.requested.v1"
+	EventBookingDecided = "compute.run.booking_decided.v1"
+	// EventAdmissionDeferred is a Run being told to wait, and why. It is a
+	// public fact rather than a log line because the queue is something an
+	// operator has to be able to read: what this Run is behind, and what its
+	// class was worth at the moment it was asked.
+	EventAdmissionDeferred = "compute.run.admission_deferred.v1"
+	// EventAdmissionRefused is a Run admission would not queue, because its
+	// class states a moment it must have started by that the queue in front of
+	// it is already past.
+	EventAdmissionRefused        = "compute.run.admission_refused.v1"
 	EventBookingDispatched       = "compute.run.booking_dispatched.v1"
 	EventAttemptCreated          = "compute.run.attempt_created.v1"
 	EventLaunchIntentRecorded    = "compute.run.launch_intent_recorded.v1"
@@ -46,6 +55,7 @@ const (
 	EventCancelRequested         = "compute.run.cancel_requested.v1"
 	EventCancelAccepted          = "compute.run.cancel_accepted.v1"
 	EventExternalStateObserved   = "compute.run.external_state_observed.v1"
+	EventExecutionStarted        = "compute.run.execution_started.v1"
 	EventRunOutcomeRecorded      = "compute.run.outcome_recorded.v1"
 	EventCleanupRequested        = "compute.run.cleanup_requested.v1"
 	EventCleanupFailed           = "compute.run.cleanup_failed.v1"
@@ -62,6 +72,8 @@ const (
 var runEventTypes = map[string]bool{
 	EventRunRequested:          true,
 	EventBookingDecided:        true,
+	EventAdmissionDeferred:     true,
+	EventAdmissionRefused:      true,
 	EventBookingDispatched:     true,
 	EventAttemptCreated:        true,
 	EventLaunchIntentRecorded:  true,
@@ -71,6 +83,7 @@ var runEventTypes = map[string]bool{
 	EventCancelRequested:       true,
 	EventCancelAccepted:        true,
 	EventExternalStateObserved: true,
+	EventExecutionStarted:      true,
 	EventRunOutcomeRecorded:    true,
 	EventCleanupRequested:      true,
 	EventCleanupFailed:         true,
@@ -97,14 +110,32 @@ type Orchestrator struct {
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
 	runLocks           keyedMutex
-	prewarmer          Prewarmer
-	prewarmPolicy      PrewarmPolicy
-	prewarmed          prewarmMemory
-	preparationClock   PreparationClock
+	// admissionLocks serialises admission within one workspace. Every other
+	// transition a Run makes is guarded by that Run's own stream version, and the
+	// log refuses an append written against a version somebody else has already
+	// spent. Admission is the one decision read over the whole workspace and
+	// written to a single Run, so nothing in the log can refuse it: two members of
+	// one family asked at the same instant each replay a queue the other is not in
+	// yet, and each appends a decision the log has no reason to reject.
+	//
+	// It is a lock in this process because the log is this process's own SQLite
+	// file, so a workspace's admissions are all decided here or not at all. A
+	// second control plane over one log would need the log to arbitrate, which is a
+	// different design rather than a wider mutex.
+	admissionLocks   keyedMutex
+	prewarmer        Prewarmer
+	prewarmPolicy    PrewarmPolicy
+	prewarmed        prewarmMemory
+	preparationClock PreparationClock
 }
 
 type Adapter interface {
-	ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error)
+	// CollectOffers is the placement read rather than a plain offer list, because
+	// a decision has to record who was asked. A connection that answered with
+	// nothing and a connection nobody contacted both publish no offer, so a census
+	// derived from the offers states the two identically, and admission reads an
+	// empty answer as the strongest thing a fleet can say about an ask.
+	CollectOffers(ctx context.Context, req adapter.OfferRequest) (adapter.OfferCollection, error)
 	Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error)
 	Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error)
 	Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error)
@@ -313,7 +344,7 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if err != nil {
 		return CreateRunResult{}, err
 	}
-	data, err := json.Marshal(publicRunRequestedData{RunID: req.RunID, Workload: publicWorkload(req.Workload)})
+	data, err := json.Marshal(publicRunRequestedData{RunID: req.RunID, Workload: req.Workload.Public()})
 	if err != nil {
 		return CreateRunResult{}, err
 	}
@@ -434,14 +465,15 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 	case state.bookingQueued():
 		return o.dispatchQueuedBooking(ctx, workspaceID, runID, version, state)
 	case state.launchIntent == nil, state.replacementEligible():
-		// Placement is where admission binds: a Run whose declared Artifacts are
-		// not all durable is not placed, and stays exactly where it is until one
-		// of them is published.
+		// A Run whose declared Artifacts are not all durable is not admitted at
+		// all, and stays exactly where it is until one of them is published. It
+		// is not queued either: waiting for content nobody has written yet is
+		// not waiting for capacity, and the queue is about capacity.
 		durable, err := o.inputsAreDurable(ctx, workspaceID, state.requested.Workload)
 		if err != nil || !durable {
 			return false, err
 		}
-		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
+		return o.stepAdmit(ctx, workspaceID, runID, version, state)
 	case !state.launchAccepted && state.launchFailure == nil:
 		return o.stepLaunch(ctx, workspaceID, runID, version, state)
 	default:
@@ -519,34 +551,44 @@ func offerFromDecision(decision domain.BookingDecision) (domain.OfferSnapshot, e
 }
 
 // stepPlace decides placement and records the decision, attempt, and launch
-// intent in one append, so the intent is durable before any adapter call.
-func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
+// intent in one append, so the intent is durable before any adapter call. It
+// reports whether the Run moved, because a placement that selected nothing has
+// not moved it: admission queues that Run and the next tick asks again.
+func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState, run queuePosition) (bool, error) {
 	attemptNumber := state.attemptCount + 1
-	decision, attempt, selectedOffer, schedule, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, state.excludedOfferSnapshotIDs)
+	supersedes, supersedesReason := state.supersession()
+	decision, attempt, selectedOffer, schedule, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, placementRequest{
+		excludedOfferSnapshotIDs: state.excludedOfferSnapshotIDs,
+		supersedes:               supersedes,
+		supersedesReason:         supersedesReason,
+	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	if decision.SelectedOfferSnapshotID == "" {
 		if state.replacementEligible() {
-			return o.closeRetryExhausted(ctx, workspaceID, runID, version, decision)
+			return true, o.closeRetryExhausted(ctx, workspaceID, runID, version, decision)
 		}
-		return ErrNoFeasibleOffers
+		deferral, projected := placementDeferral(run, decision)
+		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, run, admissionAnswer{
+			deferral:  deferral,
+			projected: projected,
+			decision:  &decision,
+		})
 	}
 	nextSchedule, err := reserveDecision(*state.requested, decision, schedule)
 	if err != nil {
-		return err
+		return false, err
 	}
-	events := []eventlog.NewEvent{
-		mustEvent(runID, "booking_decided_"+decision.Booking.ID, EventBookingDecided, bookingDecisionData{Decision: decision}, o.now()),
-	}
+	events := []eventlog.NewEvent{decisionEvent(runID, decision, o.now())}
 	commandKey := "advance:placement:" + decision.Booking.ID
 	if decision.Booking.State == domain.BookingStateQueued {
 		request, requestErr := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
 		if requestErr != nil {
-			return requestErr
+			return false, requestErr
 		}
 		_, err = o.commitSchedule(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
-		return err
+		return true, err
 	}
 	reportPublicURL, reportToken := "", ""
 	if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
@@ -555,7 +597,7 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	}
 	launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
 	if err != nil {
-		return err
+		return false, err
 	}
 	events = append(events,
 		mustEvent(runID, "attempt_created_"+attempt.AttemptID, EventAttemptCreated, attempt, o.now()),
@@ -563,10 +605,18 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	)
 	request, err := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
 	if err != nil {
-		return err
+		return false, err
 	}
 	_, err = o.commitSchedule(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
-	return err
+	return true, err
+}
+
+// decisionEvent is one Booking Decision written down. It is identified by the
+// decision rather than by the Booking it created, because a decision that placed
+// the Run nowhere created no Booking and is still a decision the Run has to be
+// explainable from.
+func decisionEvent(runID string, decision domain.BookingDecision, now time.Time) eventlog.NewEvent {
+	return mustEvent(runID, "booking_decided_"+decision.ID, EventBookingDecided, bookingDecisionData{Decision: decision}, now)
 }
 
 func reserveDecision(requested runRequestedData, decision domain.BookingDecision, schedule domain.RentalSchedule) (domain.RentalSchedule, error) {
@@ -768,28 +818,33 @@ func (o *Orchestrator) listOpenRunIDs(ctx context.Context, workspaceID string) (
 	return o.runs.ListOpenIDs(ctx, workspaceID)
 }
 
-func (o *Orchestrator) GetBookingDecision(ctx context.Context, workspaceID, runID string) (domain.BookingDecision, error) {
+// GetBookingDecisions is every decision Mercator recorded about this Run, in the
+// order it recorded them, and it is the whole chain rather than its last element.
+// A decision is added and never edited, so the newest one is an answer that
+// stands in for the ones before it and names them: collapsing the chain to its
+// last entry was showing a reader a Run that had only ever been answered once,
+// with the refusal that came first and the machine that turned it away nowhere on
+// the page.
+func (o *Orchestrator) GetBookingDecisions(ctx context.Context, workspaceID, runID string) ([]domain.BookingDecision, error) {
 	events, err := o.GetRunEvents(ctx, workspaceID, runID)
 	if err != nil {
-		return domain.BookingDecision{}, err
+		return nil, err
 	}
-	var latest domain.BookingDecision
-	found := false
+	var chain []domain.BookingDecision
 	for _, event := range events {
 		if event.Type != EventBookingDecided {
 			continue
 		}
 		var data bookingDecisionData
 		if err := json.Unmarshal(event.Data, &data); err != nil {
-			return domain.BookingDecision{}, err
+			return nil, err
 		}
-		latest = data.Decision
-		found = true
+		chain = append(chain, data.Decision)
 	}
-	if found {
-		return latest, nil
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("orchestrator: booking decision not found")
 	}
-	return domain.BookingDecision{}, fmt.Errorf("orchestrator: booking decision not found")
+	return chain, nil
 }
 
 func (o *Orchestrator) RefreshRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {
@@ -983,16 +1038,135 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 // non-terminal phase carries no new information, so it is not appended on
 // every poll.
 func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID string, version uint64, state runState, observation adapter.ExternalObservation) (bool, error) {
-	if !isTerminal(observation.Phase) && observation.Phase == state.lastObservedPhase {
+	started := startMoment(state, observation)
+	if !isTerminal(observation.Phase) && observation.Phase == state.lastObservedPhase && started == nil {
 		return false, nil
 	}
-	toAppend := []eventlog.NewEvent{
+	events := []eventlog.NewEvent{
 		mustEvent(runID, fmt.Sprintf("external_state_observed_%d", version+1), EventExternalStateObserved, observation, o.now()),
 	}
-	if err := o.appendEvents(ctx, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), toAppend); err != nil {
+	if started != nil {
+		events = append(events, mustEvent(runID, fmt.Sprintf("execution_started_%d", version+1), EventExecutionStarted, executionStartedData{
+			LaunchKey: observation.LaunchKey,
+			StartedAt: *started,
+		}, o.now()))
+	}
+	request, err := runAppendRequest(nil, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), events)
+	if err != nil {
+		return false, err
+	}
+	if err := o.commitObservation(ctx, workspaceID, request, state, observation); err != nil {
 		return false, err
 	}
 	return isTerminal(observation.Phase), nil
+}
+
+// startMoment is the moment this Run's workload began, taken from an observation
+// that carries one and only the first time. It is nil for every other
+// observation, which is what makes the run stream hold one start moment per
+// attempt rather than restating the same fact on every poll.
+//
+// Mercator never fills this in for itself. A holder that publishes no start
+// moment leaves the stage without an actual, and the record says so: acquisition
+// and boot have no production observation at all until an agent bootstraps on
+// provisioned capacity, and deriving them from when the launch was accepted would
+// put Mercator's own arithmetic into the log as though somebody had measured it.
+//
+// It is also not every moment a holder publishes. A start Mercator can defend is
+// one an observation established, which adapter.ExternalObservation decides for
+// every lane at once, so a foreign clock running ahead and a provider calling a
+// pod started before it has run anything are refused here rather than three times
+// in three adapters.
+func startMoment(state runState, observation adapter.ExternalObservation) *time.Time {
+	moment, established := observation.EstablishedStart()
+	if state.startedAt != nil || !established {
+		return nil
+	}
+	return &moment
+}
+
+// commitObservation writes the fact, and with it the moment this Run's workload
+// began running when the fact is what establishes it. The two are one append
+// because they are one observation: a schedule that learned the start separately
+// could disagree with the run's own history about when the machine said it.
+func (o *Orchestrator) commitObservation(
+	ctx context.Context,
+	workspaceID string,
+	request eventlog.AppendRequest,
+	state runState,
+	observation adapter.ExternalObservation,
+) error {
+	started, establishes, err := o.workloadStarted(ctx, workspaceID, state, observation)
+	if err != nil {
+		return err
+	}
+	if !establishes {
+		_, err = o.appendRun(ctx, request)
+		return err
+	}
+	_, err = o.commitSchedule(ctx, request, started.Version-1, started)
+	return err
+}
+
+// workloadStarted is this Run's Rental Schedule with the moment its workload
+// began running recorded on it. Both runtimes a Booking declares are bounds on a
+// container, so that moment is the only clock they can be measured from: charging
+// them from the placement decision spent provisioning and image pull against a
+// runtime nothing was enforcing yet, which read a machine still fetching as past
+// its own bound.
+//
+// Three observations establish nothing. One that does not say the container is
+// running has no moment in it. A Rental holding nothing has already finished this
+// Booking, so there is nothing left to start. A Rental holding a Booking for
+// another Run is a machine two Runs are on, which is a reconciliation problem
+// rather than a moment to record, and starting this Booking's clock from another
+// Run's container would bury it.
+func (o *Orchestrator) workloadStarted(
+	ctx context.Context,
+	workspaceID string,
+	state runState,
+	observation adapter.ExternalObservation,
+) (domain.RentalSchedule, bool, error) {
+	if observation.Phase != adapter.ExternalPhaseRunning || state.bookingDecision == nil || state.bookingDecision.Booking == nil {
+		return domain.RentalSchedule{}, false, nil
+	}
+	schedules, err := o.schedules.List(ctx, workspaceID)
+	if err != nil {
+		return domain.RentalSchedule{}, false, fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
+	}
+	booking := state.bookingDecision.Booking
+	schedule := schedules[booking.RentalID]
+	holding, held := schedule.Holding()
+	if !held || holding.Booking.ID != booking.ID || !holding.StartedAt.IsZero() {
+		return domain.RentalSchedule{}, false, nil
+	}
+	next, err := schedule.Started(booking.ID, bookingStartedAt(observation))
+	if err != nil {
+		return domain.RentalSchedule{}, false, err
+	}
+	return next, true, nil
+}
+
+// bookingStartedAt is the moment this Booking's runtime bounds are measured from.
+// It is the container's own start where an observation established one, because
+// that is the process the bounds are about. Where none did it is the moment
+// Mercator read it running, which is the latest instant the container is known to
+// have been up: a schedule needs a clock to project a remaining runtime from, and
+// the honest fallback is the last thing Mercator can prove rather than the
+// earliest thing it could guess. Nothing derives the RUN's start moment this way,
+// because a projection may be conservative and a record may not be invented.
+//
+// It asks the same law the run stream does, and asking anything else was the
+// defect: a bound is enforced against Mercator's clock, so a moment from a host an
+// hour ahead put this Booking's expiry an hour into Mercator's future while the
+// container burned paid capacity and the schedule reported the machine busy. The
+// fallback is honest only because ObservedAt is Mercator's own clock on every seam
+// that fills it in.
+func bookingStartedAt(observation adapter.ExternalObservation) time.Time {
+	if moment, established := observation.EstablishedStart(); established {
+		return moment
+	}
+	return observation.ObservedAt
 }
 
 func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, state runState) (adapter.ExternalObservation, error) {

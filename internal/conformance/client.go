@@ -120,8 +120,11 @@ func successWorkload(workspaceID string, trial Trial, platform domain.Platform) 
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{Name: "main", Image: trial.Image, Platform: platform, Args: arguments}},
 			Resources:  resources,
-			Placement:  domain.PlacementPolicy{Objective: domain.ObjectiveCheapest, ExpectedRuntimeSeconds: trial.Timeout.Seconds(), MaxExpectedCostUSD: &budget},
-			Execution:  domain.ExecutionPolicy{MaxRuntimeSeconds: int64(trial.Timeout.Seconds()), MaxPreStartAttempts: 1},
+			// A probe Run is batch work: nobody is watching it start, it is bounded
+			// by a cost ceiling, and what a trial is buying is the cheapest proof
+			// that this Connection can run a container at all.
+			Placement: domain.PlacementPolicy{Class: domain.ClassBatch, ExpectedRuntimeSeconds: trial.Timeout.Seconds(), MaxExpectedCostUSD: &budget},
+			Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: int64(trial.Timeout.Seconds()), MaxPreStartAttempts: 1},
 		},
 	}
 }
@@ -171,18 +174,25 @@ func (client trialClient) captureRunEvidence(ctx context.Context, workspaceID st
 			evidence.EventTypes = append(evidence.EventTypes, event.Type)
 		}
 	}
-	var decision httpapi.BookingDecisionResponse
+	var decisions httpapi.BookingDecisionResponse
 	path = "/v1/runs/" + url.PathEscape(run.Run.ID) + "/decision?workspace_id=" + url.QueryEscape(workspaceID)
-	if err := client.do(ctx, http.MethodGet, path, "", nil, &decision); err != nil {
-		responseErr = errors.Join(responseErr, fmt.Errorf("read probe booking decision: %w", err))
+	if err := client.do(ctx, http.MethodGet, path, "", nil, &decisions); err != nil {
+		responseErr = errors.Join(responseErr, fmt.Errorf("read probe booking decisions: %w", err))
 	} else {
-		evidence.BookingDecision = decision.Decision
+		evidence.BookingDecisions = decisions.Decisions
 	}
 	return evidence, responseErr
 }
 
 func runEvidence(run domain.RunRecord) RunEvidence {
-	return RunEvidence{ID: run.ID, Outcome: string(run.Outcome), ExitCode: run.ExitCode, Cleanup: string(run.Cleanup), Closed: run.Closed}
+	return RunEvidence{
+		ID:                 run.ID,
+		ApplicationReadyAt: run.ReadyAt,
+		Outcome:            string(run.Outcome),
+		ExitCode:           run.ExitCode,
+		Cleanup:            string(run.Cleanup),
+		Closed:             run.Closed,
+	}
 }
 
 func (client trialClient) do(ctx context.Context, method, path, idempotencyKey string, body, response any) error {

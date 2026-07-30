@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import {
   BookingDecidedData,
   BookingDispatchedData,
+  ExecutionStartedData,
   LaunchIntentData,
   ObservedRunData,
   OutcomeData,
@@ -32,10 +33,19 @@ export interface WorkspaceRun {
   expectedRuntimeSeconds: number | null;
   maxRuntimeSeconds: number;
   phase: WorkspaceRunPhase;
-  decision?: BookingDecision;
+  // The decisions themselves are not here. This projection is the canvas: the
+  // machines, the Bookings, and where each Run is. The chain of answers a Run was
+  // given is read over REST on the Run's own page, invalidated by the same
+  // booking_decided event that reaches this reducer, so a copy kept here was a
+  // second store of the same facts that nothing rendered.
   selectedOfferID?: string;
   bookingID?: string;
-  runningAt?: string;
+  // startedAt is when this Run's workload actually began, as the machine holding
+  // it reported the moment. It arrives on its own event and is absent until then:
+  // the console used to stamp it from the Booking Decision and again from the
+  // observation, so an elapsed runtime was counted from whenever Mercator last
+  // looked and, for a provisioned machine, from before the machine existed.
+  startedAt?: string;
   outcome?: string;
 }
 
@@ -198,6 +208,8 @@ function applyRunEvent(workspace: Workspace, event: CloudEvent): Workspace {
     case "compute.run.launch_accepted.v1":
     case "compute.run.external_state_observed.v1":
       return observeRun(workspace, event);
+    case "compute.run.execution_started.v1":
+      return recordStartMoment(workspace, event);
     case "compute.run.outcome_recorded.v1":
       return recordOutcome(workspace, event);
     case "compute.run.cleanup_requested.v1":
@@ -265,12 +277,9 @@ function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
   if (!runID) throw new Error(`${event.type} requires decision.run_id`);
   const run = requiredRun(workspace, runID, event.type);
   if (!decision.booking || !decision.selected_offer_snapshot_id) {
-    return changed(workspace, {
-      runs: {
-        ...workspace.runs,
-        [runID]: { ...run, decision },
-      },
-    });
+    // A decision that placed the Run nowhere moves nothing on the canvas. It is
+    // the whole of what happened to the Run and it is read on the Run's page.
+    return workspace;
   }
   const sourceBooking = decision.booking;
   const booking: WorkspaceBooking = {
@@ -307,10 +316,8 @@ function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
       [runID]: {
         ...run,
         phase,
-        decision,
         selectedOfferID: decision.selected_offer_snapshot_id,
         bookingID: booking.id,
-        runningAt: phase === "running" ? event.time : undefined,
       },
     },
   });
@@ -412,6 +419,22 @@ function recordLaunchIntent(
   });
 }
 
+// recordStartMoment is the moment the machine holding this workload said its
+// process began. It is a separate event from the observation because it is a
+// separate fact: a provider reports running from the moment it accepts a launch,
+// so the phase says only that Mercator asked.
+function recordStartMoment(workspace: Workspace, event: CloudEvent): Workspace {
+  const data = decodeEventData(ExecutionStartedData, event);
+  const runID = runIDForEvent(event);
+  const run = requiredRun(workspace, runID, event.type);
+  return changed(workspace, {
+    runs: {
+      ...workspace.runs,
+      [runID]: { ...run, startedAt: data.started_at },
+    },
+  });
+}
+
 function observeRun(workspace: Workspace, event: CloudEvent): Workspace {
   const data = decodeEventData(ObservedRunData, event);
   const phase = data.phase;
@@ -420,7 +443,7 @@ function observeRun(workspace: Workspace, event: CloudEvent): Workspace {
   const run = requiredRun(workspace, runID, event.type);
   const runs = {
     ...workspace.runs,
-    [runID]: { ...run, phase: "running" as const, runningAt: event.time },
+    [runID]: { ...run, phase: "running" as const },
   };
   if (!run.bookingID) return changed(workspace, { runs });
   const booking = workspace.bookings[run.bookingID];

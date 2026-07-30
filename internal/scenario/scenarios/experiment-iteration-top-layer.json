@@ -29,7 +29,13 @@
         "id": "fresh-4090",
         "provider": "simcloud",
         "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "4m", "p90": "8m"}
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m",
+          "agent_ready": "36s"
+        }
       }
     ]
   },
@@ -41,11 +47,11 @@
   "expect": {
     "outcome": "place",
     "offer": "rental-warm",
-    "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
     "disposition": "release",
     "candidates": {
-      "rental-warm": {"feasible": true, "pull_seconds": {"at_most": 2}},
-      "fresh-4090": {"feasible": true, "pull_seconds": {"at_least": 200}}
+      "rental-warm": {"feasible": true, "stages": {"image_fetch": {"seconds": {"at_most": 2}}}},
+      "fresh-4090": {"feasible": true, "stages": {"image_fetch": {"seconds": {"at_least": 200}}}}
     }
   }
 }

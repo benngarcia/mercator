@@ -8,19 +8,19 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/prediction"
 )
 
 func TestSchedulerSelectsLowestDeterministicScore(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	workload := schedulerRevision()
+	workload.Spec.Placement.Class = domain.ClassInteractive
 	input := SchedulingInput{
 		RunID:        "run_1",
-		Workload:     schedulerRevision(),
+		Workload:     workload,
 		Offers:       []domain.OfferSnapshot{schedulerOffer("off_slow", now, 0.00010, 40), schedulerOffer("off_fast", now, 0.00012, 5)},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
-		Weights: ScoreWeights{
-			StartLatencyUSDPerSecond: 0.001,
-		},
 	}
 
 	decision, err := New().Evaluate(context.Background(), input)
@@ -135,9 +135,9 @@ func TestAStartBoundIsAskedOfThePublishedProvisioningTail(t *testing.T) {
 	}
 
 	candidate := schedulerCandidate(t, decision, "off_slow_tail")
-	if candidate.Estimates.ProvisionSeconds.P90 != 600 {
+	if candidate.Estimates.Stages.Boot.P90 != 600 {
 		t.Fatalf("the decision recorded a provisioning p90 of %v, and the provider published 600",
-			candidate.Estimates.ProvisionSeconds.P90)
+			candidate.Estimates.Stages.Boot.P90)
 	}
 	if candidate.Feasible {
 		t.Fatalf("a machine whose own publisher says it takes ten minutes in the tail met a five-minute bound: %+v", candidate.Estimates)
@@ -170,6 +170,13 @@ func TestAQueueThatIsNearlyDoneIsAShortWait(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("reserve the running Booking: %v", err)
+	}
+	// Its workload started when it was placed. Both runtimes a Booking declares
+	// bound a container, so nothing has elapsed against them until the machine
+	// says there is one.
+	schedule, err = schedule.Started("booking-long", reserved)
+	if err != nil {
+		t.Fatalf("record the workload running: %v", err)
 	}
 	offer := schedulerOffer("off_busy", now, 0.0001, 0)
 	workload := schedulerRevision()
@@ -413,65 +420,111 @@ func TestSchedulerAllowsUnknownNetworkWhenPolicyAllowsIt(t *testing.T) {
 	}
 }
 
-func TestSchedulerAppliesRiskAndUncertaintyPenalties(t *testing.T) {
+// TestTheClassPricesTheDoubtInTheAnswersItWasGiven is the uncertainty term
+// firing. Two machines five seconds from ready, the cheaper of them publishing a
+// capacity claim it is only forty percent sure of, and an interactive Run that
+// would rather pay than act on that. The shortfall is priced from the class's own
+// exchange rate, so the machine that costs 0.02 USD less over this Run is not
+// worth the doubt.
+//
+// The reliability rates on both offers are deliberately unpriced. Probability
+// times the cost of starting again is a derivation over a prediction, and any
+// flat dollar penalty invented for it now would be exactly the unmeasured
+// constant this model keeps deleting.
+func TestTheClassPricesTheDoubtInTheAnswersItWasGiven(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	stable := schedulerOffer("off_stable", now, 0.00012, 5)
-	stable.Capacity.Confidence = 0.99
-	stable.Reliability = domain.ReliabilityEvidence{
-		StartFailureRate: 0.01,
-		InterruptionRate: 0.01,
-		Confidence:       0.99,
-	}
 	risky := schedulerOffer("off_risky", now, 0.00010, 5)
 	risky.Capacity.Confidence = 0.4
-	risky.Reliability = domain.ReliabilityEvidence{
-		StartFailureRate: 0.35,
-		InterruptionRate: 0.25,
-		Confidence:       0.5,
-	}
+	workload := schedulerRevision()
+	workload.Spec.Placement.Class = domain.ClassInteractive
 
 	decision, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
-		Workload:     schedulerRevision(),
+		Workload:     workload,
 		Offers:       []domain.OfferSnapshot{risky, stable},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
-		Weights: ScoreWeights{
-			StartFailurePenaltyUSD: 1,
-			InterruptionPenaltyUSD: 1,
-			UncertaintyPenaltyUSD:  1,
-		},
 	})
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
 	if decision.SelectedOfferSnapshotID != "off_stable" {
-		t.Fatalf("expected lower-risk offer to win, got %+v", decision)
+		t.Fatalf("the cheaper machine won on a capacity claim it is 40%% sure of, got %+v", decision)
 	}
-	if findCandidate(t, decision, "off_risky").ScoreUSD <= findCandidate(t, decision, "off_stable").ScoreUSD {
-		t.Fatalf("expected risk penalties to increase risky score, got %+v", decision.Candidates)
+	doubted := findCandidate(t, decision, "off_risky")
+	if doubted.Uncertainty() != 0.6 {
+		t.Fatalf("the doubted candidate carries %v points of uncertainty, and its capacity claim was worth 0.4: %+v",
+			doubted.Uncertainty(), doubted.Confidences)
+	}
+	if doubted.ScoreUSD <= findCandidate(t, decision, "off_stable").ScoreUSD {
+		t.Fatalf("doubt was priced at nothing: %+v", decision.Candidates)
+	}
+	if decision.Weights != domain.ClassInteractive.Weights() {
+		t.Fatalf("the decision recorded weights %+v, and it scored at %+v", decision.Weights, domain.ClassInteractive.Weights())
 	}
 }
 
-func TestSchedulerUsesLatencyEstimateOverrides(t *testing.T) {
+// TestAMeasuredStageIsAnsweredFromTheMachineAndNotFromTheListing is the whole
+// point of keying a history on what recurs, asked of the scheduler directly. The
+// machine was measured under one listing ID and is offered under another, which
+// is what a marketplace search does, and the answer has to arrive anyway.
+func TestAMeasuredStageIsAnsweredFromTheMachineAndNotFromTheListing(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
-	offer := schedulerOffer("off_latency", now, 0.00010, 40)
+	measured := schedulerOffer("off_ask_11111", now, 0.00010, 0)
+	measured.MachineID = "machine-77"
+	republished := schedulerOffer("off_ask_99999", now, 0.00010, 0)
+	republished.MachineID = "machine-77"
+	image := schedulerRevision().Spec.Containers[0].Image
+
 	decision, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
 		Workload:     schedulerRevision(),
-		Offers:       []domain.OfferSnapshot{offer},
+		Offers:       []domain.OfferSnapshot{republished},
+		Image:        domain.ImageManifest{Digest: image},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
-		LatencyEstimates: map[string]domain.Estimate{
-			"off_latency": {Expected: 3, P50: 2, P90: 5, Source: "latency_estimator", SampleCount: 2, ModelVersion: "latency-v1"},
-		},
+		History: prediction.NewHistory([]prediction.Observation{{
+			Candidate: domain.CandidateIdentityOf(measured, image),
+			Stage:     domain.StageApplicationReady,
+			Seconds:   42,
+		}}),
 	})
+
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
-	candidate := findCandidate(t, decision, "off_latency")
-	if candidate.Estimates.StartSeconds.Expected != 3 || candidate.Estimates.StartSeconds.Source != "latency_estimator" {
-		t.Fatalf("expected latency override to feed scheduler, got %+v", candidate.Estimates.StartSeconds)
+	ready := findCandidate(t, decision, "off_ask_99999").Estimates.Stages.ApplicationReady
+	if ready.Level != domain.LevelExactCandidate || ready.SampleCount != 1 || ready.Expected != 42 {
+		t.Fatalf("the machine was measured at 42s and its next listing was answered %+v", ready)
+	}
+	if strings.Contains(ready.Key, "off_ask_") {
+		t.Fatalf("the answer names the listing %q, and a listing does not recur", ready.Key)
+	}
+}
+
+// TestAStageNobodyMeasuredNamesThePrior holds the other half: an answer with no
+// history behind it says so, rather than leaving a reader to tell a measurement
+// from an assumption by the seconds.
+func TestAStageNobodyMeasuredNamesThePrior(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     schedulerRevision(),
+		Offers:       []domain.OfferSnapshot{schedulerOffer("off_unmeasured", now, 0.00010, 0)},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	candidate := findCandidate(t, decision, "off_unmeasured")
+	for _, stage := range domain.LaunchStages {
+		answered := candidate.Estimates.Stages.Stage(stage)
+		if answered.Level != domain.LevelPrior || answered.SampleCount != 0 || answered.Key != "" {
+			t.Fatalf("nothing has measured this machine and its %s stage answered %+v", stage, answered)
+		}
 	}
 }
 
@@ -481,28 +534,24 @@ func TestSchedulerDecisionStableAcrossOfferOrder(t *testing.T) {
 		schedulerOffer("off_slow", now, 0.00010, 40),
 		schedulerOffer("off_fast", now, 0.00012, 5),
 	}
+	workload := schedulerRevision()
+	workload.Spec.Placement.Class = domain.ClassInteractive
 	forward, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
-		Workload:     schedulerRevision(),
+		Workload:     workload,
 		Offers:       offers,
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
-		Weights: ScoreWeights{
-			StartLatencyUSDPerSecond: 0.001,
-		},
 	})
 	if err != nil {
 		t.Fatalf("evaluate forward: %v", err)
 	}
 	reversed, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
-		Workload:     schedulerRevision(),
+		Workload:     workload,
 		Offers:       []domain.OfferSnapshot{offers[1], offers[0]},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
-		Weights: ScoreWeights{
-			StartLatencyUSDPerSecond: 0.001,
-		},
 	})
 	if err != nil {
 		t.Fatalf("evaluate reversed: %v", err)
@@ -528,14 +577,25 @@ func TestSchedulerPopulatesDeterministicCollectionAndCandidateAuditData(t *testi
 		RunID:        "run_1",
 		Workload:     schedulerRevision(),
 		Offers:       []domain.OfferSnapshot{offB, offA},
+		// The census is what the collection reported, and it is not derivable from
+		// the offers: conn_c was asked and published nothing, and conn_d was not
+		// asked at all. Derived from the offers those two were the same fact, and
+		// admission reads an empty answer as the strongest thing a fleet can say.
+		Collection: domain.CollectionReport{
+			ConnectionsQueried:  []string{"conn_a", "conn_b", "conn_c"},
+			ExcludedConnections: []string{"conn_d: not authorized"},
+		},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
 	})
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
-	if got := strings.Join(decision.CollectionReport.ConnectionsQueried, ","); got != "conn_a,conn_b" {
-		t.Fatalf("expected deterministic collection report, got %+v", decision.CollectionReport)
+	if got := strings.Join(decision.CollectionReport.ConnectionsQueried, ","); got != "conn_a,conn_b,conn_c" {
+		t.Fatalf("expected the census the collection reported, got %+v", decision.CollectionReport)
+	}
+	if got := strings.Join(decision.CollectionReport.ExcludedConnections, ","); got != "conn_d: not authorized" {
+		t.Fatalf("expected the connection nobody asked, got %+v", decision.CollectionReport)
 	}
 	first := decision.Candidates[0]
 	if first.OfferSnapshotID != "off_a" || first.ConnectionID != "conn_a" || first.AdapterType != "fake" || first.NativeRef != "native_a" {
@@ -572,7 +632,7 @@ func schedulerRevision() domain.WorkloadRevision {
 					AllowUnknown:             false,
 				},
 			},
-			Placement: domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, MaxP90StartSeconds: 180, ExpectedRuntimeSeconds: 900},
+			Placement: domain.PlacementPolicy{Class: domain.ClassStandard, MaxP90StartSeconds: 180, ExpectedRuntimeSeconds: 900},
 		},
 	}
 }
@@ -592,6 +652,7 @@ func schedulerOffer(id string, now time.Time, ratePerSecondUSD float64, startSec
 			CPUMillis:          8000,
 			MemoryBytes:        16 << 30,
 			EphemeralDiskBytes: 80 << 30,
+			EphemeralDiskKnown: true,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, MaxEnvironmentBytes: 32768},
@@ -612,9 +673,8 @@ func schedulerOffer(id string, now time.Time, ratePerSecondUSD float64, startSec
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 		Images:   domain.ImageInventory{Known: true},
 		Reliability: domain.ReliabilityEvidence{
-			StartFailureRate: 0.01,
-			InterruptionRate: 0.01,
-			Confidence:       1,
+			StartFailures: domain.StatedRate{Rate: 0.01, Confidence: 1},
+			Interruptions: domain.StatedRate{Rate: 0.01, Confidence: 1},
 		},
 	}
 }
@@ -701,13 +761,13 @@ func TestArtifactLocalityDecidesBetweenOtherwiseIdenticalHosts(t *testing.T) {
 	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityHot {
 		t.Fatalf("the holder recorded %+v", warm.ArtifactEvidence)
 	}
-	if warm.Estimates.ArtifactSeconds.Expected != 0 || warm.Estimates.ArtifactSeconds.Confidence != 1 {
-		t.Fatalf("a host holding a checked copy was priced %+v, and it owes nothing", warm.Estimates.ArtifactSeconds)
+	if warm.Estimates.Stages.ArtifactFetch.Expected != 0 || warm.Estimates.Stages.ArtifactFetch.Confidence != 1 {
+		t.Fatalf("a host holding a checked copy was priced %+v, and it owes nothing", warm.Estimates.Stages.ArtifactFetch)
 	}
 	// 40GB at the assumed 500 Mbps is 640 seconds, over a link nothing measured.
 	empty := schedulerCandidate(t, decision, "off_cold")
-	if empty.Estimates.ArtifactSeconds.Expected != 640 || empty.Estimates.ArtifactSeconds.Confidence != domain.AssumedLinkConfidence {
-		t.Fatalf("a host holding no copy was priced %+v", empty.Estimates.ArtifactSeconds)
+	if empty.Estimates.Stages.ArtifactFetch.Expected != 640 || empty.Estimates.Stages.ArtifactFetch.Confidence != domain.AssumedLinkConfidence {
+		t.Fatalf("a host holding no copy was priced %+v", empty.Estimates.Stages.ArtifactFetch)
 	}
 	if empty.ArtifactEvidence[0].FetchBytes != dataset.SizeBytes {
 		t.Fatalf("a host holding no copy owes %d bytes, and the version is %d", empty.ArtifactEvidence[0].FetchBytes, dataset.SizeBytes)
@@ -741,11 +801,11 @@ func TestAHostThatCannotEnumerateItsCopiesRecordsUnknownAndNotZero(t *testing.T)
 	if len(candidate.ArtifactEvidence) != 1 || candidate.ArtifactEvidence[0].Locality != domain.LocalityUnknown {
 		t.Fatalf("a machine that cannot enumerate its copies recorded %+v", candidate.ArtifactEvidence)
 	}
-	if candidate.Estimates.ArtifactSeconds.Expected != 640 {
-		t.Fatalf("silence was priced %v seconds, and absence costs 640", candidate.Estimates.ArtifactSeconds.Expected)
+	if candidate.Estimates.Stages.ArtifactFetch.Expected != 640 {
+		t.Fatalf("silence was priced %v seconds, and absence costs 640", candidate.Estimates.Stages.ArtifactFetch.Expected)
 	}
-	if candidate.Estimates.ArtifactSeconds.Source != "inventory_unknown" {
-		t.Fatalf("the estimate names its source %q, and this one rests on a machine nobody could ask", candidate.Estimates.ArtifactSeconds.Source)
+	if candidate.Estimates.Stages.ArtifactFetch.Source != "inventory_unknown" {
+		t.Fatalf("the estimate names its source %q, and this one rests on a machine nobody could ask", candidate.Estimates.Stages.ArtifactFetch.Source)
 	}
 	if !candidate.Feasible {
 		t.Fatalf("a machine that cannot say what it holds was refused: %+v", candidate.Rejections)
@@ -795,26 +855,35 @@ func schedulerCandidate(t *testing.T, decision domain.BookingDecision, offerID s
 	return domain.CandidateDecision{}
 }
 
-// TestTheObjectiveDecidesWhichCandidateWins is what a Run's stated objective
-// does to a placement. Each row is the same two offers: one a fraction of a cent
-// cheaper per second and forty seconds from ready, the other pricier and five
-// seconds from ready. Nothing populates ScoreWeights in production, so before
-// the objective ordered candidates every one of these rows returned the cheaper
-// machine and the words in the public API meant nothing.
-func TestTheObjectiveDecidesWhichCandidateWins(t *testing.T) {
+// TestTheServiceClassDecidesWhichCandidateWins is what a Run's stated class does
+// to a placement. Every row is the same two offers: one a fifth of a cent cheaper
+// an hour and forty seconds from ready, the other pricier and five seconds from
+// ready. What differs is the exchange rate each class declares, and the winner
+// changes with it, which is what a class is for.
+//
+// Before the class carried the rate, every one of these rows returned the same
+// machine: the score's only time term was a weight nothing populated, so
+// "fastest_start" was a word the public API accepted and nothing read.
+func TestTheServiceClassDecidesWhichCandidateWins(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	for _, choice := range []struct {
-		objective domain.PlacementObjective
-		winner    string
-		reason    string
+		class  domain.ServiceClass
+		winner string
 	}{
-		{domain.ObjectiveCheapest, "off_slow", "LOWEST_SCORE"},
-		{domain.ObjectiveFastestStart, "off_fast", "EARLIEST_START"},
-		{domain.ObjectiveFastestCompletion, "off_fast", "EARLIEST_COMPLETION"},
+		// Somebody is watching, so thirty-five seconds is worth 0.35 USD and the
+		// cheaper machine is not.
+		{domain.ClassInteractive, "off_fast"},
+		// Waiting costs what the machine costs, which is less than the price gap.
+		{domain.ClassStandard, "off_slow"},
+		{domain.ClassBatch, "off_slow"},
+		// The answer is the point and the next iteration is behind it.
+		{domain.ClassExperimental, "off_fast"},
+		// Waiting is free, so this is the price and nothing else.
+		{domain.ClassOpportunistic, "off_slow"},
 	} {
-		t.Run(string(choice.objective), func(t *testing.T) {
+		t.Run(string(choice.class), func(t *testing.T) {
 			workload := schedulerRevision()
-			workload.Spec.Placement.Objective = choice.objective
+			workload.Spec.Placement.Class = choice.class
 
 			decision, err := New().Evaluate(context.Background(), SchedulingInput{
 				RunID:        "run_1",
@@ -827,25 +896,53 @@ func TestTheObjectiveDecidesWhichCandidateWins(t *testing.T) {
 				t.Fatalf("evaluate: %v", err)
 			}
 			if decision.SelectedOfferSnapshotID != choice.winner {
-				t.Fatalf("a Run that asked for %q landed on %q", choice.objective, decision.SelectedOfferSnapshotID)
+				t.Fatalf("a %q Run landed on %q", choice.class, decision.SelectedOfferSnapshotID)
 			}
-			if !slices.Contains(decision.SelectionReasonCodes, choice.reason) {
-				t.Fatalf("the decision recorded %v, and it ranked candidates on %q", decision.SelectionReasonCodes, choice.reason)
+			if !slices.Contains(decision.SelectionReasonCodes, choice.class.SelectionReason()) {
+				t.Fatalf("the decision recorded %v, and it was scored at the %q class's rates",
+					decision.SelectionReasonCodes, choice.class)
+			}
+			if decision.Weights != choice.class.Weights() {
+				t.Fatalf("the decision recorded weights %+v, and this class declares %+v", decision.Weights, choice.class.Weights())
 			}
 		})
 	}
 }
 
-// TestEqualPricesAreDecidedByWhatEachCandidateHolds is the case Artifact
-// locality was added for and the one a pure cost ranking cannot answer. Two
-// machines at one price, one of them forty seconds from ready, and the cheapest
-// objective still has a second term to fall back on. Without it the winner is
-// whichever offer ID sorts first, and every locality answer in the decision is
-// arithmetic nobody read.
+// TestAClassMercatorCannotPriceIsRefusedRatherThanRanked is the other half of the
+// same rule. Scoring a Run whose class declares nothing ranks every candidate on
+// price alone and records a reason naming a class nothing declared, which is the
+// silent fallback this replaced: a caller would learn their word was ignored from
+// the bill. CreateRun refuses such a Run at the door, so reaching Placement means
+// a revision was stored by something that did not ask.
+func TestAClassMercatorCannotPriceIsRefusedRatherThanRanked(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	workload := schedulerRevision()
+	workload.Spec.Placement.Class = "urgent"
+
+	_, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{schedulerOffer("off_slow", now, 0.00010, 40)},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), `service class "urgent"`) {
+		t.Fatalf("evaluating a Run of an unknown class returned %v", err)
+	}
+}
+
+// TestEqualPricesAreDecidedByWhatEachCandidateHolds is the case Artifact locality
+// was added for and the one a pure cost ranking cannot answer. Two machines at one
+// price, one of them forty seconds from ready, and a batch Run that values a
+// second of waiting at a fifth of the machine's rent. That fifth is what turns
+// locality into dollars; without any rate at all the winner is whichever offer ID
+// sorts first and every locality answer in the decision is arithmetic nobody read.
 func TestEqualPricesAreDecidedByWhatEachCandidateHolds(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	workload := schedulerRevision()
-	workload.Spec.Placement.Objective = domain.ObjectiveCheapest
+	workload.Spec.Placement.Class = domain.ClassBatch
 
 	decision, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
@@ -860,4 +957,258 @@ func TestEqualPricesAreDecidedByWhatEachCandidateHolds(t *testing.T) {
 	if decision.SelectedOfferSnapshotID != "off_b_ready" {
 		t.Fatalf("two machines at one price were decided by %q rather than by how ready each is", decision.SelectedOfferSnapshotID)
 	}
+	if findCandidate(t, decision, "off_b_ready").ScoreUSD >= findCandidate(t, decision, "off_a_slow").ScoreUSD {
+		t.Fatalf("the readier machine did not score lower, so the offer ID decided it: %+v", decision.Candidates)
+	}
+}
+
+// TestADownloadFloorRefusesOnlyWhatWasMeasuredTooSlow is the difference between the
+// two ways a candidate can miss a floor, which the record has to keep apart. The
+// machine that published 100 Mbps was measured too slow and is refused with the
+// number it published. The machines nobody answered for measured nothing, and this
+// Run allows an unmeasured link, so each is admitted exactly as the machine that
+// published nothing at all is: a number its own publisher disowned and an expired
+// one are the silence AllowUnknown was asked about, and a disowned fact that struck
+// a candidate out where an identical silence was admitted made publishing a number
+// you disown strictly worse than saying nothing.
+func TestADownloadFloorRefusesOnlyWhatWasMeasuredTooSlow(t *testing.T) {
+	now := time.Now().UTC()
+	workload := schedulerRevision()
+	workload.Spec.Network.Download.AllowUnknown = true
+	slow := schedulerOffer("off_slow", now, 0.0002, 0)
+	slow.Network.Download[0].ValueMbps = 100
+	disowned := schedulerOffer("off_disowned", now, 0.0002, 0)
+	disowned.Network.Download[0].ValueMbps, disowned.Network.Download[0].Confidence = 5000, 0
+	expired := schedulerOffer("off_expired", now, 0.0002, 0)
+	expired.Network.Download[0].ValidUntil = now.Add(-time.Minute)
+	silent := schedulerOffer("off_silent", now, 0.0002, 0)
+	silent.Network.Download = nil
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_floor_allowed",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{slow, disowned, expired, silent},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	for _, id := range []string{"off_disowned", "off_expired", "off_silent"} {
+		candidate := findCandidate(t, decision, id)
+		if !candidate.Feasible {
+			t.Errorf("%s was refused as %+v, and nobody measured its link: this Run allows that, and the machine that published nothing is feasible", id, candidate.Rejections)
+		}
+	}
+	refused := findCandidate(t, decision, "off_slow")
+	if refused.Feasible {
+		t.Fatalf("the machine that published 100 Mbps cleared a 500 Mbps floor")
+	}
+	rejection := refused.Rejections[0]
+	if rejection.Code != "NETWORK_FACT_UNSATISFIED" || rejection.Offered != 100.0 {
+		t.Fatalf("the record says %+v, and an operator reading it has to see the speed the machine published", rejection)
+	}
+}
+
+// TestARunsDownloadFloorIsNotClearedByADisownedFact is the hard half of the same
+// rule the score follows. A Run that states a floor on how fast a candidate
+// reaches content has said it would rather not run than run below it, and a
+// publisher that puts no confidence in its own number has measured nothing. The
+// two offers here publish the same 5 Gbps: one stands behind it and clears the
+// floor, one disowns it and is refused as the silence it is, which is what a Run
+// asked for when it set AllowUnknown false.
+func TestARunsDownloadFloorIsNotClearedByADisownedFact(t *testing.T) {
+	now := time.Now().UTC()
+	workload := schedulerRevision()
+	stood := schedulerOffer("off_stood", now, 0.0002, 0)
+	stood.Network.Download[0].ValueMbps, stood.Network.Download[0].Confidence = 5000, 0.9
+	disowned := schedulerOffer("off_disowned", now, 0.0001, 0)
+	disowned.Network.Download[0].ValueMbps, disowned.Network.Download[0].Confidence = 5000, 0
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_floor",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{stood, disowned},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if decision.SelectedOfferSnapshotID != "off_stood" {
+		t.Errorf("the placement chose %q, and the cheaper machine cleared the floor with a number nobody stands behind", decision.SelectedOfferSnapshotID)
+	}
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID != "off_disowned" {
+			continue
+		}
+		if candidate.Feasible {
+			t.Errorf("the disowned publisher is feasible, and its own publisher stated no confidence in the measurement that admitted it")
+		}
+		if len(candidate.Rejections) == 0 || candidate.Rejections[0].Code != "UNKNOWN_FACT" || candidate.Rejections[0].Offered != "unknown" {
+			t.Errorf("the disowned publisher was refused as %+v, and its machine measured nothing rather than measuring too slow", candidate.Rejections)
+		}
+	}
+}
+
+// TestAnUnpricedCandidateIsTakenOnlyWhenNothingPricedWillDo is what allowing
+// unknown pricing buys a Run. It admits a machine nobody has quoted, which is
+// what an enrolled node with no configured shadow price publishes, and it never
+// makes one preferable: the score is in dollars and that candidate has none, so
+// reading the absence as zero made the machine Mercator pays for the cheapest in
+// the fleet. It is the last resort it was asked to be, and it is taken when the
+// alternative is not running.
+func TestAnUnpricedCandidateIsTakenOnlyWhenNothingPricedWillDo(t *testing.T) {
+	now := time.Now().UTC()
+	workload := schedulerRevision()
+	workload.Spec.Placement.AllowUnknownPricing = true
+	priced := schedulerOffer("off_priced", now, 0.0002, 0)
+	unpriced := schedulerOffer("off_unpriced", now, 0, 0)
+	unpriced.Pricing = domain.PriceModel{Currency: "USD"}
+	unpriced.Capabilities.Pricing = domain.PricingCapabilities{}
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_pricing",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{priced, unpriced},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if decision.SelectedOfferSnapshotID != "off_priced" {
+		t.Errorf("the placement chose %q over a machine somebody quoted", decision.SelectedOfferSnapshotID)
+	}
+	// The winner has the higher score, because the score is in dollars and the
+	// loser has none of them. Nothing else in the record says which rule ranked
+	// them, so a reader comparing scores sees the selected machine beaten by the
+	// one it beat.
+	if !slices.Contains(decision.SelectionReasonCodes, "PRICED_BEFORE_UNPRICED") {
+		t.Errorf("the decision recorded %v, and it took the costlier machine because the cheaper one had no price", decision.SelectionReasonCodes)
+	}
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID != "off_unpriced" {
+			continue
+		}
+		if !candidate.Feasible {
+			t.Errorf("the unquoted machine is infeasible, and this Run said it would rather run there than not run: %+v", candidate.Rejections)
+		}
+		if candidate.Priced() || candidate.Estimates.CostUSD.Source != domain.CostUnpriced {
+			t.Errorf("the unquoted machine records cost %+v, and a reader has to be able to tell an absent price from a free machine", candidate.Estimates.CostUSD)
+		}
+	}
+
+	unreachable := schedulerOffer("off_priced", now, 0.0002, 0)
+	unreachable.Resources.MemoryBytes = 1 << 20
+	fallback, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_pricing_fallback",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{unreachable, unpriced},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate the fallback: %v", err)
+	}
+	if fallback.SelectedOfferSnapshotID != "off_unpriced" {
+		t.Errorf("with nothing priced left to take, the placement chose %q, and a last resort that is never taken is a refusal", fallback.SelectedOfferSnapshotID)
+	}
+	if !slices.Contains(fallback.SelectionReasonCodes, "UNPRICED_LAST_RESORT") {
+		t.Errorf("the decision recorded %v for a Run placed on a machine nobody has quoted", fallback.SelectionReasonCodes)
+	}
+}
+
+// TestABudgetIsNotClearedByACandidateWithNoPrice is the same absence read as a
+// bound rather than as a ranking. A Run that states a maximum expected cost has
+// said what it will spend, and a candidate whose price nobody quoted cannot be
+// shown to spend less: it reported zero dollars, so it passed every budget any
+// Run could state.
+func TestABudgetIsNotClearedByACandidateWithNoPrice(t *testing.T) {
+	now := time.Now().UTC()
+	budget := 1.0
+	workload := schedulerRevision()
+	workload.Spec.Placement.AllowUnknownPricing = true
+	workload.Spec.Placement.MaxExpectedCostUSD = &budget
+	unpriced := schedulerOffer("off_unpriced", now, 0, 0)
+	unpriced.Pricing = domain.PriceModel{Currency: "USD"}
+	unpriced.Capabilities.Pricing = domain.PricingCapabilities{}
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_budget",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{unpriced},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	candidate := decision.Candidates[0]
+	if candidate.Feasible {
+		t.Fatalf("a Run that budgeted %.2f USD was offered a machine nobody priced and took it", budget)
+	}
+	if candidate.Rejections[0].Code != "COST_LIMIT_EXCEEDED" {
+		t.Errorf("the refusal is %+v, and the caller has to see which bound the candidate missed", candidate.Rejections)
+	}
+}
+
+// TestAFactThatLapsedBeforeTheDecisionIsSilenceToBothItsReaders holds the rate
+// and the floor to one moment. A published fact is read twice on the way to one
+// placement: once to price the transfer and once to answer the Run's floor over
+// the same link. Asking the first at the offer's observation moment and the second
+// at the decision's made a lapsed fact both things at once, and the record then
+// said this candidate was refused because nobody had published a download p10 and
+// priced its image pull at 750 Mbps measured by that same publisher.
+//
+// It is not a record an operator can act on, and it is the record the Lab's
+// attribution rule reports as a fabricated measurement, in the words it exists to
+// say about a prediction that invented a number.
+func TestAFactThatLapsedBeforeTheDecisionIsSilenceToBothItsReaders(t *testing.T) {
+	collected := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	decided := collected.Add(15 * time.Second)
+	offer := schedulerOffer("offer-lapsed", decided, 0.0001, 0)
+	offer.ObservedAt = collected
+	offer.Network.Download[0].Source = "node_artifact_copy"
+	offer.Network.Download[0].ValidUntil = decided.Add(-time.Second)
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run-lapsed",
+		Workload:     schedulerRevision(),
+		Offers:       []domain.OfferSnapshot{offer},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  decided,
+		Image: domain.ImageManifest{
+			Known:  true,
+			Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			Layers: []domain.ImageLayer{{Digest: "sha256:aa", CompressedBytes: 2 << 30}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	assertCandidateRejected(t, decision, "offer-lapsed", "UNKNOWN_FACT", "network.download")
+	rate := findTransferRate(t, findCandidate(t, decision, "offer-lapsed"), domain.StageImageFetch)
+	if rate.Measurement != "" {
+		t.Fatalf("the decision priced the image pull at %+v as a measurement, and it refused the same candidate because nobody had published one", rate)
+	}
+	if rate.Assumption != domain.AssumptionRegistryRate {
+		t.Fatalf("the decision priced the image pull at %+v, and a link nothing standing describes is priced from the stated assumption", rate)
+	}
+}
+
+func findTransferRate(t *testing.T, candidate domain.CandidateDecision, stage domain.LaunchStage) domain.TransferRate {
+	t.Helper()
+	for _, rate := range candidate.TransferRates {
+		if rate.Stage == stage {
+			return rate
+		}
+	}
+	t.Fatalf("candidate %s recorded no rate for its %s stage: %+v", candidate.OfferSnapshotID, stage, candidate.TransferRates)
+	return domain.TransferRate{}
 }

@@ -197,10 +197,19 @@ func (store *memoryStore) AppendOperation(_ context.Context, operation Operation
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	key := nodeKey(operation.WorkspaceID, operation.NodeID)
-	for _, existing := range store.operations[key] {
-		if existing.OperationID == operation.OperationID {
+	for index, existing := range store.operations[key] {
+		if existing.OperationID != operation.OperationID {
+			continue
+		}
+		if !existing.Reissuable() {
 			return existing, true, nil
 		}
+		// The refusal left nothing on the machine, so this identity is a fresh
+		// command rather than a redelivery of one. It replaces the settled record
+		// in place: the position in the queue is where the node was first told
+		// about this content, and the failure it reported is spent.
+		store.operations[key][index] = operation
+		return operation, false, nil
 	}
 	store.operations[key] = append(store.operations[key], operation)
 	return operation, false, nil

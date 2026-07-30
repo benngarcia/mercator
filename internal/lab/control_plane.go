@@ -12,6 +12,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/janitor"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/runprojection"
 	"github.com/benngarcia/mercator/internal/scenario"
@@ -28,6 +29,11 @@ type controlPlane struct {
 	// caches, Artifacts, and Runs on them are not.
 	workspaces   []string
 	orchestrator *orchestrator.Orchestrator
+	// janitor is what converges capacity the control plane does not recognise. It
+	// is a controller beside the Runs rather than a step in any of them, exactly as
+	// it is in production: nothing waits on it, and what it decides about a machine
+	// is decided by a stated policy and written down.
+	janitor *janitor.Janitor
 	// prewarm is what this world's Blueprint allows the control plane to have in
 	// flight for work it has not admitted. A Blueprint that states none turns
 	// preparation off, which is every fixture written before it existed.
@@ -83,6 +89,7 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		SeededLocality:              facts.SeededLocality,
 		SeededReplicas:              facts.SeededReplicas,
 		Prewarm:                     facts.Prewarm,
+		SeededOrphans:               facts.SeededOrphans,
 		ProjectionRebuildEquivalent: reflect.DeepEqual(runs, rebuiltRuns),
 	}, nil
 }
@@ -194,6 +201,7 @@ func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error)
 		world:      world,
 		workspaces: workspaces,
 		prewarm:    prewarmPolicy(tape.InitialWorld.Prewarm),
+		janitor:    janitor.New(world, janitor.WithEventLog(storage.EventLog())),
 	}
 	runtime.restartOrchestrator()
 	return runtime, nil
@@ -209,6 +217,11 @@ func (runtime *controlPlane) handle(ctx context.Context, event WorldEvent) error
 		return runtime.applyEventFaults(ctx)
 	case EventRunCancelled:
 		if err := runtime.handleRunCancellation(ctx, event); err != nil {
+			return err
+		}
+		return runtime.applyEventFaults(ctx)
+	case EventCapacityPreempted:
+		if err := runtime.handleCapacityPreemption(ctx, event); err != nil {
 			return err
 		}
 		return runtime.applyEventFaults(ctx)
@@ -262,6 +275,29 @@ func (runtime *controlPlane) handleRunCancellation(ctx context.Context, event Wo
 	return runtime.advanceWorkspace(ctx, workspace)
 }
 
+// handleCapacityPreemption is the provider taking a machine back. Nothing is asked
+// of Mercator and nothing is told to it: the world removes the capacity and the
+// executions on it, and then every tenant's open Runs are advanced, which is the
+// sweep that finds the launch missing. That is how a control plane learns of a
+// reclamation it was never notified of, and it is the only way it can learn of one
+// here, because a provider that has taken its machine back answers no differently
+// from a provider whose machine finished the work.
+func (runtime *controlPlane) handleCapacityPreemption(ctx context.Context, event WorldEvent) error {
+	var preemption CapacityPreemption
+	if err := json.Unmarshal(event.Data, &preemption); err != nil {
+		return fmt.Errorf("decode capacity preemption event %q: %w", event.ID, err)
+	}
+	if err := runtime.world.preemptCapacity(preemption.Rental); err != nil {
+		return err
+	}
+	for _, workspace := range runtime.workspaces {
+		if err := runtime.advanceWorkspace(ctx, workspace); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) error {
 	runID := "run-" + arrival.Name
 	if err := runtime.world.prepareRun(runID, arrival); err != nil {
@@ -289,6 +325,9 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 
 func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 	runtime.world.setNow(now)
+	if err := runtime.deliverReadiness(ctx); err != nil {
+		return err
+	}
 	for _, workspace := range runtime.workspaces {
 		if err := runtime.advanceWorkspace(ctx, workspace); err != nil {
 			return err
@@ -305,6 +344,27 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 	return runtime.applyEventFaults(ctx)
 }
 
+// deliverReadiness is the applications in this world calling Mercator to say they
+// can do work. It runs before the Runs are advanced, because a readiness that has
+// arrived is a fact about a Run the same sweep then reasons over.
+//
+// It is an inbound call rather than something read off an observation, because
+// that is what application readiness is: the workload is the only authority, and
+// routing it through the provider seam would make a running process and a serving
+// one the same fact again.
+func (runtime *controlPlane) deliverReadiness(ctx context.Context) error {
+	for _, report := range runtime.world.dueReadinessReports() {
+		ready, err := orchestrator.NewApplicationReadyReport(report.ReadyAt)
+		if err != nil {
+			return err
+		}
+		if err := runtime.orchestrator.RecordReport(ctx, report.WorkspaceID, report.RunID, ready); err != nil {
+			return fmt.Errorf("report Lab readiness for Run %q: %w", report.RunID, err)
+		}
+	}
+	return nil
+}
+
 // advanceWorkspace drives one tenant's open Runs. An ambiguous launch is
 // reconciled by advancing again, which is what a control plane does with a
 // response it never got.
@@ -313,6 +373,13 @@ func (runtime *controlPlane) advanceWorkspace(ctx context.Context, workspace str
 	if errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		_, err = runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
 	}
+	if err != nil {
+		return err
+	}
+	// The orphan sweep is last because what capacity Mercator holds live work for
+	// is whatever the Runs just settled into, so a sweep that ran first would find
+	// a machine orphaned that a Run was about to be launched on.
+	_, err = runtime.janitor.Sweep(ctx, workspace)
 	return err
 }
 

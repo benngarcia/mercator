@@ -109,6 +109,14 @@ type PrewarmResult struct {
 // from content it has not, so it states nothing at all until the rate bound
 // allows a beginning. The price is that a withdrawal it discovers inside that
 // window waits for the same interval, which is the operator's own number.
+//
+// Nothing asked for and nothing wanted are held apart, which is what makes a
+// restart survivable rather than merely slow. A restarted Mercator whose Runs
+// were all withdrawn while it was down computes a desire that names nothing, and
+// a memory that read its own absence as having already asked for nothing would
+// answer that the fleet is in the state it wants and stay quiet, leaving
+// whatever was in flight to run to completion for Runs that no longer exist.
+// That is why wanting nothing has a key of its own rather than the empty one.
 type prewarmMemory struct {
 	mu   sync.Mutex
 	sent map[string]map[string]bool
@@ -138,11 +146,29 @@ func (memory *prewarmMemory) withoutAdditions(workspaceID string, wanted []adapt
 	return kept
 }
 
-// remember records a desire Mercator has just stated, and answers whether
-// stating it began any preparation. A desire naming only content this tenant was
-// already asked for began no transfer, and neither did one that only drops
-// content, so neither is a moment the rate bound measures from.
-func (memory *prewarmMemory) remember(workspaceID, key string, wanted []adapter.PrepareItem) bool {
+// remember records what the far side actually took on, which is the desire minus
+// whatever it turned away, and answers whether stating it began preparing
+// anything. A desire naming only content this tenant was already asked for began
+// no transfer, and neither did one that only drops content, so neither is a
+// moment the rate bound measures from.
+//
+// The two questions are asked of different sets, which is the whole subtlety
+// here. What Mercator remembers asking for is what the holder kept, because
+// content it refused is not on its way anywhere and nothing stopped it being
+// asked for again: remembering a refusal as asked for is what made it permanent,
+// since the desire is recomputed identically on the next pass and an unchanged
+// desire is not restated. What the rate bound measures is the attempt, refused or
+// not, because the bound is on how often Mercator may begin asking a fleet to
+// move bytes. Pacing it on what was accepted instead lets a machine that refuses
+// everything be asked again in the same instant, forever.
+//
+// A refusal is matched by the identity the desire stated the item under, which
+// names the machine as well as the content. Matching on content alone let one
+// host's refusal forget the same content another host had taken on, and what a
+// host is really fetching is what the withdrawal for it is computed against: the
+// memory collapsed to nothing, the next empty desire read as unchanged, and the
+// transfer nobody was waiting for any more ran to completion.
+func (memory *prewarmMemory) remember(workspaceID string, wanted []adapter.PrepareItem, receipt adapter.PrepareReceipt) bool {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
 	if memory.sent == nil {
@@ -150,15 +176,19 @@ func (memory *prewarmMemory) remember(workspaceID, key string, wanted []adapter.
 		memory.key = map[string]string{}
 	}
 	previous := memory.sent[workspaceID]
-	asked := make(map[string]bool, len(wanted))
 	began := false
 	for _, item := range wanted {
-		itemKey := prewarmItemKey(item)
-		asked[itemKey] = true
-		began = began || !previous[itemKey]
+		began = began || !previous[prewarmItemKey(item)]
+	}
+	kept := slices.DeleteFunc(slices.Clone(wanted), func(item adapter.PrepareItem) bool {
+		return slices.Contains(receipt.Refused, item.Identity())
+	})
+	asked := make(map[string]bool, len(kept))
+	for _, item := range kept {
+		asked[prewarmItemKey(item)] = true
 	}
 	memory.sent[workspaceID] = asked
-	memory.key[workspaceID] = key
+	memory.key[workspaceID] = prewarmOperationKey(workspaceID, kept)
 	return began
 }
 
@@ -214,14 +244,15 @@ func (o *Orchestrator) stateDesire(ctx context.Context, workspaceID string, want
 	if o.prewarmed.unchanged(workspaceID, key) {
 		return false, nil
 	}
-	if _, err := o.prewarmer.Prepare(ctx, adapter.PrepareRequest{
+	receipt, err := o.prewarmer.Prepare(ctx, adapter.PrepareRequest{
 		WorkspaceID:  workspaceID,
 		OperationKey: key,
 		Wanted:       wanted,
-	}); err != nil {
+	})
+	if err != nil {
 		return false, fmt.Errorf("orchestrator: prepare capacity for queued work: %w", err)
 	}
-	if !o.prewarmed.remember(workspaceID, key, wanted) {
+	if !o.prewarmed.remember(workspaceID, wanted, receipt) {
 		return true, nil
 	}
 	if err := o.preparationClock.RecordBegan(ctx, o.now()); err != nil {
@@ -290,11 +321,11 @@ func (o *Orchestrator) tenantDesire(ctx context.Context, workspaceID string) ([]
 	if err != nil || len(queued) == 0 {
 		return nil, err
 	}
-	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: workspaceID})
+	collected, err := o.adapter.CollectOffers(ctx, adapter.OfferRequest{WorkspaceID: workspaceID})
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator: read capacity to prepare: %w", err)
 	}
-	catalog := offersByID(offers)
+	catalog := offersByID(collected.Offers)
 	var wanted []prewarmWant
 	seen := map[string]bool{}
 	for _, placement := range queued {
@@ -540,22 +571,26 @@ func offersByID(offers []domain.OfferSnapshot) map[string]domain.OfferSnapshot {
 }
 
 // prewarmItemKey names one piece of content on one machine, which is the
-// identity two Runs wanting the same image on the same host share.
+// identity two Runs wanting the same image on the same host share. It is the
+// item's own identity, so what the far side answers about one item and what this
+// controller remembers about it are the same string.
 func prewarmItemKey(item adapter.PrepareItem) string {
-	return string(item.Kind) + ":" + item.OfferSnapshotID + "/" + item.Content()
+	return string(item.Kind) + ":" + item.Identity()
 }
 
 // prewarmOperationKey is the identity of one desired state. Two reconciliations
 // reaching the same answer produce the same key, which is what lets the far
 // side treat a redelivered desire as the same desire and lets this controller
 // stay quiet when nothing has changed.
+//
+// Wanting nothing has a key of its own, like every other desire. It is the one
+// desire a control plane that has never asked for anything might be mistaken for
+// holding, and the two are opposite instructions: one leaves a fleet alone and
+// the other stops everything speculative on it. So a Mercator that comes up with
+// no queued work sends one withdrawal of nothing, which costs a machine nothing
+// and is the only thing that stops a transfer whose Runs went away while this
+// control plane was down.
 func prewarmOperationKey(workspaceID string, wanted []adapter.PrepareItem) string {
-	// Wanting nothing is the empty key, which is what a control plane that has
-	// never asked for anything is already holding. Without that, every Mercator
-	// with no queued work would send one withdrawal of nothing at startup.
-	if len(wanted) == 0 {
-		return ""
-	}
 	keys := make([]string, 0, len(wanted))
 	for _, item := range wanted {
 		keys = append(keys, prewarmItemKey(item))

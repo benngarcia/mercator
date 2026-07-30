@@ -1,0 +1,76 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Three machines at one price for one 18.04GB image, so nothing but what each answer is worth can decide the placement. The first is a Rental that enumerated itself and holds the image: nothing to fetch, and it is certain of that. The second is a machine Mercator has not enrolled, which World Truth says is sitting on the whole image while nothing there can be asked: it is charged the whole fetch, the assembly of every byte it fetches, and one point of doubt: half because those seconds cross a link nothing has measured, and half because applying the bytes afterwards is a duration over an unpack rate nothing has measured either. That one point is the entire uncertainty term for it, and it is the same point an enrolled machine that answered and holds nothing is charged, which is what makes silence cost what absence costs here as well. Pricing the whole image AND capping the estimate's confidence AND adding a point for the unenumerated inventory was charging one silence three times, and the reference model did exactly that while the production scheduler did not, which nothing noticed because both were multiplied by zero. The third Rental holds the image too and publishes a capacity claim it is 70 percent sure of, which is three tenths of a point and the only thing separating it from the first. An interactive Run prices a point of doubt at 0.60 USD, so the doubted machine is 0.18 USD dearer and the unaskable one is dearer by its seconds.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-enumerated",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "rental-doubted",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "capacity_confidence": 0.7,
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "hosts": [
+      {
+        "id": "host-unaskable",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.0
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "service_class": "interactive",
+    "expected_runtime": "10m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-enumerated",
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_INTERACTIVE"],
+    "disposition": "release",
+    "candidates": {
+      "rental-enumerated": {
+        "feasible": true,
+        "stages": {
+          "image_fetch": {"seconds": 0, "source": "image_inventory", "confidence": 1}
+        },
+        "image_locality": "hot",
+        "uncertainty": 0,
+        "score_usd": {"at_least": 0.343, "at_most": 0.344}
+      },
+      "rental-doubted": {
+        "feasible": true,
+        "stages": {
+          "image_fetch": {"seconds": 0, "confidence": 1}
+        },
+        "image_locality": "hot",
+        "uncertainty": 0.3,
+        "score_usd": {"at_least": 0.523, "at_most": 0.524}
+      },
+      "host-unaskable": {
+        "feasible": true,
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 285, "at_most": 292}, "source": "inventory_unknown", "confidence": 0.5}
+        },
+        "image_locality": "unknown",
+        "uncertainty": 1,
+        "score_usd": {"at_least": 4.55, "at_most": 4.56}
+      }
+    }
+  }
+}

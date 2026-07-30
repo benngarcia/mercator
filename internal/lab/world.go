@@ -20,6 +20,9 @@ import (
 const (
 	labWorkspace  = "ws_lab"
 	labConnection = "connection:lab"
+	// labProvider is the backend a listing comes from when the Blueprint names no
+	// provider for it.
+	labProvider = "lab"
 )
 
 type externalExecution struct {
@@ -37,12 +40,37 @@ type externalExecution struct {
 	// is taken from the launch command rather than from the arrival, so what the
 	// world reads and writes is what the control plane actually declared.
 	CacheMounts []domain.CacheMountRequirement `json:"cache_mounts,omitempty"`
-	// AcceptedAt is when the provider took the launch. StartedAt is when the
-	// container actually began, which cannot precede the arrival of the image it
-	// runs: a process cannot execute bytes that have not landed. The gap between
-	// them is the start latency Mercator predicted and now has an actual for.
+	// AcceptedAt is when the provider took the launch. ReadyAt is when there was a
+	// machine here able to run a container, which for a machine that did not exist
+	// yet is after the world has spent acquisition, boot, and agent enrollment on
+	// making one. StartedAt is when the container actually began, which cannot
+	// precede either that machine existing or the arrival of the image it runs: a
+	// process cannot execute bytes that have not landed, and it cannot execute on
+	// a host nobody has built. The gap between accepted and started is the start
+	// latency Mercator predicted and now has an actual for.
 	AcceptedAt time.Time `json:"accepted_at"`
-	StartedAt  time.Time `json:"started_at"`
+	ReadyAt    time.Time `json:"ready_at"`
+	// ImageAt and ArtifactsAt are when each transfer this launch was waiting on
+	// finished. They are two moments because they are two stages over two kinds of
+	// content from two authorities, and a reader given only the later of them
+	// could not tell a machine that has to fetch an image from one that has to
+	// read a dataset forty times its size.
+	ImageAt     time.Time `json:"image_at"`
+	ArtifactsAt time.Time `json:"artifacts_at"`
+	// AssembledAt is when the content that landed had become a layer chain a
+	// container can start on. A machine holding every byte of an image it never
+	// applied is past the transfer and not past this.
+	AssembledAt time.Time `json:"assembled_at"`
+	StartedAt   time.Time `json:"started_at"`
+	// ApplicationReadyAt is when this workload reports that it can do work. It is
+	// after StartedAt by however long the world says an application here takes to
+	// come up, which is the whole point of separating the two: a running process
+	// is not a serving one.
+	ApplicationReadyAt time.Time `json:"application_ready_at"`
+	// ReadinessReported is whether Mercator has already been told. A workload
+	// reports its readiness once, and a world that reported it on every look would
+	// append the same fact forever.
+	ReadinessReported bool `json:"readiness_reported"`
 	// CachesAttached is whether the container was created and its caches opened
 	// with it. It happens at StartedAt rather than at the end, because creating
 	// the container is what creates the storage: a workload cancelled halfway
@@ -55,6 +83,24 @@ type externalExecution struct {
 	// machine holds it back for as long as the workload is running, because a
 	// floor two Runs were both promised is a floor neither of them has.
 	ReservedDiskBytes int64 `json:"reserved_disk_bytes,omitempty"`
+}
+
+// orphanedCapacity is one thing this world's provider is holding that Mercator
+// never launched. It is deliberately not an externalExecution: an execution is
+// Mercator's own, carries the identities Mercator minted for it, and every rule
+// about the fleet reads it as work this control plane is accountable for. This is
+// the opposite fact, and folding the two together would make capacity nobody
+// recognises look like a launch with half its identity missing.
+type orphanedCapacity struct {
+	LaunchKey      string `json:"launch_key"`
+	ExternalID     string `json:"external_id"`
+	OwnershipToken string `json:"ownership_token"`
+	RequestHash    string `json:"request_hash"`
+	OfferID        string `json:"offer_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	// RunID is the Run identity this capacity still carries, and empty is the
+	// answer that makes it unattributable. It is what the orphan policy reads.
+	RunID string `json:"run_id,omitempty"`
 }
 
 // ArtifactReplica is one host-local copy in World Truth: which machine holds
@@ -104,8 +150,18 @@ type WorldTruthSnapshot struct {
 	At               time.Time              `json:"at"`
 	Offers           []domain.OfferSnapshot `json:"offers"`
 	ActiveExecutions []externalExecution    `json:"active_executions"`
-	ArtifactReplicas []ArtifactReplica      `json:"artifact_replicas"`
-	CacheMounts      []CacheMountState      `json:"cache_mounts"`
+	// Orphans is capacity this world still holds that Mercator never launched and
+	// has not converged. It is stated apart from the executions for the same reason
+	// the world keeps them apart, and a rule about the orphan policy is the only
+	// thing that reads it.
+	Orphans          []orphanedCapacity `json:"orphans,omitempty"`
+	ArtifactReplicas []ArtifactReplica  `json:"artifact_replicas"`
+	// PublishedPaths is every network fact each machine in this world published
+	// about the paths it crosses, by offer, including machines this world has since
+	// retired. Offers above are the fleet as it stands; this is what the fleet has
+	// said, which is what a rule about a decision already taken has to ask.
+	PublishedPaths map[string][]domain.NetworkFact `json:"published_paths,omitempty"`
+	CacheMounts    []CacheMountState               `json:"cache_mounts"`
 	// Disk is what each machine's content is taking up, stated as World Truth
 	// because an offer states only what is left. A rule that read the remainder
 	// could never catch a world that lost track of the difference.
@@ -196,6 +252,18 @@ type hostState struct {
 	// leaseExpiresAt is when this machine's idle lease ends and the Rental stops
 	// existing. Zero means the lease outlives the scenario.
 	leaseExpiresAt time.Time
+	// provisioning is what this world really takes to turn a listing into a
+	// machine that can run a container, stage by stage. It is World Truth and
+	// never the estimate the offer publishes, which is a claim the scheduler
+	// predicts from, and it is kept per stage rather than as one total because
+	// each stage has its own prediction to be measured against. Standing capacity
+	// spends none of it, because the machine is already there.
+	provisioning scenario.ProvisioningSpec
+	// clockAhead is how far this machine's wall clock runs ahead of Mercator's. It
+	// changes nothing about when anything here happens and everything about the
+	// moment this machine states when asked: a host does not know its clock is
+	// wrong, so it reports its container's start off the clock it has.
+	clockAhead time.Duration
 }
 
 // missing is what launching this image here would still have to fetch, and how
@@ -213,6 +281,21 @@ func (state hostState) missing(image string, layers []scenario.LayerSpec) ([]sce
 		bytes += int64(layer.Size)
 	}
 	return fetched, bytes
+}
+
+// owesAssembly reports whether this host is holding any of this image's content
+// that it has not applied. A machine in that state owes the unpack stage without
+// owing a byte of transfer, which is what makes the two stages different work.
+func (state hostState) owesAssembly(image string, layers []scenario.LayerSpec) bool {
+	if state.packed[domain.ReferenceDigest(image)] {
+		return true
+	}
+	for _, layer := range layers {
+		if state.packed[layer.Digest] {
+			return true
+		}
+	}
+	return false
 }
 
 // keep records content that finished arriving on this host: the layers the pull
@@ -416,6 +499,28 @@ type simulatedWorld struct {
 	// about Mercator rather than a property of the capacity.
 	prewarm *scenario.PrewarmSpec
 
+	// publishedPaths is what every machine in this world has told Mercator about
+	// the paths it crosses, kept by offer and never removed. A machine is retired
+	// when its lease elapses and the decisions taken about it stay in the record, so
+	// a rule about one of those decisions has to be able to read what the machine
+	// published while it was here.
+	publishedPaths map[string][]domain.NetworkFact
+
+	// paths is what this world declared about the links its machines cross, read
+	// for the world's own transfer model rather than off the offers Mercator sees.
+	// How fast a path is and how much its publisher stands behind having measured
+	// it are different statements: a host that disowns its own number has published
+	// nothing to Mercator and still crosses the path at the speed the path is.
+	paths scenario.PathSpecs
+
+	// launch is what this world spends on the stages of a launch that happen
+	// after its content has arrived: assembling that content, creating the
+	// container, and the application reporting that it can do work. They are
+	// stated durations rather than arithmetic over rates, because a world that
+	// computed what the predictor computes would make every prediction right by
+	// construction.
+	launch scenario.LaunchSpec
+
 	// prepared is every preparation identity this world has already taken on,
 	// so a redelivered desired set changes nothing. It is never cleared: a
 	// prefetch Mercator abandoned was abandoned because it stopped wanting the
@@ -428,7 +533,14 @@ type simulatedWorld struct {
 	// saying nothing about another's content is not that tenant withdrawing it.
 	desired map[string]map[string]bool
 
-	executions  map[string]externalExecution
+	executions map[string]externalExecution
+	// orphans is capacity this world's provider holds that Mercator never
+	// launched, keyed by the launch key a reclaim is addressed by. seededOrphans is
+	// which of them this world began with and is never cleared: a rule about the
+	// policy has to be able to ask what became of capacity that is no longer here.
+	orphans       map[string]orphanedCapacity
+	seededOrphans map[string]bool
+
 	operations  map[string]worldOperation
 	launchCount map[string]int
 	faults      []scenario.FaultSpec
@@ -452,9 +564,14 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		seededReplicas: map[string]map[string]bool{},
 		cacheMounts:    map[string]map[string]CacheMountState{},
 		prewarm:        tape.InitialWorld.Prewarm,
+		publishedPaths: map[string][]domain.NetworkFact{},
+		paths:          slices.Clone(tape.InitialWorld.Paths),
+		launch:         tape.InitialWorld.Launch,
 		prepared:       map[string]bool{},
 		desired:        map[string]map[string]bool{},
 		executions:     map[string]externalExecution{},
+		orphans:        map[string]orphanedCapacity{},
+		seededOrphans:  map[string]bool{},
 		operations:     map[string]worldOperation{},
 		launchCount:    map[string]int{},
 		faults:         slices.Clone(tape.Faults),
@@ -466,18 +583,46 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	for _, artifact := range tape.InitialWorld.Artifacts {
 		world.replicas[artifact.ID] = map[string]domain.ArtifactReplica{}
 	}
-	for _, rental := range tape.InitialWorld.Rentals {
+	for index, rental := range tape.InitialWorld.Rentals {
 		state := hostState{
-			offer:          labOffer(rental.ID, domain.OfferKindStanding, domain.LaneReusable, rental.RatePerHourUSD, rental.Resources),
+			offer: labOffer(
+				rental.ID,
+				domain.OfferKindStanding,
+				domain.LaneReusable,
+				// A Rental is a machine this world keeps, so it names one. The machine is
+				// not the lease and not the listing: the fixture's ID is both of those,
+				// and the handle the backend has for the machine behind them is minted
+				// by the world exactly as a node ID is minted by the registry.
+				labCandidate{provider: rental.Provider, region: rental.Region, machine: scenario.NodeHandle(index)},
+				rental.RatePerHourUSD,
+				rental.Billing,
+				rental.Resources,
+			),
 			heldLayers:     map[string]scenario.LayerSpec{},
 			heldImages:     map[string]bool{},
 			packed:         map[string]bool{},
 			reportsDiffIDs: rental.ReportsDiffIDs,
+			clockAhead:     rental.Skew(),
 		}
 		if rental.IdleLeaseExpiresIn != nil {
 			state.leaseExpiresAt = tape.Start.Add(rental.IdleLeaseExpiresIn.Duration())
 		}
-		applyOfferWorldFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
+		state.offer.Capacity.Confidence = rental.Confidence()
+		// The terms this capacity was sold on. They are properties of the sale rather
+		// than of the moment an offer was read, so they are stated once here and
+		// republished with every snapshot the provider takes: whether the provider
+		// may take the machine back, what Mercator already owes on it, what it is
+		// held for, and how long it stays Mercator's to use.
+		state.offer.Reclaimable = rental.Reclaimable
+		state.offer.Terms = rental.Terms.Terms(tape.Start)
+		if rental.Unpriced {
+			// Nobody quoted this machine. That is a statement about the world, so it
+			// is carried through as one rather than becoming a rate of zero, which
+			// would be a machine somebody says is free.
+			state.offer.Pricing = domain.PriceModel{Currency: "USD"}
+			state.offer.Capabilities.Pricing = domain.PricingCapabilities{}
+		}
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, rental.ID, nil)
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
 				state.heldLayers[layer.Digest] = layer
@@ -495,9 +640,21 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		world.seedReplicas(rental.ID, rental.ArtifactReplicas, tape.InitialWorld, tape.Start)
 		world.seedCaches(rental.ID, rental.CacheMounts, tape.Start)
 	}
-	for _, host := range tape.InitialWorld.Hosts {
+	for index, host := range tape.InitialWorld.Hosts {
 		state := hostState{
-			offer:      labOffer(host.ID, domain.OfferKindStanding, domain.LaneEphemeral, host.RatePerHourUSD, host.Resources),
+			offer: labOffer(
+				host.ID,
+				domain.OfferKindStanding,
+				domain.LaneEphemeral,
+				// A borrowed host holds nothing for Mercator and is the same machine next
+				// time, which is the position an operator's own Docker daemon is in: it
+				// names itself with the daemon's own ID rather than with the endpoint
+				// Mercator reached it through.
+				labCandidate{machine: scenario.DaemonHandle(index)},
+				host.RatePerHourUSD,
+				host.Billing,
+				host.Resources,
+			),
 			heldLayers: map[string]scenario.LayerSpec{},
 			heldImages: map[string]bool{},
 			packed:     map[string]bool{},
@@ -508,7 +665,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			}
 			state.heldImages[domain.ReferenceDigest(reference)] = true
 		}
-		applyOfferWorldFacts(&state.offer, tape.InitialWorld, host.ID, nil, host.Billing)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, host.ID, nil)
 		world.seededLocality[host.ID] = state.seededDigests()
 		world.truth[host.ID] = cloneHostState(state)
 		world.seedReplicas(host.ID, host.ArtifactReplicas, tape.InitialWorld, tape.Start)
@@ -519,13 +676,27 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 				marketplace.ID,
 				domain.OfferKindProvisionable,
 				marketplace.ExecutionLane(),
+				// A listing names no machine, because the machine does not exist yet. What
+				// recurs about it is the provider, the place, and the product name, which is
+				// what the Blueprint states and what the identity falls back to.
+				labCandidate{
+					provider:     marketplace.Provider,
+					region:       marketplace.Region,
+					instanceType: marketplace.InstanceType,
+				},
 				marketplace.RatePerHourUSD,
+				marketplace.Billing,
 				marketplace.Resources,
 			),
 			heldLayers: map[string]scenario.LayerSpec{},
 			heldImages: map[string]bool{},
+			// What this world spends turning the listing into a machine. It is read
+			// from the stages the Blueprint states rather than from the estimate
+			// published below, because a world that spent its provider's own
+			// expectation would make that expectation right by construction.
+			provisioning: marketplace.Provisioning,
 		}
-		applyOfferWorldFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available, marketplace.Billing)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available)
 		world.seededLocality[marketplace.ID] = state.seededDigests()
 		state.offer.Provisioning = &domain.Estimate{
 			Expected: marketplace.Provisioning.Expected.Duration().Seconds(),
@@ -534,13 +705,43 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		if marketplace.Provisioning.P90 != nil {
 			state.offer.Provisioning.P90 = marketplace.Provisioning.P90.Duration().Seconds()
 		}
+		// The history this listing's provider publishes about the machine behind it.
+		// It is a fact about the machine rather than about the moment an offer was
+		// read, so it is stated once and republished with every snapshot, and a
+		// listing no fixture measured publishes none of it.
+		state.offer.Reliability = marketplace.Risk()
 		world.truth[marketplace.ID] = cloneHostState(state)
 	}
+	world.seedOrphans(tape.InitialWorld.Orphans)
 	if err := world.refuseOversubscribedDisks(); err != nil {
 		return nil, err
 	}
 	world.publishObservations()
 	return world, nil
+}
+
+// seedOrphans is the capacity this world's provider was already holding when the
+// world began, which Mercator has no record of launching. The identities are
+// minted here rather than stated by the fixture: a Blueprint says which machine
+// the capacity is on and whose work it carries, and the handles a provider issued
+// for it are the provider's business exactly as they are for a launch.
+func (world *simulatedWorld) seedOrphans(declared []scenario.OrphanSpec) {
+	for _, orphan := range declared {
+		runID := ""
+		if orphan.Run != "" {
+			runID = "run-" + orphan.Run
+		}
+		world.seededOrphans[orphan.ID] = true
+		world.orphans[orphan.ID] = orphanedCapacity{
+			LaunchKey:      orphan.ID,
+			ExternalID:     "lab-orphan-" + orphan.ID,
+			OwnershipToken: "own-orphan-" + orphan.ID,
+			RequestHash:    "sha256:orphan-" + orphan.ID,
+			OfferID:        orphan.Rental,
+			WorkspaceID:    labWorkspace,
+			RunID:          runID,
+		}
+	}
 }
 
 // refuseOversubscribedDisks is this world declining to exist as described. A
@@ -614,29 +815,18 @@ func (world *simulatedWorld) seedCaches(offerID string, held []scenario.HeldCach
 	}
 }
 
-func applyOfferWorldFacts(offer *domain.OfferSnapshot, world scenario.WorldSpec, offerID string, available *bool, billing scenario.BillingSpec) {
+// publishOfferFacts is one machine being handed what this world says about it,
+// and this world writing down what it handed over. The publication outlives the
+// machine on purpose: a placement is decided at one moment and judged at a later
+// one, and a rule that asked only the machines still standing would read a
+// correct decision about capacity since retired as a decision priced from
+// nothing.
+func (world *simulatedWorld) publishOfferFacts(offer *domain.OfferSnapshot, spec scenario.WorldSpec, offerID string, available *bool) {
 	if available != nil {
 		offer.Capacity.Available = *available
 	}
-	offer.Pricing.SetupFeeUSD = billing.SetupFeeUSD
-	if billing.MinimumCharge != nil {
-		offer.Pricing.MinimumChargeSeconds = int64(billing.MinimumCharge.Duration().Seconds())
-	}
-	for _, path := range world.Paths {
-		if path.From != offerID {
-			continue
-		}
-		offer.Network.Download = append(offer.Network.Download, domain.NetworkFact{
-			Scope:       domain.NetworkScope(path.Scope),
-			Statistic:   "p10",
-			ValueMbps:   path.P10Mbps,
-			Source:      "lab-world",
-			SampleCount: 1,
-			ObservedAt:  world.Start(),
-			ValidUntil:  world.Start().Add(24 * time.Hour),
-			Confidence:  1,
-		})
-	}
+	offer.Network = spec.Paths.PublishedFacts(offerID, spec.Start())
+	world.publishedPaths[offerID] = slices.Clone(offer.Network.Download)
 }
 
 // prepareRun is the world learning about a Run it will be asked to execute. An
@@ -897,13 +1087,68 @@ func (world *simulatedWorld) retireExpiredCapacity() {
 		if state.leaseExpiresAt.IsZero() || world.now.Before(state.leaseExpiresAt) || world.busy(id) {
 			continue
 		}
-		delete(world.truth, id)
-		delete(world.seededLocality, id)
-		delete(world.seededReplicas, id)
-		delete(world.cacheMounts, id)
-		for _, hosts := range world.replicas {
-			delete(hosts, id)
+		world.retireCapacity(id)
+	}
+}
+
+// preemptCapacity is the provider taking a machine back. It is the same removal an
+// elapsed lease performs and it is not the same act: a lease waits for the machine
+// to be idle, and this does not, which is the whole of what reclaimable capacity
+// means. Whatever was running here stops running here, and the ledger says so
+// before the machine is gone, because after it there is nothing left to name.
+func (world *simulatedWorld) preemptCapacity(rentalID string) error {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	if _, exists := world.truth[rentalID]; !exists {
+		return fmt.Errorf("Lab world cannot preempt %q, which is not capacity it holds", rentalID)
+	}
+	interrupted := []map[string]any{}
+	for _, launchKey := range slices.Sorted(maps.Keys(world.executions)) {
+		execution := world.executions[launchKey]
+		if execution.OfferID != rentalID {
+			continue
 		}
+		interrupted = append(interrupted, map[string]any{
+			"run_id":       execution.RunID,
+			"launch_key":   execution.LaunchKey,
+			"workspace_id": execution.WorkspaceID,
+			// Whether the process had begun at all. A launch reclaimed before its
+			// container started lost the machine and no work, which is a different
+			// fact about the same event and one nothing else in the record could
+			// recover once the execution is gone.
+			"started": !execution.StartedAt.IsZero() && !world.now.Before(execution.StartedAt),
+		})
+		delete(world.executions, launchKey)
+		world.cancelTransfers(launchKey)
+	}
+	world.recordEffect(
+		OperationCapacityPreempted,
+		"capacity-preempted/"+rentalID,
+		EffectCommandAccepted,
+		EffectResponseDelivered,
+		rentalID,
+		"capacity-preempted/"+rentalID,
+		"",
+		map[string]any{"offer_id": rentalID},
+		map[string]any{"interrupted": interrupted},
+		"",
+	)
+	world.retireCapacity(rentalID)
+	world.publishObservations()
+	return nil
+}
+
+// retireCapacity is a machine ceasing to exist, whichever of the two reasons took
+// it. Everything local goes with it: the content on its disk and the Artifact
+// copies on it were on that disk, and a copy is exactly what does not survive the
+// machine. What survives is what the object store holds, which is the point.
+func (world *simulatedWorld) retireCapacity(id string) {
+	delete(world.truth, id)
+	delete(world.seededLocality, id)
+	delete(world.seededReplicas, id)
+	delete(world.cacheMounts, id)
+	for _, hosts := range world.replicas {
+		delete(hosts, id)
 	}
 }
 
@@ -964,7 +1209,10 @@ func (world *simulatedWorld) setOfferAvailable(id string, available bool) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	state := world.truth[id]
-	state.offer.Capacity = domain.CapacityEvidence{Available: available, Confidence: 1}
+	// Only whether the capacity is there changes. How sure its publisher is of
+	// that answer is a property of the publisher, so a world that reclaims a
+	// machine does not also become certain about one it was unsure of.
+	state.offer.Capacity.Available = available
 	world.truth[id] = state
 }
 
@@ -982,8 +1230,10 @@ func (world *simulatedWorld) truthSnapshot() WorldTruthSnapshot {
 		At:               world.now,
 		Offers:           world.offerSnapshots(world.truth, world.now),
 		ActiveExecutions: executions,
+		Orphans:          world.orphanedCapacity(),
 		ArtifactReplicas: world.artifactReplicas(),
 		CacheMounts:      world.cacheMountStates(),
+		PublishedPaths:   maps.Clone(world.publishedPaths),
 		Disk:             world.diskLedgers(),
 	}
 }
@@ -1006,6 +1256,9 @@ type worldFacts struct {
 	SeededReplicas  map[string]map[string]bool
 	// Prewarm is the bound this world states on speculative preparation.
 	Prewarm *scenario.PrewarmSpec
+	// SeededOrphans is the capacity this world began holding that Mercator never
+	// launched, by the identity a decision about it is filed under.
+	SeededOrphans map[string]bool
 }
 
 func (world *simulatedWorld) invariantFacts() worldFacts {
@@ -1015,6 +1268,7 @@ func (world *simulatedWorld) invariantFacts() worldFacts {
 		Runs:            cloneMap(world.runs),
 		ArtifactCatalog: world.store.versions(),
 		Prewarm:         world.prewarm,
+		SeededOrphans:   cloneMap(world.seededOrphans),
 		SeededLocality:  make(map[string]map[string]bool, len(world.seededLocality)),
 		SeededReplicas:  make(map[string]map[string]bool, len(world.seededReplicas)),
 	}
@@ -1061,6 +1315,14 @@ func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.Offer
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	offers := world.publishedOffers()
+	// A marketplace listing is a search result, so this world answers the shape it
+	// was asked about and capacity Mercator holds is listed whole. Returning the
+	// whole inventory whatever was asked meant no world here could answer one ask
+	// with nothing while publishing machines for another, which is the case that
+	// empties a workspace. See domain.OfferSnapshot.PublishedTo.
+	offers = slices.DeleteFunc(offers, func(offer domain.OfferSnapshot) bool {
+		return !offer.PublishedTo(request.Resources)
+	})
 	world.recordEffect(
 		OperationProviderListOffers,
 		"list-offers/"+request.WorkspaceID,
@@ -1074,6 +1336,18 @@ func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.Offer
 		"",
 	)
 	return offers, nil
+}
+
+// CollectOffers is this world answering as the whole fleet: the offers it
+// publishes and the one connection it is. The census is stated rather than read
+// off the offers, because a world that published nothing would otherwise record
+// that nobody was asked, and admission reads those as different facts.
+func (world *simulatedWorld) CollectOffers(ctx context.Context, request adapter.OfferRequest) (adapter.OfferCollection, error) {
+	offers, err := world.ListOffers(ctx, request)
+	if err != nil {
+		return adapter.OfferCollection{}, err
+	}
+	return adapter.OfferCollection{Offers: offers, Queried: []string{labConnection}}, nil
 }
 
 func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
@@ -1148,18 +1422,31 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		Disposition:       request.Disposition,
 		Phase:             adapter.ExternalPhaseRunning,
 		AcceptedAt:        world.now,
+		ReadyAt:           world.now.Add(offer.provisioning.Spend()),
 		ReservedDiskBytes: request.Resources.EphemeralDisk.MinBytes,
 	}
 	if offer.offer.Kind == domain.OfferKindStanding {
-		offer.offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: 1}
+		offer.offer.Capacity.Available = false
 		world.truth[request.SelectedOfferSnapshotID] = offer
 	}
 	// A process cannot execute bytes that have not landed, and that is as true
-	// of the Artifacts it reads as of the image it runs.
-	execution.StartedAt = later(
-		world.pullRunImage(execution, request.Image),
-		world.readRunArtifacts(execution, arrival.Request.ConsumesArtifacts),
-	)
+	// of the Artifacts it reads as of the image it runs. Neither can be fetched
+	// before there is a machine to fetch them onto, so both transfers start when
+	// the world has finished acquiring, booting, and enrolling this host.
+	execution.ImageAt = world.pullRunImage(execution, request.Image, execution.ReadyAt)
+	execution.ArtifactsAt = world.readRunArtifacts(execution, arrival.Request.ConsumesArtifacts, execution.ReadyAt)
+	// Bytes on a disk are not a layer chain, and a container runtime asked for a
+	// process does not hand one back instantly. Both stages cost time here, so a
+	// prediction of either has an actual to be measured against.
+	execution.AssembledAt = later(execution.ImageAt, execution.ArtifactsAt).
+		Add(world.unpackSpend(execution.OfferID, request.Image))
+	execution.StartedAt = execution.AssembledAt.Add(world.launch.ContainerStartSpend())
+	// A world whose applications never come up leaves this absent rather than equal
+	// to the start, which is the difference between a process that is serving the
+	// instant it exists and one that never serves at all.
+	if world.launch.ApplicationBecomesReady() {
+		execution.ApplicationReadyAt = execution.StartedAt.Add(world.launch.ApplicationReadySpend())
+	}
 	execution.CompletesAt = execution.StartedAt.Add(actualRuntimeForOffer(arrival, request.SelectedOfferSnapshotID))
 	world.executions[request.LaunchKey] = execution
 	// The caches this launch declared are opened with the container, which is at
@@ -1192,6 +1479,65 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		world.recordLaunchEffect(request, EffectCommandAccepted, EffectResponseDuplicate, receipt, fault.ID)
 	}
 	return receipt, nil
+}
+
+// unpackSpend is what this launch spends turning content on the disk into a
+// layer chain a container can start on. A machine with nothing to apply spends
+// nothing, which is what tells a warm host from one that has just fetched
+// eighteen gigabytes: unpacking is work over bytes, and a host holding the image
+// assembled has none of it to do.
+// ReadinessReport is one workload telling Mercator it can do work. It is the
+// application's own callback rather than anything the machine holding it says: a
+// provider, a node, and a container runtime can all see a process running, and
+// none of them can see whether it is serving.
+type ReadinessReport struct {
+	WorkspaceID string
+	RunID       string
+	// ReadyAt is the application's own moment. It travels in the report because a
+	// readiness stamped when Mercator got round to recording it would move with the
+	// control plane's polling cadence, which is the defect the observed start
+	// moment was fixed for one stage over.
+	ReadyAt time.Time
+}
+
+// dueReadinessReports is every workload here that has become ready and has not
+// said so yet. A workload reports once, so the world remembers which have
+// spoken: a report appended on every look would say the same thing forever.
+func (world *simulatedWorld) dueReadinessReports() []ReadinessReport {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	var due []ReadinessReport
+	for _, launchKey := range slices.Sorted(maps.Keys(world.executions)) {
+		execution := world.executions[launchKey]
+		if execution.ReadinessReported ||
+			execution.ApplicationReadyAt.IsZero() ||
+			world.now.Before(execution.ApplicationReadyAt) {
+			continue
+		}
+		execution.ReadinessReported = true
+		world.executions[launchKey] = execution
+		due = append(due, ReadinessReport{
+			WorkspaceID: execution.WorkspaceID,
+			RunID:       execution.RunID,
+			// The application reads the clock of the host it runs on, so the moment
+			// it states is world truth read on that clock. It is the same clock for
+			// every machine in this corpus but one, and the exception is the point: a
+			// workload on a host running ahead publishes a readiness Mercator has not
+			// reached, which Mercator has to refuse rather than file as an hour of
+			// ready latency nothing measured.
+			ReadyAt: execution.ApplicationReadyAt.Add(world.truth[execution.OfferID].clockAhead),
+		})
+	}
+	return due
+}
+
+func (world *simulatedWorld) unpackSpend(offerID, image string) time.Duration {
+	state := world.truth[offerID]
+	layers := world.images[image].Layers
+	if _, fetched := state.missing(image, layers); fetched == 0 && !state.owesAssembly(image, layers) {
+		return 0
+	}
+	return world.launch.UnpackSpend()
 }
 
 func actualRuntimeForOffer(arrival RunArrival, offerID string) time.Duration {
@@ -1229,6 +1575,20 @@ func (world *simulatedWorld) Observe(_ context.Context, request adapter.ObserveR
 		Phase:      execution.Phase,
 		ObservedAt: world.now,
 		NativeJSON: fmt.Sprintf(`{"adapter":"lab","external_id":%q}`, execution.ExternalID),
+	}
+	// This provider says running from the moment it accepts a launch, which is what
+	// every provider in the tree does and why Mercator cannot learn a start from a
+	// phase. What it can say is when the container actually began, and only once it
+	// has: a moment that has not arrived is reported as the absence it is rather
+	// than as the moment the launch was taken.
+	//
+	// The moment is stated on the machine's own clock. That is the same clock for
+	// every host in this corpus but one, and the exception is the whole point: a
+	// machine running ahead publishes a start that has arrived here and not there,
+	// which Mercator has to refuse rather than adopt as a fact about its own future.
+	if !world.now.Before(execution.StartedAt) {
+		startedAt := execution.StartedAt.Add(world.truth[execution.OfferID].clockAhead)
+		observation.StartedAt = &startedAt
 	}
 	if observation.Phase == adapter.ExternalPhaseSucceeded {
 		exitCode := 0
@@ -1299,6 +1659,22 @@ func (world *simulatedWorld) ListOwned(_ context.Context, request adapter.Owners
 			Phase:          execution.Phase,
 		})
 	}
+	for _, launchKey := range slices.Sorted(maps.Keys(world.orphans)) {
+		orphan := world.orphans[launchKey]
+		if request.WorkspaceID != "" && request.WorkspaceID != orphan.WorkspaceID {
+			continue
+		}
+		objects = append(objects, adapter.OwnedExternalObject{
+			ExternalID:     orphan.ExternalID,
+			WorkspaceID:    orphan.WorkspaceID,
+			ConnectionID:   labConnection,
+			RunID:          orphan.RunID,
+			OwnershipToken: orphan.OwnershipToken,
+			LaunchKey:      orphan.LaunchKey,
+			RequestHash:    orphan.RequestHash,
+			Phase:          adapter.ExternalPhaseRunning,
+		})
+	}
 	sort.Slice(objects, func(i, j int) bool { return objects[i].LaunchKey < objects[j].LaunchKey })
 	world.recordEffect(
 		OperationProviderListOwned,
@@ -1327,6 +1703,9 @@ func (world *simulatedWorld) cleanup(operation, operationKey, requestHash, launc
 		world.recordCleanupEffect(operation, operationKey, requestHash, launchKey, existing.correlationID, EffectCommandDuplicate)
 		return adapter.ReleaseReceipt{Released: true, Duplicate: true}, true, nil
 	}
+	if orphan, exists := world.orphans[launchKey]; exists {
+		return world.reclaimOrphan(operation, operationKey, requestHash, ownershipToken, launchHash, orphan)
+	}
 	execution, exists := world.executions[launchKey]
 	if exists && (ownershipToken != "" && ownershipToken != execution.OwnershipToken ||
 		launchHash != "" && launchHash != execution.RequestHash) {
@@ -1337,7 +1716,7 @@ func (world *simulatedWorld) cleanup(operation, operationKey, requestHash, launc
 		delete(world.executions, launchKey)
 		world.cancelTransfers(launchKey)
 		if offer := world.truth[execution.OfferID]; offer.offer.Kind == domain.OfferKindStanding {
-			offer.offer.Capacity = domain.CapacityEvidence{Available: true, Confidence: 1}
+			offer.offer.Capacity.Available = true
 			world.truth[execution.OfferID] = offer
 		}
 		world.publishObservations()
@@ -1350,6 +1729,43 @@ func (world *simulatedWorld) cleanup(operation, operationKey, requestHash, launc
 	}
 	world.recordCleanupEffect(operation, operationKey, requestHash, launchKey, execution.RunID, EffectCommandAccepted)
 	return receipt, false, nil
+}
+
+// reclaimOrphan is the provider carrying out one decision about capacity Mercator
+// did not recognise. Releasing it gives the slot back and leaves the machine
+// standing; terminating it takes the machine with it, which is the whole reason the
+// two are different answers and the whole reason the policy has to choose.
+func (world *simulatedWorld) reclaimOrphan(
+	operation, operationKey, requestHash, ownershipToken, launchHash string,
+	orphan orphanedCapacity,
+) (adapter.ReleaseReceipt, bool, error) {
+	if ownershipToken != "" && ownershipToken != orphan.OwnershipToken ||
+		launchHash != "" && launchHash != orphan.RequestHash {
+		world.recordCleanupEffect(operation, operationKey, requestHash, orphan.LaunchKey, orphan.RunID, EffectCommandRejected)
+		return adapter.ReleaseReceipt{}, false, adapter.ErrIdempotencyConflict
+	}
+	delete(world.orphans, orphan.LaunchKey)
+	if operation == OperationProviderTerminate {
+		world.retireCapacity(orphan.OfferID)
+	}
+	receipt := adapter.ReleaseReceipt{Released: true}
+	world.operations[operationKey] = worldOperation{
+		hash:          requestHash,
+		correlationID: orphan.RunID,
+		receipt:       receipt,
+	}
+	world.recordCleanupEffect(operation, operationKey, requestHash, orphan.LaunchKey, orphan.RunID, EffectCommandAccepted)
+	world.publishObservations()
+	return receipt, false, nil
+}
+
+// orphanedCapacity is what this world still holds that Mercator never launched.
+func (world *simulatedWorld) orphanedCapacity() []orphanedCapacity {
+	held := make([]orphanedCapacity, 0, len(world.orphans))
+	for _, launchKey := range slices.Sorted(maps.Keys(world.orphans)) {
+		held = append(held, world.orphans[launchKey])
+	}
+	return held
 }
 
 // offerSnapshots projects host state into the only vocabulary Mercator gets to
@@ -1367,8 +1783,13 @@ func (world *simulatedWorld) offerSnapshots(source map[string]hostState, at time
 		// built with. An offer that restated its capacity whatever it was
 		// holding is an offer that can never say no, and every Run reading its
 		// disk would be reading a number that stopped being true the first time
-		// anything landed here.
-		offer.Resources.EphemeralDiskBytes = world.diskLedger(state).FreeBytes()
+		// anything landed here. A machine this world declares cannot measure its
+		// disk states no room and states that nobody measured it, which are two
+		// facts rather than one number.
+		offer.Resources.EphemeralDiskBytes = 0
+		if offer.Resources.EphemeralDiskKnown {
+			offer.Resources.EphemeralDiskBytes = world.diskLedger(state).FreeBytes()
+		}
 		offer.Images = state.inventory(at)
 		offer.Artifacts = world.artifactInventory(offer.ID, at)
 		offer.Caches = world.cacheInventory(offer.ID, at)
@@ -1509,12 +1930,15 @@ func (world *simulatedWorld) publishedOffers() []domain.OfferSnapshot {
 // bytes has landed. The ledger records what the pull fetched, which is nothing at
 // all on a host that already holds the image; what the host keeps is recorded
 // separately, when it keeps it.
-func (world *simulatedWorld) pullRunImage(execution externalExecution, image string) time.Time {
+//
+// The pull starts at from rather than now, because bytes land on a machine and a
+// machine that does not exist yet has to be made first.
+func (world *simulatedWorld) pullRunImage(execution externalExecution, image string, from time.Time) time.Time {
 	state := world.truth[execution.OfferID]
 	layers := world.images[image].Layers
 	fetchedLayers, bytes := state.missing(image, layers)
 	fetched := fetchedNames(image, state.heldImages[domain.ReferenceDigest(image)], fetchedLayers)
-	completesAt := world.now.Add(transferDuration(bytes, state.offer.RegistryDownloadMbps()))
+	completesAt := from.Add(transferDuration(bytes, world.linkMbps(execution.OfferID, domain.NetworkScopeRegistry)))
 	world.recordEffect(
 		OperationImagePull,
 		"image-pull/"+execution.LaunchKey+"/"+image,
@@ -1562,6 +1986,26 @@ func fetchedNames(image string, alreadyHeld bool, layers []scenario.LayerSpec) [
 	return names
 }
 
+// unmeasuredLinkMbps is how fast this world moves content over a path no fixture
+// declared. It is this world's own number rather than the scheduler's assumption,
+// deliberately the same figure: an unmeasured path is exactly the case where both
+// halves are guessing about one thing, so a difference here would be a difference
+// no Blueprint asked for. What separates the two halves is a fixture declaring a
+// path, which this world then really spends and Mercator then really reads.
+const unmeasuredLinkMbps = 500.0
+
+// linkMbps is how fast this world moves content of one kind onto one machine. It
+// reads the Blueprint's own declaration rather than the fact the machine
+// published, which is what keeps the prediction and the actual separable: a
+// fixture can state a path a host measured and then disowned, and this world
+// still crosses it at the speed the fixture said it is.
+func (world *simulatedWorld) linkMbps(offerID string, scope domain.NetworkScope) float64 {
+	if declared, stated := world.paths.LinkMbps(offerID, scope); stated {
+		return declared
+	}
+	return unmeasuredLinkMbps
+}
+
 // transferDuration is how long this world takes to move content, which is its
 // own model rather than the scheduler's: a fixture is only worth anything when
 // the actual pull and the predicted pull come from different code.
@@ -1594,7 +2038,9 @@ func (world *simulatedWorld) readableReplica(artifactID, offerID string) (domain
 // the last of them is readable on the host. A copy this host may read is read
 // where there is one and costs nothing, which is the whole value of a replica;
 // anything else is read out of the object store, because a copy nobody checked
-// against this version is not evidence that the right bytes are here.
+// against this version is not evidence that the right bytes are here. The ledger
+// records which it was, so what a Run read is a fact rather than an inference
+// from world state.
 //
 // What the read does not leave behind is a copy. A workload reads its own inputs
 // into its own container: no runtime in this tree attaches a replica to a Run or
@@ -1602,10 +2048,13 @@ func (world *simulatedWorld) readableReplica(artifactID, offerID string) (domain
 // files them, and a machine that read 40GB for one Run owes the same read for the
 // next. Only a fetch Mercator issued leaves a replica, which is the rule the
 // output side of this file already holds for the same reason.
-func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consumes []string) time.Time {
-	ready := world.now
+//
+// Reads start at from for the same reason a pull does: there is nowhere to read
+// them onto until the machine exists.
+func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consumes []string, from time.Time) time.Time {
+	ready := from
 	for _, artifactID := range consumes {
-		read := world.artifactRead(artifactID, execution.OfferID)
+		read := world.artifactRead(artifactID, execution.OfferID, from)
 		world.recordEffect(
 			OperationArtifactRead,
 			"artifact-read/"+execution.LaunchKey+"/"+artifactID,
@@ -1640,20 +2089,20 @@ type artifactRead struct {
 	CompletesAt   time.Time                   `json:"completes_at"`
 }
 
-func (world *simulatedWorld) artifactRead(artifactID, offerID string) artifactRead {
+func (world *simulatedWorld) artifactRead(artifactID, offerID string, from time.Time) artifactRead {
 	if replica, readable := world.readableReplica(artifactID, offerID); readable {
 		return artifactRead{
 			Source:        "replica",
 			ContentDigest: replica.ContentDigest,
 			ReplicaState:  replica.State,
-			CompletesAt:   world.now,
+			CompletesAt:   from,
 		}
 	}
 	version, _ := world.store.entry(artifactID)
 	return artifactRead{
 		Source:        "object_store",
 		ContentDigest: version.ContentDigest,
-		CompletesAt:   world.now.Add(world.store.transferDuration(artifactID)),
+		CompletesAt:   from.Add(world.store.transferDuration(artifactID, world.linkMbps(offerID, domain.NetworkScopeObjectStore))),
 	}
 }
 
@@ -1709,7 +2158,7 @@ func (world *simulatedWorld) storeRunOutputs(execution externalExecution, at tim
 		world.publishing = append(world.publishing, pendingPublication{
 			artifactID:  artifactID,
 			runID:       execution.RunID,
-			completesAt: at.Add(world.store.transferDuration(artifactID)),
+			completesAt: at.Add(world.store.transferDuration(artifactID, world.linkMbps(execution.OfferID, domain.NetworkScopeObjectStore))),
 		})
 	}
 }
@@ -1888,6 +2337,37 @@ func (world *simulatedWorld) matchEventFault(eventType, runID string) *scenario.
 	return nil
 }
 
+// stageSeconds is what this launch spent on each of the eight stages, named by
+// the stage. It is World Truth: every entry is the gap between two moments this
+// world settled, so nothing here is derived from what Mercator predicted.
+//
+// The three stages a provider performs are reported as the world spent them,
+// which is what the fixture declared, and not as a share of the moment the
+// machine became ready: a fixture that says a machine boots for four minutes and
+// enrolls for thirty seconds has stated two actuals, and folding them back into
+// one would delete the fact the record exists to carry.
+// stageSeconds is what this launch spent on each stage it reached. A stage the
+// launch never reached carries no duration at all, because a stage that did not
+// happen and a stage that happened instantly are opposite facts and a calibration
+// reading the first as a zero would train on it.
+func (world *simulatedWorld) stageSeconds(execution externalExecution) map[string]float64 {
+	machine := world.truth[execution.OfferID].provisioning
+	content := later(execution.ImageAt, execution.ArtifactsAt)
+	spent := map[string]float64{
+		string(domain.StageAcquisition):    machine.AcquisitionSpend().Seconds(),
+		string(domain.StageBoot):           machine.BootSpend().Seconds(),
+		string(domain.StageAgentReady):     machine.AgentReadySpend().Seconds(),
+		string(domain.StageImageFetch):     execution.ImageAt.Sub(execution.ReadyAt).Seconds(),
+		string(domain.StageArtifactFetch):  execution.ArtifactsAt.Sub(execution.ReadyAt).Seconds(),
+		string(domain.StageUnpack):         execution.AssembledAt.Sub(content).Seconds(),
+		string(domain.StageContainerStart): execution.StartedAt.Sub(execution.AssembledAt).Seconds(),
+	}
+	if !execution.ApplicationReadyAt.IsZero() {
+		spent[string(domain.StageApplicationReady)] = execution.ApplicationReadyAt.Sub(execution.StartedAt).Seconds()
+	}
+	return spent
+}
+
 func (world *simulatedWorld) recordLaunchEffect(request adapter.LaunchRequest, command EffectCommand, response EffectResponse, consequence any, faultID string) {
 	if receipt, ok := consequence.(adapter.LaunchReceipt); ok {
 		execution := world.executions[receipt.LaunchKey]
@@ -1897,10 +2377,20 @@ func (world *simulatedWorld) recordLaunchEffect(request adapter.LaunchRequest, c
 			"phase":       receipt.Phase,
 			"accepted_at": receipt.AcceptedAt,
 			"duplicate":   receipt.Duplicate,
-			// The two actuals a prediction is calibrated against: how long the
-			// container waited for its image, and how long it then ran.
+			// What this launch really spent, stage by stage, and how long it then
+			// ran. This is the only place the actuals a stage prediction is
+			// calibrated against exist: Mercator can observe a container starting and
+			// an application reporting ready, and nothing in production tells it when
+			// a machine finished booting, so a Run Bundle reads the world's own
+			// ledger for the rest of the waterfall.
 			"start_latency_seconds":  execution.StartedAt.Sub(execution.AcceptedAt).Seconds(),
 			"actual_runtime_seconds": execution.CompletesAt.Sub(execution.StartedAt).Seconds(),
+			"stage_seconds":          world.stageSeconds(execution),
+			// Whether the application behind this process ever comes up here. It is
+			// stated rather than inferred from the missing duration, because a stage
+			// with no actual is either a stage this world never reached or a stage
+			// nothing timed, and only the world can say which.
+			"application_becomes_ready": world.launch.ApplicationBecomesReady(),
 		}
 	}
 	world.recordEffect(
@@ -2020,12 +2510,53 @@ func (world *simulatedWorld) ResolveManifest(_ context.Context, imageDigest stri
 	return manifest, nil
 }
 
-func labOffer(id string, kind domain.OfferKind, lane domain.ExecutionLane, ratePerHourUSD float64, resources *scenario.ResourcesSpec) domain.OfferSnapshot {
+// labCandidate is what a Blueprint says this capacity is, as opposed to how big it
+// is: the provider selling it, where it sits, the product name it is sold under,
+// and the machine it is wherever the Blueprint names a machine at all.
+//
+// It exists because a simulated fleet that stated none of it had one candidate key
+// for every listing in the world. Two marketplaces in two regions were
+// indistinguishable at every level of the key, so a prediction learned from one
+// provider's launches would be served as evidence about the other's listing and no
+// rule could see it, while the branch for a candidate that cannot recur was
+// reachable only by a CPU-only listing nothing had named.
+type labCandidate struct {
+	provider     string
+	region       string
+	instanceType string
+	// machine is the handle for capacity that is a machine rather than a listing for
+	// one. A Rental and a borrowed host are machines this world keeps; a marketplace
+	// listing describes a machine that does not exist yet and names none.
+	machine string
+}
+
+// providerName is the backend this capacity comes from. A Blueprint that names no
+// provider gets the Lab itself, which is what every simulated listing was before a
+// fixture could say otherwise.
+func (candidate labCandidate) providerName() string {
+	if candidate.provider == "" {
+		return labProvider
+	}
+	return candidate.provider
+}
+
+func labOffer(
+	id string,
+	kind domain.OfferKind,
+	lane domain.ExecutionLane,
+	candidate labCandidate,
+	ratePerHourUSD float64,
+	billing scenario.BillingSpec,
+	resources *scenario.ResourcesSpec,
+) domain.OfferSnapshot {
 	offer := domain.OfferSnapshot{
 		ID:           id,
+		MachineID:    candidate.machine,
 		ConnectionID: labConnection,
-		AdapterType:  "lab",
+		AdapterType:  candidate.providerName(),
 		NativeRef:    id,
+		Region:       candidate.region,
+		InstanceType: candidate.instanceType,
 		Kind:         kind,
 		Lane:         lane,
 		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
@@ -2041,11 +2572,12 @@ func labOffer(id string, kind domain.OfferKind, lane domain.ExecutionLane, rateP
 			Pricing:   domain.PricingCapabilities{Known: true},
 			Lifecycle: domain.LifecycleCapabilities{IdempotentLaunch: "launch_key", ListOwned: true},
 		},
-		Pricing: domain.PriceModel{
-			Currency:         "USD",
-			RatePerSecondUSD: ratePerHourUSD / 3600,
-			Known:            true,
-		},
+		// What this publisher charges and how: the rate, the fee to hand the machine
+		// over, the smallest allocation it sells, and the block of time it bills in.
+		// The Blueprint's own words translate to a price model in one place, so the
+		// two simulated worlds cannot disagree about which of a fixture's billing
+		// terms they read.
+		Pricing:  billing.PriceModel(ratePerHourUSD),
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 	// Only capacity Mercator keeps names a Rental, which is the same stamp
@@ -2078,6 +2610,8 @@ func cloneHostState(state hostState) hostState {
 		packed:         cloneMap(state.packed),
 		reportsDiffIDs: state.reportsDiffIDs,
 		leaseExpiresAt: state.leaseExpiresAt,
+		provisioning:   state.provisioning,
+		clockAhead:     state.clockAhead,
 	}
 }
 

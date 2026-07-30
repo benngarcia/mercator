@@ -1,0 +1,59 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One Rental holding nothing, an 18GB image, and a four gigabit path to the registry that this machine states no confidence in. Mercator may not act on a number its publisher disowned, so it prices the pull from its own fleet-wide assumption at 288 seconds, and then this world spends the thirty-six the path really costs. The predicted seconds and the spent seconds come from different numbers here, which is the only shape in which the two halves of the transfer model can be told apart. Every other fixture in this corpus declares a path its host stands behind, so prediction and actual are the same figure and a world that derived its own rates from the facts Mercator prices from would be indistinguishable from one that read its own declaration: every other Blueprint here stayed green under that substitution, and the machines whose paths are disowned quietly moved their bytes at the fleet assumption instead of the rate the fixture stated. This is the fixture that is not indistinguishable. The start it asserts is the world's own moment, so a harness reading Mercator's input would spend 288 seconds here and say so.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-that-disowned-its-reading",
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "paths": [
+      {"from": "rental-that-disowned-its-reading", "to": "registry.example", "scope": "registry", "p10_mbps": 4000, "confidence": 0}
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "puller",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-that-disowned-its-reading",
+        "no_start_observed": true,
+        "candidates": {
+          "rental-that-disowned-its-reading": {
+            "feasible": true,
+            "image_locality": "cold",
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 288, "at_most": 289}, "confidence": 0.5, "rate": {"mbps": 500, "assumption": "assumed_registry_rate"}}
+            }
+          }
+        }
+      }
+    },
+    {
+      "advance": "5m"
+    },
+    {
+      "reconcile": "puller",
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-that-disowned-its-reading",
+        "start_latency_seconds": {"at_least": 36, "at_most": 37}
+      }
+    }
+  ]
+}

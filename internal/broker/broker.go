@@ -128,14 +128,31 @@ func (b *Broker) executorByID(ctx context.Context, workspaceID, connectionID str
 }
 
 func (b *Broker) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
-	aggregation, err := b.AggregateOffers(ctx, req)
+	collection, err := b.CollectOffers(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	if err := aggregation.Failures.OrNil(); err != nil {
-		return nil, err
+	return collection.Offers, nil
+}
+
+// CollectOffers is the placement read: every offer this workspace can be placed
+// on, and the census of who was asked for them. It is fail-closed on a connection
+// that could not answer, because placing a Run against part of a fleet while
+// recording the answer as the fleet's is how a machine that was there gets left
+// out of a decision nobody can retrace.
+func (b *Broker) CollectOffers(ctx context.Context, req adapter.OfferRequest) (adapter.OfferCollection, error) {
+	aggregation, err := b.AggregateOffers(ctx, req)
+	if err != nil {
+		return adapter.OfferCollection{}, err
 	}
-	return aggregation.Offers, nil
+	if err := aggregation.Failures.OrNil(); err != nil {
+		return adapter.OfferCollection{}, err
+	}
+	return adapter.OfferCollection{
+		Offers:   aggregation.Offers,
+		Queried:  aggregation.Queried,
+		Excluded: aggregation.Excluded,
+	}, nil
 }
 
 func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) (OfferAggregation, error) {
@@ -143,7 +160,7 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 	if err != nil {
 		return OfferAggregation{}, err
 	}
-	results := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]domain.OfferSnapshot, error) {
+	results, excluded := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]domain.OfferSnapshot, error) {
 		backend, err := b.build(ctx, req.WorkspaceID, c)
 		if err != nil {
 			return nil, err
@@ -161,11 +178,14 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 	aggregation := OfferAggregation{
 		Offers:   []domain.OfferSnapshot{},
 		Failures: ConnectionErrors{},
+		Queried:  []string{},
+		Excluded: excluded,
 	}
 	// Enrolled nodes are capacity this workspace already holds. They are
 	// aggregated beside provider offers so one Booking Decision weighs reusing
 	// a machine against renting another.
 	if b.nodes != nil {
+		aggregation.Queried = append(aggregation.Queried, nodeConnectionID)
 		nodeOffers, nodeErr := b.nodes.Offers(ctx, req.WorkspaceID)
 		if nodeErr != nil {
 			aggregation.Failures = append(aggregation.Failures, ConnectionError{
@@ -177,6 +197,7 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 		aggregation.Offers = append(aggregation.Offers, nodeOffers...)
 	}
 	for _, result := range results {
+		aggregation.Queried = append(aggregation.Queried, result.connection.ID)
 		if result.err != nil {
 			aggregation.Failures = append(aggregation.Failures, connectionError(result))
 			continue
@@ -205,6 +226,7 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 		return aggregation.Offers[i].ID < aggregation.Offers[j].ID
 	})
 	sortConnectionErrors(aggregation.Failures)
+	sort.Strings(aggregation.Queried)
 	return aggregation, nil
 }
 
@@ -314,7 +336,7 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 	if err != nil {
 		return nil, err
 	}
-	results := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]adapter.OwnedExternalObject, error) {
+	results, _ := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]adapter.OwnedExternalObject, error) {
 		backend, err := b.build(ctx, req.WorkspaceID, c)
 		if err != nil {
 			return nil, err

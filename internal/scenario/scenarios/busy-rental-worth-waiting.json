@@ -1,8 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
   "summary": "The warm Rental's running Booking is expected to finish in 4 minutes (bounded at 6), and fresh capacity pays 5 minutes of boot plus a full pull. Mercator assigns the Run to the Rental as a queued Booking projected from the expected runtime.",
-  "classification": "target",
-  "missing_capabilities": ["rental_schedule"],
+  "classification": "green",
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
@@ -36,7 +35,13 @@
         "id": "fresh-4090",
         "provider": "simcloud",
         "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "5m", "p90": "9m"}
+        "provisioning": {
+          "expected": "5m",
+          "p90": "9m",
+          "acquisition": "30s",
+          "boot": "3m45s",
+          "agent_ready": "45s"
+        }
       }
     ]
   },
@@ -59,7 +64,9 @@
     "candidates": {
       "rental-warm": {
         "queue_seconds": 240,
-        "pull_seconds": 0,
+        "stages": {
+          "image_fetch": {"seconds": 0}
+        },
         "rental_schedule": {
           "version": 1,
           "running": {
@@ -71,7 +78,7 @@
           "projected_start_in": "4m"
         }
       },
-      "fresh-4090": {"provision_seconds": {"at_least": 300}}
+      "fresh-4090": {"stages": {"boot": {"seconds": {"at_least": 300}}}}
     }
   }
 }

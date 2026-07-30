@@ -1,0 +1,66 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The sweep the placement corpus states one moment of, driven to the end under the real control plane. Eight Runs arrive together in one family whose caller said three of them may hold capacity at once, on four idle machines all warm for the image, and each takes about nine minutes. Three run, five wait on GROUP_AT_PARALLELISM, and as each member finishes the next is admitted, so the family drains three at a time and every Run in it ends succeeded. The fourth machine is never taken, which is the whole point: the bound counts members rather than machines, and this is the execution safety.group_parallelism_respected reads the launch ledger of.",
+  "seed": "mercator-lab-run-group-v1",
+  "world": {
+    "images": {
+      "sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "4GB"
+          },
+          {
+            "digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-1",
+        "cached_images": ["sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11"],
+        "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "rental-2",
+        "cached_images": ["sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11"],
+        "rate_per_hour_usd": 2.1
+      },
+      {
+        "id": "rental-3",
+        "cached_images": ["sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11"],
+        "rate_per_hour_usd": 2.2
+      },
+      {
+        "id": "rental-4",
+        "cached_images": ["sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11"],
+        "rate_per_hour_usd": 2.3
+      }
+    ],
+    "runtime_models": [
+      {"candidate": "rental-1", "minimum": "9m", "maximum": "9m30s"},
+      {"candidate": "rental-2", "minimum": "9m", "maximum": "9m30s"},
+      {"candidate": "rental-3", "minimum": "9m", "maximum": "9m30s"},
+      {"candidate": "rental-4", "minimum": "9m", "maximum": "9m30s"}
+    ]
+  },
+  "arrivals": {
+    "type": "burst",
+    "burst": {
+      "name_prefix": "member",
+      "at": "0s",
+      "count": 8,
+      "request": {
+        "image": "sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11",
+        "service_class": "batch",
+        "group": {"id": "sweep", "max_parallel": 3},
+        "expected_runtime": "9m",
+        "max_runtime": "15m"
+      }
+    }
+  }
+}

@@ -7,14 +7,6 @@ import (
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
-// labObjectStoreMbps is how fast this world moves Artifact content in and out
-// of the object store. It is the world's own transfer model, deliberately
-// independent of anything Mercator predicts, and it is what makes publication a
-// moment rather than an instant: a producer's local copy exists before the
-// durable one does, and a consumer that could not tell those apart would be
-// admitted on the strength of bytes sitting on one machine.
-const labObjectStoreMbps = domain.DefaultObjectStoreDownloadMbps
-
 // objectStore is the durable authority for Artifacts in this world. It holds
 // two facts that are constantly confused and are not the same: what an Artifact
 // version IS, which the catalog states from the start, and whether its bytes
@@ -89,9 +81,15 @@ func (store *objectStore) replicaOf(artifactID string, at time.Time) domain.Arti
 }
 
 // transferDuration is how long this world takes to move one version to or from
-// the object store.
-func (store *objectStore) transferDuration(artifactID string) time.Duration {
-	return transferDuration(store.catalog[artifactID].SizeBytes, labObjectStoreMbps)
+// the object store over one machine's path to it. The path is the caller's to
+// state, because the same forty gigabytes are a minute for a machine beside the
+// store and half an hour for one across the country: a store that answered
+// without being told which machine was reading would be a world in which
+// distance does not exist. It is also what makes publication a moment rather than
+// an instant, so a producer's local copy exists before the durable one does and a
+// consumer cannot be admitted on bytes sitting on one machine.
+func (store *objectStore) transferDuration(artifactID string, mbps float64) time.Duration {
+	return transferDuration(store.catalog[artifactID].SizeBytes, mbps)
 }
 
 // versions is the whole catalog, which is what an invariant reads to check a

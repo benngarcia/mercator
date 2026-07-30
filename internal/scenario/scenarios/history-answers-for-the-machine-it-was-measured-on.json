@@ -1,0 +1,214 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Six listings of five machines, two of which this fleet has measured. One marketplace machine is published twice under two ask IDs, and the Run that measured it ran on the first of them: an ask ID is a fresh integer for every search, so a history filed under it would answer for one listing of that machine and be blind to the other. A second machine in the same place was measured too, and it brings its application up five times slower. The third Run asks all six what they will spend on the stage this fleet has actuals for, and every answer names the level it came from: both listings of the measured machine answer at the exact candidate with its own thirty seconds, the second measured machine with its own hundred and fifty, an unmeasured machine in the same region falls to the two samples of that provider and place, an unmeasured machine of that provider elsewhere falls to the provider, and a machine of a provider nobody has ever measured falls to the only prior there is, which is what the Run itself declared. Key the history on the listing and the second ask of the measured machine loses its samples; key it on nothing at all and every machine here answers the same thirty seconds. Both measured machines are asked what they will spend pulling as well, which is the stage a history may not answer: a transfer is this launch's own missing bytes over the path they cross, so the answer is the prior and the rate it was divided by, and a measured launch reaching that stage charges a machine for four hundred megabytes it may already hold. A fourth Run then asks the same fleet about a second image nothing here has ever launched, and every rung has to be silent about it: readiness is the workload's own semantics, so the machine that came up in thirty seconds, its neighbour in that region, and its provider elsewhere all fall to what this Run declared about itself. Carry the content into the narrowest key alone and the two coarse rungs answer this image out of the other one's launches, which is the world every Blueprint holding one image was written in.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "400MB"}
+        ]
+      },
+      "scorer@sha256:8bd4c1e0f27a5b3c9d6e0a1f4b7c2d5e8a0f3b6c9d2e5a8f1b4c7d0e3a6f9b2c": {
+        "layers": [
+          {"digest": "sha256:c4a1f70b52d8e3c6a9f0b1d4e7a2c5f8b0d3e6a9c2f5b8d1e4a7c0f3b6d9e2a5", "size": "400MB"}
+        ]
+      }
+    },
+    "marketplace": [
+      {
+        "id": "ask-4417",
+        "machine": "machine-77",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 1.0,
+        "application_ready": "30s",
+        "provisioning": {"expected": "1m", "acquisition": "10s", "boot": "40s", "agent_ready": "10s"},
+        "resources": {"memory": "64GB", "gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "ask-90218",
+        "machine": "machine-77",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 1.1,
+        "application_ready": "30s",
+        "provisioning": {"expected": "1m", "acquisition": "10s", "boot": "40s", "agent_ready": "10s"},
+        "resources": {"memory": "64GB", "gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "ask-2211",
+        "machine": "machine-88",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 2.0,
+        "application_ready": "150s",
+        "provisioning": {"expected": "1m", "acquisition": "10s", "boot": "40s", "agent_ready": "10s"},
+        "resources": {"memory": "256GB", "gpu": {"model": "A100", "count": 8, "memory": "80GB"}}
+      },
+      {
+        "id": "ask-3333",
+        "machine": "machine-91",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 3.0,
+        "application_ready": "12s",
+        "provisioning": {"expected": "1m", "acquisition": "10s", "boot": "40s", "agent_ready": "10s"},
+        "resources": {"memory": "64GB", "gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "ask-5555",
+        "machine": "machine-92",
+        "provider": "simvast",
+        "region": "EU-DE",
+        "rate_per_hour_usd": 4.0,
+        "application_ready": "12s",
+        "provisioning": {"expected": "1m", "acquisition": "10s", "boot": "40s", "agent_ready": "10s"},
+        "resources": {"memory": "64GB", "gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "pod-7777",
+        "machine": "machine-93",
+        "provider": "simpool",
+        "region": "US-CA",
+        "rate_per_hour_usd": 5.0,
+        "application_ready": "12s",
+        "provisioning": {"expected": "1m", "acquisition": "10s", "boot": "40s", "agent_ready": "10s"},
+        "resources": {"memory": "64GB", "gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "measures-the-cheap-machine",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
+        "expected_ready": "5m",
+        "expected_runtime": "5m",
+        "max_runtime": "10m",
+        "resources": {"memory": "16GB"}
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "ask-4417",
+        "candidates": {
+          "ask-4417": {
+            "stages": {
+              "application_ready": {"seconds": 300, "source": "workload.expected_ready", "level": "prior", "samples": 0}
+            }
+          }
+        }
+      }
+    },
+    {"advance": "5m"},
+    {"reconcile": "measures-the-cheap-machine", "expect": {"outcome": "place", "offer": "ask-4417"}},
+    {"advance": "20m"},
+    {"reconcile": "measures-the-cheap-machine", "expect": {"outcome": "place", "offer": "ask-4417"}},
+    {
+      "submit": "measures-the-large-machine",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
+        "expected_ready": "5m",
+        "expected_runtime": "5m",
+        "max_runtime": "10m",
+        "resources": {"memory": "128GB"}
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "ask-2211"
+      }
+    },
+    {"advance": "5m"},
+    {"reconcile": "measures-the-large-machine", "expect": {"outcome": "place", "offer": "ask-2211"}},
+    {"advance": "20m"},
+    {"reconcile": "measures-the-large-machine", "expect": {"outcome": "place", "offer": "ask-2211"}},
+    {
+      "submit": "asks-what-the-fleet-learned",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
+        "expected_ready": "5m",
+        "expected_runtime": "5m",
+        "max_runtime": "10m",
+        "resources": {"memory": "16GB"}
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "ask-4417",
+        "candidates": {
+          "ask-4417": {
+            "stages": {
+              "application_ready": {"seconds": 30, "source": "history", "level": "exact_candidate", "samples": 1},
+              "image_fetch": {"level": "prior", "samples": 0, "rate": {"mbps": 500.0, "assumption": "assumed_registry_rate"}}
+            }
+          },
+          "ask-90218": {
+            "stages": {
+              "application_ready": {"seconds": 30, "source": "history", "level": "exact_candidate", "samples": 1}
+            }
+          },
+          "ask-2211": {
+            "stages": {
+              "application_ready": {"seconds": 150, "source": "history", "level": "exact_candidate", "samples": 1},
+              "image_fetch": {"level": "prior", "samples": 0, "rate": {"mbps": 500.0, "assumption": "assumed_registry_rate"}}
+            }
+          },
+          "ask-3333": {
+            "stages": {
+              "application_ready": {"seconds": 90, "source": "history", "level": "provider_and_region", "samples": 2}
+            }
+          },
+          "ask-5555": {
+            "stages": {
+              "application_ready": {"seconds": 90, "source": "history", "level": "provider", "samples": 2}
+            }
+          },
+          "pod-7777": {
+            "stages": {
+              "application_ready": {"seconds": 300, "source": "workload.expected_ready", "level": "prior", "samples": 0}
+            }
+          }
+        }
+      }
+    },
+    {
+      "submit": "asks-about-other-content",
+      "request": {
+        "image": "scorer@sha256:8bd4c1e0f27a5b3c9d6e0a1f4b7c2d5e8a0f3b6c9d2e5a8f1b4c7d0e3a6f9b2c",
+        "service_class": "standard",
+        "expected_ready": "5m",
+        "expected_runtime": "5m",
+        "max_runtime": "10m",
+        "resources": {"memory": "16GB"}
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "ask-4417",
+        "candidates": {
+          "ask-4417": {
+            "stages": {
+              "application_ready": {"seconds": 300, "source": "workload.expected_ready", "level": "prior", "samples": 0}
+            }
+          },
+          "ask-2211": {
+            "stages": {
+              "application_ready": {"seconds": 300, "source": "workload.expected_ready", "level": "prior", "samples": 0}
+            }
+          },
+          "ask-3333": {
+            "stages": {
+              "application_ready": {"seconds": 300, "source": "workload.expected_ready", "level": "prior", "samples": 0}
+            }
+          },
+          "ask-5555": {
+            "stages": {
+              "application_ready": {"seconds": 300, "source": "workload.expected_ready", "level": "prior", "samples": 0}
+            }
+          }
+        }
+      }
+    }
+  ]
+}

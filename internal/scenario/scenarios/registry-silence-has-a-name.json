@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "A registry that will not answer stops Placement telling a warm host from a cold one, and the Booking Decision has to say which refusal it was, because an operator acts on each differently. This fixture is the two silences an operator cannot fix by fixing credentials: a registry rate limiting Mercator, which is waited out, and a registry that answered nothing at all, which is a network path to repair. Both are priced identically, as zero seconds carrying no confidence, because a host may be sitting on the image whatever the registry says about it. What differs is the name on the estimate. Recording both as one unreadable answer is the collapse this fixture exists to prevent: it is the difference between telling an operator to wait and telling them to look at the network.",
+  "summary": "A registry that will not answer stops Placement telling a warm host from a cold one, and the Booking Decision has to say which refusal it was, because an operator acts on each differently. This fixture is the two silences an operator cannot fix by fixing credentials: a registry rate limiting Mercator, which is waited out, and a registry that answered nothing at all, which is a network path to repair. Both are priced identically, as zero seconds carrying no confidence, because a host may be sitting on the image whatever the registry says about it. What differs is the name on the estimate. Neither Run can be filed under a content key at all: Mercator could not learn what it is about to run, and a key that carried an unknown content would file a 900MB image and a 40GB one under one name. Recording both as one unreadable answer is the collapse this fixture exists to prevent: it is the difference between telling an operator to wait and telling them to look at the network.",
   "classification": "green",
   "world": {
     "images": {
@@ -41,6 +41,7 @@
       "submit": "throttled",
       "request": {
         "image": "popular@sha256:5b0c2d1e3f4a5968778695a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4",
+        "service_class": "standard",
         "expected_runtime": "10m",
         "max_runtime": "20m"
       },
@@ -51,15 +52,17 @@
         "candidates": {
           "first-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_throttled",
-            "pull_confidence": 0
+            "content": "",
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_throttled", "confidence": 0}
+            }
           },
           "second-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_throttled",
-            "pull_confidence": 0
+            "content": "",
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_throttled", "confidence": 0}
+            }
           }
         }
       }
@@ -71,6 +74,7 @@
       "submit": "unreachable",
       "request": {
         "image": "faraway@sha256:6c1d2e3f4a5b69788796a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4",
+        "service_class": "standard",
         "expected_runtime": "10m",
         "max_runtime": "20m"
       },
@@ -81,15 +85,17 @@
         "candidates": {
           "first-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_unreachable",
-            "pull_confidence": 0
+            "content": "",
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_unreachable", "confidence": 0}
+            }
           },
           "second-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_unreachable",
-            "pull_confidence": 0
+            "content": "",
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_unreachable", "confidence": 0}
+            }
           }
         }
       }

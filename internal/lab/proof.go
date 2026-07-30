@@ -159,8 +159,8 @@ func (facts proofFacts) partialImageReuse(runID string) bool {
 	fresh := candidateWithDisposition(decision, domain.CandidateDispositionProvision)
 	return existing != nil &&
 		fresh != nil &&
-		existing.Estimates.PullSeconds.Expected > 0 &&
-		existing.Estimates.PullSeconds.Expected < fresh.Estimates.PullSeconds.Expected
+		existing.Estimates.Stages.ImageFetch.Expected > 0 &&
+		existing.Estimates.Stages.ImageFetch.Expected < fresh.Estimates.Stages.ImageFetch.Expected
 }
 
 // comparesQueueAndFresh is the decision weighing capacity Mercator already holds
@@ -180,7 +180,7 @@ func (facts proofFacts) comparesQueueAndFresh(runID string) bool {
 	return standing != nil &&
 		fresh != nil &&
 		standing.Estimates.QueueSeconds.Source != "" &&
-		fresh.Estimates.ProvisionSeconds.Expected > 0
+		fresh.Estimates.Stages.Boot.Expected > 0
 }
 
 func candidateWithDisposition(decision domain.BookingDecision, disposition domain.CandidateDisposition) *domain.CandidateDecision {

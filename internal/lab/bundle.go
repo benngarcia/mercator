@@ -16,7 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
@@ -151,7 +153,7 @@ func (execution *Execution) Export(ctx context.Context) (RunBundle, error) {
 	if err != nil {
 		return RunBundle{}, err
 	}
-	predictions, err := predictionActualRecords(execution.config.Tape, effects)
+	predictions, err := predictionActualRecords(execution.config.Tape, effects, mercatorEvents)
 	if err != nil {
 		return RunBundle{}, err
 	}
@@ -200,9 +202,17 @@ func (execution *Execution) bundleRuntimeData(ctx context.Context) ([]eventlog.C
 	return events, execution.runtime.world.effectRecords(), execution.runtime.restarts, nil
 }
 
-func predictionActualRecords(tape WorldTape, effects []EffectRecord) ([]predictionActualRecord, error) {
+func predictionActualRecords(tape WorldTape, effects []EffectRecord, mercatorEvents []eventlog.CloudEvent) ([]predictionActualRecord, error) {
 	actuals := acceptedActualRuntimes(effects)
-	records := make([]predictionActualRecord, 0, len(tape.Events))
+	starts, err := recordedStartLatencies(mercatorEvents)
+	if err != nil {
+		return nil, err
+	}
+	waterfalls, err := stageWaterfalls(effects, mercatorEvents)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]predictionActualRecord, 0, (2+len(domain.LaunchStages))*len(tape.Events))
 	for _, event := range tape.Events {
 		if event.Kind != EventRunArrived {
 			continue
@@ -216,19 +226,237 @@ func predictionActualRecords(tape WorldTape, effects []EffectRecord) ([]predicti
 			predicted = arrival.Request.ExpectedRuntime.Duration().Seconds()
 		}
 		actual := arrival.ActualRuntime.Duration().Seconds()
-		if observed, exists := actuals["run-"+arrival.Name]; exists {
+		runID := "run-" + arrival.Name
+		if observed, exists := actuals[runID]; exists {
 			actual = observed
 		}
 		records = append(records, predictionActualRecord{
-			RunID:            "run-" + arrival.Name,
+			RunID:            runID,
 			Metric:           "runtime_seconds",
 			PredictedSeconds: predicted,
 			ActualSeconds:    actual,
 			PredictionSource: "workload.expected_runtime",
 			ActualSource:     "world_tape.actual_runtime",
 		})
+		records = append(records, starts.record(runID))
+		records = append(records, waterfalls.records(runID)...)
 	}
 	return records, nil
+}
+
+// stageWaterfall is one Run's launch as the record holds it: what Mercator
+// predicted each stage would cost, and what the world spent on each.
+//
+// The two halves come from independent places on purpose. The prediction is read
+// off the Booking Decision Mercator wrote, and the actual is read off the Effect
+// Ledger's own launch consequence, which is the world's account of what happened.
+// A record whose actual came from the predictor would be the predictor agreeing
+// with itself, and there is no other source for six of the eight: Mercator sees a
+// container start and an application report itself ready, and nothing in
+// production tells it when a machine finished booting.
+// launched is separate from actual because the two answer different questions. A
+// Run is in launched when the Effect Ledger accepted a launch for it, whatever the
+// consequence then said, and in actual only where that consequence carried stage
+// durations. Deriving one from the other made a launch that reported no stage at
+// all indistinguishable from a Run that never launched, so the law about launches
+// skipped exactly the launches with nothing to measure.
+type stageWaterfall struct {
+	predicted map[string]domain.LaunchStageEstimates
+	launched  map[string]bool
+	actual    map[string]map[string]float64
+	// unreached is the stages this launch never got to, which the world states
+	// rather than leaving to be inferred from a missing duration. A launch whose
+	// application never comes up has no readiness to measure, and that is a
+	// different record from a launch whose readiness nothing timed.
+	unreached map[string]map[domain.LaunchStage]bool
+}
+
+// records is one row per stage for this Run, in the order a launch goes through
+// them. Every stage gets a row even where one half is missing, and the row says
+// which half: a stage nobody predicted and a stage predicted to cost nothing are
+// different facts, and so are a stage the world never reached and one it passed
+// through instantly.
+func (waterfall stageWaterfall) records(runID string) []predictionActualRecord {
+	predicted, decided := waterfall.predicted[runID]
+	actual := waterfall.actual[runID]
+	rows := make([]predictionActualRecord, 0, len(domain.LaunchStages))
+	for _, stage := range domain.LaunchStages {
+		row := predictionActualRecord{
+			RunID:            runID,
+			Metric:           string(stage) + "_seconds",
+			PredictionSource: "no_booking_decision",
+			ActualSource:     "launch_not_accepted",
+		}
+		if decided {
+			row.PredictedSeconds = predicted.Stage(stage).Expected
+			row.PredictionSource = "booking_decision.estimates.stages." + string(stage)
+		}
+		if waterfall.launched[runID] {
+			// A launch that reported no duration for this stage is named as that
+			// rather than as a measured zero, because a calibration reading zero
+			// seconds off a stage nobody timed would train on it. A stage the launch
+			// never reached is named as that too, and it is a third thing again: the
+			// world says this workload never came up, so there was nothing to time.
+			row.ActualSource = "launch_reported_no_actual"
+			if waterfall.unreached[runID][stage] {
+				row.ActualSource = "launch_never_reached_stage"
+			}
+		}
+		if seconds, measured := actual[string(stage)]; measured {
+			row.ActualSeconds = seconds
+			row.ActualSource = "effect_ledger.launch.stage_seconds"
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func stageWaterfalls(effects []EffectRecord, mercatorEvents []eventlog.CloudEvent) (stageWaterfall, error) {
+	waterfall := stageWaterfall{
+		predicted: map[string]domain.LaunchStageEstimates{},
+		launched:  map[string]bool{},
+		actual:    map[string]map[string]float64{},
+		unreached: map[string]map[domain.LaunchStage]bool{},
+	}
+	for _, event := range mercatorEvents {
+		if event.Type != orchestrator.EventBookingDecided {
+			continue
+		}
+		var payload struct {
+			Decision domain.BookingDecision `json:"decision"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			return stageWaterfall{}, fmt.Errorf("decode Booking Decision from %s: %w", event.ID, err)
+		}
+		waterfall.predicted[payload.Decision.RunID] = selectedStages(payload.Decision)
+	}
+	for _, effect := range effects {
+		if effect.Operation != OperationProviderLaunch || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		waterfall.launched[effect.CorrelationID] = true
+		var consequence struct {
+			StageSeconds            map[string]float64 `json:"stage_seconds"`
+			ApplicationBecomesReady *bool              `json:"application_becomes_ready"`
+		}
+		if json.Unmarshal(effect.Consequence, &consequence) != nil {
+			continue
+		}
+		if consequence.StageSeconds != nil {
+			waterfall.actual[effect.CorrelationID] = consequence.StageSeconds
+		}
+		if consequence.ApplicationBecomesReady != nil && !*consequence.ApplicationBecomesReady {
+			waterfall.unreached[effect.CorrelationID] = map[domain.LaunchStage]bool{
+				domain.StageApplicationReady: true,
+			}
+		}
+	}
+	return waterfall, nil
+}
+
+// selectedStages is what Mercator predicted the machine it chose would spend on
+// each stage, which is the only candidate's waterfall an actual can be compared
+// with.
+func selectedStages(decision domain.BookingDecision) domain.LaunchStageEstimates {
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == decision.SelectedOfferSnapshotID {
+			return candidate.Estimates.Stages
+		}
+	}
+	return domain.LaunchStageEstimates{}
+}
+
+// startLatencies is what Mercator predicted each Run's start would cost and what
+// it then observed, read entirely out of Mercator's own event log. Both halves
+// come from the same place on purpose: this is the record a calibration reads, and
+// a record whose actual came from World Truth would be measuring the world against
+// itself rather than measuring Mercator's prediction.
+type startLatencies struct {
+	predicted map[string]float64
+	accepted  map[string]time.Time
+	started   map[string]time.Time
+}
+
+// record is one Run's start-latency row. A Run whose holder reported no start
+// moment gets a row with the prediction and no actual, because a stage nobody
+// observed has none: subtracting the accepted moment from itself would put a zero
+// in the calibration set and teach it that every start is instant.
+func (latencies startLatencies) record(runID string) predictionActualRecord {
+	record := predictionActualRecord{
+		RunID:            runID,
+		Metric:           "start_latency_seconds",
+		PredictedSeconds: latencies.predicted[runID],
+		PredictionSource: "booking_decision.estimates.start_seconds",
+		ActualSource:     "start_not_observed",
+	}
+	accepted, taken := latencies.accepted[runID]
+	started, began := latencies.started[runID]
+	if !taken || !began {
+		return record
+	}
+	if started.Before(accepted) {
+		// Two clocks that disagree rather than a duration: the holder dated the start
+		// before the moment its own launch was accepted. A negative number here is a
+		// calibration set being taught that work begins before it is asked for, and the
+		// row says which pair of moments could not be subtracted instead.
+		record.ActualSource = "start_before_launch_accepted"
+		return record
+	}
+	record.ActualSeconds = started.Sub(accepted).Seconds()
+	record.ActualSource = "run_stream.execution_started"
+	return record
+}
+
+func recordedStartLatencies(events []eventlog.CloudEvent) (startLatencies, error) {
+	latencies := startLatencies{
+		predicted: map[string]float64{},
+		accepted:  map[string]time.Time{},
+		started:   map[string]time.Time{},
+	}
+	for _, event := range events {
+		switch event.Type {
+		case orchestrator.EventBookingDecided:
+			var payload struct {
+				Decision domain.BookingDecision `json:"decision"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				return startLatencies{}, fmt.Errorf("decode Booking Decision from %s: %w", event.ID, err)
+			}
+			latencies.predicted[payload.Decision.RunID] = selectedStartSeconds(payload.Decision)
+		case orchestrator.EventLaunchAccepted:
+			// The provider's own accepted moment rather than when Mercator wrote the
+			// event down, because the machine started getting ready when the launch was
+			// taken and not when the control plane finished its append.
+			var payload struct {
+				AcceptedAt time.Time `json:"accepted_at"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				return startLatencies{}, fmt.Errorf("decode launch receipt from %s: %w", event.ID, err)
+			}
+			latencies.accepted[event.CorrelationID] = payload.AcceptedAt
+		case orchestrator.EventExecutionStarted:
+			var payload struct {
+				StartedAt time.Time `json:"started_at"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				return startLatencies{}, fmt.Errorf("decode start moment from %s: %w", event.ID, err)
+			}
+			latencies.started[event.CorrelationID] = payload.StartedAt
+		}
+	}
+	return latencies, nil
+}
+
+// selectedStartSeconds is what Mercator predicted the machine it chose would take
+// to start, which is the only candidate's prediction an actual can be compared
+// with.
+func selectedStartSeconds(decision domain.BookingDecision) float64 {
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == decision.SelectedOfferSnapshotID {
+			return candidate.Estimates.StartSeconds.Expected
+		}
+	}
+	return 0
 }
 
 func acceptedActualRuntimes(effects []EffectRecord) map[string]float64 {

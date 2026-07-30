@@ -27,6 +27,19 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 	if blueprint.Arrivals == nil {
 		return WorldTape{}, nil, fmt.Errorf("Lab compilation requires an arrival-driven Blueprint")
 	}
+	// A seeded Rental Schedule is Broker state, and the Lab drives the real
+	// control plane against its own storage: this world builds the machines and
+	// the Bookings on them belong to Runs no event log here ever saw. Nothing
+	// loads them, so a Blueprint stating one would be compiled into a world with
+	// every Rental idle, and the fixture would pass while asserting the opposite
+	// of what it says. Refusing is the honest answer until the Lab can seed the
+	// Broker; every queue in this world is made by Runs it created itself.
+	if len(blueprint.World.RentalSchedules) > 0 {
+		return WorldTape{}, nil, fmt.Errorf(
+			"Lab compilation cannot seed Broker Rental Schedule state, and Blueprint %q states %d",
+			blueprint.Name, len(blueprint.World.RentalSchedules),
+		)
+	}
 	seed := options.Seed
 	if seed == "" {
 		seed = blueprint.Seed
@@ -53,7 +66,6 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 		samples = append(samples, runtimeSamples...)
 		data, err := json.Marshal(RunArrival{
 			Name:                 arrival.Name,
-			Group:                arrival.Group,
 			Workspace:            arrival.Workspace,
 			Request:              arrival.Request,
 			ActualRuntime:        scenario.Duration(actualRuntime),
@@ -75,6 +87,11 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 		return WorldTape{}, nil, err
 	}
 	events = append(events, withdrawals...)
+	reclaimed, err := preemptionEvents(seed, start, len(arrivals)+len(withdrawals), blueprint.World.Preemptions)
+	if err != nil {
+		return WorldTape{}, nil, err
+	}
+	events = append(events, reclaimed...)
 	sort.Slice(events, func(i, j int) bool {
 		if events[i].At.Equal(events[j].At) {
 			return events[i].Sequence < events[j].Sequence
@@ -128,6 +145,34 @@ func cancellationEvents(
 			At:       start.Add(cancellation.At.Duration()),
 			Sequence: uint64(len(arrivals) + index + 1),
 			Kind:     EventRunCancelled,
+			Data:     data,
+		})
+	}
+	return events, nil
+}
+
+// preemptionEvents is every machine this world's providers take back. The
+// sequence is offset past everything a caller does, so a reclamation at the same
+// instant as an arrival or a withdrawal is ordered after it: the work is in the
+// world before the world acts on it. The tape resequences the lot once it is
+// sorted by time.
+func preemptionEvents(
+	seed string,
+	start time.Time,
+	before int,
+	preemptions []scenario.PreemptionSpec,
+) ([]WorldEvent, error) {
+	events := make([]WorldEvent, 0, len(preemptions))
+	for index, preemption := range preemptions {
+		data, err := json.Marshal(CapacityPreemption{Rental: preemption.Rental})
+		if err != nil {
+			return nil, fmt.Errorf("encode capacity preemption %q: %w", preemption.Rental, err)
+		}
+		events = append(events, WorldEvent{
+			ID:       DeterministicID(seed, "event", "capacity-preemption/"+preemption.Rental),
+			At:       start.Add(preemption.At.Duration()),
+			Sequence: uint64(before + index + 1),
+			Kind:     EventCapacityPreempted,
 			Data:     data,
 		})
 	}

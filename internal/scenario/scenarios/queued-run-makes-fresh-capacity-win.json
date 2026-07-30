@@ -1,8 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Two Runs arrive while a warm Rental is busy. Mercator schedules the first behind the running Booking. The second decision includes that queued Booking's expected runtime, making fresh capacity faster.",
-  "classification": "target",
-  "missing_capabilities": ["rental_schedule"],
+  "summary": "Two Runs arrive while a warm Rental is busy. Mercator schedules the first behind the running Booking. The second decision includes that queued Booking's expected runtime, making fresh capacity faster. Both machines cost the same on purpose: the claim is that a queue Mercator itself created lengthens the next Run's wait, and a fixture whose price gap decided the placement would prove nothing about the queue.",
+  "classification": "green",
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
@@ -34,8 +33,14 @@
       {
         "id": "fresh-4090",
         "provider": "simcloud",
-        "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "5m", "p90": "9m"}
+        "rate_per_hour_usd": 2.5,
+        "provisioning": {
+          "expected": "5m",
+          "p90": "9m",
+          "acquisition": "30s",
+          "boot": "3m45s",
+          "agent_ready": "45s"
+        }
       }
     ]
   },

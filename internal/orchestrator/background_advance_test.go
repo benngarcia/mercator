@@ -154,7 +154,12 @@ func seedWedgedRun(t *testing.T, log eventlog.EventLog, workspaceID, runID strin
 				SchemaVersion: 1,
 				OccurredAt:    time.Now().UTC(),
 				Visibility:    eventlog.VisibilityPublic,
-				Data:          []byte(`{}`),
+				// A readable request, so the one thing wedging this Run is the
+				// one this test names: cleanup asked for with no launch intent
+				// to clean up. A request naming no Run wedges the workspace's
+				// whole read model instead, which is a different defect and
+				// would let this test pass for the wrong reason.
+				Data: []byte(`{"run_id":"` + runID + `"}`),
 			},
 			{
 				ID:            "evt_" + workspaceID + "_" + runID + "_cleanup",

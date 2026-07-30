@@ -22,14 +22,14 @@ import (
 
 func TestRunEvidenceSerializesBookingDecisionVocabulary(t *testing.T) {
 	encoded, err := json.Marshal(RunEvidence{
-		ID:              "run-1",
-		BookingDecision: domain.BookingDecision{ID: "decision-1"},
+		ID:               "run-1",
+		BookingDecisions: []domain.BookingDecision{{ID: "decision-1"}},
 	})
 	if err != nil {
 		t.Fatalf("marshal run evidence: %v", err)
 	}
 	text := string(encoded)
-	if !strings.Contains(text, `"booking_decision"`) || strings.Contains(text, `"placement"`) {
+	if !strings.Contains(text, `"booking_decisions"`) || strings.Contains(text, `"placement"`) {
 		t.Fatalf("run evidence uses superseded decision vocabulary: %s", text)
 	}
 }
@@ -61,8 +61,20 @@ func TestRunnerVerifiesARealReportedRunAndConfirmedCleanup(t *testing.T) {
 	if evidence.Inventory.Owned != 0 {
 		t.Fatalf("owned inventory = %d, want zero", evidence.Inventory.Owned)
 	}
-	if evidence.Run.BookingDecision.SelectedOfferSnapshotID == "" || len(evidence.Run.Events) == 0 || evidence.Run.StartedAt.IsZero() {
+	if len(evidence.Run.BookingDecisions) != 1 || evidence.Run.BookingDecisions[0].SelectedOfferSnapshotID == "" || len(evidence.Run.Events) == 0 || evidence.Run.StartedAt.IsZero() {
 		t.Fatalf("run evidence is incomplete: %+v", evidence.Run)
+	}
+	// The probe reported its own readiness over the real report endpoint, with the
+	// moment it became ready, and the record carries it. That is the actual of the
+	// last stage of a launch, and it is the one stage nothing but the workload can
+	// report: the trial's verdict reads it, so a probe that ran and never said so
+	// fails rather than passing with that stage unproven.
+	if evidence.Run.ApplicationReadyAt == nil {
+		t.Fatalf("the trial recorded no moment the probe became ready: %+v", evidence.Run)
+	}
+	if evidence.Run.ApplicationReadyAt.Before(evidence.Run.StartedAt) || evidence.Run.ApplicationReadyAt.After(time.Now().UTC()) {
+		t.Fatalf("the probe reported readiness at %s, and the trial ran from %s to now",
+			evidence.Run.ApplicationReadyAt.Format(time.RFC3339Nano), evidence.Run.StartedAt.Format(time.RFC3339Nano))
 	}
 }
 
@@ -243,6 +255,7 @@ func trialOffer(rate float64) domain.OfferSnapshot {
 			CPUMillis:          2000,
 			MemoryBytes:        2 << 30,
 			EphemeralDiskBytes: 2 << 30,
+			EphemeralDiskKnown: true,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, MaxEnvironmentBytes: 32768},

@@ -1,0 +1,41 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One idle Rental holding the image, and one Run that says it is urgent. There is no urgent class: the five Mercator prices are interactive, standard, batch, experimental, and opportunistic, and a word outside that list carries no exchange rate at all. Mercator refuses the Run where it enters rather than accepting it and ranking every candidate on price alone, which is what a caller would otherwise learn from the bill: their word for urgency was read as no opinion about waiting, and the placement went to the slowest machine in the fleet. This is the refusal at L1, through the real control plane's own create path, on a world where a placement would have succeeded.",
+  "seed": "mercator-lab-unknown-class-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "18GB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "held-4090",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 4.0
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "says-urgent",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "service_class": "urgent",
+          "expected_runtime": "8m",
+          "max_runtime": "20m"
+        }
+      }
+    ]
+  }
+}

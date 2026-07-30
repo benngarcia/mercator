@@ -60,6 +60,26 @@ type OfferRequest struct {
 	Resources   domain.ResourceRequirements
 }
 
+// OfferCollection is one answer to an offer query together with the census of who
+// gave it: the connections that were asked, and the connections that were not.
+//
+// The census travels with the offers because the offers cannot carry it. A
+// connection that answered with nothing publishes no offer to be counted, and a
+// connection nobody contacted publishes none either, so a report derived from the
+// offers states the two identically. Placement reads an empty answer as the
+// strongest thing a fleet can say about an ask, and an operator reading that has
+// to be able to tell a marketplace that sells no machine of the shape from a
+// workspace whose providers were never asked.
+type OfferCollection struct {
+	Offers []domain.OfferSnapshot
+	// Queried is every connection that was asked, whatever it answered.
+	Queried []string
+	// Excluded is every connection that was not asked and why nobody asked it, one
+	// entry per connection. An operator de-authorising a provider is the case: the
+	// fleet answers with less, and nothing else in the record says so.
+	Excluded []string
+}
+
 type LaunchRequest struct {
 	OperationKey       string                      `json:"operation_key"`
 	RequestHash        string                      `json:"request_hash"`
@@ -138,8 +158,62 @@ type ExternalObservation struct {
 	LaunchKey  string        `json:"launch_key"`
 	Phase      ExternalPhase `json:"phase"`
 	ObservedAt time.Time     `json:"observed_at"`
-	ExitCode   *int          `json:"exit_code,omitempty"`
-	NativeJSON string        `json:"native_json,omitempty"`
+	// StartedAt is when the workload's process actually began, as the thing
+	// holding it reports the moment: a container runtime's own start time, or a
+	// provider's where that provider publishes a moment about the process rather
+	// than about the machine. It is not ObservedAt, which is when Mercator looked,
+	// and it is not the moment the launch was accepted, which is when the machine
+	// started getting ready. The whole point of predicting a start latency is that
+	// it is calibrated against started minus accepted, and nothing could subtract
+	// those until this field existed.
+	//
+	// It is a pointer because a holder that cannot say is common and must stay
+	// distinguishable from one that says now. A provider whose API publishes no
+	// start moment leaves it nil, and the record states the moment absent rather
+	// than deriving one from acceptance.
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	ExitCode   *int       `json:"exit_code,omitempty"`
+	NativeJSON string     `json:"native_json,omitempty"`
+}
+
+// EstablishedStart is the moment this observation establishes the workload began,
+// and whether it establishes one at all. It is the single place a foreign moment
+// becomes a moment Mercator will act on: the run stream's start and the Booking's
+// runtime clock both read it, because a law with two adoption sites is a law one
+// of them will be missing.
+//
+// An observation establishes a start when the holder said the work had begun and
+// said when, by the moment Mercator read it. Two moments a holder can publish are
+// not that.
+//
+// A moment later than the read that carried it is a clock Mercator does not share
+// rather than anything it saw: a host running an hour ahead publishes a start an
+// hour in the future, and Mercator recording it would file a start latency an hour
+// too large as a measurement, and stamp a Booking's runtime clock an hour into
+// Mercator's own future, where the bound it enforces expires an hour after the
+// capacity was really spent. The comparison only means something because ObservedAt
+// is Mercator's own clock on every seam that fills it in, which is what
+// broker.observeOnNode had to be corrected to do: the node published both moments
+// off its own clock, so the two agreed with each other and neither agreed with
+// Mercator.
+//
+// A moment carried by a phase saying the work has not begun is the claim every
+// provider in this tree makes from the moment it accepts a launch. What the phase
+// cannot do is repair a moment that was never about the process: a provider that
+// dates a pod when it places it publishes the same stale moment once the pod is
+// running, so the field itself has to be absent where the holder cannot see the
+// process, which is why the RunPod and Vast adapters publish none.
+//
+// The observation still carries what the holder said either way. This decides what
+// Mercator adopts as the Run's own start, not what the provider is recorded saying.
+func (o ExternalObservation) EstablishedStart() (time.Time, bool) {
+	if o.StartedAt == nil || o.StartedAt.IsZero() || o.StartedAt.After(o.ObservedAt) {
+		return time.Time{}, false
+	}
+	if o.Phase != ExternalPhaseRunning && !o.Phase.Exited() {
+		return time.Time{}, false
+	}
+	return o.StartedAt.UTC(), true
 }
 
 type ReleaseRequest struct {

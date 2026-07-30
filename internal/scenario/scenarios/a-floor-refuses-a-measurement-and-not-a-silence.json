@@ -1,0 +1,64 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "A Run that states a floor on how fast a candidate reaches the registry, 500 Mbps, and would rather run on a machine nobody has measured than not run at all. Four Rentals at one price, none holding the 2GB image. The first published 750 Mbps and stands behind it, so it answers, clears the floor, and wins on the seconds it saves. The second published 100 Mbps and stands behind it: that machine was measured too slow, it is refused, and the record states the speed it published rather than the word unknown. The third published 5 Gbps and disowned it, stating no confidence at all. The fourth published nothing. Those two are identical in every column and both are feasible, which is the whole claim: a number nobody stands behind is the silence it is, and what silence buys is what this Run said it buys. Before this the floor consulted allow_unknown only when a candidate published no facts whatsoever, so the disowned publisher was struck out where the silent machine beside it was admitted, and publishing a number you disown was strictly worse than saying nothing.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:9c1f1cc70e2c0dd7bb0b1ff37e5a20d3fd67ed6d4a3f0f7ec26f10e2b1b3f9aa": {
+        "layers": [
+          {"digest": "sha256:6b8f4e4a09d95c60e50e1cba4bb52bbde5ba0bd8a3c0eb0d5c0a19f0b1de3f21", "size": "2GB"}
+        ]
+      }
+    },
+    "rentals": [
+      {"id": "rental-measured", "rate_per_hour_usd": 2.0},
+      {"id": "rental-slow", "rate_per_hour_usd": 2.0},
+      {"id": "rental-disowned", "rate_per_hour_usd": 2.0},
+      {"id": "rental-silent", "rate_per_hour_usd": 2.0}
+    ],
+    "paths": [
+      {"from": "rental-measured", "to": "registry.example", "scope": "registry", "p10_mbps": 750, "confidence": 0.9},
+      {"from": "rental-slow", "to": "registry.example", "scope": "registry", "p10_mbps": 100, "confidence": 0.9},
+      {"from": "rental-disowned", "to": "registry.example", "scope": "registry", "p10_mbps": 5000, "confidence": 0}
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:9c1f1cc70e2c0dd7bb0b1ff37e5a20d3fd67ed6d4a3f0f7ec26f10e2b1b3f9aa",
+    "service_class": "standard",
+    "download": {"scope": "registry", "min_p10_mbps": 500, "allow_unknown": true},
+    "expected_runtime": "10m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-measured",
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
+    "disposition": "release",
+    "candidates": {
+      "rental-measured": {
+        "feasible": true,
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 21.8, "at_most": 21.9}, "confidence": 0.9}
+        }
+      },
+      "rental-slow": {
+        "feasible": false,
+        "rejected": [{"code": "NETWORK_FACT_UNSATISFIED", "path": "network.download"}]
+      },
+      "rental-disowned": {
+        "feasible": true,
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 32.4, "at_most": 32.6}, "confidence": 0.5}
+        },
+        "uncertainty": 1
+      },
+      "rental-silent": {
+        "feasible": true,
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 32.4, "at_most": 32.6}, "confidence": 0.5}
+        },
+        "uncertainty": 1
+      }
+    }
+  }
+}

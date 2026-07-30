@@ -673,9 +673,13 @@ function remainingMax(run: WorkspaceRun, now: number): number {
   return Math.max(1, run.maxRuntimeSeconds - elapsedSeconds(run, now));
 }
 
+// elapsedSeconds is how long this workload has been running, measured from the
+// moment its machine said it began. A Run nothing has reported a start for has no
+// elapsed runtime to show: counting from when Mercator last looked would report a
+// workload as newly started every time the console reconnected.
 function elapsedSeconds(run: WorkspaceRun, now: number): number {
-  if (!run.runningAt) return 0;
-  return Math.max(0, (now - new Date(run.runningAt).getTime()) / 1000);
+  if (!run.startedAt) return 0;
+  return Math.max(0, (now - new Date(run.startedAt).getTime()) / 1000);
 }
 
 function secondsUntil(value: string | undefined, now: number): number {
