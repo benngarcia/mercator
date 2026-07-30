@@ -65,6 +65,13 @@ for target in ${TARGETS}; do
   mkdir -p "${work_dir}"
 
   GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags="-s -w" -o "${work_dir}/mercator" ./cmd/mercator
+  # The node agent ships beside the control plane because it is half of the
+  # product rather than an add-on. A machine an operator enrolls by hand runs it
+  # from the environment, and a machine a provider rents fetches the same binary
+  # through the bootstrap, so an archive carrying only `mercator` leaves both
+  # paths asking the operator to build Go from source before anything can execute
+  # a workload.
+  GOOS="${os}" GOARCH="${arch}" go build -trimpath -ldflags="-s -w" -o "${work_dir}/mercator-node" ./cmd/mercator-node
   cp README.md LICENSE NOTICE "${work_dir}/"
   tar -C "${DIST_DIR}" -czf "${archive}" "${name}"
   rm -rf "${work_dir}"
