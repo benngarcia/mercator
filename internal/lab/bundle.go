@@ -141,13 +141,17 @@ func (execution *Execution) Export(ctx context.Context) (RunBundle, error) {
 	if err != nil {
 		return RunBundle{}, err
 	}
+	invariants, err := canonicalJSON(latestInvariantResults(execution.invariants))
+	if err != nil {
+		return RunBundle{}, err
+	}
 	entries = append(entries,
 		bundleEntry{name: "samples.jsonl", data: samples},
 		bundleEntry{name: "events/mercator.jsonl", data: encodedMercatorEvents},
 		bundleEntry{name: "events/world.jsonl", data: worldEvents},
 		bundleEntry{name: "effects.jsonl", data: encodedEffects},
 		bundleEntry{name: "predictions.jsonl", data: encodedPredictions},
-		bundleEntry{name: "invariants.json", data: []byte("{}\n")},
+		bundleEntry{name: "invariants.json", data: invariants},
 		bundleEntry{name: "metrics.json", data: metrics},
 	)
 	return RunBundle{entries: entries}, nil
