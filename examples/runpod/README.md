@@ -17,7 +17,8 @@ connection setup, GPU offer behavior, cleanup, and image-resolution caveats.
 
 - Use a public URL for `MERCATOR_PUBLIC_URL`; a loopback or private laptop URL
   is not reachable from RunPod.
-- Set `MERCATOR_SECRET_KEY` so Mercator can sign per-run reporting tokens.
+- Set `MERCATOR_SECRET_KEY`; it is required to start at all, and it signs
+  per-run reporting tokens.
 - Pin image references to real registry digests. The server rejects mutable
   tags at create time, and RunPod can only pull digests that actually exist in
   a registry.

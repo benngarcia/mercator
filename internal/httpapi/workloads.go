@@ -12,10 +12,14 @@ func (s *Server) CreateWorkload(ctx context.Context, request CreateWorkloadReque
 		return CreateWorkload501JSONResponse(apiError("WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")), nil
 	}
 	body := request.Body
-	if body.WorkspaceId == "" {
-		return CreateWorkload400JSONResponse(apiError("WORKSPACE_ID_REQUIRED", "workspace_id is required.")), nil
+	workspaceID, workspaceErr := s.resolveWorkspace(ctx, body.WorkspaceId, "")
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return CreateWorkload403JSONResponse(workspaceErr.Response), nil
+		}
+		return CreateWorkload400JSONResponse(workspaceErr.Response), nil
 	}
-	if err := s.workloads.CreateWorkload(ctx, workload.CreateWorkloadRequest{WorkspaceID: body.WorkspaceId, WorkloadID: body.WorkloadId, Name: body.Name}); err != nil {
+	if err := s.workloads.CreateWorkload(ctx, workload.CreateWorkloadRequest{WorkspaceID: workspaceID, WorkloadID: body.WorkloadId, Name: body.Name}); err != nil {
 		if response, ok := workspaceAPIError(err); ok {
 			return CreateWorkload400JSONResponse(response), nil
 		}

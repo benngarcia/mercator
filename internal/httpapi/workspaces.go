@@ -18,7 +18,10 @@ func (s *Server) ListWorkspaces(ctx context.Context, request ListWorkspacesReque
 	if s.workspaces == nil {
 		return ListWorkspaces500JSONResponse(internalAPIError(http.StatusInternalServerError, "WORKSPACE_CATALOG_DISABLED", errors.New("workspace catalog is not configured"))), nil
 	}
-	items, err := s.workspaces.List(ctx, workspace.ListOptions{IncludeArchived: request.Params.IncludeArchived})
+	items, err := s.workspaces.List(ctx, workspace.ListOptions{
+		IncludeArchived: request.Params.IncludeArchived,
+		Subject:         requestMemberScope(ctx),
+	})
 	if err != nil {
 		return ListWorkspaces500JSONResponse(internalAPIError(http.StatusInternalServerError, "LIST_WORKSPACES_FAILED", err)), nil
 	}
@@ -61,6 +64,12 @@ func (s *Server) ArchiveWorkspace(ctx context.Context, request ArchiveWorkspaceR
 	}
 	if s.workspaces == nil {
 		return ArchiveWorkspace500JSONResponse(internalAPIError(http.StatusInternalServerError, "WORKSPACE_CATALOG_DISABLED", errors.New("workspace catalog is not configured"))), nil
+	}
+	// A workspace this subject is not a member of is one they cannot see, and
+	// archive declares no 403. Answering "not found" is both the declared
+	// response and the true one from where the caller stands.
+	if refusal := s.refuseNonMember(ctx, request.WorkspaceId); refusal != nil {
+		return ArchiveWorkspace404JSONResponse(apiError("WORKSPACE_NOT_FOUND", "Workspace not found.")), nil
 	}
 	item, err := s.workspaces.Archive(ctx, request.WorkspaceId, time.Now().UTC())
 	if err != nil {

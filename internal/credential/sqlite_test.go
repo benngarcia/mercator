@@ -122,3 +122,85 @@ func TestMigrateSealKeyNoMasterKeyIsNoop(t *testing.T) {
 		t.Fatalf("expected no-op, got migrated=%d err=%v", migrated, err)
 	}
 }
+
+func retiredKey32() []byte { return []byte("fedcba9876543210fedcba9876543210") }
+
+// TestRekeyMovesEveryRowToTheNewKey: after rotation the store answers under the
+// new master key and refuses the retired one. This is the property an operator
+// rotating a leaked key is buying, so it is asserted by resolving real rows and
+// not by counting writes.
+func TestRekeyMovesEveryRowToTheNewKey(t *testing.T) {
+	// Arrange: two credentials sealed under the key about to be retired.
+	ctx := context.Background()
+	store := newTestStore(t)
+	retired := NewResolver(nil, store, retiredKey32())
+	sealed := map[string]string{"conn_a": "vast-token", "conn_b": "runpod-token"}
+	for id, secret := range sealed {
+		blob, ok := retired.Seal([]byte(secret))
+		if !ok {
+			t.Fatalf("seal %s under the retired key", id)
+		}
+		if err := store.Put(ctx, "ws_1", id, blob); err != nil {
+			t.Fatalf("put %s: %v", id, err)
+		}
+	}
+
+	// Act
+	resealed, err := store.Rekey(ctx, retiredKey32(), key32())
+
+	// Assert
+	if err != nil {
+		t.Fatalf("rekey: %v", err)
+	}
+	if resealed != len(sealed) {
+		t.Fatalf("re-sealed %d rows, want %d", resealed, len(sealed))
+	}
+	current := NewResolver(nil, store, key32())
+	for id, want := range sealed {
+		got, err := current.Resolve(ctx, "ws_1", Credential{Source: SourceMercator, Ref: id})
+		if err != nil || got != want {
+			t.Errorf("resolve %s under the new key = %q, err = %v; want %q", id, got, err, want)
+		}
+		if _, err := retired.Resolve(ctx, "ws_1", Credential{Source: SourceMercator, Ref: id}); err == nil {
+			t.Errorf("%s still resolves under the retired key", id)
+		}
+	}
+
+	// A second rotation finds nothing left to move, so an interrupted operator
+	// can simply run it again.
+	resealed, err = store.Rekey(ctx, retiredKey32(), key32())
+	if err != nil || resealed != 0 {
+		t.Fatalf("second rekey: resealed = %d, err = %v", resealed, err)
+	}
+}
+
+// TestRekeyRefusesTheWrongRetiredKey: a row neither key opens names the
+// connection and aborts the whole rotation, leaving the store as it was.
+func TestRekeyRefusesTheWrongRetiredKey(t *testing.T) {
+	// Arrange: a credential sealed under a key the operator will not supply.
+	ctx := context.Background()
+	store := newTestStore(t)
+	stranger := []byte("aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb")
+	blob, ok := NewResolver(nil, store, stranger).Seal([]byte("orphan"))
+	if !ok {
+		t.Fatal("seal under the stranger key")
+	}
+	if err := store.Put(ctx, "ws_1", "conn_orphan", blob); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	// Act
+	_, err := store.Rekey(ctx, retiredKey32(), key32())
+
+	// Assert
+	if err == nil {
+		t.Fatal("a row neither key opens must abort the rotation")
+	}
+	if !strings.Contains(err.Error(), "ws_1/conn_orphan") {
+		t.Fatalf("error = %v, want the affected connection named", err)
+	}
+	stored, err := store.Get(ctx, "ws_1", "conn_orphan")
+	if err != nil || string(stored) != string(blob) {
+		t.Fatalf("aborted rotation must leave the row untouched: err = %v", err)
+	}
+}

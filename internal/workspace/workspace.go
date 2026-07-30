@@ -32,6 +32,10 @@ type Create struct {
 
 type ListOptions struct {
 	IncludeArchived bool
+	// Subject narrows the listing to the workspaces one subject is a member of.
+	// Empty lists every workspace, which is what an instance credential asking
+	// on the deployment's own behalf sees.
+	Subject string
 }
 
 func (c Create) validate() error {

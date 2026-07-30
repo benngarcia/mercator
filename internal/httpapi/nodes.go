@@ -25,13 +25,21 @@ func WithNodes(registry NodeRegistry) Option {
 // InviteNode reserves a node identity and returns the material one machine
 // needs to enroll. The enrollment token is returned exactly this once: it is
 // short-lived, redeemable once, and never stored in a readable form.
+//
+// A node belongs to a workspace, so the workspace named in the body is resolved
+// through the same membership check every other workspace-scoped route uses.
+// Neither node operation declares 403 in the contract, so a refusal answers the
+// 400 they do declare, carrying the WORKSPACE_FORBIDDEN code that says what
+// really happened. Making it the 403 it is regenerates the contract, which is
+// #222.
 func (s *Server) InviteNode(ctx context.Context, request InviteNodeRequestObject) (InviteNodeResponseObject, error) {
 	if s.nodes == nil {
 		return InviteNode500JSONResponse{Code: "NODES_UNAVAILABLE", Message: "This Mercator has no node registry."}, nil
 	}
 	body := request.Body
-	if body.WorkspaceId == "" {
-		return InviteNode400JSONResponse{Code: "INVALID_REQUEST", Message: "workspace_id is required."}, nil
+	workspaceID, workspaceErr := s.resolveWorkspace(ctx, body.WorkspaceId, "")
+	if workspaceErr != nil {
+		return InviteNode400JSONResponse(workspaceErr.Response), nil
 	}
 	if body.ShadowPriceUsdPerHour <= 0 {
 		return InviteNode400JSONResponse{
@@ -57,7 +65,7 @@ func (s *Server) InviteNode(ctx context.Context, request InviteNodeRequestObject
 		}
 	}
 	invitation := node.Invitation{
-		WorkspaceID: body.WorkspaceId,
+		WorkspaceID: workspaceID,
 		NodeID:      body.NodeId,
 		RentalID:    body.RentalId,
 		Generation:  1,
@@ -92,15 +100,19 @@ func (s *Server) InviteNode(ctx context.Context, request InviteNodeRequestObject
 
 // ListNodes reports every node identity in a workspace, whatever its state, so
 // an operator sees capacity that never enrolled as readily as capacity that
-// did.
+// did. A fleet's size, machine identities, liveness and shadow prices are the
+// workspace's own facts, so this asks the same membership question every other
+// workspace-scoped read asks, and refuses with the 400 the contract declares
+// (see InviteNode).
 func (s *Server) ListNodes(ctx context.Context, request ListNodesRequestObject) (ListNodesResponseObject, error) {
 	if s.nodes == nil {
 		return ListNodes500JSONResponse{Code: "NODES_UNAVAILABLE", Message: "This Mercator has no node registry."}, nil
 	}
-	if request.Params.WorkspaceId == "" {
-		return ListNodes400JSONResponse{Code: "INVALID_REQUEST", Message: "workspace_id is required."}, nil
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		return ListNodes400JSONResponse(workspaceErr.Response), nil
 	}
-	records, err := s.nodes.List(ctx, request.Params.WorkspaceId)
+	records, err := s.nodes.List(ctx, workspaceID)
 	if err != nil {
 		return ListNodes500JSONResponse{Code: "NODE_LIST_FAILED", Message: err.Error()}, nil
 	}

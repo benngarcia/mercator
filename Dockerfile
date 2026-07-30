@@ -5,10 +5,18 @@
 # Run it with the host Docker socket mounted:
 #
 #   docker run --rm \
-#     -e MERCATOR_ADDR=0.0.0.0:8080 \
+#     -e MERCATOR_ADDR=0.0.0.0:8443 \
 #     -e MERCATOR_API_TOKEN=dev-token \
+#     -e MERCATOR_SECRET_KEY="$(openssl rand -hex 32)" \
+#     -e MERCATOR_TLS_CERT_FILE=/tls/tls.crt \
+#     -e MERCATOR_TLS_KEY_FILE=/tls/tls.key \
+#     -v /tmp/mercator-tls:/tls:ro \
 #     -v /var/run/docker.sock:/var/run/docker.sock \
-#     -p 8080:8080 mercator:local serve
+#     -p 127.0.0.1:8443:8443 mercator:local serve
+#
+# A non-loopback bind requires TLS material, and a published container port
+# needs a non-loopback bind, so a container evaluation needs a certificate. See
+# docs/production/install-configuration.md for a throwaway one.
 #
 # Mounting the Docker socket grants this container root-equivalent control of
 # the host Docker daemon. That is fine for local evaluation on a machine you

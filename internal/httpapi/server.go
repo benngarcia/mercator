@@ -86,16 +86,24 @@ type Server struct {
 	webauth      WebAuth
 	manifests    func() []adapter.Manifest
 	nodes        NodeRegistry
+	admin        *adminSurface
 }
 
 // WebAuth is the human-login surface the server mounts at /auth/ when OIDC is
 // configured: it serves the login/callback/logout/session endpoints, answers
-// which signed-in human a request's session cookie belongs to, and verifies
-// the bearer tokens `mercator login` mints for CLI users.
+// which signed-in human a request's session cookie belongs to, verifies the
+// bearer tokens `mercator login` mints for CLI users, and says whether the one
+// human it can authenticate is the deployment's own operator.
+//
+// SoleOperator is on this interface rather than beside it so that an
+// authenticator which can only ever establish one identity cannot be mounted
+// without saying so. Every implementation has to answer, and the answer travels
+// with the authenticator through whatever wires it.
 type WebAuth interface {
 	http.Handler
 	SessionEmail(*http.Request) (string, bool)
 	VerifyCLIToken(token string) (string, bool)
+	SoleOperator() string
 }
 
 // connectionVerifier is the narrow capability the server needs from the Broker

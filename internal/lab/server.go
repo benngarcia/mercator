@@ -109,11 +109,24 @@ func (server *Server) Handler() http.Handler {
 	return server.handler
 }
 
+// Serve answers on a loopback listener and refuses every other one. The Lab
+// drives a simulated world through routes that restart it and export its whole
+// event log, so its containment is a property of the server rather than of
+// whichever command started it: no flag, no environment variable and no
+// mistaken deployment puts it on an address another machine can reach.
 func (server *Server) Serve(listener net.Listener) error {
 	if listener == nil {
 		return errors.New("Lab server listener is required")
 	}
+	if !isLoopbackListener(listener) {
+		return fmt.Errorf("Lab server serves loopback only and will not serve %s", listener.Addr())
+	}
 	return server.http.Serve(listener)
+}
+
+func isLoopbackListener(listener net.Listener) bool {
+	address, ok := listener.Addr().(*net.TCPAddr)
+	return ok && address.IP.IsLoopback()
 }
 
 func (server *Server) Shutdown(ctx context.Context) error {

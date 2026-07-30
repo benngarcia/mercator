@@ -1,8 +1,15 @@
 # Workload Reporting
 
 Workload reporting lets a running container push progress and result events
-back to Mercator without the operator token. Each container receives a
-short-lived, run-scoped bearer token derived from the master key.
+back to Mercator without the operator token. Each container receives a bearer
+token scoped to its own run, derived from the master key.
+
+The token is minted once, when the attempt is dispatched, and carries no
+expiry. A run holds the token it was given for its whole life, so rotating
+`MERCATOR_SECRET_KEY` under a running workload ends its reporting for good: see
+[Let The Runs Finish First](security-model.md#let-the-runs-finish-first).
+Expiry and re-issue is
+[#215](https://github.com/benngarcia/mercator/issues/215).
 
 ---
 
@@ -10,11 +17,13 @@ short-lived, run-scoped bearer token derived from the master key.
 
 | Variable | Required | Description |
 |---|---|---|
-| `MERCATOR_SECRET_KEY` | Yes (for reporting) | Master key of at least 32 decoded bytes, hex- or base64-encoded. Used to derive the report-token signing key. Also the input for the HKDF-derived subkey that encrypts stored credentials (the raw key itself never encrypts anything). A present malformed or short value stops startup. |
+| `MERCATOR_SECRET_KEY` | Yes, always: `serve` refuses to start without it | Master key of at least 32 decoded bytes, hex- or base64-encoded. Used to derive the report-token signing key. Also the input for the HKDF-derived subkey that encrypts stored credentials (the raw key itself never encrypts anything). A present malformed or short value stops startup. |
 | `MERCATOR_PUBLIC_URL` | Yes (for reporting) | The publicly reachable base URL of this Mercator instance (e.g. `https://mercator.example.com`). Injected into containers as the report endpoint base. Both this and `MERCATOR_SECRET_KEY` must be set for reporting to be enabled. |
 
-Reporting is **disabled** unless both `MERCATOR_SECRET_KEY` and
-`MERCATOR_PUBLIC_URL` are set.
+Reporting is **disabled** unless `MERCATOR_PUBLIC_URL` is set. `cmd/mercator`
+will not start without `MERCATOR_SECRET_KEY` at all, so the key half of that
+condition is now enforced at startup; a runtime embedded some other way can
+still be built without one, and answers `501 REPORTING_DISABLED` when it is.
 
 ---
 
@@ -37,8 +46,11 @@ in order). The derived `reportKey` is what backs `reporting.Signer`.
 Each run receives a unique token minted by the server:
 
 ```
-runToken = base64url-raw(HMAC-SHA256(reportKey, run_id))
+runToken = base64url-raw(HMAC-SHA256(reportKey, workspace_id || 0x00 || run_id))
 ```
+
+The workspace is in the token, so the `workspace_id` a reporter sends must be
+the one the token was minted for.
 
 The token is injected into the container at launch as `MERCATOR_RUN_TOKEN`.
 Three additional vars are also injected:
@@ -137,10 +149,11 @@ execution.
 
 ## Token Security Notes
 
-- The run token is bound to the `run_id` only (not workspace). This is safe
-  under the current single-operator model where run IDs are globally unique
-  (UUIDv7). A future multi-tenant deployment should bind workspace into the
-  token as well.
+- The run token binds the workspace as well as the `run_id`, so a leaked token
+  cannot be replayed against another workspace's view of the same run.
+- The token has no expiry and no re-issue path. It is as long-lived as the run
+  it was minted for, which is what makes a master-key rotation under an
+  in-flight run destructive rather than a brief interruption.
 - The signer is disabled (and the server returns `501`) when `MERCATOR_SECRET_KEY`
   is absent — no silent no-op.
 - The operator token is explicitly rejected on the `/report` endpoint; only a

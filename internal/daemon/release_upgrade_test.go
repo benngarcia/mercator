@@ -162,6 +162,7 @@ func bootAndReplayReleaseState(t *testing.T, dsn string, manifest releaseUpgrade
 	runtime, err := daemon.New(t.Context(), daemon.Config{
 		SQLiteDSN:       dsn,
 		OperatorToken:   releaseUpgradeToken,
+		MasterKey:       []byte("0123456789abcdef0123456789abcdef"),
 		ProviderFactory: broker.NewFactory(),
 	})
 	if err != nil {

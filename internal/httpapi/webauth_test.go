@@ -7,11 +7,18 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 // stubWebAuth authenticates any request carrying the X-Test-Session header as
-// that header's value, standing in for the real cookie-verifying webauth.
-type stubWebAuth struct{}
+// that header's value, standing in for the real cookie-verifying webauth. The
+// zero value authenticates many humans, like OIDC does; sole names the one
+// human a local-login deployment can ever establish.
+type stubWebAuth struct{ sole string }
+
+func (s stubWebAuth) SoleOperator() string { return s.sole }
 
 func (stubWebAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/auth/session" {
@@ -32,9 +39,28 @@ func (stubWebAuth) VerifyCLIToken(token string) (string, bool) {
 	return email, ok && email != ""
 }
 
+// signedInOperator is the human these cases sign in as, and ws_1 is the
+// workspace they are a member of. A signed-in human reaches only the workspaces
+// they belong to, so a case about what a session may do needs a workspace the
+// session's subject actually belongs to.
+const signedInOperator = "operator@example.com"
+
+func newSignedInHandler(t *testing.T) http.Handler {
+	t.Helper()
+	handler, catalog := newTenantHandler(t)
+	if _, err := catalog.Create(t.Context(), workspace.Create{
+		ID:          "ws_1",
+		DisplayName: "Workspace One",
+		CreatedAt:   time.Now().UTC(),
+		CreatedBy:   signedInOperator,
+	}); err != nil {
+		t.Fatalf("create workspace ws_1: %v", err)
+	}
+	return handler
+}
+
 func TestSessionGrantsAPIAccessAlongsideBearer(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
+	handler := newSignedInHandler(t)
 
 	unauthenticated := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
 	rec := httptest.NewRecorder()
@@ -61,8 +87,7 @@ func TestSessionGrantsAPIAccessAlongsideBearer(t *testing.T) {
 }
 
 func TestCLITokenAuthenticatesAsItsEmail(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
+	handler := newSignedInHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
 	req.Header.Set("Authorization", "Bearer cli:operator@example.com")
@@ -91,8 +116,7 @@ func TestCLITokenAuthenticatesAsItsEmail(t *testing.T) {
 }
 
 func TestWrongBearerDoesNotDowngradeToSession(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
+	handler := newSignedInHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
@@ -105,8 +129,7 @@ func TestWrongBearerDoesNotDowngradeToSession(t *testing.T) {
 }
 
 func TestUnauthenticatedConsoleLoadRedirectsToLogin(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
+	handler := newSignedInHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/runs?workspace_id=ws_1", nil)
 	rec := httptest.NewRecorder()
@@ -144,8 +167,7 @@ func TestSessionEndpointReportsDisabledWithoutWebAuth(t *testing.T) {
 }
 
 func TestRunRecordsActingPrincipals(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
+	handler := newSignedInHandler(t)
 
 	// A machine-token create records "bearer".
 	body := mustMarshal(t, CreateRunRequest{RunId: "run_audit", Workload: httpRevision()})
@@ -189,8 +211,7 @@ func TestRunRecordsActingPrincipals(t *testing.T) {
 }
 
 func TestPublicRunEventsDoNotLeakActorEmails(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
+	handler := newSignedInHandler(t)
 
 	body := mustMarshal(t, CreateRunRequest{RunId: "run_actor_leak", Workload: httpRevision()})
 	create := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))

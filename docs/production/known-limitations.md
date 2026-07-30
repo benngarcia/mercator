@@ -8,17 +8,153 @@ limits.
 
 - Single-process only; no multi-process leader election, failover, or replicated
   event log.
-- SQLite backup/restore is manual.
+- Backup is a command an operator runs. `mercator backup <path>` takes an online
+  copy of the database this deployment serves from, and nothing schedules it,
+  prunes old copies, reports when the last one succeeded, or checks that a copy
+  opens. A deployment whose cron entry is broken looks exactly like one that is
+  backing up correctly
+  ([#225](https://github.com/benngarcia/mercator/issues/225)).
+- Recovery is to the last backup. There is no continuous archiving and no
+  point-in-time recovery, so the exposure is everything written since
+  `mercator backup` last ran
+  ([#225](https://github.com/benngarcia/mercator/issues/225)).
+- Restore-critical state is in two places and only one of them is in the backup.
+  `mercator backup` copies the database. `MERCATOR_SECRET_KEY` is not in the
+  database, and a copy restored without it holds every event and no readable
+  provider credential. Backing up the key is the operator's, once, when they
+  generate it.
+- An interrupted backup leaves a partial file behind and nothing removes it.
+  `mercator backup` assembles the copy in `<destination>.partial-<timestamp>`
+  and links it to the destination only when the copy is whole, so a killed run
+  writes nothing to the destination and the retry succeeds. The partial and its
+  `-journal` survive, because the process was signalled before its cleanup ran,
+  and each one is as large as however much of the database had been copied. An
+  operator deletes `<destination>.partial-*`; nothing prunes them
+  ([#225](https://github.com/benngarcia/mercator/issues/225)).
+- The backup destination must be on a filesystem that supports hard links.
+  `mercator backup` puts the finished copy in place with `link(2)` rather than
+  `rename(2)`, so that a destination naming yesterday's backup is refused
+  instead of silently replaced. On exFAT, on some network mounts, and anywhere
+  else `link(2)` is unavailable, the command fails at the last step with the
+  link error naming both paths and leaves the partial behind. It is a refusal
+  with a message rather than a silent downgrade, and it is the accepted cost of
+  never overwriting an existing backup.
+- `mercator rekey` still resolves an unset `MERCATOR_SQLITE_DSN` through the
+  per-user fallback path, so an operator who runs it from a shell that does not
+  export the variable can re-seal a stray database and be told it succeeded.
+  `mercator backup` was made to refuse that case and `rekey` was not, so the
+  three commands do not yet agree on the fail-loudly rule. The command prints
+  the file it opened and the number of rows it moved, which is what an operator
+  has to read to catch it
+  ([#228](https://github.com/benngarcia/mercator/issues/228)).
+- A commit is durable against power loss because SQLite's compiled-in
+  `synchronous` default is `FULL` under the driver this branch pins, not because
+  Mercator asks for it. Nothing sets the pragma and nothing asserts it, so a
+  driver upgrade could quietly downgrade every commit to "in the operating
+  system's cache" with no test failing
+  ([#226](https://github.com/benngarcia/mercator/issues/226)).
+- Schema migrations carry no version number. They are a fixed list of idempotent
+  functions in `internal/storage/sqlite/storage.go` that run on every boot, each
+  detecting its own work by inspecting the data rather than by reading a
+  schema-version row. There is no down migration and no rollback: a migration
+  that refuses, as the placement-objective one does when it finds an open Run in
+  the retired vocabulary, stops the process from starting and the operator's
+  recovery is to restore the backup and roll the binary back. What this branch
+  closed is narrower: a migration that rewrites the event log now marks the Run
+  projection stale inside the same transaction, so a process killed mid-boot can
+  no longer commit the rewrite while losing the record that the read model
+  derived from it is out of date.
 - No schema migration runbook exists yet.
 - Health checks are shallow process/API checks.
 
 ## Security
 
-- One bearer token principal plus audited OIDC identities, with no roles or
-  per-user workspace authorization.
-- No built-in TLS.
-- No Mercator-managed secret vault, grant API, KMS integration, or key rotation
-  flow exists. Workloads/runtimes own their secret-management backend.
+- A workspace is now a tenancy boundary a human is refused across, and there is
+  no way to grant a membership over HTTP. A subject becomes a member of a
+  workspace by creating it and in no other way, because a grant endpoint is a
+  new operation in the API contract and this branch does not regenerate the
+  contract ([#219](https://github.com/benngarcia/mercator/issues/219)). Adding a
+  second person to a workspace is a SQL insert into `workspace_members` until
+  that lands; the statement is in
+  [authentication-workspaces.md](authentication-workspaces.md#current-limitations).
+- Upgrading an existing database backfills one admin per workspace from
+  `workspaces.created_by`, which is the only authority fact the old schema
+  recorded. A workspace created by the bearer token, by the bootstrap seed, or
+  by the event-history backfill therefore has a machine principal as its only
+  admin: no human is a member, and every human is refused there until an
+  operator inserts a row. `mercator serve --dev` is the exception: its one human
+  is the deployment's own operator, unscoped by membership, because that mode has
+  exactly one human by construction and hands them the instance bearer token
+  anyway.
+- `GET /v1/nodes` and `POST /v1/nodes` refuse a non-member with `400` carrying
+  the code `WORKSPACE_FORBIDDEN`, because neither declares `403` in the API
+  contract and this branch does not regenerate it. The refusal is the same one
+  every other workspace-scoped route makes; only the status differs
+  ([#222](https://github.com/benngarcia/mercator/issues/222)).
+- Memberships carry a role, `admin` or `member`, and no operation checks which
+  one a subject holds. Archiving a workspace is the operation that should be
+  admin-only, and its declared response set has no `403`, so saying "you are a
+  member but not an admin" needs a contract change
+  ([#219](https://github.com/benngarcia/mercator/issues/219)).
+- The console creates and archives workspaces through routes that now answer
+  only on the administrative listener, so those two console actions answer `404`
+  on a deployment that has one. The console is not part of this branch and was
+  not changed ([#220](https://github.com/benngarcia/mercator/issues/220)).
+- Administrative and public traffic are told apart by the accepting listener's
+  local address, so `MERCATOR_ADMIN_ADDR` must name one interface. A deployment
+  that wants the administrative surface on a routable address gets the same
+  certificate the public listener uses; there is no separate administrative
+  certificate and no client-certificate requirement in front of it.
+- Mercator terminates TLS itself and manages no certificates. It reads
+  `MERCATOR_TLS_CERT_FILE` and `MERCATOR_TLS_KEY_FILE` once, at startup, so a
+  renewed certificate is served only after a restart. There is no ACME client,
+  no automatic issuance, no OCSP stapling configuration, no client-certificate
+  (mTLS) mode, no HSTS header, and no plain-HTTP listener that redirects to
+  HTTPS: a deployment that wants port 80 to redirect needs something else on
+  port 80. An operator renewing on a short-lived certificate should expect a
+  process restart per renewal
+  ([#213](https://github.com/benngarcia/mercator/issues/213)).
+- The non-loopback TLS rule is `mercator serve`'s alone. It is enforced in the
+  process entrypoint against `MERCATOR_ADDR`, and `mercator verify` builds the
+  same server on a listener of its own: a remote provider trial binds the fixed
+  routable `MERCATOR_CONFORMANCE_LISTEN_ADDR` it requires, reads no TLS
+  variable, and serves the full `/v1` API and its generated operator token in
+  cleartext until the trial ends. The documented topology is a TLS terminator in
+  front of it. Moving the rule into the server so it covers both callers needs
+  the trial to be able to carry its own certificate
+  ([#216](https://github.com/benngarcia/mercator/issues/216)).
+- A workload's run-report token is minted once at dispatch and never expires, so
+  a master-key rotation performed while a run is executing answers every later
+  report from that container `401 INVALID_RUN_TOKEN` for the rest of the run,
+  including its terminal verdict. Let in-flight runs finish before rotating;
+  there is no drain command
+  ([#215](https://github.com/benngarcia/mercator/issues/215)).
+- The non-loopback TLS rule reads the bind address and nothing else, which makes
+  it conservative in one real case: a container that binds `0.0.0.0` so that a
+  loopback-only published port can reach it is required to carry a certificate
+  even though nothing off the host can reach the listener. The alternative,
+  inferring exposure from anything other than the address this process binds,
+  would be guessing.
+- No Mercator-managed secret vault, grant API, or KMS integration exists.
+  Workloads and runtimes own their secret-management backend. Master-key
+  rotation does exist: `mercator rekey` re-seals every stored connection
+  credential from `MERCATOR_SECRET_KEY_PREVIOUS` to `MERCATOR_SECRET_KEY` in one
+  transaction. It is offline, and it covers stored credentials only: an
+  in-flight run's report token and an enrolled node's credentials were signed
+  under the retired key and are not carried across, so runs have to reach a
+  terminal phase and nodes have to be bootstrapped again
+  ([#215](https://github.com/benngarcia/mercator/issues/215),
+  [#217](https://github.com/benngarcia/mercator/issues/217)). There is no online
+  rotation, no rotation of a session-cookie key, and no scheduled or automatic
+  rotation, so the retired key is in the environment for as long as the operator
+  leaves it there.
+- Inviting a node identity that already exists answers `500` with the raw SQLite
+  message `UNIQUE constraint failed: nodes.node_id (2067)` rather than `409`.
+  The SQLite node store never returns the typed `node.ErrIdentityExists` the
+  in-memory store returns, so the handler has nothing to map. An operator
+  recovering an enrolled node after a master-key rotation meets this, because
+  the identity is still in the table and the credentials under it are dead
+  ([#217](https://github.com/benngarcia/mercator/issues/217)).
 - Health, OpenAPI, and UI shell are public on the listen interface.
 - A registry credential minted for one pull is the operator's standing account
   verbatim ([#238](https://github.com/benngarcia/mercator/issues/238)).
@@ -376,10 +512,34 @@ Three of them are narrower than they were, and one is wrong as written:
   browser case that skips unless `MERCATOR_BROWSER_TEST` asks for it. Work kept
   off CI for a long stretch should assume the same two classes are hiding in it.
 
+- Added 2026-07-29, at the close of the security and durability half of phase 6.
+  None of the boundaries that half closed is held by the Scenario Blueprint
+  corpus or by a Lab invariant. Steps 1, 2, 4 and 5 of the development rule were
+  not performed for any of them, because `internal/scenario` and every file in
+  `internal/lab` except `server.go` were phase 5's live working set while this
+  work was built in parallel. The replacement proof is a real boundary rather
+  than a mock in every case: a TLS client completing a handshake against the
+  process's own listener, an HTTP request from a non-member being refused, a
+  backup restored into a second control plane and read back, and a process
+  killed mid-write with its survivors asserted. Two of these rules do belong in
+  the corpus and are blocked on the phase 5 merge, namely a Run refused because
+  its subject is not a member of the workspace, and the Lab endpoint being
+  unreachable off the host. The durability half needs more than the merge: the
+  Lab control plane opens storage at `:memory:`, so it has no vocabulary for a
+  second database file, a backup path, or a process ended part way through
+  copying one ([#229](https://github.com/benngarcia/mercator/issues/229)).
+  Until that lands, a refactor that moves the tenancy check out of middleware
+  leaves the whole corpus green.
+
 ## GA Documentation Gaps
 
-- Deployment topology with TLS/reverse proxy.
-- Key-management and rotation procedure.
+- Deployment topology with a reverse proxy in front of a loopback bind. The
+  administrative-listener half of it is now documented and enforced
+  ([install-configuration.md](install-configuration.md)); what remains is the
+  proxy's own configuration, header handling, and timeouts.
+- Key-management procedure beyond the rotation command
+  ([security-model.md](security-model.md#master-key-and-rotation)): where the
+  master key lives, who can read it, and how a leak is detected.
 - Registry digest-resolution procedure beyond pre-pinned workload images.
 - External sink configuration and incident runbooks.
 - SQLite migration, backup automation, and restore SLOs.

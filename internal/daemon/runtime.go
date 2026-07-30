@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 	"github.com/benngarcia/mercator/internal/sinks"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
+	"github.com/benngarcia/mercator/internal/tlsmaterial"
 	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
 	"github.com/benngarcia/mercator/internal/workspace"
@@ -41,9 +43,25 @@ import (
 // parsing. Getenv is retained only for connections that explicitly reference an
 // environment-backed provider credential.
 type Config struct {
-	SQLiteDSN      string
-	OperatorToken  string
-	MasterKey      []byte
+	SQLiteDSN     string
+	OperatorToken string
+	// MasterKey is required. The credential sealing key, the run-report signing
+	// key and the node identity signing key are all derived from it, and each
+	// derivation answers an absent master key by disabling itself, so a runtime
+	// built without one is a runtime with three security features silently off.
+	MasterKey []byte
+	// TLS names the certificate and key this server terminates TLS with. An
+	// unconfigured Material serves plaintext, which only a loopback deployment
+	// may do; the process entrypoint enforces that, because only it knows the
+	// listen address.
+	TLS tlsmaterial.Material
+	// AdminAddr is the bound address of the administrative listener, wildcards
+	// resolved. Workspace creation and archiving, node invitation and sink
+	// delivery answer there and nowhere else. Empty serves every route on every
+	// listener, which is what a single-listener loopback deployment wants; the
+	// process entrypoint is what refuses a non-loopback deployment that has not
+	// named one.
+	AdminAddr      string
 	PublicURL      string
 	Getenv         func(string) string
 	WebAuth        webauth.Config
@@ -94,6 +112,14 @@ type Runtime struct {
 	orch    *orchestrator.Orchestrator
 	janitor *janitor.Janitor
 
+	// servesTLS is whether this deployment was given a certificate. The
+	// question cannot be asked of http.Server.TLSConfig, because net/http
+	// installs one of its own the first time it configures HTTP/2 on a
+	// listener: a runtime serving plaintext answers "yes" from its second
+	// listener onwards and then tries to read a certificate from the empty
+	// path.
+	servesTLS bool
+
 	stopReconcile context.CancelFunc
 	reconcileDone chan struct{}
 	prepareDone   chan struct{}
@@ -112,8 +138,18 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if cfg.OperatorToken == "" {
 		return nil, errors.New("daemon: OperatorToken is required")
 	}
+	if len(cfg.MasterKey) == 0 {
+		return nil, errors.New("daemon: MasterKey is required; set MERCATOR_SECRET_KEY")
+	}
 	if cfg.WebAuth.Enabled() && cfg.LocalAuthEmail != "" {
 		return nil, errors.New("daemon: OIDC and local authentication cannot both be enabled")
+	}
+	// Security material is loaded before storage is opened, so a deployment
+	// configured with a certificate it cannot read fails without having touched
+	// the database.
+	serverTLS, err := serverTLSConfig(cfg.TLS)
+	if err != nil {
+		return nil, err
 	}
 
 	storage, err := sqlitestore.Open(ctx, cfg.SQLiteDSN)
@@ -139,7 +175,6 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if err := seedFirstWorkspace(ctx, storage.Workspaces()); err != nil {
 		return nil, fmt.Errorf("daemon: seed first workspace: %w", err)
 	}
-
 	resolver := credential.NewResolver(cfg.Getenv, credentialStore, cfg.MasterKey)
 	connections, err := storage.Connections(resolver)
 	if err != nil {
@@ -245,6 +280,9 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if signer.Enabled() {
 		serverOptions = append(serverOptions, httpapi.WithReportSigner(signer))
 	}
+	if cfg.AdminAddr != "" {
+		serverOptions = append(serverOptions, httpapi.WithAdminAddr(cfg.AdminAddr))
+	}
 	if cfg.WebAuth.Enabled() {
 		authenticator, authErr := webauth.New(ctx, cfg.WebAuth)
 		if authErr != nil {
@@ -286,11 +324,13 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	runtime := &Runtime{
 		server: &http.Server{
 			Handler:           rootHandler,
+			TLSConfig:         serverTLS,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       60 * time.Second,
 			WriteTimeout:      90 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		},
+		servesTLS:     serverTLS != nil,
 		broker:        providerBroker,
 		storage:       storage,
 		orch:          orch,
@@ -433,6 +473,21 @@ func registryManifests(cfg Config) (*ociresolver.RegistryResolver, error) {
 	return ociresolver.NewRegistryResolver(ociresolver.WithCredentials(credentials)), nil
 }
 
+// serverTLSConfig answers nil for a deployment that named no certificate, and
+// an error naming the file for one that named a certificate it cannot load. A
+// nil configuration serves plaintext, which is why the only other outcome here
+// is a refusal: there is no path from a broken certificate to a served port.
+func serverTLSConfig(material tlsmaterial.Material) (*tls.Config, error) {
+	if !material.Configured() {
+		return nil, nil
+	}
+	config, err := material.Config()
+	if err != nil {
+		return nil, fmt.Errorf("daemon: %w", err)
+	}
+	return config, nil
+}
+
 // contentMint is the control plane's authority to let one machine fetch one
 // piece of content. It is built from the accounts this deployment already
 // states, and stating them is the whole of what an operator has to do: a
@@ -513,9 +568,19 @@ func objectStoreAccount(getenv func(string) string) (*credential.ObjectStoreAcco
 }
 
 // Serve runs the production HTTP server on a listener allocated by the caller.
+// A runtime holding TLS material terminates TLS itself. The empty file names
+// are what tell http.Server to serve the certificates already loaded into
+// TLSConfig rather than read a pair of its own.
+//
+// It may be called more than once, on a listener each. One http.Server serves
+// them all and one Shutdown drains them all, which is how the administrative
+// surface gets an address of its own without a second server to shut down.
 func (r *Runtime) Serve(listener net.Listener) error {
 	if listener == nil {
 		return errors.New("daemon: listener is required")
+	}
+	if r.servesTLS {
+		return r.server.ServeTLS(listener, "", "")
 	}
 	return r.server.Serve(listener)
 }
