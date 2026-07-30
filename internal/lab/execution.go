@@ -88,8 +88,9 @@ type Checkpoint struct {
 }
 
 type Execution struct {
-	config Config
-	queue  []WorldEvent
+	config  Config
+	queue   []WorldEvent
+	runtime *controlPlane
 
 	now         time.Time
 	transitions uint64
@@ -127,11 +128,19 @@ func Open(ctx context.Context, config Config) (*Execution, error) {
 	config.Blueprint = blueprint
 	config.Tape = tape
 	config.Samples = cloneSamples(config.Samples)
-	return &Execution{
+	execution := &Execution{
 		config: config,
 		queue:  slices.Clone(config.Tape.Events),
 		now:    config.Tape.Start,
-	}, nil
+	}
+	if config.Blueprint.Schema == scenario.BlueprintSchemaV1 && config.Blueprint.Arrivals != nil {
+		runtime, err := newControlPlane(ctx, config.Tape)
+		if err != nil {
+			return nil, err
+		}
+		execution.runtime = runtime
+	}
+	return execution, nil
 }
 
 func (execution *Execution) Drive(ctx context.Context, command DriveCommand) (Checkpoint, error) {
@@ -166,6 +175,11 @@ func (execution *Execution) Drive(ctx context.Context, command DriveCommand) (Ch
 			}
 		}
 		execution.now = target
+		if execution.runtime != nil {
+			if err := execution.runtime.advance(ctx, target); err != nil {
+				return execution.checkpoint(), err
+			}
+		}
 		return execution.checkpoint(), nil
 	case driveEvent:
 		if command.eventKind == "" {
@@ -203,6 +217,11 @@ func (execution *Execution) Drive(ctx context.Context, command DriveCommand) (Ch
 				return execution.checkpoint(), err
 			}
 		}
+		if execution.runtime != nil {
+			if err := execution.runtime.advance(ctx, execution.now); err != nil {
+				return execution.checkpoint(), err
+			}
+		}
 		return execution.checkpoint(), nil
 	default:
 		return execution.checkpoint(), fmt.Errorf("unknown Lab drive command")
@@ -230,39 +249,47 @@ func (execution *Execution) transition(ctx context.Context) error {
 			execution.config.Limits.MaxVirtualDuration,
 		)
 	}
+	nextSameTimestamp := event.At
+	nextSameTimestampCount := uint64(1)
 	if event.At.Equal(execution.sameTimestamp) {
-		execution.sameTimestampCount++
-	} else {
-		execution.sameTimestamp = event.At
-		execution.sameTimestampCount = 1
+		nextSameTimestampCount = execution.sameTimestampCount + 1
 	}
-	if execution.sameTimestampCount > execution.config.Limits.MaxSameTimestamp {
+	if nextSameTimestampCount > execution.config.Limits.MaxSameTimestamp {
 		return fmt.Errorf(
 			"%w: timestamp %s has transition %d, maximum %d",
 			ErrSameTimestampLimit,
 			event.At.Format(time.RFC3339Nano),
-			execution.sameTimestampCount,
+			nextSameTimestampCount,
 			execution.config.Limits.MaxSameTimestamp,
 		)
 	}
 	fingerprint := eventFingerprint(event)
+	nextRepeatedAt := event.At
+	nextRepeatedFingerprint := fingerprint
+	nextRepeatedCount := uint64(1)
 	if event.At.Equal(execution.repeatedAt) && bytes.Equal(fingerprint, execution.repeatedFingerprint) {
-		execution.repeatedCount++
-	} else {
-		execution.repeatedAt = event.At
-		execution.repeatedFingerprint = fingerprint
-		execution.repeatedCount = 1
+		nextRepeatedCount = execution.repeatedCount + 1
 	}
-	if execution.repeatedCount > execution.config.Limits.MaxRepeatedEvent {
+	if nextRepeatedCount > execution.config.Limits.MaxRepeatedEvent {
 		return fmt.Errorf(
 			"%w: event %q repeated %d times at %s, maximum %d",
 			ErrLivelock,
 			event.Kind,
-			execution.repeatedCount,
+			nextRepeatedCount,
 			event.At.Format(time.RFC3339Nano),
 			execution.config.Limits.MaxRepeatedEvent,
 		)
 	}
+	if execution.runtime != nil {
+		if err := execution.runtime.handle(ctx, event); err != nil {
+			return err
+		}
+	}
+	execution.sameTimestamp = nextSameTimestamp
+	execution.sameTimestampCount = nextSameTimestampCount
+	execution.repeatedAt = nextRepeatedAt
+	execution.repeatedFingerprint = nextRepeatedFingerprint
+	execution.repeatedCount = nextRepeatedCount
 
 	execution.queue = execution.queue[1:]
 	execution.now = event.At
@@ -272,6 +299,20 @@ func (execution *Execution) transition(ctx context.Context) error {
 	eventCopy.Data = slices.Clone(event.Data)
 	execution.lastEvent = &eventCopy
 	return nil
+}
+
+func (execution *Execution) Restart(ctx context.Context) error {
+	if execution.runtime == nil {
+		return fmt.Errorf("Lab execution has no control plane to restart")
+	}
+	return execution.runtime.restart(ctx)
+}
+
+func (execution *Execution) Close() error {
+	if execution.runtime == nil {
+		return nil
+	}
+	return execution.runtime.close()
 }
 
 func cloneBlueprint(blueprint scenario.Blueprint) (scenario.Blueprint, error) {

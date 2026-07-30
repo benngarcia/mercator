@@ -59,6 +59,83 @@ func TestCompileRejectsAnUnsupportedBlueprintSchema(t *testing.T) {
 	}
 }
 
+func TestCompileSamplesActualRuntimeIndependentlyFromMercatorPrediction(t *testing.T) {
+	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/demos/artifact-warmth-restart.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+	firstTape, firstSamples, err := Compile(blueprint, CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile first tape: %v", err)
+	}
+
+	changed := scenario.Duration(30 * time.Second)
+	blueprint.Arrivals.Runs[0].Request.ExpectedRuntime = &changed
+	secondTape, secondSamples, err := Compile(blueprint, CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile second tape: %v", err)
+	}
+
+	firstArrival := findRunArrival(t, firstTape, "producer")
+	secondArrival := findRunArrival(t, secondTape, "producer")
+	if firstArrival.ActualRuntime != secondArrival.ActualRuntime {
+		t.Fatalf(
+			"actual runtime changed with prediction: %s vs %s",
+			firstArrival.ActualRuntime.Duration(),
+			secondArrival.ActualRuntime.Duration(),
+		)
+	}
+	if len(firstSamples) != len(blueprint.Arrivals.Runs) ||
+		len(secondSamples) != len(blueprint.Arrivals.Runs) {
+		t.Fatalf("runtime samples = %d and %d, want %d", len(firstSamples), len(secondSamples), len(blueprint.Arrivals.Runs))
+	}
+	if firstSamples[0].Key != "world.actual-runtime/run/producer" {
+		t.Fatalf("sample key = %q", firstSamples[0].Key)
+	}
+}
+
+func TestCompilePreservesAuthoredOrderForSimultaneousArrivals(t *testing.T) {
+	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/demos/artifact-warmth-restart.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+
+	tape, _, err := Compile(blueprint, CompileOptions{})
+	if err != nil {
+		t.Fatalf("compile Blueprint: %v", err)
+	}
+
+	first := decodeRunArrival(t, tape.Events[0])
+	second := decodeRunArrival(t, tape.Events[1])
+	if first.Name != "producer" || second.Name != "consumer" {
+		t.Fatalf("simultaneous arrivals = %q then %q, want authored producer then consumer", first.Name, second.Name)
+	}
+	if tape.Events[0].Sequence != 1 || tape.Events[1].Sequence != 2 {
+		t.Fatalf("event sequences = %d and %d, want 1 and 2", tape.Events[0].Sequence, tape.Events[1].Sequence)
+	}
+}
+
+func decodeRunArrival(t *testing.T, event WorldEvent) RunArrival {
+	t.Helper()
+	var arrival RunArrival
+	if err := json.Unmarshal(event.Data, &arrival); err != nil {
+		t.Fatalf("decode Run arrival: %v", err)
+	}
+	return arrival
+}
+
+func findRunArrival(t *testing.T, tape WorldTape, name string) RunArrival {
+	t.Helper()
+	for _, event := range tape.Events {
+		arrival := decodeRunArrival(t, event)
+		if arrival.Name == name {
+			return arrival
+		}
+	}
+	t.Fatalf("World Tape has no Run arrival %q", name)
+	return RunArrival{}
+}
+
 func TestWorldTapeRejectsUnstableOrdering(t *testing.T) {
 	t.Run("virtual time moves backward", func(t *testing.T) {
 		tape := tapeWithEvents(

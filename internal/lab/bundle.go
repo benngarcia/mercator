@@ -13,6 +13,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
@@ -50,6 +51,23 @@ type bundleManifest struct {
 type bundleConfiguration struct {
 	Limits Limits `json:"limits"`
 	Policy string `json:"policy"`
+}
+
+type predictionActualRecord struct {
+	RunID            string  `json:"run_id"`
+	Metric           string  `json:"metric"`
+	PredictedSeconds float64 `json:"predicted_seconds"`
+	ActualSeconds    float64 `json:"actual_seconds"`
+	PredictionSource string  `json:"prediction_source"`
+	ActualSource     string  `json:"actual_source"`
+}
+
+type bundleMetrics struct {
+	Transitions    uint64 `json:"transitions"`
+	MercatorEvents int    `json:"mercator_events"`
+	WorldEvents    int    `json:"world_events"`
+	Effects        int    `json:"effects"`
+	Restarts       uint64 `json:"control_plane_restarts"`
 }
 
 func (execution *Execution) Export(ctx context.Context) (RunBundle, error) {
@@ -93,16 +111,87 @@ func (execution *Execution) Export(ctx context.Context) (RunBundle, error) {
 	if err != nil {
 		return RunBundle{}, err
 	}
+	mercatorEvents, effects, restarts, err := execution.bundleRuntimeData(ctx)
+	if err != nil {
+		return RunBundle{}, err
+	}
+	encodedMercatorEvents, err := jsonLines(mercatorEvents)
+	if err != nil {
+		return RunBundle{}, err
+	}
+	encodedEffects, err := jsonLines(effects)
+	if err != nil {
+		return RunBundle{}, err
+	}
+	predictions, err := predictionActualRecords(execution.config.Tape)
+	if err != nil {
+		return RunBundle{}, err
+	}
+	encodedPredictions, err := jsonLines(predictions)
+	if err != nil {
+		return RunBundle{}, err
+	}
+	metrics, err := canonicalJSON(bundleMetrics{
+		Transitions:    execution.transitions,
+		MercatorEvents: len(mercatorEvents),
+		WorldEvents:    len(execution.processed),
+		Effects:        len(effects),
+		Restarts:       restarts,
+	})
+	if err != nil {
+		return RunBundle{}, err
+	}
 	entries = append(entries,
 		bundleEntry{name: "samples.jsonl", data: samples},
-		bundleEntry{name: "events/mercator.jsonl", data: nil},
+		bundleEntry{name: "events/mercator.jsonl", data: encodedMercatorEvents},
 		bundleEntry{name: "events/world.jsonl", data: worldEvents},
-		bundleEntry{name: "effects.jsonl", data: nil},
-		bundleEntry{name: "predictions.jsonl", data: nil},
+		bundleEntry{name: "effects.jsonl", data: encodedEffects},
+		bundleEntry{name: "predictions.jsonl", data: encodedPredictions},
 		bundleEntry{name: "invariants.json", data: []byte("{}\n")},
-		bundleEntry{name: "metrics.json", data: []byte("{}\n")},
+		bundleEntry{name: "metrics.json", data: metrics},
 	)
 	return RunBundle{entries: entries}, nil
+}
+
+func (execution *Execution) bundleRuntimeData(ctx context.Context) ([]eventlog.CloudEvent, []EffectRecord, uint64, error) {
+	if execution.runtime == nil {
+		return nil, nil, 0, nil
+	}
+	stored, err := execution.runtime.mercatorEvents(ctx)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("read Mercator events for Run Bundle: %w", err)
+	}
+	events := make([]eventlog.CloudEvent, len(stored))
+	for index, event := range stored {
+		events[index] = event.CloudEvent()
+	}
+	return events, execution.runtime.world.effectRecords(), execution.runtime.restarts, nil
+}
+
+func predictionActualRecords(tape WorldTape) ([]predictionActualRecord, error) {
+	records := make([]predictionActualRecord, 0, len(tape.Events))
+	for _, event := range tape.Events {
+		if event.Kind != EventRunArrived {
+			continue
+		}
+		var arrival RunArrival
+		if err := json.Unmarshal(event.Data, &arrival); err != nil {
+			return nil, fmt.Errorf("decode prediction record from World event %q: %w", event.ID, err)
+		}
+		predicted := float64(0)
+		if arrival.Request.ExpectedRuntime != nil {
+			predicted = arrival.Request.ExpectedRuntime.Duration().Seconds()
+		}
+		records = append(records, predictionActualRecord{
+			RunID:            "run-" + arrival.Name,
+			Metric:           "runtime_seconds",
+			PredictedSeconds: predicted,
+			ActualSeconds:    arrival.ActualRuntime.Duration().Seconds(),
+			PredictionSource: "workload.expected_runtime",
+			ActualSource:     "world_tape.actual_runtime",
+		})
+	}
+	return records, nil
 }
 
 func (bundle RunBundle) EntryNames() []string {

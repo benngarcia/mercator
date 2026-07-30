@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"reflect"
@@ -29,6 +30,11 @@ func TestRunBundleIsDeterministicAndReplayable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
 	if _, err := execution.Drive(context.Background(), Quiesce()); err != nil {
 		t.Fatalf("drive: %v", err)
 	}
@@ -45,6 +51,11 @@ func TestRunBundleIsDeterministicAndReplayable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open replay: %v", err)
 	}
+	defer func() {
+		if err := replayed.Close(); err != nil {
+			t.Fatalf("close replay: %v", err)
+		}
+	}()
 	if _, err := replayed.Drive(context.Background(), Quiesce()); err != nil {
 		t.Fatalf("drive replay: %v", err)
 	}
@@ -78,6 +89,16 @@ func TestRunBundleIsDeterministicAndReplayable(t *testing.T) {
 	}
 	if !reflect.DeepEqual(first.EntryNames(), wantEntries) {
 		t.Fatalf("bundle entries = %v", first.EntryNames())
+	}
+	for _, name := range []string{"events/mercator.jsonl", "events/world.jsonl", "effects.jsonl", "predictions.jsonl"} {
+		if len(bundleEntryData(t, first, name)) == 0 {
+			t.Fatalf("bundle entry %q is empty", name)
+		}
+	}
+	for _, forbidden := range [][]byte{[]byte("PrivateData"), []byte("private_data")} {
+		if bytes.Contains(firstBytes, forbidden) {
+			t.Fatalf("Run Bundle contains private field %q", forbidden)
+		}
 	}
 }
 
@@ -151,6 +172,9 @@ func exportFixtureBundle(t *testing.T) RunBundle {
 	if err != nil {
 		t.Fatalf("export bundle: %v", err)
 	}
+	if err := execution.Close(); err != nil {
+		t.Fatalf("close execution: %v", err)
+	}
 	return bundle
 }
 
@@ -173,4 +197,15 @@ func replaceBundleJSON(t *testing.T, bundle *RunBundle, name string, replace fun
 		return
 	}
 	t.Fatalf("bundle has no %s entry", name)
+}
+
+func bundleEntryData(t *testing.T, bundle RunBundle, name string) []byte {
+	t.Helper()
+	for _, entry := range bundle.entries {
+		if entry.name == name {
+			return entry.data
+		}
+	}
+	t.Fatalf("bundle has no %s entry", name)
+	return nil
 }

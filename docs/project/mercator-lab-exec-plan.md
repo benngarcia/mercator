@@ -58,7 +58,12 @@ The core implementation rule is:
   enforces every configured limit, and supports step, duration, event,
   predicate, and quiescence drives. Replay accepts only the strict, canonical
   uncompressed tar contract.
-- [ ] Slice 04: World Truth, Observed State, effects, and real control plane.
+- [x] 2026-07-24: Complete Slice 04 World Truth, Observed State, effects,
+  Artifact and Cache Mount consequences, and real Level 1 control plane. The
+  Lab now runs the production scheduler, orchestrator, reconciliation, SQLite
+  event log, durable Run projection, and Rental Schedule store against a
+  simulated provider. Deterministic restart reconstructs the control plane
+  while preserving external executions.
 - [ ] Slice 05: invariants, metamorphic tests, and reference solver.
 - [ ] Slice 06: generators, fuzzing, and semantic shrinking.
 - [ ] Slice 07: Lab server and normal UI path.
@@ -170,6 +175,41 @@ git diff --check
 The browser test needed an unsandboxed local rerun because Chromium's macOS
 Mach-port registration is denied inside the command sandbox. The same test
 then passed in 5.981 seconds.
+
+### Slice 04
+
+On 2026-07-24, the exact reviewed worktree passed:
+
+```text
+go test -race ./internal/lab ./internal/scenario -count=1
+go test ./...
+go vet ./...
+go build ./...
+cd web/app
+bun install --frozen-lockfile
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice04
+scripts/check-open-source-launch.sh
+MERCATOR_BROWSER_TEST=1 go test -count=1 ./internal/httpapi -run '^TestConsoleRunsNavigation$'
+git diff --check
+```
+
+The browser test again needed an unsandboxed local rerun because Chromium's
+macOS Mach-port registration is denied inside the command sandbox. The same
+test then passed in 5.920 seconds.
+
+World Tape v2 records actual Run runtime as sampled exogenous reality instead
+of deriving it from Mercator's prediction. Simultaneous arrivals preserve
+Blueprint order and receive global sequence numbers after time ordering.
+Artifact replicas are immutable facts keyed by Artifact ID; Cache Mounts remain
+mutable facts keyed only by mount name and node. The Run Bundle now carries
+public Mercator events, effects, prediction-versus-actual records, and summary
+metrics without private event data or effect secrets.
 
 ## Public contracts
 
