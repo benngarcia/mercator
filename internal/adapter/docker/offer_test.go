@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
@@ -252,8 +253,11 @@ func TestGPUSpecSchedulesOnGPUDockerOfferAndRejectsCPUOnlyOffer(t *testing.T) {
 		},
 	}}
 
+	// Placement sees offers as the Broker hands them over, with the lane
+	// stamped from the connection's negotiated Declaration.
+	offers := stampedLane(t, []domain.OfferSnapshot{gpuOffer, cpuOffer})
 	decision, err := scheduler.New().Evaluate(context.Background(), scheduler.SchedulingInput{
-		RunID: "run_gpu", Workload: revision, Offers: []domain.OfferSnapshot{gpuOffer, cpuOffer}, ModelVersion: "latency-v1", EvaluatedAt: now,
+		RunID: "run_gpu", Workload: revision, Offers: offers, ModelVersion: "latency-v1", EvaluatedAt: now,
 	})
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
@@ -276,4 +280,15 @@ func TestGPUSpecSchedulesOnGPUDockerOfferAndRejectsCPUOnlyOffer(t *testing.T) {
 		t.Fatalf("CPU-only offer must be rejected on resources.accelerators, got %+v", candidate.Rejections)
 	}
 	t.Fatalf("CPU-only candidate missing from decision: %+v", decision.Candidates)
+}
+
+// stampedLane applies the lane the Broker would stamp on this adapter's
+// offers, so a placement assertion sees production-shaped input.
+func stampedLane(t *testing.T, offers []domain.OfferSnapshot) []domain.OfferSnapshot {
+	t.Helper()
+	declaration, err := capability.Declare("docker", New(NewCLIClient("")))
+	if err != nil {
+		t.Fatalf("declare docker capabilities: %v", err)
+	}
+	return capability.StampLane(declaration, offers)
 }

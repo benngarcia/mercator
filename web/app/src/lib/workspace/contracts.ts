@@ -151,6 +151,7 @@ export const OfferSnapshot = Schema.Struct({
   connection_id: Schema.String,
   adapter_type: Schema.String,
   kind: Schema.Literals(["standing", "provisionable"]),
+  lane: Schema.Literals(["reusable", "ephemeral"]),
   native_ref: Schema.String,
   observed_at: Schema.String,
   expires_at: Schema.String,

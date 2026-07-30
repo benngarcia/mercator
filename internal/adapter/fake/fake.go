@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
@@ -329,4 +330,18 @@ func requireOperation(key, hash string) error {
 		return fmt.Errorf("adapter: operation key and request hash are required")
 	}
 	return nil
+}
+
+// EphemeralSupport declares the fake's lane. It stands in for a provider-native
+// one-shot product, which is what the ephemeral scenarios exercise.
+func (a *Adapter) EphemeralSupport() capability.EphemeralSupport {
+	return capability.EphemeralSupport{
+		ReusableBetweenRuns: false,
+		ObservableLocality:  true,
+		CancelQueued:        true,
+		ProviderTTL:         false,
+		IdempotentLaunch:    "launch_key",
+		ListOwned:           true,
+		ExactPricing:        true,
+	}
 }

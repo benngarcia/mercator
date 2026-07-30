@@ -22,6 +22,7 @@ type Storage struct {
 	workspaces  *workspace.SQLiteCatalog
 	schedules   *RentalScheduleStore
 	runs        *RunStore
+	nodes       *NodeStore
 }
 
 func Open(ctx context.Context, dsn string) (*Storage, error) {
@@ -55,6 +56,10 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		_ = log.Close()
 		return nil, err
 	}
+	if err := migrateNodes(ctx, db); err != nil {
+		_ = log.Close()
+		return nil, err
+	}
 	workspaces := workspace.NewSQLiteCatalog(db)
 	credentials, err := credential.NewSQLiteStore(ctx, db)
 	if err != nil {
@@ -64,6 +69,7 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 	storage := &Storage{db: db, log: log, credentials: credentials, workspaces: workspaces}
 	storage.runs = &RunStore{db: db, log: log}
 	storage.schedules = &RentalScheduleStore{db: db, log: log, runs: storage.runs}
+	storage.nodes = &NodeStore{db: db}
 	if err := storage.purgeDeletedConnectionCredentials(ctx); err != nil {
 		_ = log.Close()
 		return nil, err
@@ -96,6 +102,12 @@ func (s *Storage) Connections(sealer credentialSealer) (*ConnectionRepository, e
 		return nil, fmt.Errorf("sqlite storage: connection credential sealer is required")
 	}
 	return &ConnectionRepository{WorkspaceEventLog: s.log, sealer: sealer, credentials: s.credentials}, nil
+}
+
+// Nodes is the durable registry of enrolled node identities, the commands they
+// were given, and what they reported back.
+func (s *Storage) Nodes() *NodeStore {
+	return s.nodes
 }
 
 func (s *Storage) Close() error {

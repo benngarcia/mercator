@@ -5,10 +5,11 @@ import (
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
-type stubAdapter struct{ adapter.Provider }
+type stubAdapter struct{ oneShotLane }
 
 func (stubAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	return nil, nil
@@ -17,7 +18,7 @@ func (stubAdapter) Verify(context.Context) error { return nil }
 
 func TestFactoryBuildsRegisteredType(t *testing.T) {
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(map[string]string, string) (adapter.Provider, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(map[string]string, string) (capability.Backend, error) {
 		return stubAdapter{}, nil
 	})
 	if _, err := f.Build("stub", nil, ""); err != nil {

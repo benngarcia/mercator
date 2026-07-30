@@ -8,9 +8,13 @@ import (
 	"sync"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 )
 
-type FactoryFunc func(config map[string]string, secret string) (adapter.Provider, error)
+// FactoryFunc builds one connection's implementation. Which contracts the
+// result satisfies is discovered from the implementation rather than declared
+// at registration, so an adapter cannot advertise a lane it cannot serve.
+type FactoryFunc func(config map[string]string, secret string) (capability.Backend, error)
 
 type Factory struct {
 	mu        sync.RWMutex
@@ -35,14 +39,35 @@ func (f *Factory) Register(m adapter.Manifest, fn FactoryFunc) {
 	f.manifests[m.Type] = m
 }
 
-func (f *Factory) Build(adapterType string, config map[string]string, secret string) (adapter.Provider, error) {
+// Build constructs one connection's Backend, negotiating its capabilities so
+// callers receive a lane rather than an untyped implementation.
+func (f *Factory) Build(adapterType string, config map[string]string, secret string) (Backend, error) {
 	f.mu.RLock()
 	fn, ok := f.fns[adapterType]
 	f.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("broker: no adapter registered for type %q", adapterType)
+		return Backend{}, fmt.Errorf("broker: no adapter registered for type %q", adapterType)
 	}
-	return fn(config, secret)
+	built, err := fn(config, secret)
+	if err != nil {
+		return Backend{}, err
+	}
+	return NewBackend(adapterType, built)
+}
+
+// Declarations returns every registered adapter's negotiated capability
+// Declaration, built with empty configuration so onboarding surfaces and
+// compatibility tests can state each backend's lane without a connection.
+func (f *Factory) Declarations() ([]capability.Declaration, error) {
+	declarations := make([]capability.Declaration, 0, len(f.manifests))
+	for _, manifest := range f.Manifests() {
+		backend, err := f.Build(manifest.Type, map[string]string{}, "")
+		if err != nil {
+			return nil, fmt.Errorf("broker: declare %s: %w", manifest.Type, err)
+		}
+		declarations = append(declarations, backend.Declaration)
+	}
+	return declarations, nil
 }
 
 // Manifests returns every registered adapter's manifest, sorted by type.

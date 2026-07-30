@@ -14,6 +14,7 @@ import (
 	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/broker"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/conformanceprobe"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/orchestrator"
@@ -34,7 +35,7 @@ func TestRunEvidenceSerializesBookingDecisionVocabulary(t *testing.T) {
 }
 
 func TestRunnerVerifiesARealReportedRunAndConfirmedCleanup(t *testing.T) {
-	provider := &reportingProvider{Provider: fake.New(
+	provider := &reportingProvider{EphemeralExecutor: fake.New(
 		fake.WithOffers([]domain.OfferSnapshot{trialOffer(0.0001)}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
 	)}
@@ -92,7 +93,7 @@ func TestRunnerLaunchCancelProvesARealLaunchAndConfirmedCleanup(t *testing.T) {
 
 func TestRunnerRetriesCleanupAndRetainsTheScenarioFailureEvidence(t *testing.T) {
 	provider := &transientReleaseProvider{
-		Provider: fake.New(
+		EphemeralExecutor: fake.New(
 			fake.WithOffers([]domain.OfferSnapshot{trialOffer(0.0001)}),
 			fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
 		),
@@ -122,9 +123,9 @@ func TestRunnerRetriesCleanupAndRetainsTheScenarioFailureEvidence(t *testing.T) 
 }
 
 func TestRunnerRejectsUnreachableRemoteCallbackTopologyBeforeProviderContact(t *testing.T) {
-	provider := &contactCountingProvider{Provider: fake.New()}
+	provider := &contactCountingProvider{EphemeralExecutor: fake.New()}
 	factory := broker.NewFactory()
-	factory.Register(dockeradapter.Manifest(), func(map[string]string, string) (adapter.Provider, error) { return provider, nil })
+	factory.Register(dockeradapter.Manifest(), func(map[string]string, string) (capability.Backend, error) { return provider, nil })
 	runner := newRunner(RunnerConfig{Environment: map[string]string{}}, withProviderFactory(factory), withTempRoot(t.TempDir()))
 	trial := dockerTrial(time.Minute, 0.50)
 	trial.Config = map[string]string{"host": "tcp://gpu.example:2376"}
@@ -163,7 +164,7 @@ func TestRemoteCallbackTopologyRequiresAFixedListenerAndReachableOrigin(t *testi
 }
 
 func TestRunnerRejectsAnOfferWhoseTimeoutCostExceedsTheBudget(t *testing.T) {
-	provider := &reportingProvider{Provider: fake.New(
+	provider := &reportingProvider{EphemeralExecutor: fake.New(
 		fake.WithOffers([]domain.OfferSnapshot{trialOffer(1)}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
 	)}
@@ -185,7 +186,7 @@ func TestRunnerRejectsAnOfferWhoseTimeoutCostExceedsTheBudget(t *testing.T) {
 func TestRunnerCancelsAndConfirmsCleanupWhenTheTrialEndsAfterLaunch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	provider := &cancellingProvider{
-		Provider: fake.New(
+		EphemeralExecutor: fake.New(
 			fake.WithOffers([]domain.OfferSnapshot{trialOffer(0.0001)}),
 			fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
 		),
@@ -209,10 +210,10 @@ func TestRunnerCancelsAndConfirmsCleanupWhenTheTrialEndsAfterLaunch(t *testing.T
 	}
 }
 
-func testRunner(t *testing.T, provider adapter.Provider) *Runner {
+func testRunner(t *testing.T, provider capability.EphemeralExecutor) *Runner {
 	t.Helper()
 	factory := broker.NewFactory()
-	factory.Register(dockeradapter.Manifest(), func(map[string]string, string) (adapter.Provider, error) {
+	factory.Register(dockeradapter.Manifest(), func(map[string]string, string) (capability.Backend, error) {
 		return provider, nil
 	})
 	return newRunner(RunnerConfig{Environment: map[string]string{}}, withProviderFactory(factory), withTempRoot(t.TempDir()))
@@ -233,6 +234,7 @@ func trialOffer(rate float64) domain.OfferSnapshot {
 		ID:         "offer_fixture",
 		RentalID:   "offer_fixture",
 		Kind:       domain.OfferKindStanding,
+		Lane:       domain.LaneReusable,
 		NativeRef:  "fixture-capacity",
 		ObservedAt: now.Add(-time.Second),
 		ExpiresAt:  now.Add(time.Minute),
@@ -256,17 +258,17 @@ func trialOffer(rate float64) domain.OfferSnapshot {
 }
 
 type reportingProvider struct {
-	adapter.Provider
+	capability.EphemeralExecutor
 	launches atomic.Int64
 }
 
 type cancellingProvider struct {
-	adapter.Provider
+	capability.EphemeralExecutor
 	cancel context.CancelFunc
 }
 
 type transientReleaseProvider struct {
-	adapter.Provider
+	capability.EphemeralExecutor
 	mu                sync.Mutex
 	failuresRemaining int
 	attempts          int
@@ -281,7 +283,7 @@ func (provider *transientReleaseProvider) Release(ctx context.Context, request a
 		return adapter.ReleaseReceipt{}, adapter.ErrRetryableFailure
 	}
 	provider.mu.Unlock()
-	return provider.Provider.Release(ctx, request)
+	return provider.EphemeralExecutor.Release(ctx, request)
 }
 
 func (provider *transientReleaseProvider) releaseAttempts() int {
@@ -291,28 +293,28 @@ func (provider *transientReleaseProvider) releaseAttempts() int {
 }
 
 type contactCountingProvider struct {
-	adapter.Provider
+	capability.EphemeralExecutor
 	contacts atomic.Int64
 }
 
 func (provider *contactCountingProvider) Verify(ctx context.Context) error {
 	provider.contacts.Add(1)
-	return provider.Provider.Verify(ctx)
+	return provider.EphemeralExecutor.Verify(ctx)
 }
 
 func (provider *contactCountingProvider) ListOffers(ctx context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	provider.contacts.Add(1)
-	return provider.Provider.ListOffers(ctx, request)
+	return provider.EphemeralExecutor.ListOffers(ctx, request)
 }
 
 func (provider *cancellingProvider) Launch(ctx context.Context, request adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
-	receipt, err := provider.Provider.Launch(ctx, request)
+	receipt, err := provider.EphemeralExecutor.Launch(ctx, request)
 	provider.cancel()
 	return receipt, err
 }
 
 func (provider *reportingProvider) Launch(ctx context.Context, request adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
-	receipt, err := provider.Provider.Launch(ctx, request)
+	receipt, err := provider.EphemeralExecutor.Launch(ctx, request)
 	if err != nil {
 		return receipt, err
 	}

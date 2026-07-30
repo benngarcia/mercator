@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
@@ -295,5 +296,23 @@ func phaseFromState(state string, exitCode *int) adapter.ExternalPhase {
 		return adapter.ExternalPhaseReleased
 	default:
 		return adapter.ExternalPhaseQueued
+	}
+}
+
+// EphemeralSupport states what a Docker connection can do today. Mercator
+// reaches the daemon directly and controls no host runtime between Runs, so
+// this connection is one-shot however long the host itself lives. Enrolling a
+// node agent on the same host is what moves it into the reusable lane.
+func (a *Adapter) EphemeralSupport() capability.EphemeralSupport {
+	return capability.EphemeralSupport{
+		ReusableBetweenRuns: false,
+		// The daemon answers exactly which images it holds, which is why a
+		// Docker offer carries real image-cache evidence.
+		ObservableLocality: true,
+		CancelQueued:       true,
+		ProviderTTL:        false,
+		IdempotentLaunch:   "launch_key",
+		ListOwned:          true,
+		ExactPricing:       true,
 	}
 }

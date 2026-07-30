@@ -16,6 +16,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/orchestrator"
@@ -99,7 +100,7 @@ func newReportingTestHarness(t *testing.T, signerKey []byte, extra ...Option) re
 	return newReportingTestHarnessWithProvider(t, signerKey, log, ad, ad, extra...)
 }
 
-func newReportingTestHarnessWithProvider(t *testing.T, signerKey []byte, log eventlog.EventLog, provider adapter.Provider, ad *fake.Adapter, extra ...Option) reportingTestHarness {
+func newReportingTestHarnessWithProvider(t *testing.T, signerKey []byte, log eventlog.EventLog, provider capability.EphemeralExecutor, ad *fake.Adapter, extra ...Option) reportingTestHarness {
 	t.Helper()
 	sched := scheduler.New()
 	workspaceLog := workspaceTestLog{EventLog: log}
@@ -416,7 +417,7 @@ func TestCleanupFailureIsVisibleThroughRunAndEventAPIs(t *testing.T) {
 	offer := httpOffer("off_cleanup_failure", time.Now().UTC())
 	offer.Kind = domain.OfferKindProvisionable
 	base := fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}), fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))
-	provider := &httpTerminateFailsOnceProvider{Provider: base}
+	provider := &httpTerminateFailsOnceProvider{EphemeralExecutor: base}
 	harness := newReportingTestHarnessWithProvider(t, key32, log, provider, base)
 	runID := createReportingRun(t, harness.handler, "run_report_cleanup_failure")
 
@@ -584,7 +585,7 @@ func TestReportEndpointRunNotFound(t *testing.T) {
 }
 
 type httpTerminateFailsOnceProvider struct {
-	adapter.Provider
+	capability.EphemeralExecutor
 	calls int
 }
 
@@ -593,5 +594,5 @@ func (p *httpTerminateFailsOnceProvider) Terminate(ctx context.Context, req adap
 	if p.calls == 1 {
 		return adapter.TerminateReceipt{}, errors.Join(adapter.ErrRetryableFailure, errors.New("provider secret"))
 	}
-	return p.Provider.Terminate(ctx, req)
+	return p.EphemeralExecutor.Terminate(ctx, req)
 }

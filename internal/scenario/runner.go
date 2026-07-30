@@ -264,6 +264,9 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 	if expect.Feasible != nil && candidate.Feasible != *expect.Feasible {
 		fail("expected feasible=%v, got %v (rejections %s)", *expect.Feasible, candidate.Feasible, describeRejections(candidate.Rejections))
 	}
+	if expect.Disposition != "" && candidate.Disposition != expect.Disposition {
+		fail("expected disposition %q, got %q", expect.Disposition, candidate.Disposition)
+	}
 	for _, rejection := range expect.Rejected {
 		if !hasRejection(candidate.Rejections, rejection) {
 			fail("expected rejection %s at %s, got %s", rejection.Code, rejection.Path, describeRejections(candidate.Rejections))

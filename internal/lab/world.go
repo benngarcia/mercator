@@ -126,7 +126,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	}
 	for _, rental := range tape.InitialWorld.Rentals {
 		state := observedOffer{
-			offer:      labOffer(rental.ID, domain.OfferKindStanding, rental.RatePerHourUSD, rental.Resources),
+			offer:      labOffer(rental.ID, domain.OfferKindStanding, domain.LaneReusable, rental.RatePerHourUSD, rental.Resources),
 			heldLayers: map[string]int64{},
 		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
@@ -154,6 +154,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			offer: labOffer(
 				marketplace.ID,
 				domain.OfferKindProvisionable,
+				marketplace.ExecutionLane(),
 				marketplace.RatePerHourUSD,
 				marketplace.Resources,
 			),
@@ -852,13 +853,14 @@ func (world *simulatedWorld) recordEffect(
 	})
 }
 
-func labOffer(id string, kind domain.OfferKind, ratePerHourUSD float64, resources *scenario.ResourcesSpec) domain.OfferSnapshot {
+func labOffer(id string, kind domain.OfferKind, lane domain.ExecutionLane, ratePerHourUSD float64, resources *scenario.ResourcesSpec) domain.OfferSnapshot {
 	return domain.OfferSnapshot{
 		ID:           id,
 		ConnectionID: labConnection,
 		AdapterType:  "lab",
 		NativeRef:    id,
 		Kind:         kind,
+		Lane:         lane,
 		RentalID:     standingRentalID(id, kind),
 		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
 		Resources:    labResources(resources),

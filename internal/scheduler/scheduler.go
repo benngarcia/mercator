@@ -121,7 +121,14 @@ func bookingForDecision(input SchedulingInput, decisionID string, offer domain.O
 	bookingID := "bkg_" + bookingHash[len("sha256:"):24]
 	rentalID := offer.RentalID
 	schedule := domain.RentalSchedule{}
-	switch offer.Kind {
+	kind := offer.Kind
+	if !offer.Lane.Reusable() {
+		// A one-shot execution holds nothing afterwards, so it gets its own
+		// single-use binding instead of joining capacity another Run could
+		// later queue behind.
+		kind = domain.OfferKindProvisionable
+	}
+	switch kind {
 	case domain.OfferKindStanding:
 		if rentalID == "" {
 			return domain.Booking{}, fmt.Errorf("scheduler: standing offer %q requires rental_id", offer.ID)
@@ -202,6 +209,15 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 			Required: "offer not rejected by an earlier attempt",
 			Offered:  offer.ID,
 			Message:  "Offer was rejected as unavailable by an earlier launch attempt.",
+		})
+	}
+	if !offer.Lane.Valid() {
+		violations = append(violations, domain.Violation{
+			Code:     "UNKNOWN_FACT",
+			Path:     "lane",
+			Required: "reusable or ephemeral",
+			Offered:  string(offer.Lane),
+			Message:  "Offer does not state whether Mercator can run a second workload on it.",
 		})
 	}
 	if !offer.ExpiresAt.IsZero() && !offer.ExpiresAt.After(input.EvaluatedAt) {
@@ -308,12 +324,21 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain
 	}
 }
 
+// queueable reports whether a Run may wait behind work already assigned here.
+// Only reusable capacity qualifies: waiting for a one-shot execution to finish
+// buys nothing, because the machine does not survive it.
 func queueable(input SchedulingInput, offer domain.OfferSnapshot) bool {
+	if !offer.Lane.Reusable() {
+		return false
+	}
 	schedule, ok := input.Schedules[offer.RentalID]
 	return offer.Kind == domain.OfferKindStanding && ok && len(schedule.Bookings) > 0 && len(schedule.Bookings) < domain.RentalScheduleQueueCapacity+1
 }
 
 func candidateDisposition(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDisposition {
+	if !offer.Lane.Reusable() {
+		return domain.CandidateDispositionEphemeral
+	}
 	if offer.Kind == domain.OfferKindProvisionable {
 		return domain.CandidateDispositionProvision
 	}
@@ -331,6 +356,8 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 		return "QUEUE_EXISTING_RENTAL"
 	case domain.CandidateDispositionProvision:
 		return "PROVISION_FRESH_RENTAL"
+	case domain.CandidateDispositionEphemeral:
+		return "LAUNCH_EPHEMERAL"
 	default:
 		return "UNKNOWN_DISPOSITION"
 	}

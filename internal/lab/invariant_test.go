@@ -2,6 +2,7 @@ package lab
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
@@ -31,8 +33,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 16 {
-		t.Fatalf("latest invariant results = %d, want 16", len(latest))
+	if len(latest) != 17 {
+		t.Fatalf("latest invariant results = %d, want 17", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -187,6 +189,9 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		"safety.secrets_absent": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{{Data: []byte(`{"password":"exposed"}`)}}
 		},
+		"safety.ephemeral_capacity_not_reused": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{queuedBehindOneShotCapacity()}
+		},
 		"liveness.lost_response_reconciliation": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{{CorrelationID: "run-missing", Response: EffectResponseLost}}
 		},
@@ -241,6 +246,34 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 	if len(cases) != len(DefaultInvariantRegistry().invariants) {
 		t.Fatalf("deliberate cases = %d, default invariants = %d", len(cases), len(DefaultInvariantRegistry().invariants))
 	}
+}
+
+// queuedBehindOneShotCapacity is the decision the lane split forbids: a Run
+// parked in a queue behind capacity that will not exist once its workload exits.
+func queuedBehindOneShotCapacity() eventlog.CloudEvent {
+	decision := domain.BookingDecision{
+		ID:                      "dec_ephemeral_queue",
+		RunID:                   "run-queued",
+		SelectedOfferSnapshotID: "off_oneshot",
+		Candidates: []domain.CandidateDecision{{
+			OfferSnapshotID: "off_oneshot",
+			Disposition:     domain.CandidateDispositionEphemeral,
+			Feasible:        true,
+		}},
+		Booking: &domain.Booking{
+			ID:       "bkg_queued",
+			RunID:    "run-queued",
+			RentalID: "rnt_oneshot",
+			State:    domain.BookingStateQueued,
+		},
+	}
+	data, err := json.Marshal(struct {
+		Decision domain.BookingDecision `json:"decision"`
+	}{decision})
+	if err != nil {
+		panic(err)
+	}
+	return eventlog.CloudEvent{ID: "evt_ephemeral_queue", Type: orchestrator.EventBookingDecided, Data: data}
 }
 
 func invariantResultByID(t *testing.T, results []InvariantResult, id string) InvariantResult {

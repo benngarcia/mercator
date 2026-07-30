@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
@@ -61,19 +62,19 @@ func endpointLabel(host, dockerContext string) string {
 // those timestamps: after the one-hour expiry window every placement failed
 // with OFFER_EXPIRED until the process restarted. A non-empty archOverride
 // wins over the probed architecture (useful for forcing emulated platforms).
-func NewOffering(client *CLIClient, id EndpointIdentity, archOverride string) adapter.Provider {
+func NewOffering(client *CLIClient, id EndpointIdentity, archOverride string) capability.EphemeralExecutor {
 	return offeringAdapter{
-		Provider: New(client),
-		client:   client,
-		id:       id,
-		arch:     archOverride,
-		disk:     &probeFact[int64]{},
-		gpus:     &probeFact[[]domain.AcceleratorInventory]{},
+		EphemeralExecutor: New(client),
+		client:            client,
+		id:                id,
+		arch:              archOverride,
+		disk:              &probeFact[int64]{},
+		gpus:              &probeFact[[]domain.AcceleratorInventory]{},
 	}
 }
 
 type offeringAdapter struct {
-	adapter.Provider
+	capability.EphemeralExecutor
 	client *CLIClient
 	id     EndpointIdentity
 	arch   string

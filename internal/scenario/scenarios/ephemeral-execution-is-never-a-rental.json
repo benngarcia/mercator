@@ -1,0 +1,46 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "A provider-native one-shot product is the only capacity available, and its offer is cheaper and faster than the reusable alternative. Placement still records it as a one-shot launch rather than a Rental, because nothing survives the workload's exit for a later Run to reuse.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "marketplace": [
+      {
+        "id": "oneshot-container",
+        "provider": "simcloud",
+        "lane": "ephemeral",
+        "rate_per_hour_usd": 1.0,
+        "provisioning": {"expected": "1m", "p90": "2m"}
+      },
+      {
+        "id": "reusable-4090",
+        "provider": "simcloud",
+        "lane": "reusable",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "4m", "p90": "8m"}
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "expected_runtime": "20m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "oneshot-container",
+    "disposition": "terminate",
+    "reasons": ["LAUNCH_EPHEMERAL"],
+    "candidates": {
+      "oneshot-container": {"feasible": true, "disposition": "launch_ephemeral"},
+      "reusable-4090": {"feasible": true, "disposition": "provision_fresh_rental"}
+    }
+  }
+}

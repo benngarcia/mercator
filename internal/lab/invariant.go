@@ -11,6 +11,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 )
 
 type InvariantStatus string
@@ -84,6 +85,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.cache_disk_accounting", check: cacheDiskAccounting},
 		invariantRule{id: "safety.projection_rebuild_equivalence", check: projectionRebuildEquivalence},
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
+		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
 		invariantRule{
 			id:          "liveness.lost_response_reconciliation",
 			assumptions: []string{"the provider preserves operation identity", "provider observation remains available"},
@@ -345,6 +347,68 @@ func artifactDependencies(observation InvariantObservation) error {
 					artifactID,
 				)
 			}
+		}
+	}
+	return nil
+}
+
+// ephemeralCapacityNotReused is the standing guard on the lane split. A one-shot
+// execution holds nothing after it exits, so nothing may ever wait behind it and
+// nothing may inherit its capacity. Placement records the disposition it chose;
+// this reads the audit trail back and checks the Rental Schedules agree.
+func ephemeralCapacityNotReused(observation InvariantObservation) error {
+	ephemeralRentals := map[string]string{}
+	for _, event := range observation.MercatorEvents {
+		if event.Type != orchestrator.EventBookingDecided {
+			continue
+		}
+		var payload struct {
+			Decision domain.BookingDecision `json:"decision"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			return fmt.Errorf("decode Booking Decision from %s: %w", event.ID, err)
+		}
+		decision := payload.Decision
+		for _, candidate := range decision.Candidates {
+			if candidate.Disposition != domain.CandidateDispositionEphemeral {
+				continue
+			}
+			if candidate.OfferSnapshotID != decision.SelectedOfferSnapshotID || decision.Booking == nil {
+				continue
+			}
+			ephemeralRentals[decision.Booking.RentalID] = decision.RunID
+		}
+		if decision.Booking == nil || decision.Booking.State != domain.BookingStateQueued {
+			continue
+		}
+		if selected := selectedCandidate(decision); selected != nil && selected.Disposition == domain.CandidateDispositionEphemeral {
+			return fmt.Errorf(
+				"Run %q was queued behind one-shot capacity %q, which holds nothing to wait for",
+				decision.RunID,
+				selected.OfferSnapshotID,
+			)
+		}
+	}
+	for rentalID, runID := range ephemeralRentals {
+		schedule, ok := observation.RentalSchedules[rentalID]
+		if !ok {
+			continue
+		}
+		if len(schedule.Bookings) > 1 {
+			return fmt.Errorf(
+				"one-shot capacity held for Run %q accumulated %d Bookings, which claims reuse it cannot perform",
+				runID,
+				len(schedule.Bookings),
+			)
+		}
+	}
+	return nil
+}
+
+func selectedCandidate(decision domain.BookingDecision) *domain.CandidateDecision {
+	for index := range decision.Candidates {
+		if decision.Candidates[index].OfferSnapshotID == decision.SelectedOfferSnapshotID {
+			return &decision.Candidates[index]
 		}
 	}
 	return nil

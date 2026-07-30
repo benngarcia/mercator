@@ -28,6 +28,27 @@ in [docs/production/known-limitations.md](docs/production/known-limitations.md).
   built yet and fail CI the moment they start passing, so the corpus always
   says exactly where the program stands.
 
+## Building: an auditable capacity broker
+
+Mercator is migrating to a control plane that decides whether to reuse, queue
+on, resume, or provision capacity by predicting candidate-specific
+time-to-ready, cost, locality, and risk, and records a replayable reason for
+every decision. The tracking issue is
+[#155](https://github.com/benngarcia/mercator/issues/155) and the living plan is
+[the migration plan](docs/project/capacity-broker-migration.md).
+
+The first slice shipped: capacity allocation and workload execution are now
+separate contracts. A backend lands in the reusable lane only by implementing
+both a capacity provider and a node runtime, so nothing can advertise reuse it
+cannot perform. Every current backend is ephemeral, which is what each of them
+actually does today.
+
+What comes next, in order: the node protocol and Go agent so one machine runs
+successive workloads; exact image and artifact locality; candidate-specific
+prediction with service classes and owned-capacity economics; one provider
+bootstrapping the agent end to end; then the launch waterfall, calibration, and
+placement explanation UI.
+
 ## Building: warm placement
 
 The goal of the current program: the next run starts faster because the fleet

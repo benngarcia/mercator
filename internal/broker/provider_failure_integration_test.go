@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/shadeform"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -47,7 +47,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	var privateLog bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&privateLog, nil))
 	factory := NewFactory()
-	factory.Register(shadeform.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
+	factory.Register(shadeform.Manifest(), func(config map[string]string, secret string) (capability.Backend, error) {
 		return shadeform.New(secret, config)
 	})
 	connections := fakeConns{recs: []connection.Record{{

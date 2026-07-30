@@ -866,8 +866,16 @@ export interface components {
             rental_id?: string;
             connection_id: string;
             adapter_type: string;
-            /** @enum {string} */
+            /**
+             * @description Who owns the host: standing capacity Mercator borrows a slot on, or provisionable capacity Mercator creates and must destroy.
+             * @enum {string}
+             */
             kind: "standing" | "provisionable";
+            /**
+             * @description Whether Mercator can run a second workload here without allocating new capacity. Reusable capacity is held across Runs through an enrolled node runtime and may become a Rental; ephemeral capacity is a provider-native one-shot product that holds nothing afterwards. The Broker stamps this from the connection's negotiated capabilities, so an adapter cannot advertise reuse it cannot perform.
+             * @enum {string}
+             */
+            lane: "reusable" | "ephemeral";
             native_ref: string;
             /** Format: date-time */
             observed_at: string;
