@@ -123,6 +123,42 @@ func (server *Server) Shutdown(ctx context.Context) error {
 	return server.shutdownErr
 }
 
+// Play drives this Lab's Blueprint to completion, waiting between rounds so the
+// console shows the world changing rather than a world that never starts.
+//
+// The Lab holds no clock of its own, which is what makes an execution
+// reproducible and is also why a served Blueprint sits at its start time until
+// something advances it. Before this, the only things that could were an operator
+// issuing drive commands by hand and the headless run that exports a bundle and
+// shows nobody anything.
+//
+// It takes the same lock the drive route takes, for the whole of each round
+// rather than per command, because a console control landing between a round's
+// Advance and the Quiesce that settles it would interleave two callers inside one
+// logical step. Whoever holds the lock finishes their round first, so an operator
+// can still drive by hand while a player runs and the transcript stays a sequence
+// somebody could replay.
+func (server *Server) Play(ctx context.Context, between time.Duration) error {
+	if between < 0 {
+		return fmt.Errorf("lab: play interval %s is negative", between)
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	_, err := server.execution.DriveToCompletionPaced(ctx, func(ctx context.Context, _ Checkpoint) error {
+		server.mu.Unlock()
+		defer server.mu.Lock()
+		timer := time.NewTimer(between)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		}
+	})
+	return err
+}
+
 func (server *Server) labOnly(next http.Handler) http.Handler {
 	return server.labOnlyBytes(1<<20, next)
 }

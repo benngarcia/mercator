@@ -25,6 +25,15 @@ type labServeOptions struct {
 	addr      string
 	seed      string
 	policy    string
+	// play is the wait between drive rounds. Zero is a served Blueprint that sits
+	// at its start time until an operator advances it by hand, which is what this
+	// command did before and is still what a scripted driver wants.
+	play time.Duration
+	// open reports whether to hand the console URL to the desktop's browser. It is
+	// a convenience and never a requirement: a host with no opener still serves,
+	// and says so, because a Lab nobody can click is still a Lab something can
+	// curl.
+	open bool
 }
 
 func runLabCommand(ctx context.Context, args []string, env map[string]string, stdout, stderr io.Writer) int {
@@ -75,7 +84,7 @@ Commands:
 
 func parseLabServeOptions(args []string) (labServeOptions, error) {
 	if len(args) < 3 || args[1] != "lab" || args[2] != "serve" {
-		return labServeOptions{}, errors.New("usage: mercator lab serve --blueprint FILE [--addr LOOPBACK:PORT] [--seed SEED] [--policy NAME]")
+		return labServeOptions{}, errors.New("usage: mercator lab serve --blueprint FILE [--addr LOOPBACK:PORT] [--seed SEED] [--policy NAME] [--play INTERVAL] [--open=false]")
 	}
 	flags := flag.NewFlagSet("mercator lab serve", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -84,11 +93,13 @@ func parseLabServeOptions(args []string) (labServeOptions, error) {
 	flags.StringVar(&options.addr, "addr", "127.0.0.1:8081", "loopback listen address")
 	flags.StringVar(&options.seed, "seed", "", "keyed entropy seed override")
 	flags.StringVar(&options.policy, "policy", "default", "policy identity")
+	flags.DurationVar(&options.play, "play", 0, "wait between drive rounds, e.g. 1s; absent leaves the clock to the operator")
+	flags.BoolVar(&options.open, "open", true, "hand the console URL to the desktop browser")
 	if err := flags.Parse(args[3:]); err != nil {
-		return labServeOptions{}, fmt.Errorf("usage: mercator lab serve --blueprint FILE [--addr LOOPBACK:PORT] [--seed SEED] [--policy NAME]: %w", err)
+		return labServeOptions{}, fmt.Errorf("usage: mercator lab serve --blueprint FILE [--addr LOOPBACK:PORT] [--seed SEED] [--policy NAME] [--play INTERVAL] [--open=false]: %w", err)
 	}
 	if flags.NArg() != 0 {
-		return labServeOptions{}, errors.New("usage: mercator lab serve --blueprint FILE [--addr LOOPBACK:PORT] [--seed SEED] [--policy NAME]")
+		return labServeOptions{}, errors.New("usage: mercator lab serve --blueprint FILE [--addr LOOPBACK:PORT] [--seed SEED] [--policy NAME] [--play INTERVAL] [--open=false]")
 	}
 	if options.blueprint == "" {
 		return labServeOptions{}, errors.New("mercator lab serve: --blueprint is required")
@@ -98,6 +109,9 @@ func parseLabServeOptions(args []string) (labServeOptions, error) {
 	}
 	if !isLoopback(options.addr) {
 		return labServeOptions{}, fmt.Errorf("mercator lab serve: --addr must be loopback, got %s", options.addr)
+	}
+	if options.play < 0 {
+		return labServeOptions{}, fmt.Errorf("mercator lab serve: --play must not be negative, got %s", options.play)
 	}
 	return options, nil
 }
@@ -153,7 +167,28 @@ func runLabServe(ctx context.Context, options labServeOptions, env map[string]st
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(stop)
-	log.Printf("Mercator Lab %q listening on http://%s", blueprint.Name, options.addr)
+	consoleURL := "http://" + options.addr
+	log.Printf("Mercator Lab %q listening on %s", blueprint.Name, consoleURL)
+
+	playCtx, stopPlaying := context.WithCancel(ctx)
+	defer stopPlaying()
+	if options.play > 0 {
+		log.Printf("playing %q, %s between rounds", blueprint.Name, options.play)
+		go func() {
+			switch err := server.Play(playCtx, options.play); {
+			case err == nil:
+				log.Printf("%q reached completion; the console holds the finished execution", blueprint.Name)
+			case errors.Is(err, context.Canceled):
+			default:
+				log.Printf("play Lab: %v", err)
+			}
+		}()
+	}
+	if options.open {
+		if err := openInBrowser(consoleURL); err != nil {
+			log.Printf("open %s yourself: %v", consoleURL, err)
+		}
+	}
 	exitCode := 0
 	select {
 	case err := <-serveErr:

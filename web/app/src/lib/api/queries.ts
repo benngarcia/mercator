@@ -32,6 +32,8 @@ import {
   runDecisionsAtom,
   runEventsAtom,
   runsAtom,
+  workspaceDecisionsAtom,
+  workspaceDecisionsKey,
   sinkStatusAtom,
   workspacesAtom,
 } from "./atoms";
@@ -253,6 +255,19 @@ export function useRunDecisions(
   return useResource(
     enabled ? runDecisionsAtom(workspaceId, runId) : inactiveRunDecisionsAtom,
     enabled,
+  );
+}
+
+// useWorkspaceDecisions is every placed Run's decision chain in one read. It
+// takes the Run IDs rather than deriving them, because the caller holds the
+// projection that knows which Runs are placed and this module does not.
+export function useWorkspaceDecisions(
+  runIds: readonly string[],
+  workspaceOverride?: string,
+): readonly { runId: string; decisions: BookingDecision[] | null | undefined }[] {
+  const workspaceId = useWorkspaceId(workspaceOverride);
+  return useAtomValue(
+    workspaceDecisionsAtom(workspaceDecisionsKey(workspaceId ?? "", runIds)),
   );
 }
 
