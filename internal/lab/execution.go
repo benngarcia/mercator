@@ -287,12 +287,43 @@ func driveRecord(command DriveCommand, checkpoint Checkpoint) DriveRecord {
 // placed is owed by Mercator, so the execution ends at the liveness bound
 // instead of at the last transfer.
 func (execution *Execution) DriveToCompletion(ctx context.Context) (Checkpoint, error) {
+	return execution.DriveToCompletionPaced(ctx, nil)
+}
+
+// DriveToCompletionPaced is DriveToCompletion with a caller's wait between
+// rounds, so a human can watch a Blueprint execute instead of reading its bundle
+// afterwards.
+//
+// It issues the same commands in the same order for the same world, so the
+// recorded drive transcript and the exported bundle are identical to the unpaced
+// drive's, byte for byte. That holds because a round's increment is derived from
+// the world's own executionHorizon rather than from elapsed real time, and
+// because the drive transcript records the commands rather than when they were
+// sent. Wall clock is not in the record, which is what makes pacing a matter of
+// presentation instead of a second, slower kind of execution nobody could
+// replay.
+//
+// A nil wait is the unpaced drive, so there is one implementation of what
+// completion means rather than two that could disagree about it. The wait
+// receives the checkpoint the round settled at, so a caller reporting progress
+// says what the world did rather than that time passed, and its error ends the
+// drive: a viewer that has gone away is a reason to stop, not to keep advancing a
+// world nobody is watching.
+func (execution *Execution) DriveToCompletionPaced(
+	ctx context.Context,
+	wait func(context.Context, Checkpoint) error,
+) (Checkpoint, error) {
 	checkpoint, err := execution.Drive(ctx, Quiesce())
 	if err != nil {
 		return checkpoint, err
 	}
 	rounds := len(execution.config.Tape.Events) + len(execution.config.Tape.InitialWorld.Artifacts)
 	for range rounds {
+		if wait != nil {
+			if err := wait(ctx, checkpoint); err != nil {
+				return checkpoint, err
+			}
+		}
 		horizon := execution.runtime.world.executionHorizon()
 		if horizon.IsZero() {
 			break

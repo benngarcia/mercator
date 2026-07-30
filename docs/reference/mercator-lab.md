@@ -47,18 +47,42 @@ mercator lab run \
   --bundle generated.mlab
 ```
 
-Open the isolated process server and production console:
+Open the isolated process server and production console, and watch the Blueprint
+execute:
 
 ```sh
 mercator lab serve \
   --blueprint internal/scenario/scenarios/demos/artifact-warmth-restart.json \
-  --addr 127.0.0.1:8081
+  --addr 127.0.0.1:8081 \
+  --play 1s
 ```
+
+`--play` waits the given interval between drive rounds, and the command hands the
+console URL to the desktop's browser. Pass `--open=false` on a headless host or in
+CI. A host with no opener still serves and says so.
+
+The Lab holds no clock of its own, which is what makes an execution reproducible.
+Without `--play` a served Blueprint therefore sits at its start time until an
+operator advances it over `POST /v1/lab/drive`, which is what a scripted driver
+wants and what a person watching does not.
+
+A paced drive issues the same commands in the same order as the headless
+`mercator lab run`, because a round's increment comes from the world's own
+execution horizon rather than from elapsed real time, and the drive transcript
+records commands rather than when they were sent. The exported bundle and its
+normalized hash are identical either way, so pacing is presentation and never a
+second kind of execution. `TestPacingChangesNothingTheExecutionRecorded` holds
+that.
+
+Play stops where the drive stops, including on a failed invariant, and logs which
+one failed. The console then holds the world at the moment it broke, which is the
+state worth looking at.
 
 The command prints a generated operator token when
 `MERCATOR_API_TOKEN` is absent. Lab controls require that bearer token and bind
 only to loopback. The console continues to use the production Run API and SSE
-feed.
+feed, and has no Lab controls of its own: pause, step, and speed live in the
+command rather than on the page.
 
 ## Replay
 
