@@ -73,7 +73,11 @@ The core implementation rule is:
   catalogs, Rentals, exact image graphs, Artifact DAGs, workload phases,
   candidate runtime models, path throughput, three arrival families, and
   provider faults.
-- [ ] Slice 07: Lab server and normal UI path.
+- [x] 2026-07-24: Complete Slice 07 isolated Lab server, normal API/SSE
+  console path, and catalog-driven Playwright proof. `mercator lab serve`
+  composes the real control plane behind five authenticated Lab-only routes;
+  the production daemon and OpenAPI contract have no Lab mounting seam. The
+  console now has one live event path after deleting transcript playback.
 - [ ] Slice 08: complete vertical proof, CI tiers, and documentation.
 
 ## Current architecture evidence
@@ -303,6 +307,47 @@ still reproduces. The provider-rejection campaign case is persisted as
 under its fingerprint and reproduces byte-equivalent normalized output from
 one Run Bundle.
 
+### Slice 07
+
+On 2026-07-24, the exact reviewed worktree passed:
+
+```text
+go test -race ./internal/lab ./internal/scenario ./internal/httpapi ./internal/daemon ./cmd/mercator -count=1
+go test ./...
+go vet ./...
+go build ./...
+cd web/app
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice07
+scripts/check-open-source-launch.sh
+MERCATOR_BROWSER_TEST=1 go test -count=1 ./internal/lab -run '^TestLabConsoleUsesNormalAPIAndSSE$' -v
+git diff --check
+```
+
+The Playwright proof passed outside the command sandbox in 7.660 seconds.
+Playwright called authenticated `/v1/lab/drive` and `/v1/lab/restart` routes
+while the embedded console consumed the production `/v1/runs` API and
+`/v1/console/events` SSE feed. Both catalog Runs reached `succeeded`; the test
+reported no console, page, or HTTP failures. The proof retained two curated
+catalog-sidecar screenshots, a 3.7 MB Playwright trace, and a replayable 45 KB
+Run Bundle under the ignored `output/playwright-lab` directory.
+
+A live `mercator lab serve` process also returned `200` from production health,
+`401` from an unauthenticated Lab route, and a typed status document from the
+same route with its operator bearer token. The production handler returns
+`404` for that path and has no Lab dependency, flag, environment variable, or
+OpenAPI operation.
+
+The replacement deleted 2,596 lines of transcript generation, playback state,
+parallel SSE framing, frontend controls, and playback-only browser automation.
+The catalog Blueprint plus UI sidecar now drives the same live control plane and
+console used by the browser proof.
+
 ## Public contracts
 
 ### Scenario catalog
@@ -522,5 +567,9 @@ keeps #146 open.
   periodic events at different timestamps are progress; only consecutive
   identical transitions at one timestamp count toward the repeated-event
   limit.
+- Lab restart replaces the HTTP handler's orchestrator reference after the
+  execution kernel reconstructs the control plane. Existing SSE readers remain
+  attached to the durable event log; later API requests cannot retain the
+  pre-restart orchestrator object.
 
 Add dated findings here as implementation changes the plan.

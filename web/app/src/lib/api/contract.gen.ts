@@ -68,22 +68,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/dev/scenario-sessions/{workspace_id}/commands": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["commandScenarioPlayback"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/runs": {
         parameters: {
             query?: never;
@@ -646,12 +630,6 @@ export interface components {
             cursor: number;
             has_cursor: boolean;
         };
-        ScenarioPlaybackCommand: {
-            /** @enum {string} */
-            type: "play" | "pause" | "previous" | "next" | "restart" | "set_speed";
-            /** @enum {integer} */
-            speed?: 1 | 2 | 4;
-        };
         ErrorResponse: {
             code: string;
             message: string;
@@ -1099,8 +1077,6 @@ export interface operations {
         parameters: {
             query: {
                 workspace_id: string;
-                scenario?: string;
-                play?: "0" | "1";
             };
             header?: {
                 "Last-Event-ID"?: string;
@@ -1157,70 +1133,6 @@ export interface operations {
             };
             /** @description Offer catalog unavailable */
             502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    commandScenarioPlayback: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScenarioPlaybackCommand"];
-            };
-        };
-        responses: {
-            /** @description Scenario playback command accepted */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        accepted: boolean;
-                    };
-                };
-            };
-            /** @description Invalid command */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Authentication failed */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Scenario playback session not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Development scenarios are disabled */
-            501: {
                 headers: {
                     [name: string]: unknown;
                 };

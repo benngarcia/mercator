@@ -27,6 +27,15 @@ type Limits struct {
 	MaxRepeatedEvent   uint64        `json:"max_repeated_event"`
 }
 
+func DefaultLimits() Limits {
+	return Limits{
+		MaxTransitions:     100_000,
+		MaxVirtualDuration: 30 * 24 * time.Hour,
+		MaxSameTimestamp:   10_000,
+		MaxRepeatedEvent:   1_000,
+	}
+}
+
 func (limits Limits) validate() error {
 	if limits.MaxTransitions == 0 ||
 		limits.MaxVirtualDuration <= 0 ||
@@ -81,11 +90,11 @@ func Until(predicate func(Checkpoint) bool) DriveCommand {
 func Quiesce() DriveCommand { return DriveCommand{kind: driveQuiescence} }
 
 type Checkpoint struct {
-	Now         time.Time
-	Transitions uint64
-	LastEvent   *WorldEvent
-	Quiescent   bool
-	WorldHash   string
+	Now         time.Time   `json:"now"`
+	Transitions uint64      `json:"transitions"`
+	LastEvent   *WorldEvent `json:"last_event,omitempty"`
+	Quiescent   bool        `json:"quiescent"`
+	WorldHash   string      `json:"world_hash"`
 }
 
 type Execution struct {

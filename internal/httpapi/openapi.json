@@ -100,23 +100,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "scenario",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "play",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "enum": ["0", "1"]
-            }
           }
         ],
         "responses": {
@@ -173,87 +156,6 @@
           },
           "501": {
             "description": "Event feed is unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/dev/scenario-sessions/{workspace_id}/commands": {
-      "post": {
-        "operationId": "commandScenarioPlayback",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ScenarioPlaybackCommand"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Scenario playback command accepted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": ["accepted"],
-                  "properties": {
-                    "accepted": {"type": "boolean"}
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid command",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Scenario playback session not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "501": {
-            "description": "Development scenarios are disabled",
             "content": {
               "application/json": {
                 "schema": {
@@ -3080,21 +2982,6 @@
           "path": "github.com/benngarcia/mercator/internal/sinks",
           "name": "sinks"
         }
-      },
-      "ScenarioPlaybackCommand": {
-        "type": "object",
-        "required": ["type"],
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": ["play", "pause", "previous", "next", "restart", "set_speed"]
-          },
-          "speed": {
-            "type": "integer",
-            "enum": [1, 2, 4]
-          }
-        },
-        "additionalProperties": false
       },
       "ErrorResponse": {
         "type": "object",

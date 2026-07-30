@@ -7,18 +7,6 @@ import { useWorkspaceFeed } from "@/lib/workspace";
 
 import { rootRoute } from "./root";
 
-interface CanvasSearch {
-  scenario?: string;
-  play?: "1";
-}
-
-function validateSearch(search: Record<string, unknown>): CanvasSearch {
-  return {
-    scenario: typeof search.scenario === "string" ? search.scenario : undefined,
-    play: search.play === "1" || search.play === 1 ? "1" : undefined,
-  };
-}
-
 function CanvasPage() {
   const { workspace } = useSession();
   const feed = useWorkspaceFeed();
@@ -36,9 +24,6 @@ function CanvasPage() {
     <WorkspaceCanvas
       workspace={feed.workspace}
       events={feed.events}
-      playback={feed.playback}
-      fidelity={feed.fidelity}
-      controls={feed.controls}
     />
   );
 }
@@ -68,6 +53,5 @@ function CanvasSkeleton() {
 export const canvasRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/canvas",
-  validateSearch,
   component: CanvasPage,
 });

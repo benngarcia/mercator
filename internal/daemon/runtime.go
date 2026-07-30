@@ -24,7 +24,6 @@ import (
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/providers"
 	"github.com/benngarcia/mercator/internal/reporting"
-	"github.com/benngarcia/mercator/internal/scenario"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	"github.com/benngarcia/mercator/internal/sinks"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
@@ -168,10 +167,6 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		serverOptions = append(serverOptions, httpapi.WithWebAuth(authenticator))
 	}
 
-	var dashboardScenarios *scenario.DashboardPlayback
-	if cfg.LocalAuthEmail != "" {
-		dashboardScenarios = scenario.NewDashboardPlayback()
-	}
 	handler := httpapi.New(httpapi.Deps{
 		Orchestrator: orch,
 		Offers:       providerBroker,
@@ -181,7 +176,6 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		Resolver:     ociresolver.NewDaemonResolver(inspectLocalImage),
 		Workspaces:   storage.Workspaces(),
 		Events:       logStore,
-		Scenarios:    dashboardScenarios,
 	}, serverOptions...)
 	var rootHandler http.Handler = handler
 	if cfg.LocalAuthEmail != "" {

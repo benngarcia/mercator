@@ -7,38 +7,18 @@ import {
   reduceWorkspaceFeed,
 } from "./snapshot";
 
-test("Workspace feed resets and orders the CloudEvents that drive the canvas", () => {
-  const playback = {
-    status: "playing" as const,
-    cursor: 0,
-    cueCount: 14,
-    elapsedMillis: 0,
-    durationMillis: 90_000,
-    speed: 1 as const,
-  };
-  const fidelity = {
-    offerSource: "sanitized_recordings",
-    provenCapabilities: ["placement"],
-    targetCapabilities: ["rental_schedule"],
-  };
-  const first = reduceWorkspaceFeed(initialWorkspaceFeedSnapshot("ws_1"), {
-    type: "reset",
-    messages: [
-      eventMessage(cloudEvent(1)),
-      eventMessage(cloudEvent(2)),
-      {
-        type: "ready",
-        throughGlobalPosition: 2,
-      },
-    ],
-    playback,
-    fidelity,
-  });
+test("Workspace feed orders the CloudEvents that drive the canvas", () => {
+  const first = [cloudEvent(1), cloudEvent(2)].reduce(
+    (snapshot, event) =>
+      reduceWorkspaceFeed(snapshot, {
+        type: "message",
+        message: eventMessage(event),
+      }),
+    initialWorkspaceFeedSnapshot("ws_1"),
+  );
 
   expect(first.workspace.throughGlobalPosition).toBe(2);
   expect(first.events.map((event) => event.id)).toEqual(["event-2", "event-1"]);
-  expect(first.playback).toEqual(playback);
-  expect(first.fidelity).toEqual(fidelity);
 
   const duplicate = reduceWorkspaceFeed(first, {
     type: "message",
@@ -50,20 +30,6 @@ test("Workspace feed resets and orders the CloudEvents that drive the canvas", (
   ]);
   expect(duplicate.workspace).toBe(first.workspace);
 
-  const restarted = reduceWorkspaceFeed(first, {
-    type: "reset",
-    messages: [
-      eventMessage(cloudEvent(3)),
-      {
-        type: "ready",
-        throughGlobalPosition: 3,
-      },
-    ],
-    playback,
-    fidelity,
-  });
-
-  expect(restarted.events.map((event) => event.id)).toEqual(["event-3"]);
 });
 
 test("skips replayed events already incorporated, even outside the id window", () => {

@@ -16,13 +16,6 @@ import type {
   WorkspaceBooking,
   WorkspaceRun,
 } from "@/lib/workspace";
-import type {
-  ScenarioFidelity,
-  ScenarioPlaybackSnapshot,
-} from "@/lib/workspace/playback";
-import type { WorkspacePlaybackControls } from "@/lib/workspace/react";
-
-import { ScenarioControls } from "./ScenarioControls";
 import { WorkspaceEventFeed } from "./WorkspaceEventFeed";
 
 const BASE_PIXELS_PER_MINUTE = 24;
@@ -32,16 +25,10 @@ const QUEUE_CAPACITY = 4;
 const LANE_LABEL_WIDTH = 224;
 
 export function WorkspaceCanvas({
-  controls,
   events,
-  fidelity,
-  playback,
   workspace,
 }: {
-  controls: WorkspacePlaybackControls | null;
   events: readonly CloudEvent[];
-  fidelity: ScenarioFidelity | null;
-  playback: ScenarioPlaybackSnapshot | null;
   workspace: Workspace;
 }) {
   const now = Date.now();
@@ -65,9 +52,6 @@ export function WorkspaceCanvas({
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-base font-semibold tracking-tight">Workspace</h1>
           <div className="flex items-center gap-5">
-            {playback && controls ? (
-              <ScenarioControls playback={playback} controls={controls} />
-            ) : null}
             <span className="font-mono text-xs text-muted-foreground">
               {workspace.id}
             </span>
@@ -128,7 +112,7 @@ export function WorkspaceCanvas({
             available={workspace.offersAvailable}
           />
         </div>
-        <WorkspaceEventFeed events={events} fidelity={fidelity} />
+        <WorkspaceEventFeed events={events} />
       </div>
     </div>
   );
