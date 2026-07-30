@@ -104,6 +104,7 @@ walkthrough with expected output, see
 | Install, start, health checks | [install and configuration](docs/production/install-configuration.md) |
 | First local evaluation on Docker | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
 | CLI commands and environment | [CLI reference](docs/reference/cli.md) |
+| Deterministic scenarios and replay | [Mercator Lab](docs/reference/mercator-lab.md) |
 | HTTP and OpenAPI routes | [OpenAPI overview](docs/reference/openapi.md) |
 | Workload and run lifecycle | [workload and run lifecycle](docs/production/workload-run-lifecycle.md) |
 | Authentication and workspaces | [authentication and workspaces](docs/production/authentication-workspaces.md) |

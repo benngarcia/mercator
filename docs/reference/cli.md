@@ -1,11 +1,13 @@
 # CLI Reference
 
-The `mercator` binary has three modes:
+The `mercator` binary has four modes:
 
 - `mercator serve [--dev]` starts the HTTP API and embedded console. `--dev`
   adds a loopback-only browser session for local development.
 - `mercator verify --spec FILE` starts an isolated broker and launches a real,
   bounded provider conformance Run.
+- `mercator lab <command>` authors, executes, replays, minimizes, and proves
+  deterministic scenarios. See [Mercator Lab](mercator-lab.md).
 - Every other command (`run`, `sink`, `login`, `context`, ...) targets an
   existing Mercator API and prints JSON responses.
 
@@ -125,6 +127,15 @@ mercator run decision
 mercator run refresh
 mercator run cancel
 ```
+
+`mercator run list` returns at most 50 Runs by default. A response with
+`next_cursor` has another page:
+
+```sh
+mercator run list --limit 100 --cursor "$NEXT_CURSOR"
+```
+
+Treat the cursor as opaque and pass it back unchanged.
 
 Follow-up commands after the README quickstart. Each one defaults the
 workspace and the run, so nothing here restates an id:

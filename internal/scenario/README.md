@@ -45,8 +45,9 @@ Fixture parse, schema, and coherence errors always fail. Missing capabilities
 only explain why valid executed expectations remain red.
 
 The 12 top-level Placement Blueprints remain four green and eight target.
-`demos/artifact-warmth-restart.json` is the complete 15-checkpoint target for
-Mercator Lab.
+`demos/artifact-warmth-restart.json` is Mercator Lab's complete
+15-checkpoint green demonstration. `mercator lab promote` accepts its
+classification change only when one Run Bundle proves every checkpoint.
 
 ## Placement fixture shape
 

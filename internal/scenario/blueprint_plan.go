@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/orchestrator"
 )
@@ -9,27 +10,47 @@ import (
 type ArrivalType string
 
 const (
-	ArrivalFixed ArrivalType = "fixed"
+	ArrivalFixed    ArrivalType = "fixed"
+	ArrivalPeriodic ArrivalType = "periodic"
+	ArrivalBurst    ArrivalType = "burst"
 )
 
 // ArrivalPlan authors exogenous Run arrivals. Later schema-compatible fields
 // add periodic and burst families without changing the execution seam.
 type ArrivalPlan struct {
-	Type ArrivalType      `json:"type"`
-	Runs []RunArrivalSpec `json:"runs"`
+	Type     ArrivalType      `json:"type"`
+	Runs     []RunArrivalSpec `json:"runs,omitempty"`
+	Periodic *RunFamilySpec   `json:"periodic,omitempty"`
+	Burst    *RunFamilySpec   `json:"burst,omitempty"`
 }
 
 type RunArrivalSpec struct {
 	Name    string      `json:"name"`
+	Group   string      `json:"group,omitempty"`
 	At      Duration    `json:"at"`
 	Request RequestSpec `json:"request"`
+}
+
+type RunFamilySpec struct {
+	NamePrefix string      `json:"name_prefix"`
+	Group      string      `json:"group,omitempty"`
+	At         Duration    `json:"at"`
+	Interval   Duration    `json:"interval"`
+	Count      int         `json:"count"`
+	Request    RequestSpec `json:"request"`
 }
 
 type FaultAction string
 
 const (
 	FaultLoseResponse        FaultAction = "lose_response"
+	FaultDelayResponse       FaultAction = "delay_response"
+	FaultDuplicateResponse   FaultAction = "duplicate_response"
+	FaultRejectCommand       FaultAction = "reject_command"
+	FaultLoseCallback        FaultAction = "lose_callback"
+	FaultDelayCallback       FaultAction = "delay_callback"
 	FaultDuplicateCallback   FaultAction = "duplicate_callback"
+	FaultReorderCallback     FaultAction = "reorder_callback"
 	FaultRestartControlPlane FaultAction = "restart_control_plane"
 )
 
@@ -37,6 +58,7 @@ type FaultSpec struct {
 	ID      string           `json:"id"`
 	Trigger FaultTriggerSpec `json:"trigger"`
 	Action  FaultAction      `json:"action"`
+	Delay   *Duration        `json:"delay,omitempty"`
 }
 
 type FaultTriggerSpec struct {
@@ -90,15 +112,13 @@ type ProofCheckpoint struct {
 }
 
 func (plan ArrivalPlan) validate(world WorldSpec) error {
-	if plan.Type != ArrivalFixed {
-		return fmt.Errorf("arrival type must be %q, got %q", ArrivalFixed, plan.Type)
-	}
-	if len(plan.Runs) == 0 {
-		return fmt.Errorf("arrival plans need at least one Run")
+	runs, err := plan.ExpandedRuns()
+	if err != nil {
+		return err
 	}
 	names := map[string]bool{}
 	producers := map[string]string{}
-	for _, arrival := range plan.Runs {
+	for _, arrival := range runs {
 		if arrival.Name == "" {
 			return fmt.Errorf("Run arrivals need a name")
 		}
@@ -122,9 +142,61 @@ func (plan ArrivalPlan) validate(world WorldSpec) error {
 	return nil
 }
 
+func (plan ArrivalPlan) ExpandedRuns() ([]RunArrivalSpec, error) {
+	switch plan.Type {
+	case ArrivalFixed:
+		if len(plan.Runs) == 0 || plan.Periodic != nil || plan.Burst != nil {
+			return nil, fmt.Errorf("fixed arrival plans need Runs and no family")
+		}
+		return append([]RunArrivalSpec(nil), plan.Runs...), nil
+	case ArrivalPeriodic:
+		if len(plan.Runs) > 0 || plan.Periodic == nil || plan.Burst != nil {
+			return nil, fmt.Errorf("periodic arrival plans need exactly one periodic family")
+		}
+		return expandRunFamily(*plan.Periodic, false)
+	case ArrivalBurst:
+		if len(plan.Runs) > 0 || plan.Burst == nil || plan.Periodic != nil {
+			return nil, fmt.Errorf("burst arrival plans need exactly one burst family")
+		}
+		return expandRunFamily(*plan.Burst, true)
+	default:
+		return nil, fmt.Errorf("unknown arrival type %q", plan.Type)
+	}
+}
+
+func expandRunFamily(family RunFamilySpec, burst bool) ([]RunArrivalSpec, error) {
+	if family.NamePrefix == "" || family.Count <= 0 {
+		return nil, fmt.Errorf("arrival families need a name_prefix and positive count")
+	}
+	if family.At.Duration() < 0 || family.Interval.Duration() < 0 {
+		return nil, fmt.Errorf("arrival family timing cannot be negative")
+	}
+	if !burst && family.Interval.Duration() <= 0 {
+		return nil, fmt.Errorf("periodic arrival families need a positive interval")
+	}
+	runs := make([]RunArrivalSpec, family.Count)
+	for index := range runs {
+		at := family.At.Duration()
+		if !burst {
+			at += time.Duration(index) * family.Interval.Duration()
+		}
+		runs[index] = RunArrivalSpec{
+			Name:    fmt.Sprintf("%s-%03d", family.NamePrefix, index+1),
+			Group:   family.Group,
+			At:      Duration(at),
+			Request: family.Request,
+		}
+	}
+	return runs, nil
+}
+
 func (plan ArrivalPlan) runNames() map[string]bool {
-	names := make(map[string]bool, len(plan.Runs))
-	for _, arrival := range plan.Runs {
+	runs, err := plan.ExpandedRuns()
+	if err != nil {
+		return nil
+	}
+	names := make(map[string]bool, len(runs))
+	for _, arrival := range runs {
 		names[arrival.Name] = true
 	}
 	return names
@@ -144,9 +216,24 @@ func validateFaults(faults []FaultSpec, runs map[string]bool) error {
 			return fmt.Errorf("fault %q references unknown Run %q", fault.ID, fault.Trigger.Run)
 		}
 		switch fault.Action {
-		case FaultLoseResponse, FaultDuplicateCallback:
+		case FaultLoseResponse,
+			FaultDuplicateResponse,
+			FaultRejectCommand,
+			FaultLoseCallback,
+			FaultDuplicateCallback,
+			FaultReorderCallback:
 			if fault.Trigger.Operation == "" {
 				return fmt.Errorf("fault %q needs trigger.operation", fault.ID)
+			}
+			if fault.Delay != nil {
+				return fmt.Errorf("fault %q action %q does not accept delay", fault.ID, fault.Action)
+			}
+		case FaultDelayResponse, FaultDelayCallback:
+			if fault.Trigger.Operation == "" {
+				return fmt.Errorf("fault %q needs trigger.operation", fault.ID)
+			}
+			if fault.Delay == nil || fault.Delay.Duration() <= 0 {
+				return fmt.Errorf("fault %q action %q needs a positive delay", fault.ID, fault.Action)
 			}
 		case FaultRestartControlPlane:
 			if fault.Trigger.Event == "" {
@@ -154,6 +241,9 @@ func validateFaults(faults []FaultSpec, runs map[string]bool) error {
 			}
 			if !orchestrator.IsRunEventType(fault.Trigger.Event) {
 				return fmt.Errorf("fault %q triggers on unknown event %q", fault.ID, fault.Trigger.Event)
+			}
+			if fault.Delay != nil {
+				return fmt.Errorf("fault %q action %q does not accept delay", fault.ID, fault.Action)
 			}
 		default:
 			return fmt.Errorf("fault %q has unknown action %q", fault.ID, fault.Action)

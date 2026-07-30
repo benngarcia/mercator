@@ -344,7 +344,12 @@ func (s *Service) IDInUse(ctx context.Context, workspaceID, connectionID string)
 
 func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error) {
 	states := make(map[string]*connectionState)
-	for event, err := range eventlog.ScanAll(ctx, s.log, eventlog.EventFilter{WorkspaceID: workspaceID, StreamTypes: []string{"connection"}}) {
+	filter := eventlog.EventFilter{WorkspaceID: workspaceID, StreamTypes: []string{"connection"}}
+	head, err := s.log.LatestPosition(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	for event, err := range eventlog.ScanAll(ctx, s.log, head, filter) {
 		if err != nil {
 			return nil, err
 		}

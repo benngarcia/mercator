@@ -48,13 +48,40 @@ The core implementation rule is:
   placement scenarios load through Blueprint v1 while preserving four green
   and eight target classifications. The catalog also validates the complete
   15-checkpoint target demonstration and its UI sidecar.
-- [ ] Slice 02: stable read models.
-- [ ] Slice 03: deterministic kernel, entropy, and World Tape.
-- [ ] Slice 04: World Truth, Observed State, effects, and real control plane.
-- [ ] Slice 05: invariants, metamorphic tests, and reference solver.
-- [ ] Slice 06: generators, fuzzing, and semantic shrinking.
-- [ ] Slice 07: Lab server and normal UI path.
-- [ ] Slice 08: complete vertical proof, CI tiers, and documentation.
+- [x] 2026-07-23: Complete Slice 02 stable read models. Global scans stop at
+  a captured filtered head. The SQLite Run projection commits with every Run
+  fact, including the coupled Rental Schedule transaction, and serves bounded
+  cursor pages plus the open-Run index. Existing databases rebuild once from
+  the event log before the daemon serves requests.
+- [x] 2026-07-24: Complete Slice 03 deterministic kernel, entropy, World
+  Tape, and Run Bundle skeleton. Execution owns immutable copies of its inputs,
+  enforces every configured limit, and supports step, duration, event,
+  predicate, and quiescence drives. Replay accepts only the strict, canonical
+  uncompressed tar contract.
+- [x] 2026-07-24: Complete Slice 04 World Truth, Observed State, effects,
+  Artifact and Cache Mount consequences, and real Level 1 control plane. The
+  Lab now runs the production scheduler, orchestrator, reconciliation, SQLite
+  event log, durable Run projection, and Rental Schedule store against a
+  simulated provider. Deterministic restart reconstructs the control plane
+  while preserving external executions.
+- [x] 2026-07-24: Complete Slice 05 transition-time invariants, bounded
+  liveness, reusable metamorphic checks, and the independent small-world
+  Placement solver. Sixteen default invariants run after every transition,
+  carry stable IDs, and persist their latest result in the Run Bundle.
+- [x] 2026-07-24: Complete Slice 06 typed generation, Go fuzzing, and
+  deterministic semantic shrinking. Generated Blueprints cover provider
+  catalogs, Rentals, exact image graphs, Artifact DAGs, workload phases,
+  candidate runtime models, path throughput, three arrival families, and
+  provider faults.
+- [x] 2026-07-24: Complete Slice 07 isolated Lab server, normal API/SSE
+  console path, and catalog-driven Playwright proof. `mercator lab serve`
+  composes the real control plane behind six authenticated Lab-only routes;
+  the production daemon and OpenAPI contract have no Lab mounting seam. The
+  console now has one live event path after deleting transcript playback.
+- [x] 2026-07-24: Complete Slice 08 vertical proof, portable UI evidence,
+  exact replay, operator commands, CI tiers, and fidelity documentation. The
+  proof-gated promotion command passed all 15 checkpoints against the real
+  Playwright Run Bundle before the demo moved from target to green.
 
 ## Current architecture evidence
 
@@ -66,9 +93,9 @@ The core implementation rule is:
   simulated state, so truth and observations are currently the same object.
 - intake IDs and several HTTP/SSE identities still use nondeterministic UUIDs.
 - daemon reconciliation and dashboard playback use wall-clock tickers.
-- `GET /v1/runs` rebuilds state by scanning the full event history. #142 and
-  #140 define the bounded scan and durable projection work needed before Lab can
-  compare projection rebuilds.
+- before Slice 02, `GET /v1/runs` rebuilt state by scanning the full event
+  history. #142 and #140 now resolve through snapshot-bounded scans and the
+  atomic indexed Run projection.
 - dashboard playback owns three hard-coded transcripts and a special 250 ms SSE
   path beside the normal API/SSE feed.
 - the current top-level placement corpus contains 12 scenarios: four green and
@@ -105,6 +132,286 @@ bun run build
 git diff --check
 ```
 
+### Slice 02
+
+On 2026-07-23, the exact reviewed worktree passed:
+
+```text
+go generate ./...
+go test ./...
+go vet ./...
+go build ./...
+go test -race ./internal/eventlog ./internal/storage/sqlite ./internal/orchestrator ./internal/httpapi ./internal/daemon ./internal/cli ./internal/rentalschedule ./internal/broker
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice02
+scripts/check-open-source-launch.sh
+git diff --check
+```
+
+A temporary local measurement issued 500 indexed reads of the first 50-Run
+page, then deleted the measurement harness:
+
+```text
+5,000 Runs:  69.215us per page
+50,000 Runs: 59.395us per page
+```
+
+The stable primary-key cursor keeps page work independent of total Run history.
+
+### Slice 03
+
+On 2026-07-24, the exact reviewed worktree passed:
+
+```text
+go test ./internal/lab ./internal/scenario -count=1
+go test -race ./internal/lab ./internal/scenario -count=1
+go generate ./...
+go test ./...
+go vet ./...
+go build ./...
+cd web/app
+bun install --frozen-lockfile
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice03
+scripts/check-open-source-launch.sh
+MERCATOR_BROWSER_TEST=1 go test -count=1 ./internal/httpapi -run '^TestConsoleRunsNavigation$'
+git diff --check
+```
+
+The browser test needed an unsandboxed local rerun because Chromium's macOS
+Mach-port registration is denied inside the command sandbox. The same test
+then passed in 5.981 seconds.
+
+### Slice 04
+
+On 2026-07-24, the exact reviewed worktree passed:
+
+```text
+go test -race ./internal/lab ./internal/scenario -count=1
+go test ./...
+go vet ./...
+go build ./...
+cd web/app
+bun install --frozen-lockfile
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice04
+scripts/check-open-source-launch.sh
+MERCATOR_BROWSER_TEST=1 go test -count=1 ./internal/httpapi -run '^TestConsoleRunsNavigation$'
+git diff --check
+```
+
+The browser test again needed an unsandboxed local rerun because Chromium's
+macOS Mach-port registration is denied inside the command sandbox. The same
+test then passed in 5.920 seconds.
+
+World Tape v2 records actual Run runtime as sampled exogenous reality instead
+of deriving it from Mercator's prediction. Simultaneous arrivals preserve
+Blueprint order and receive global sequence numbers after time ordering.
+Artifact replicas are immutable facts keyed by Artifact ID; Cache Mounts remain
+mutable facts keyed only by mount name and node. The Run Bundle now carries
+public Mercator events, effects, prediction-versus-actual records, and summary
+metrics without private event data or effect secrets.
+
+### Slice 05
+
+On 2026-07-24, the exact reviewed worktree passed:
+
+```text
+go test -race ./internal/lab ./internal/scenario ./internal/scheduler -count=1
+go test ./...
+go vet ./...
+go build ./...
+cd web/app
+bun install --frozen-lockfile
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice05
+scripts/check-open-source-launch.sh
+MERCATOR_BROWSER_TEST=1 go test -count=1 ./internal/httpapi -run '^TestConsoleRunsNavigation$'
+git diff --check
+```
+
+The browser test passed outside the command sandbox in 6.130 seconds. The
+default registry covers 11 safety properties and five bounded liveness
+properties. Each liveness result records its assumptions and virtual-time
+bound. The suite includes one passing canonical execution and a deliberately
+failing fixture for every default invariant.
+
+Seven reusable metamorphic checks cover offer order, dominated candidates,
+image warming, bandwidth reduction, duplicate delivery, control-plane restart,
+and projection rebuild. A deliberately bounded, independent Placement solver
+enumerates feasible candidates and scores small worlds without calling private
+production scheduler functions. It fails loudly for dimensions outside its
+documented oracle subset.
+
+The Artifact dependency invariant exposed a real behavior gap: the dependent
+consumer entered placement before its immutable input existed. Run arrivals
+with unresolved Artifact inputs now remain pending at the Lab admission
+boundary and enter the real control plane only after the simulated Artifact
+store contains a replica.
+
+### Slice 06
+
+On 2026-07-24, the exact reviewed worktree passed:
+
+```text
+go test -race ./internal/scenario ./internal/lab -count=1
+go test ./...
+go vet ./...
+go build ./...
+go test ./internal/lab -run '^$' -fuzz '^FuzzGeneratedBlueprintCompilesAndPreservesInvariants$' -fuzztime=5s -parallel=1
+cd web/app
+bun install --frozen-lockfile
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice06
+scripts/check-open-source-launch.sh
+MERCATOR_BROWSER_TEST=1 go test -count=1 ./internal/httpapi -run '^TestConsoleRunsNavigation$'
+git diff --check
+```
+
+The bounded fuzz campaign completed its three seed cases and five generated
+executions in 6.600 seconds with one worker. The browser test passed outside
+the command sandbox in 5.935 seconds.
+
+`scenario.GenerateBlueprint` derives every choice from `seed + semantic key`;
+adding an unrelated generated value leaves existing samples unchanged. Fixed,
+periodic, and burst arrival plans expand into the same ordered Run arrival
+contract. Candidate-specific actual runtime ranges compile into policy-neutral
+World Tape samples, and the selected offer chooses the matching actual without
+consulting Mercator's prediction.
+
+`scenario.ShrinkBlueprint` removes timeline operations, Runs, Rentals, provider
+offers, image layers, Artifacts, faults, and optional fields. It validates each
+candidate and keeps a reduction only when the supplied failure fingerprint
+still reproduces. The provider-rejection campaign case is persisted as
+`scenarios/minimized/provider-rejection-single-run.json`; it is irreducible
+under its fingerprint and reproduces byte-equivalent normalized output from
+one Run Bundle.
+
+### Slice 07
+
+On 2026-07-24, the exact reviewed worktree passed:
+
+```text
+go test -race ./internal/lab ./internal/scenario ./internal/httpapi ./internal/daemon ./cmd/mercator -count=1
+go test ./...
+go vet ./...
+go build ./...
+cd web/app
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice07
+scripts/check-open-source-launch.sh
+MERCATOR_BROWSER_TEST=1 go test -count=1 ./internal/lab -run '^TestLabConsoleUsesNormalAPIAndSSE$' -v
+git diff --check
+```
+
+The Playwright proof passed outside the command sandbox in 7.660 seconds.
+Playwright called authenticated `/v1/lab/drive` and `/v1/lab/restart` routes
+while the embedded console consumed the production `/v1/runs` API and
+`/v1/console/events` SSE feed. Both catalog Runs reached `succeeded`; the test
+reported no console, page, or HTTP failures. The proof retained two curated
+catalog-sidecar screenshots, a 3.7 MB Playwright trace, and a replayable 45 KB
+Run Bundle under the ignored `output/playwright-lab` directory.
+
+A live `mercator lab serve` process also returned `200` from production health,
+`401` from an unauthenticated Lab route, and a typed status document from the
+same route with its operator bearer token. The production handler returns
+`404` for that path and has no Lab dependency, flag, environment variable, or
+OpenAPI operation.
+
+The replacement deleted 2,596 lines of transcript generation, playback state,
+parallel SSE framing, frontend controls, and playback-only browser automation.
+The catalog Blueprint plus UI sidecar now drives the same live control plane and
+console used by the browser proof.
+
+### Slice 08
+
+The final slice records every external drive and restart in the Run Bundle,
+uploads the Playwright trace and curated screenshots into that same archive,
+and reconstructs the recorded control sequence with one command. Normalization
+compares public state and world-mutating consequences while excluding
+presentation bytes, read-only provider observations, execution-control shape,
+and behavior-preserving restarts.
+
+`mercator lab author`, `generate`, `run`, `replay`, `minimize`, and `promote`
+cover the complete operator lifecycle. Promotion compares the bundle's
+Blueprint with the target and runs all 15 executable proof checkpoints before
+it can clear missing capabilities.
+
+Pull requests run focused Lab race tests, a short generated-world fuzz
+campaign, and the Playwright proof. The scheduled `Lab Campaigns` workflow
+runs longer generated and scenario fuzz campaigns plus the browser proof.
+
+The fidelity reference distinguishes deterministic L0-L2 evidence, the
+current process and browser portion of L3, bounded real-provider L4
+conformance, and future L5 telemetry calibration. The simulated provider
+implements the production `adapter.Provider` seam but does not claim protocol
+compatibility.
+
+On 2026-07-24, the final local worktree passed:
+
+```text
+go generate ./...
+go test ./...
+go vet ./...
+go build ./...
+go test -race ./internal/lab ./internal/scenario ./internal/httpapi ./internal/daemon ./internal/cli ./cmd/mercator -count=1
+go test ./internal/lab -run '^$' -fuzz '^FuzzGeneratedBlueprintCompilesAndPreservesInvariants$' -fuzztime=10s -parallel=1
+cd web/app
+bun install --frozen-lockfile
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci <temporary-directory>
+scripts/check-open-source-launch.sh
+git diff --check
+```
+
+The fuzz campaign reported 384 executions and four retained corpus cases in
+11.606 seconds. Vitest passed 11 tests in five files. Release archive
+construction produced all four OS and architecture combinations.
+
+The upgraded Playwright flow passed outside the command sandbox in 7.960
+seconds and produced a bundle containing `drives.jsonl`, its trace, and two
+curated PNG screenshots. `mercator lab replay` reconstructed that bundle and
+matched normalized output. The proof-gated promotion command reported all 15
+checkpoints passing before the catalog classification changed to green.
+
+A later final browser rerun could not start Chromium inside the macOS sandbox
+because Mach-port registration returned `Permission denied (1100)`, and the
+current escalation policy rejected the unsandboxed rerun. Pull-request CI runs
+the same browser proof on Linux and is the final authoritative browser gate.
+
 ## Public contracts
 
 ### Scenario catalog
@@ -128,9 +435,14 @@ func (e *Execution) Drive(
     DriveCommand,
 ) (Checkpoint, error)
 
+func (e *Execution) DriveToCompletion(context.Context) (Checkpoint, error)
 func (e *Execution) Restart(context.Context) error
 func (e *Execution) Export(context.Context) (RunBundle, error)
 func (e *Execution) Close() error
+
+func DecodeRunBundle([]byte) (RunBundle, error)
+func Reconstruct(context.Context, RunBundle) (*Execution, error)
+func VerifyVerticalProof(context.Context, RunBundle) (ProofReport, error)
 ```
 
 The kernel queue, continuations, truth store, observation store, effect
@@ -145,6 +457,7 @@ manifest.json
 configuration.json
 blueprint.json
 world-tape.json
+drives.jsonl
 samples.jsonl
 events/mercator.jsonl
 events/world.jsonl
@@ -316,5 +629,17 @@ keeps #146 open.
   boundaries and missing read models, not from a need to replace the runner.
 - The console reducer and normal SSE client are reusable. The dashboard
   transcript and playback protocol are the parallel path to delete.
+- Blueprint values need explicit JSON marshaling for durations, relative
+  moments, and exact numeric bounds. Without those reciprocal encoders, a
+  bundle can serialize a valid in-memory Blueprint into a document its strict
+  decoder cannot replay.
+- Repeated-event livelock detection must include virtual time. Identical
+  periodic events at different timestamps are progress; only consecutive
+  identical transitions at one timestamp count toward the repeated-event
+  limit.
+- Lab restart replaces the HTTP handler's orchestrator reference after the
+  execution kernel reconstructs the control plane. Existing SSE readers remain
+  attached to the durable event log; later API requests cannot retain the
+  pre-restart orchestrator object.
 
 Add dated findings here as implementation changes the plan.

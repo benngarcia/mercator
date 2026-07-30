@@ -11,7 +11,13 @@ import (
 
 type Store interface {
 	List(ctx context.Context, workspaceID string) (map[string]domain.RentalSchedule, error)
-	Commit(ctx context.Context, event eventlog.AppendRequest, expectedVersion uint64, next domain.RentalSchedule) (eventlog.AppendResult, error)
+	Commit(
+		ctx context.Context,
+		event eventlog.AppendRequest,
+		expectedVersion uint64,
+		next domain.RentalSchedule,
+		run domain.RunRecord,
+	) (eventlog.AppendResult, error)
 }
 
 type Memory struct {
@@ -39,7 +45,13 @@ func (store *Memory) List(_ context.Context, workspaceID string) (map[string]dom
 	return result, nil
 }
 
-func (store *Memory) Commit(ctx context.Context, event eventlog.AppendRequest, expectedVersion uint64, next domain.RentalSchedule) (eventlog.AppendResult, error) {
+func (store *Memory) Commit(
+	ctx context.Context,
+	event eventlog.AppendRequest,
+	expectedVersion uint64,
+	next domain.RentalSchedule,
+	_ domain.RunRecord,
+) (eventlog.AppendResult, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if err := validCommit(event, expectedVersion, next); err != nil {

@@ -30,7 +30,7 @@ func TestScanAllContinuesAfterShortPages(t *testing.T) {
 	}}
 
 	var eventIDs []string
-	for event, err := range ScanAll(context.Background(), reader, EventFilter{}) {
+	for event, err := range ScanAll(context.Background(), reader, 3, EventFilter{}) {
 		if err != nil {
 			t.Fatalf("scan all: %v", err)
 		}
@@ -49,13 +49,29 @@ func TestCompleteScansRejectNonAdvancingReaders(t *testing.T) {
 	}
 
 	var globalErr error
-	for _, err := range ScanAll(context.Background(), reader, EventFilter{}) {
+	for _, err := range ScanAll(context.Background(), reader, 2, EventFilter{}) {
 		if err != nil {
 			globalErr = err
 		}
 	}
 	if globalErr == nil || !strings.Contains(globalErr.Error(), "did not advance") {
 		t.Fatalf("global error = %v, want cursor progress error", globalErr)
+	}
+}
+
+func TestScanAllStopsAtSnapshotWhileReaderKeepsAppending(t *testing.T) {
+	reader := &growingPageReader{}
+
+	var positions []GlobalPosition
+	for event, err := range ScanAll(context.Background(), reader, 3, EventFilter{}) {
+		if err != nil {
+			t.Fatalf("scan all: %v", err)
+		}
+		positions = append(positions, event.GlobalPosition)
+	}
+
+	if len(positions) != 3 || positions[2] != 3 {
+		t.Fatalf("positions = %v, want snapshot through position 3", positions)
 	}
 }
 
@@ -89,4 +105,11 @@ func (stalledReader) ReadStream(_ context.Context, _ StreamKey, _ uint64, _ int)
 
 func (stalledReader) ReadAll(_ context.Context, _ GlobalPosition, _ int, _ EventFilter) ([]StoredEvent, error) {
 	return []StoredEvent{{ID: "evt_stalled", GlobalPosition: 1}}, nil
+}
+
+type growingPageReader struct{}
+
+func (r *growingPageReader) ReadAll(_ context.Context, after GlobalPosition, _ int, _ EventFilter) ([]StoredEvent, error) {
+	next := after + 1
+	return []StoredEvent{{ID: "evt_growing", GlobalPosition: next}}, nil
 }

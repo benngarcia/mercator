@@ -12,7 +12,6 @@ import (
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/reporting"
-	"github.com/benngarcia/mercator/internal/scenario"
 	sinkspkg "github.com/benngarcia/mercator/internal/sinks"
 	"github.com/benngarcia/mercator/internal/workload"
 	"github.com/benngarcia/mercator/internal/workspace"
@@ -60,7 +59,6 @@ type Deps struct {
 	Resolver     ImageResolver
 	Workspaces   *workspace.SQLiteCatalog
 	Events       ConsoleEventLog
-	Scenarios    *scenario.DashboardPlayback
 }
 
 type Server struct {
@@ -73,7 +71,6 @@ type Server struct {
 	resolver     ImageResolver
 	workspaces   *workspace.SQLiteCatalog
 	events       ConsoleEventLog
-	scenarios    *scenario.DashboardPlayback
 	offerCatalog *offerCatalog
 	verifier     connectionVerifier
 	security     securityConfig
@@ -146,7 +143,6 @@ func New(deps Deps, options ...Option) http.Handler {
 		resolver:   deps.Resolver,
 		workspaces: deps.Workspaces,
 		events:     deps.Events,
-		scenarios:  deps.Scenarios,
 	}
 	if deps.Offers != nil {
 		s.offerCatalog = newOfferCatalog(deps.Offers, offerObservationInterval)

@@ -26,7 +26,8 @@ func TestMemoryStoreCommitsScheduleWithRunEvent(t *testing.T) {
 		t.Fatalf("reserve: %v", err)
 	}
 
-	_, err = store.Commit(t.Context(), appendRequest(now), 0, next)
+	run := domain.RunRecord{ID: "run-1", WorkspaceID: "ws-1", Phase: "launching"}
+	_, err = store.Commit(t.Context(), appendRequest(now), 0, next, run)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -46,7 +47,7 @@ func TestMemoryStoreCommitsScheduleWithRunEvent(t *testing.T) {
 	stale.CommandKey = "run-1:place-stale"
 	stale.RequestHash = "sha256:stale"
 	stale.Events[0].ID = "evt-ws-1-run-1-booking-stale"
-	_, err = store.Commit(t.Context(), stale, 0, next)
+	_, err = store.Commit(t.Context(), stale, 0, next, run)
 	if !errors.Is(err, eventlog.ErrConcurrencyConflict) {
 		t.Fatalf("stale commit error = %v", err)
 	}

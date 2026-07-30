@@ -1,18 +1,8 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "classification": "target",
+  "classification": "green",
   "kind": "demo",
   "summary": "A producer publishes an immutable Artifact on a partly warm Rental; its dependent consumer then prefers the same warm capacity, survives ambiguous provider delivery and a deterministic control-plane restart, and reaches the same replayable terminal result.",
-  "missing_capabilities": [
-    "artifacts",
-    "artifact_evidence",
-    "lab_execution",
-    "effect_ledger",
-    "control_plane_restart",
-    "run_bundle",
-    "invariants",
-    "lab_ui"
-  ],
   "seed": "mercator-lab-vertical-v1",
   "world": {
     "images": {

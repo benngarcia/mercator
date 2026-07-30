@@ -172,8 +172,8 @@ func TestCatalogPinsCompleteArtifactWarmthRestartDemonstration(t *testing.T) {
 		EvidenceBundleReplayed,
 		EvidenceInvariantsPassed,
 	}
-	if entry.Blueprint.Classification != ClassificationTarget {
-		t.Errorf("classification = %q, want target", entry.Blueprint.Classification)
+	if entry.Blueprint.Classification != ClassificationGreen {
+		t.Errorf("classification = %q, want green", entry.Blueprint.Classification)
 	}
 	if entry.Blueprint.Kind != KindDemo {
 		t.Errorf("kind = %q, want demo", entry.Blueprint.Kind)
@@ -244,5 +244,51 @@ func TestCatalogFaultsTriggerOnEventsMercatorRecords(t *testing.T) {
 				t.Errorf("Blueprint %q fault %q triggers on unrecorded event %q", entry.Blueprint.Name, fault.ID, fault.Trigger.Event)
 			}
 		}
+	}
+}
+
+func TestEncodeBlueprintRoundTripsThePublicContract(t *testing.T) {
+	blueprint, err := LoadBlueprint("scenarios/demos/artifact-warmth-restart.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+	encoded, err := EncodeBlueprint(blueprint)
+	if err != nil {
+		t.Fatalf("encode Blueprint: %v", err)
+	}
+	decoded, err := DecodeBlueprint("round-trip.json", encoded)
+	if err != nil {
+		t.Fatalf("decode Blueprint: %v", err)
+	}
+
+	if decoded.Name != "round-trip" {
+		t.Fatalf("decoded name = %q", decoded.Name)
+	}
+	if decoded.Schema != blueprint.Schema || decoded.Seed != blueprint.Seed {
+		t.Fatalf("decoded Blueprint = %+v", decoded)
+	}
+}
+
+func TestPromoteBlueprintClearsOnlyTheTargetClassificationDebt(t *testing.T) {
+	blueprint, err := LoadBlueprint("scenarios/demos/artifact-warmth-restart.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+	blueprint.Classification = ClassificationTarget
+	blueprint.MissingCapabilities = []Capability{CapabilityLabUI}
+
+	promoted, err := PromoteBlueprint(blueprint)
+	if err != nil {
+		t.Fatalf("promote Blueprint: %v", err)
+	}
+
+	if promoted.Classification != ClassificationGreen {
+		t.Fatalf("classification = %q", promoted.Classification)
+	}
+	if len(promoted.MissingCapabilities) != 0 {
+		t.Fatalf("missing capabilities = %v", promoted.MissingCapabilities)
+	}
+	if promoted.Seed != blueprint.Seed || len(promoted.Proof) != len(blueprint.Proof) {
+		t.Fatal("promotion changed executable scenario semantics")
 	}
 }

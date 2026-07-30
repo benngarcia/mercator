@@ -101,6 +101,29 @@ func TestRunDecisionDefaultsToTheLatestRun(t *testing.T) {
 	}
 }
 
+func TestLatestRunTraversesEveryProjectionPage(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		response.Header().Set("Content-Type", "application/json")
+		if request.URL.Query().Get("cursor") == "" {
+			_, _ = response.Write([]byte(`{"runs":[{"id":"run_a"}],"next_cursor":"run_a"}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"runs":[{"id":"run_z"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	runID, err := (&session{baseURL: server.URL, client: server.Client()}).latestRun(context.Background(), "ws_1")
+
+	if err != nil {
+		t.Fatalf("find latest Run: %v", err)
+	}
+	if runID != "run_z" || requests != 2 {
+		t.Fatalf("latest Run = %q after %d requests, want run_z after 2", runID, requests)
+	}
+}
+
 // Asking for one run in a workspace that has none must say so plainly instead
 // of sending an empty run id to the server.
 func TestRunGetSaysWhenThereIsNoRunToDefaultTo(t *testing.T) {
