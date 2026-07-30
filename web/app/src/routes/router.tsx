@@ -13,10 +13,12 @@ import { offersRoute } from "./offers";
 import { connectionsRoute } from "./connections";
 import { sinksRoute } from "./sinks";
 import { canvasRoute } from "./canvas";
+import { localityRoute } from "./locality";
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
   canvasRoute,
+  localityRoute,
   runsRoute,
   runsDetailRoute,
   offersRoute,
