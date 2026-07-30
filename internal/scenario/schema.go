@@ -1,23 +1,22 @@
-// Package scenario is the placement-scenario harness: a corpus of
-// fixture-defined worlds (rentals with running work, cached image layers and
-// named data caches, marketplace offers) plus incoming run requests, asserted
-// against the booking decisions Mercator records in its event log.
+// Package scenario owns the versioned Mercator Lab Blueprint catalog and the
+// placement-runner adapter. Blueprints describe digest-pinned images,
+// immutable Artifacts, mutable Cache Mounts, Rentals, provider capacity, Run
+// arrivals, faults, and public evidence.
 //
-// One scenario contract, two backends: decision correctness runs against
-// simulated capacity (the fake adapter's World); mechanism correctness against
-// real daemons is a later backend behind the same Session seam.
+// Placement decision correctness runs against simulated capacity through the
+// real orchestrator, Placement implementation, and SQLite event log. Later Lab
+// slices execute the same catalog through deterministic in-process and
+// process-backed worlds.
 //
-// Scenarios carry a status. Green scenarios assert current behavior and fail
-// CI on regression. Target scenarios encode the contract of unbuilt semantics
-// (Rental schedules, cache evidence, host facts); the runner reports their failures as
-// pending-red, and a target scenario that starts passing must be promoted.
+// Green classification fails on regression. Target classification records
+// unbuilt semantics as pending, and a target that starts passing must be
+// deliberately promoted.
 package scenario
 
 import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -64,23 +63,44 @@ const (
 	// time: dispatching the next Booking, expiring one past its latest
 	// start, and re-placing its Run.
 	CapabilityScheduleAdvancement Capability = "schedule_advancement"
-	// CapabilityCacheEvidence is named-cache hit/miss evidence recorded and
-	// scored per candidate.
-	CapabilityCacheEvidence Capability = "cache_evidence"
-	// CapabilityCacheMounts is the container spec carrying content-keyed
-	// cache mount declarations.
-	CapabilityCacheMounts Capability = "cache_mounts"
 	// CapabilityHostFacts is providers advertising SSH and NVIDIA-driver
 	// facts on offers, rejected loudly when absent or false.
 	CapabilityHostFacts Capability = "host_facts"
+	// CapabilityArtifacts is immutable Artifact production, dependency, and
+	// replica tracking.
+	CapabilityArtifacts Capability = "artifacts"
+	// CapabilityArtifactEvidence is per-candidate Artifact locality evidence.
+	CapabilityArtifactEvidence Capability = "artifact_evidence"
+	// CapabilityLabExecution is deterministic execution beyond one Placement
+	// decision.
+	CapabilityLabExecution Capability = "lab_execution"
+	// CapabilityEffectLedger is inspectable external commands and
+	// consequences.
+	CapabilityEffectLedger Capability = "effect_ledger"
+	// CapabilityControlPlaneRestart is deterministic restart with surviving
+	// external resources.
+	CapabilityControlPlaneRestart Capability = "control_plane_restart"
+	// CapabilityRunBundle is portable export, normalization, and replay.
+	CapabilityRunBundle Capability = "run_bundle"
+	// CapabilityInvariants is the transition-aware safety and bounded-liveness
+	// registry.
+	CapabilityInvariants Capability = "invariants"
+	// CapabilityLabUI is the Lab-backed normal HTTP/SSE and console path.
+	CapabilityLabUI Capability = "lab_ui"
 )
 
 var knownCapabilities = map[Capability]bool{
 	CapabilityRentalSchedule:      true,
 	CapabilityScheduleAdvancement: true,
-	CapabilityCacheEvidence:       true,
-	CapabilityCacheMounts:         true,
 	CapabilityHostFacts:           true,
+	CapabilityArtifacts:           true,
+	CapabilityArtifactEvidence:    true,
+	CapabilityLabExecution:        true,
+	CapabilityEffectLedger:        true,
+	CapabilityControlPlaneRestart: true,
+	CapabilityRunBundle:           true,
+	CapabilityInvariants:          true,
+	CapabilityLabUI:               true,
 }
 
 // MaxQueuedBookings bounds every RentalSchedule: at most this many queued
@@ -110,9 +130,16 @@ type Scenario struct {
 type WorldSpec struct {
 	Clock           time.Time              `json:"clock,omitzero"`
 	Images          map[string]ImageSpec   `json:"images,omitempty"`
+	Artifacts       []ArtifactSpec         `json:"artifacts,omitempty"`
 	Rentals         []RentalSpec           `json:"rentals,omitempty"`
 	RentalSchedules []RentalScheduleSpec   `json:"rental_schedules,omitempty"`
 	Marketplace     []MarketplaceOfferSpec `json:"marketplace,omitempty"`
+}
+
+// ArtifactSpec declares immutable, versioned content available to Runs.
+type ArtifactSpec struct {
+	ID   string   `json:"id"`
+	Size ByteSize `json:"size"`
 }
 
 // Start is the scripted clock's origin for this world.
@@ -127,11 +154,10 @@ type ImageSpec struct {
 	Layers []LayerSpec `json:"layers"`
 }
 
-// LayerSpec names one image layer. Layer names are content identity: two
-// images listing the same layer name share that layer.
+// LayerSpec identifies one image layer by its exact OCI content digest.
 type LayerSpec struct {
-	Name string   `json:"name"`
-	Size ByteSize `json:"size"`
+	Digest string   `json:"digest"`
+	Size   ByteSize `json:"size"`
 }
 
 // RentalSpec is reusable machine capacity the broker owns. Its schedule is
@@ -145,13 +171,12 @@ type RentalSpec struct {
 	IdleLeaseExpiresIn *Duration `json:"idle_lease_expires_in,omitempty"`
 	// CachedImages holds every layer of the named images; CachedLayers adds
 	// individual layers (for a rental warm from a previous image version).
-	CachedImages []string `json:"cached_images,omitempty"`
-	CachedLayers []string `json:"cached_layers,omitempty"`
-	// NamedCaches maps content-keyed data cache keys (e.g. a dataset GID) to
-	// the bytes materialized on the rental's local disk.
-	NamedCaches    map[string]ByteSize `json:"named_caches,omitempty"`
-	RatePerHourUSD float64             `json:"rate_per_hour_usd"`
-	Resources      *ResourcesSpec      `json:"resources,omitempty"`
+	CachedImages     []string       `json:"cached_images,omitempty"`
+	CachedLayers     []string       `json:"cached_layers,omitempty"`
+	ArtifactReplicas []string       `json:"artifact_replicas,omitempty"`
+	CacheMounts      []string       `json:"cache_mounts,omitempty"`
+	RatePerHourUSD   float64        `json:"rate_per_hour_usd"`
+	Resources        *ResourcesSpec `json:"resources,omitempty"`
 }
 
 // RentalScheduleSpec is Mercator's ordered sequence of nonterminal Bookings
@@ -245,16 +270,17 @@ type RequestSpec struct {
 	MaxRuntime      *Duration      `json:"max_runtime,omitempty"`
 	ExpectedRuntime *Duration      `json:"expected_runtime,omitempty"`
 	Objective       string         `json:"objective,omitempty"`
-	// CacheMounts declare the content-keyed data caches the run wants
-	// materialized, scored as avoided transfer bytes when a rental already
-	// holds them. Target ontology: the container spec cannot carry these yet.
+	// CacheMounts declare mutable, application-owned caches by their
+	// workspace-scoped names.
 	CacheMounts []CacheMountSpec `json:"cache_mounts,omitempty"`
+	// ConsumesArtifacts and ProducesArtifacts refer to immutable Artifact IDs
+	// declared in the Blueprint world.
+	ConsumesArtifacts []string `json:"consumes_artifacts,omitempty"`
+	ProducesArtifacts []string `json:"produces_artifacts,omitempty"`
 }
 
 type CacheMountSpec struct {
-	Name string   `json:"name"`
-	Key  string   `json:"key"`
-	Size ByteSize `json:"size"`
+	Name string `json:"name"`
 }
 
 type ExpectSpec struct {
@@ -292,9 +318,8 @@ type CandidateExpectation struct {
 	// Schedule asserts the ordered broker-owned schedule evidence weighed for
 	// this Rental candidate.
 	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`
-	// Caches asserts recorded named-cache evidence, key to "hit" or "miss".
-	// Target ontology: decisions record no cache evidence yet.
-	Caches map[string]string `json:"caches,omitempty"`
+	// Artifacts asserts recorded immutable-Artifact locality evidence.
+	Artifacts map[string]string `json:"artifact_evidence,omitempty"`
 }
 
 type ScheduleEvidenceExpectation struct {
@@ -373,6 +398,8 @@ func (d Duration) Duration() time.Duration { return time.Duration(d) }
 type ByteSize int64
 
 var byteSizePattern = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB)$`)
+var ociDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var ociImageRefPattern = regexp.MustCompile(`^(?:[^@\s]+@)?sha256:[0-9a-f]{64}$`)
 
 var byteSizeUnits = map[string]float64{"B": 1, "KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12}
 
@@ -473,22 +500,18 @@ func strictUnmarshal(data []byte, v any) error {
 	return nil
 }
 
-// Load reads and validates one scenario fixture. The scenario's name is the
-// file's base name without extension.
+// Load adapts one canonical Blueprint or legacy fixture for the placement
+// runner.
 func Load(path string) (Scenario, error) {
-	data, err := os.ReadFile(path)
+	blueprint, err := LoadBlueprint(path)
 	if err != nil {
 		return Scenario{}, err
 	}
-	var sc Scenario
-	if err := strictUnmarshal(data, &sc); err != nil {
-		return Scenario{}, fmt.Errorf("%s: %w", path, err)
+	scenario, ok := blueprint.PlacementScenario()
+	if !ok {
+		return Scenario{}, fmt.Errorf("%s: Blueprint is not a placement fixture", path)
 	}
-	sc.Name = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	if err := sc.validate(); err != nil {
-		return Scenario{}, fmt.Errorf("%s: %w", path, err)
-	}
-	return sc, nil
+	return scenario, nil
 }
 
 // LoadCorpus reads every *.json scenario in dir, sorted by name.
@@ -522,19 +545,8 @@ func (sc Scenario) validate() error {
 	if sc.Summary == "" {
 		return fmt.Errorf("summary is required")
 	}
-	if sc.Status != StatusGreen && sc.Status != StatusTarget {
-		return fmt.Errorf("status must be %q or %q, got %q", StatusGreen, StatusTarget, sc.Status)
-	}
-	if sc.Status == StatusTarget && len(sc.MissingCapabilities) == 0 {
-		return fmt.Errorf("target scenarios declare the missing_capabilities their promotion waits on")
-	}
-	if sc.Status == StatusGreen && len(sc.MissingCapabilities) > 0 {
-		return fmt.Errorf("green scenarios declare no missing_capabilities")
-	}
-	for _, capability := range sc.MissingCapabilities {
-		if !knownCapabilities[capability] {
-			return fmt.Errorf("unknown capability %q", capability)
-		}
+	if err := validateClassification(sc.Status, sc.MissingCapabilities); err != nil {
+		return err
 	}
 	if err := sc.World.validate(); err != nil {
 		return err
@@ -568,6 +580,24 @@ func (sc Scenario) validate() error {
 		}
 	}
 	return sc.validateScheduleTimeline()
+}
+
+func validateClassification(status Status, missing []Capability) error {
+	if status != StatusGreen && status != StatusTarget {
+		return fmt.Errorf("classification status must be %q or %q, got %q", StatusGreen, StatusTarget, status)
+	}
+	if status == StatusTarget && len(missing) == 0 {
+		return fmt.Errorf("target scenarios declare the missing_capabilities their promotion waits on")
+	}
+	if status == StatusGreen && len(missing) > 0 {
+		return fmt.Errorf("green scenarios declare no missing_capabilities")
+	}
+	for _, capability := range missing {
+		if !knownCapabilities[capability] {
+			return fmt.Errorf("unknown capability %q", capability)
+		}
+	}
+	return nil
 }
 
 // validateScheduleTimeline proves that each fixture's expected schedule
@@ -823,16 +853,29 @@ func (step StepSpec) validate(submitted map[string]bool) error {
 
 func (w WorldSpec) validate() error {
 	for ref, image := range w.Images {
+		if !ociImageRefPattern.MatchString(ref) {
+			return fmt.Errorf("image %q must be digest-pinned", ref)
+		}
 		if len(image.Layers) == 0 {
 			return fmt.Errorf("image %q needs at least one layer", ref)
 		}
 		for _, layer := range image.Layers {
-			if layer.Name == "" || layer.Size <= 0 {
-				return fmt.Errorf("image %q: layers need a name and a positive size", ref)
+			if !ociDigestPattern.MatchString(layer.Digest) || layer.Size <= 0 {
+				return fmt.Errorf("image %q: layers need an exact sha256 digest and a positive size", ref)
 			}
 		}
 	}
-	layerNames := w.layerNames()
+	artifactIDs := map[string]bool{}
+	for _, artifact := range w.Artifacts {
+		if artifact.ID == "" || artifact.Size <= 0 {
+			return fmt.Errorf("Artifacts need an id and a positive size")
+		}
+		if artifactIDs[artifact.ID] {
+			return fmt.Errorf("duplicate Artifact %q", artifact.ID)
+		}
+		artifactIDs[artifact.ID] = true
+	}
+	layerDigests := w.layerDigests()
 	ids := map[string]bool{}
 	for _, rental := range w.Rentals {
 		if rental.ID == "" {
@@ -847,10 +890,25 @@ func (w WorldSpec) validate() error {
 				return fmt.Errorf("rental %q caches undefined image %q", rental.ID, ref)
 			}
 		}
-		for _, name := range rental.CachedLayers {
-			if !layerNames[name] {
-				return fmt.Errorf("rental %q caches undefined layer %q", rental.ID, name)
+		for _, digest := range rental.CachedLayers {
+			if !layerDigests[digest] {
+				return fmt.Errorf("rental %q caches undefined layer %q", rental.ID, digest)
 			}
+		}
+		for _, artifactID := range rental.ArtifactReplicas {
+			if !artifactIDs[artifactID] {
+				return fmt.Errorf("rental %q holds undefined Artifact %q", rental.ID, artifactID)
+			}
+		}
+		cacheMounts := map[string]bool{}
+		for _, name := range rental.CacheMounts {
+			if name == "" {
+				return fmt.Errorf("rental %q has a Cache Mount without a name", rental.ID)
+			}
+			if cacheMounts[name] {
+				return fmt.Errorf("rental %q has duplicate Cache Mount %q", rental.ID, name)
+			}
+			cacheMounts[name] = true
 		}
 		if rental.RatePerHourUSD <= 0 {
 			return fmt.Errorf("rental %q needs a positive rate_per_hour_usd", rental.ID)
@@ -1003,14 +1061,14 @@ func validateBookingIdentity(rentalID, bookingID, runID string, bookingIDs, runI
 	return nil
 }
 
-func (w WorldSpec) layerNames() map[string]bool {
-	names := map[string]bool{}
+func (w WorldSpec) layerDigests() map[string]bool {
+	digests := map[string]bool{}
 	for _, image := range w.Images {
 		for _, layer := range image.Layers {
-			names[layer.Name] = true
+			digests[layer.Digest] = true
 		}
 	}
-	return names
+	return digests
 }
 
 func (w WorldSpec) candidateIDs() map[string]bool {
@@ -1032,6 +1090,22 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 		if _, ok := w.Images[req.Image]; !ok {
 			return fmt.Errorf("request image %q is not defined in the world", req.Image)
 		}
+	}
+	artifactIDs := w.artifactIDs()
+	for _, artifactID := range append(slices.Clone(req.ConsumesArtifacts), req.ProducesArtifacts...) {
+		if !artifactIDs[artifactID] {
+			return fmt.Errorf("request references undefined Artifact %q", artifactID)
+		}
+	}
+	cacheMounts := map[string]bool{}
+	for _, mount := range req.CacheMounts {
+		if mount.Name == "" {
+			return fmt.Errorf("Cache Mounts need a name")
+		}
+		if cacheMounts[mount.Name] {
+			return fmt.Errorf("request has duplicate Cache Mount %q", mount.Name)
+		}
+		cacheMounts[mount.Name] = true
 	}
 	return nil
 }
@@ -1083,9 +1157,12 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 		if !ids[id] {
 			return fmt.Errorf("candidate %q is not in the world", id)
 		}
-		for key, want := range candidate.Caches {
+		for artifactID, want := range candidate.Artifacts {
+			if !w.artifactIDs()[artifactID] {
+				return fmt.Errorf("candidate %q references undefined Artifact %q", id, artifactID)
+			}
 			if want != "hit" && want != "miss" {
-				return fmt.Errorf("candidate %q cache %q expects \"hit\" or \"miss\", got %q", id, key, want)
+				return fmt.Errorf("candidate %q Artifact %q expects \"hit\" or \"miss\", got %q", id, artifactID, want)
 			}
 		}
 		if candidate.Schedule != nil {
@@ -1098,4 +1175,12 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 		}
 	}
 	return nil
+}
+
+func (w WorldSpec) artifactIDs() map[string]bool {
+	ids := make(map[string]bool, len(w.Artifacts))
+	for _, artifact := range w.Artifacts {
+		ids[artifact.ID] = true
+	}
+	return ids
 }

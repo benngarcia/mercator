@@ -54,6 +54,36 @@ const (
 	runCloseReasonRetryExhausted = "RETRY_EXHAUSTED"
 )
 
+// runEventTypes is every Run lifecycle event type the orchestrator records.
+// Authored contracts that name an event, such as Blueprint fault triggers,
+// resolve it here so a name Mercator never emits is rejected where it is
+// written rather than silently never matching at execution time.
+var runEventTypes = map[string]bool{
+	EventRunRequested:          true,
+	EventBookingDecided:        true,
+	EventBookingDispatched:     true,
+	EventAttemptCreated:        true,
+	EventLaunchIntentRecorded:  true,
+	EventLaunchAccepted:        true,
+	EventLaunchIndeterminate:   true,
+	EventLaunchFailed:          true,
+	EventCancelRequested:       true,
+	EventCancelAccepted:        true,
+	EventExternalStateObserved: true,
+	EventRunOutcomeRecorded:    true,
+	EventCleanupRequested:      true,
+	EventCleanupFailed:         true,
+	EventCleanupConfirmed:      true,
+	EventRunClosed:             true,
+	EventRunReported:           true,
+}
+
+// IsRunEventType reports whether candidate names a Run lifecycle event the
+// orchestrator actually records.
+func IsRunEventType(candidate string) bool {
+	return runEventTypes[candidate]
+}
+
 type Orchestrator struct {
 	log                eventlog.WorkspaceEventLog
 	scheduler          scheduler.Scheduler

@@ -1,105 +1,174 @@
-# Placement scenario harness
+# Mercator Lab scenario catalog
 
-Each scenario in `scenarios/` states a world (Rentals, separate Broker-owned `rental_schedules` keyed to them, cached image layers and named data caches, and marketplace Offers with pricing and provisioning estimates), an incoming Run request, and the BookingDecision Mercator must record. The runner drives the real orchestrator and scheduler, then asserts only on events in the Run's stream: `compute.run.booking_decided.v1` for the decision, resulting Booking, and per-candidate evidence; `compute.run.launch_intent_recorded.v1` for the recorded cleanup disposition. Scheduler internals stay invisible.
+`internal/scenario` owns Mercator's canonical Scenario Blueprint contract and
+catalog. A Blueprint describes a possible world, authored arrivals and faults,
+and externally visible evidence Mercator must produce. Placement regression
+fixtures continue to run through the real orchestrator and Placement
+implementation over SQLite.
 
-This corpus is the design target for the warm-rentals program. Scenarios that need unbuilt semantics carry `"status": "target"` and read as the contract those milestones must satisfy.
-
-## Green and target scenarios
-
-A scenario's `status` decides how the runner treats failures:
-
-- `green` asserts behavior Mercator has today. Any failure fails CI as a regression.
-- `target` encodes the future contract. Failures are reported as pending (the test skips, with the full diff of what happened instead). A target scenario that starts passing fails CI until someone promotes it to green, so the corpus always states exactly where the program stands.
-
-Every target scenario declares `missing_capabilities`: the named semantics its promotion waits on (`rental_schedule`, `schedule_advancement`, `cache_evidence`, `cache_mounts`, `host_facts`). Fixture parse or coherence errors are always hard failures; the capability declaration only explains why the executed expectations are still red, and it makes the fixtures for a given milestone greppable. Green scenarios declare none.
-
-## Fixture shape
-
-A single-decision scenario:
+Every versioned document starts with:
 
 ```json
 {
-  "summary": "One line saying why the expected decision is right.",
-  "status": "green",
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "green",
+  "kind": "regression"
+}
+```
+
+`kind` defaults to `regression`. The other catalog kinds are `generated`,
+`minimized`, `demo`, and `conformance`. An optional sibling
+`<blueprint>.ui.json` file carries semantic UI checkpoints. Browser metadata
+never enters the Blueprint domain model.
+
+`LoadBlueprint` accepts Blueprint v1 and rejects unknown versions. It also
+provides the one-way compatibility path for unversioned placement fixtures:
+mutable image tags and synthetic layer names become deterministic synthetic
+digests, and content-keyed dataset caches become immutable Artifacts. Versioned
+Blueprints reject those legacy forms.
+
+`OpenCatalog` loads Blueprints recursively and attaches UI sidecars.
+`LoadCorpus` remains the top-level placement-runner adapter while the later Lab
+execution slices come online.
+
+## Green and target classification
+
+Classification controls how a runner treats failed expectations:
+
+- `green` asserts behavior Mercator has today. Any failure is a regression.
+- `target` states desired behavior that is not built yet. Its failures remain
+  pending. A target that starts passing fails until someone deliberately
+  promotes it to green.
+
+Every target declares `missing_capabilities`. Green Blueprints declare none.
+Fixture parse, schema, and coherence errors always fail. Missing capabilities
+only explain why valid executed expectations remain red.
+
+The 12 top-level Placement Blueprints remain four green and eight target.
+`demos/artifact-warmth-restart.json` is the complete 15-checkpoint target for
+Mercator Lab.
+
+## Placement fixture shape
+
+A single-decision Blueprint:
+
+```json
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "target",
+  "summary": "The Rental holding the immutable input beats a colder Rental.",
+  "missing_capabilities": ["artifacts", "artifact_evidence"],
   "world": {
     "images": {
-      "trainer:v1": {"layers": [{"name": "cuda-base", "size": "18GB"}]}
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "18GB"
+          }
+        ]
+      }
     },
+    "artifacts": [
+      {"id": "artifact:imagenet:v2.41", "size": "40GB"}
+    ],
     "rentals": [
       {
         "id": "rental-warm",
-        "idle_lease_expires_in": "30m",
-        "cached_images": ["trainer:v1"],
-        "named_caches": {"dataset-imagenet-2a41": "40GB"},
+        "artifact_replicas": ["artifact:imagenet:v2.41"],
+        "cache_mounts": ["compiler-cache"],
         "rate_per_hour_usd": 2.5
-      }
-    ],
-    "marketplace": [
-      {
-        "id": "fresh-4090",
-        "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "4m", "p90": "8m"},
-        "facts": {"ssh": true, "nvidia_driver": true}
       }
     ]
   },
   "request": {
-    "image": "trainer:v1",
-    "expected_runtime": "20m",
-    "max_runtime": "1h",
-    "cache_mounts": [{"name": "dataset", "key": "dataset-imagenet-2a41", "size": "40GB"}]
+    "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "consumes_artifacts": ["artifact:imagenet:v2.41"],
+    "cache_mounts": [{"name": "compiler-cache"}]
   },
   "expect": {
     "outcome": "place",
     "offer": "rental-warm",
-    "disposition": "release",
     "candidates": {
-      "rental-warm": {"feasible": true, "pull_seconds": 0},
-      "fresh-4090": {"provision_seconds": {"at_least": 240}}
+      "rental-warm": {
+        "artifact_evidence": {"artifact:imagenet:v2.41": "hit"}
+      }
     }
   }
 }
 ```
 
-Scenarios that advance the clock or submit several Runs replace `request`/`expect` with a `timeline`: each step is exactly one of `submit` (a named Run with its request and expectation), `advance` (move the scripted clock), or `reconcile` (drive Broker advancement for a named Run after relevant world state changed).
+`request` and `expect` are the single-decision shorthand. A Placement fixture
+that advances virtual time or submits several Runs uses `timeline`; each step
+is exactly one `submit`, `advance`, or `reconcile`.
 
-Conventions:
+An arrival-driven Lab Blueprint uses:
 
-- durations are Go syntax ("6m", "1h30m"); sizes use decimal units ("40GB", "512MB")
-- the world clock starts at 2030-01-01T00:00:00Z unless `world.clock` says otherwise; deadlines are offsets from that start ("+6m")
-- layer names are content identity: two images listing the same layer name share that layer
-- rentals default to a generous GPU-box inventory (8 CPUs, 32GB memory, 200GB disk); state only the resources the scenario is about
-- `world.rental_schedules` belongs to the Broker and references Rentals by ID; Rental entries describe machines and contain no schedule or future-work state
-- an omitted RentalSchedule is empty; a nonempty RentalSchedule has a positive `version`, exactly one `running` Booking, and at most 4 ordered `queued` Bookings; a Run arriving at a full schedule goes elsewhere, whatever the score says
-- every Booking carries stable `booking` and `run` IDs; the running Booking states `remaining_max_runtime`, while every queued Booking states its full `max_runtime`
-- max runtimes are the enforced bounds; the optional `remaining_expected_runtime` and `expected_runtime` fields carry the p50, defaulting to the bound; projected starts and queue-delay scoring work off the p50 sums, while `latest_start` guarantees rest on the max bounds
-- `expect.outcome` is `place` (a selected Rental or provisionable Offer) or `fail` (a recorded decision with no feasible candidates); selecting a provisionable Offer mints a new Rental whose first Booking is the Run in `running` state, so there is one ontology for running work
-- numeric candidate expectations are exact (`"pull_seconds": 0`) or bounded (`{"at_least": 240}`)
+```json
+{
+  "seed": "stable-semantic-seed",
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {"name": "producer", "at": "0s", "request": {}},
+      {"name": "consumer", "at": "0s", "request": {}}
+    ]
+  },
+  "faults": [],
+  "proof": []
+}
+```
 
-## Target contracts pinned here
+The initial authored arrival type is `fixed`. Periodic and burst families land
+with the typed generator slice. Faults and proof checkpoints are typed and
+strictly validated before execution.
 
-Target scenarios assert shapes that no domain type carries yet. The runner reads them from the decision's raw JSON, which pins the contract the milestones must implement:
+## Identity and units
 
-- assigning a Run to an existing Rental records `"booking": {"id", "rental_id", "state", "after_booking_id", "projected_start_at", "latest_start_at", "schedule_version"}` on the decision; `state` is `running` or `queued`
-- a busy Rental candidate records `"rental_schedule": {"version", "running", "preceding", "projected_start_seconds"}`; `running` and each `preceding` entry carry `booking_id`, `run_id`, the enforced max runtime, and the expected (p50) runtime; `preceding` preserves every queued Booking ahead of the incoming Run in exact order, and `projected_start_seconds` is the p50 sum
-- a full schedule rejects the candidate with `SCHEDULE_FULL` at `rental_schedule.queued`
-- named-cache evidence is `"cache_evidence": [{"key", "hit"}]` on each candidate, recording hit or miss per declared cache key
-- host facts are rejected with the existing violation vocabulary: a fact present and false is `CAPABILITY_MISMATCH` at `facts.<name>`, a fact absent is `UNKNOWN_FACT` at `facts.<name>`
+- Durations use Go syntax such as `"6m"` and `"1h30m"`.
+- Sizes use decimal units such as `"40GB"` and `"512MB"`.
+- Image references are digest-pinned OCI identities.
+- Image layers use exact `sha256:` digests. Shared digests mean shared content.
+- Artifacts are immutable and versioned. Runs declare
+  `consumes_artifacts` and `produces_artifacts`; Rentals carry exact
+  `artifact_replicas`.
+- Cache Mounts are mutable application-owned state. Their only identity is the
+  workspace-scoped `name`; they never carry content keys or sizes.
+- The world clock starts at `2030-01-01T00:00:00Z` unless `world.clock` says
+  otherwise. Placement deadlines are offsets such as `"+6m"`.
 
-## Schedule lifecycle contract
+Rentals default to a generous GPU-box inventory. State only resources relevant
+to the scenario. `world.rental_schedules` belongs to Mercator and references
+Rentals by ID. A nonempty schedule has a positive version, exactly one running
+Booking, and at most four ordered queued Bookings.
 
-The Broker owns every schedule transition and records each one on the Rental's stream, so "why did this Run wait" is answerable from the log alone:
+Every Booking carries stable Booking and Run IDs. Max runtimes are enforced
+bounds. Expected runtimes are p50 estimates used for projected starts and
+queue-delay scoring.
 
-- `compute.rental.booking_queued.v1` when a decision appends a Booking in `queued` state
-- `compute.rental.booking_dispatched.v1` when a Booking enters `running` state and launches through the Rental's Docker endpoint
-- `compute.rental.booking_moved.v1` when a recheck relocates a queued Booking
-- `compute.rental.booking_expired.v1` when a queued Booking passes its latest start and its Run re-enters placement
-- `compute.rental.booking_cancelled.v1` when a Run's cancellation removes its Booking
+## Target Placement evidence
 
-The Broker rechecks schedules on a one-minute cadence. Only the tail queued Booking is re-evaluated: it reruns the placement algorithm and moves if a better candidate now exists. Interior queued Bookings never move, so the order ahead of any waiting Run only ever shrinks. In scenarios, `reconcile` steps model those ticks; the `Session` seam gains a Rental-stream reader when these events exist.
+Targets pin event contracts that production types may not carry yet:
 
-## Backends
+- assigning a Run records a Booking with ID, Rental ID, state, predecessor,
+  projected start, latest start, and schedule version;
+- a busy Rental candidate records ordered Rental Schedule evidence;
+- a full schedule rejects with `SCHEDULE_FULL` at
+  `rental_schedule.queued`;
+- Artifact locality is
+  `"artifact_evidence": [{"artifact_id", "present"}]` on each candidate;
+- a false host fact is `CAPABILITY_MISMATCH` and an absent fact is
+  `UNKNOWN_FACT`.
 
-`Backend`/`Session` (runner.go) is the seam between the scenario contract and the capacity behind it. `SimBackend` (sim.go) runs decision correctness against simulated capacity: the fake adapter's `World` (standard Docker endpoints with layer and cache state, scripted running Bookings, and a scripted clock) under the real orchestrator, scheduler, and a real SQLite event log. It is fast enough for hundreds of cases. A later backend can execute the same fixtures against real daemons and providers to verify what the simulation assumes; nothing in the fixtures is simulation-specific.
+## Placement backend
 
-The simulation stays inside today's offer vocabulary: a busy Rental currently advertises unavailable capacity with its running Booking's remaining maximum runtime as queue evidence, an expired idle lease removes the Rental from the offer list, and image-layer state becomes honest `ImageCache.MissingBytes` for the image being placed. The Broker now versions, persists, and appends queued Bookings, but the scenario backend still cannot seed an initial RentalSchedule, so scenarios that start with occupied Rentals report their seeded QueuedBookings as dropped notes and the target scenarios remain red. What the vocabulary cannot express yet (RentalSchedules, named caches, host facts, cache mounts), the backend reports as notes so pending results say what was dropped.
+`Backend` and `Session` are the seam between the placement fixture and its
+capacity implementation. `SimBackend` uses the fake provider world under the
+real orchestrator, Placement implementation, and SQLite event log. Tests assert
+recorded events, never private Placement state.
+
+The current backend can execute offer, image-layer, and basic Rental behavior.
+It records explicit notes when an Artifact, Cache Mount, seeded Rental
+Schedule, or host fact cannot yet cross the production seam. Later Lab slices
+replace this mutable scripted boundary with World Truth, Observed State, and a
+deterministic dispatcher while keeping the real control plane in the loop.

@@ -1,0 +1,19 @@
+{
+  "schema": "mercator.lab/ui-checkpoints.v1",
+  "checkpoints": [
+    {
+      "id": "consumer-visible",
+      "after": {
+        "event": "compute.run.booking_decided.v1",
+        "run": "consumer"
+      },
+      "assertions": [
+        {
+          "role": "heading",
+          "name": "Consumer"
+        }
+      ],
+      "screenshot": true
+    }
+  ]
+}

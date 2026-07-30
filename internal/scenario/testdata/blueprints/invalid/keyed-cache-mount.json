@@ -1,0 +1,27 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "green",
+  "summary": "Cache Mounts have names, not immutable content keys.",
+  "world": {
+    "rentals": [
+      {
+        "id": "rental-a",
+        "rate_per_hour_usd": 1.0
+      }
+    ]
+  },
+  "request": {
+    "image": "sha256:a172cedcae47474b170e81ae01adcd56a1223f9af8b95dea874433c3674ef00f",
+    "cache_mounts": [
+      {
+        "name": "dataset",
+        "key": "dataset-key",
+        "size": "40GB"
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-a"
+  }
+}

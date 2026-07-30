@@ -283,14 +283,14 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 	if expect.Schedule != nil {
 		failures = append(failures, assertScheduleEvidence(rec, name, id, *expect.Schedule)...)
 	}
-	for _, key := range sortedKeys(expect.Caches) {
-		hit, ok := candidateCacheEvidence(rec, id, key)
+	for _, artifactID := range sortedKeys(expect.Artifacts) {
+		present, ok := candidateArtifactEvidence(rec, id, artifactID)
 		if !ok {
-			fail("records no cache evidence for %q", key)
+			fail("records no Artifact evidence for %q", artifactID)
 			continue
 		}
-		if want := expect.Caches[key] == "hit"; hit != want {
-			fail("cache %q: expected %s, recorded %s", key, expect.Caches[key], hitOrMiss(hit))
+		if want := expect.Artifacts[artifactID] == "hit"; present != want {
+			fail("Artifact %q: expected %s, recorded %s", artifactID, expect.Artifacts[artifactID], hitOrMiss(present))
 		}
 	}
 	return failures
@@ -367,10 +367,11 @@ func candidateScheduleEvidence(rec recordedDecision, id string) (scheduleEvidenc
 	return scheduleEvidenceRecord{}, false
 }
 
-// candidateCacheEvidence reads the target contract for named-cache evidence
+// candidateArtifactEvidence reads the target contract for Artifact evidence
 // from the decision's raw JSON: each candidate carries
-// {"cache_evidence": [{"key", "hit"}]} once cache scoring exists.
-func candidateCacheEvidence(rec recordedDecision, id, key string) (bool, bool) {
+// {"artifact_evidence": [{"artifact_id", "present"}]} once Artifact scoring
+// exists.
+func candidateArtifactEvidence(rec recordedDecision, id, artifactID string) (bool, bool) {
 	var candidates []map[string]json.RawMessage
 	if err := json.Unmarshal(rec.raw["candidates"], &candidates); err != nil {
 		return false, false
@@ -381,15 +382,15 @@ func candidateCacheEvidence(rec recordedDecision, id, key string) (bool, bool) {
 			continue
 		}
 		var evidence []struct {
-			Key string `json:"key"`
-			Hit bool   `json:"hit"`
+			ArtifactID string `json:"artifact_id"`
+			Present    bool   `json:"present"`
 		}
-		if err := json.Unmarshal(candidate["cache_evidence"], &evidence); err != nil {
+		if err := json.Unmarshal(candidate["artifact_evidence"], &evidence); err != nil {
 			return false, false
 		}
 		for _, entry := range evidence {
-			if entry.Key == key {
-				return entry.Hit, true
+			if entry.ArtifactID == artifactID {
+				return entry.Present, true
 			}
 		}
 	}

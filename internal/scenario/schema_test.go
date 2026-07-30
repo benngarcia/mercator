@@ -72,7 +72,7 @@ func TestLoadParsesHumanReadableUnits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if got := sc.World.Images["app:v1"].Layers[0].Size; got != ByteSize(1_500_000_000) {
+	if got := sc.World.Images[sc.Request.Image].Layers[0].Size; got != ByteSize(1_500_000_000) {
 		t.Fatalf("layer size = %d, want 1.5GB in bytes", got)
 	}
 	if got := sc.World.RentalSchedules[0].Running.RemainingMaxRuntime.Duration(); got != 6*time.Minute {

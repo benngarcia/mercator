@@ -42,7 +42,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	for ref, image := range spec.Images {
 		layers := make([]fake.Layer, 0, len(image.Layers))
 		for _, layer := range image.Layers {
-			layers = append(layers, fake.Layer{Digest: layer.Name, Bytes: int64(layer.Size)})
+			layers = append(layers, fake.Layer{Digest: layer.Digest, Bytes: int64(layer.Size)})
 		}
 		world.DefineImage(ref, layers)
 	}
@@ -54,8 +54,11 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		if len(schedule.Queued) > 0 {
 			session.note("rental %q starts with QueuedBookings, but the scenario backend cannot seed Broker RentalSchedule state yet", rental.ID)
 		}
-		if len(rental.NamedCaches) > 0 {
-			session.note("rental %q holds named caches, but no offer field can advertise them yet", rental.ID)
+		if len(rental.ArtifactReplicas) > 0 {
+			session.note("rental %q holds Artifact replicas, but no offer field can advertise them yet", rental.ID)
+		}
+		if len(rental.CacheMounts) > 0 {
+			session.note("rental %q holds Cache Mounts, but no offer field can advertise them yet", rental.ID)
 		}
 	}
 	for _, offer := range spec.Marketplace {
@@ -89,14 +92,11 @@ func simDaemon(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, c
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
-			daemon.HeldLayers[layer.Name] = int64(layer.Size)
+			daemon.HeldLayers[layer.Digest] = int64(layer.Size)
 		}
 	}
 	for _, name := range rental.CachedLayers {
 		daemon.HeldLayers[name] = int64(layerSize(spec, name))
-	}
-	for key, size := range rental.NamedCaches {
-		daemon.HeldCaches[key] = int64(size)
 	}
 	if running := schedule.Running; running != nil {
 		daemon.BusyUntil = start.Add(running.RemainingMaxRuntime.Duration())
@@ -183,7 +183,7 @@ func simOffer(id, connectionID string, ratePerHourUSD float64, resources *Resour
 func layerSize(spec WorldSpec, name string) ByteSize {
 	for _, image := range spec.Images {
 		for _, layer := range image.Layers {
-			if layer.Name == name {
+			if layer.Digest == name {
 				return layer.Size
 			}
 		}
@@ -213,6 +213,9 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 	}
 	if len(req.CacheMounts) > 0 {
 		s.note("run %q declares cache mounts, but the container spec cannot carry them yet", name)
+	}
+	if len(req.ConsumesArtifacts) > 0 || len(req.ProducesArtifacts) > 0 {
+		s.note("run %q declares Artifact inputs or outputs, but the control plane cannot carry them yet", name)
 	}
 	runID := "run-" + name
 	s.runs[name] = runID

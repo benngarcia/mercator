@@ -1,0 +1,95 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "green",
+  "summary": "A fault cannot trigger on an event Mercator never records.",
+  "seed": "unknown-fault-event",
+  "world": {
+    "images": {
+      "producer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+        "layers": [
+          {
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "size": "80MB"
+          }
+        ]
+      },
+      "consumer@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
+        "layers": [
+          {
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:model-checkpoint:v1",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_layers": [
+          "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "cache_mounts": [
+          "compiler-cache"
+        ],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m"
+        }
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "producer",
+        "at": "0s",
+        "request": {
+          "image": "producer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_runtime": "8m",
+          "max_runtime": "20m",
+          "produces_artifacts": [
+            "artifact:model-checkpoint:v1"
+          ],
+          "cache_mounts": [
+            {
+              "name": "compiler-cache"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "restart-on-an-event-that-does-not-exist",
+      "trigger": {
+        "event": "compute.artifact.published.v1",
+        "run": "producer"
+      },
+      "action": "restart_control_plane"
+    }
+  ]
+}
