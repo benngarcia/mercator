@@ -26,6 +26,7 @@ const createNodes = `CREATE TABLE IF NOT EXISTS nodes (
 	last_heartbeat_at TEXT NOT NULL,
 	agent_version TEXT NOT NULL,
 	facts_json BLOB NOT NULL,
+	shadow_price_usd_per_hour REAL NOT NULL DEFAULT 0,
 	PRIMARY KEY(workspace_id, node_id)
 )`
 
@@ -86,12 +87,12 @@ func (store *NodeStore) Invite(ctx context.Context, record node.Record) error {
 		INSERT INTO nodes (
 			workspace_id, node_id, rental_id, generation, state, fencing_token,
 			enrollment_token_id, enrollment_expires, enrolled_at, lease_expires,
-			last_heartbeat_at, agent_version, facts_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			last_heartbeat_at, agent_version, facts_json, shadow_price_usd_per_hour
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.WorkspaceID, record.ID, record.RentalID, record.Generation, string(record.State),
 		record.FencingToken, record.EnrollmentTokenID, stamp(record.EnrollmentExpires),
 		stamp(record.EnrolledAt), stamp(record.LeaseExpires), stamp(record.LastHeartbeatAt),
-		record.AgentVersion, facts,
+		record.AgentVersion, facts, record.ShadowPriceUSDPerHour,
 	)
 	if err != nil {
 		return fmt.Errorf("invite node %q: %w", record.ID, err)
@@ -425,7 +426,7 @@ func (store *NodeStore) operations(ctx context.Context, workspaceID, nodeID stri
 
 const nodeColumns = `SELECT workspace_id, node_id, rental_id, generation, state, fencing_token,
 	enrollment_token_id, enrollment_expires, enrolled_at, lease_expires, last_heartbeat_at,
-	agent_version, facts_json FROM nodes`
+	agent_version, facts_json, shadow_price_usd_per_hour FROM nodes`
 
 func (store *NodeStore) scanOne(ctx context.Context, where string, args ...any) (node.Record, error) {
 	rows, err := store.db.QueryContext(ctx, nodeColumns+" "+where, args...)
@@ -450,7 +451,8 @@ func scanNode(rows scanner) (node.Record, error) {
 	var facts []byte
 	if err := rows.Scan(&record.WorkspaceID, &record.ID, &record.RentalID, &record.Generation,
 		&state, &record.FencingToken, &record.EnrollmentTokenID, &enrollmentExpires,
-		&enrolledAt, &leaseExpires, &heartbeat, &record.AgentVersion, &facts); err != nil {
+		&enrolledAt, &leaseExpires, &heartbeat, &record.AgentVersion, &facts,
+		&record.ShadowPriceUSDPerHour); err != nil {
 		return node.Record{}, err
 	}
 	record.State = node.State(state)

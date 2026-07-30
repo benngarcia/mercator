@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -40,6 +42,8 @@ type Registry struct {
 	lease      time.Duration
 	session    time.Duration
 	invitation time.Duration
+
+	newIdentity func() string
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -97,24 +101,49 @@ func (registry *Registry) NodeSupport() capability.NodeSupport {
 	}
 }
 
+// Invitation is what an operator or a capacity provider states about a machine
+// before it exists: which node it will be, which Rental generation it belongs
+// to, and what holding it costs.
+type Invitation struct {
+	WorkspaceID string
+	NodeID      string
+	RentalID    string
+	Generation  uint64
+	// ShadowPriceUSDPerHour is what this machine costs to hold. Placement needs
+	// a price to weigh a node against fresh capacity, and a node without one is
+	// refused rather than treated as free.
+	ShadowPriceUSDPerHour float64
+}
+
 // Invite reserves a node identity and mints the bootstrap material a machine
 // needs to reach the control plane. The identity exists before the machine
 // does, so capacity provisioned by a request whose response was lost is still
 // reconcilable.
-func (registry *Registry) Invite(ctx context.Context, workspaceID, nodeID, rentalID string, generation uint64) (capability.NodeBootstrap, error) {
+func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (capability.NodeBootstrap, error) {
+	nodeID, rentalID, generation := invitation.NodeID, invitation.RentalID, invitation.Generation
+	if generation == 0 {
+		generation = 1
+	}
+	if nodeID == "" {
+		nodeID = "nod_" + registry.identity()
+	}
+	if rentalID == "" {
+		rentalID = "rnt_" + registry.identity()
+	}
 	expires := registry.now().UTC().Add(registry.invitation)
 	token, err := registry.signer.Enrollment(nodeID, rentalID, generation, expires)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
 	}
 	record := Record{
-		ID:                nodeID,
-		WorkspaceID:       workspaceID,
-		RentalID:          rentalID,
-		Generation:        generation,
-		State:             StateEnrolling,
-		EnrollmentTokenID: TokenID(token),
-		EnrollmentExpires: expires,
+		ID:                    nodeID,
+		WorkspaceID:           invitation.WorkspaceID,
+		RentalID:              rentalID,
+		Generation:            generation,
+		State:                 StateEnrolling,
+		EnrollmentTokenID:     TokenID(token),
+		EnrollmentExpires:     expires,
+		ShadowPriceUSDPerHour: invitation.ShadowPriceUSDPerHour,
 	}
 	if err := registry.store.Invite(ctx, record); err != nil {
 		return capability.NodeBootstrap{}, err
@@ -356,4 +385,25 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 		EnrollmentToken: token,
 		AgentVersion:    registry.agentVersion,
 	}, nil
+}
+
+// WithIdentitySource replaces how the registry mints identities for machines an
+// operator did not name. Production uses random material; the Lab and tests
+// inject a deterministic source so an invitation replays identically.
+func WithIdentitySource(identity func() string) Option {
+	return func(registry *Registry) { registry.newIdentity = identity }
+}
+
+func (registry *Registry) identity() string {
+	if registry.newIdentity != nil {
+		return registry.newIdentity()
+	}
+	material := make([]byte, 12)
+	if _, err := rand.Read(material); err != nil {
+		// A registry that cannot mint unguessable identities must not fall back
+		// to a guessable one, so it names the failure in the identity itself
+		// and the invitation write refuses the collision.
+		return "unavailable"
+	}
+	return base64.RawURLEncoding.EncodeToString(material)
 }

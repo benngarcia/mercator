@@ -1,14 +1,23 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Capacity provisioned for the first Run is still there when the second arrives, because an enrolled node agent holds the host runtime open. The second Run reuses that machine and its layers instead of provisioning a second one, which is the whole difference between the reusable and ephemeral lanes.",
+  "summary": "Capacity provisioned for the first Run is still there when the second arrives, because an enrolled node agent holds the host runtime open. The second Run reuses that machine and its layers instead of provisioning a second one. Mercator can already do this on a node an operator enrolled by hand; what is missing is provisioned capacity arriving with an agent already on it, and a Rental Schedule that survives the first Run.",
   "classification": "target",
-  "missing_capabilities": ["node_runtime", "rental_schedule"],
+  "missing_capabilities": [
+    "node_bootstrap",
+    "rental_schedule"
+  ],
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
         "layers": [
-          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
-          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948",
+            "size": "40MB"
+          }
         ]
       }
     },
@@ -18,7 +27,10 @@
         "provider": "simcloud",
         "lane": "reusable",
         "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "4m", "p90": "8m"}
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m"
+        }
       }
     ]
   },
@@ -35,11 +47,16 @@
         "offer": "reusable-4090",
         "disposition": "terminate",
         "candidates": {
-          "reusable-4090": {"feasible": true, "disposition": "provision_fresh_rental"}
+          "reusable-4090": {
+            "feasible": true,
+            "disposition": "provision_fresh_rental"
+          }
         }
       }
     },
-    {"advance": "15m"},
+    {
+      "advance": "15m"
+    },
     {
       "submit": "run-second",
       "request": {
@@ -51,7 +68,9 @@
         "outcome": "place",
         "offer": "reusable-4090",
         "disposition": "release",
-        "reasons": ["REUSE_EXISTING_RENTAL"],
+        "reasons": [
+          "REUSE_EXISTING_RENTAL"
+        ],
         "candidates": {
           "reusable-4090": {
             "feasible": true,

@@ -35,6 +35,9 @@ type stateFile struct {
 	Applied        []string     `json:"applied_operation_ids,omitempty"`
 	Spool          []node.Event `json:"spool,omitempty"`
 	EventSequence  uint64       `json:"event_sequence"`
+	// Reported is the last phase the control plane was told about each
+	// workload, so the agent sends transitions rather than repeating itself.
+	Reported map[string]string `json:"reported_workload_phases,omitempty"`
 }
 
 // OpenState loads the agent's state from path, creating it when absent.
@@ -132,6 +135,30 @@ func (state *State) ClearSpool() error {
 	defer state.mu.Unlock()
 	state.data.Spool = nil
 	return state.persistLocked()
+}
+
+// WorkloadChanged reports whether this observation says something the control
+// plane has not already been told.
+func (state *State) WorkloadChanged(observation capability.WorkloadObservation) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.data.Reported[workloadKey(observation)] != string(observation.Phase)
+}
+
+// RecordWorkload remembers what the control plane was told, so an unchanged
+// phase is not repeated on every tick.
+func (state *State) RecordWorkload(observation capability.WorkloadObservation) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.data.Reported == nil {
+		state.data.Reported = map[string]string{}
+	}
+	state.data.Reported[workloadKey(observation)] = string(observation.Phase)
+	_ = state.persistLocked()
+}
+
+func workloadKey(observation capability.WorkloadObservation) string {
+	return observation.RunID + "/" + observation.AttemptID
 }
 
 // NextEventID mints a stable, monotonic identity for one event, so the same

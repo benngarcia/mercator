@@ -29,6 +29,7 @@ type Resolver interface {
 }
 
 type Broker struct {
+	nodes     Nodes
 	conns     Connections
 	factory   *Factory
 	resolver  Resolver
@@ -161,6 +162,20 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 		Offers:   []domain.OfferSnapshot{},
 		Failures: ConnectionErrors{},
 	}
+	// Enrolled nodes are capacity this workspace already holds. They are
+	// aggregated beside provider offers so one Booking Decision weighs reusing
+	// a machine against renting another.
+	if b.nodes != nil {
+		nodeOffers, nodeErr := b.nodes.Offers(ctx, req.WorkspaceID)
+		if nodeErr != nil {
+			aggregation.Failures = append(aggregation.Failures, ConnectionError{
+				ConnectionID: nodeConnectionID,
+				AdapterType:  nodeAdapterType,
+				Err:          nodeErr,
+			})
+		}
+		aggregation.Offers = append(aggregation.Offers, nodeOffers...)
+	}
 	for _, result := range results {
 		if result.err != nil {
 			aggregation.Failures = append(aggregation.Failures, connectionError(result))
@@ -205,6 +220,13 @@ func offerSnapshotID(connectionID, adapterOfferID string) (string, error) {
 }
 
 func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	if req.SelectedOfferLane.Reusable() {
+		receipt, err := b.launchOnNode(ctx, req)
+		if err != nil {
+			b.logLaunchFailure(ctx, req, err)
+		}
+		return receipt, err
+	}
 	executor, err := b.executorByID(ctx, req.WorkspaceID, req.SelectedOfferConnectionID)
 	if err != nil {
 		b.logLaunchFailure(ctx, req, err)
@@ -258,6 +280,9 @@ func (b *Broker) logLaunchFailure(ctx context.Context, req adapter.LaunchRequest
 }
 
 func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	if req.Lane.Reusable() {
+		return b.observeOnNode(ctx, req, req.NativeRef, req.RunID, req.AttemptID)
+	}
 	executor, err := b.executorByID(ctx, req.WorkspaceID, req.ConnectionID)
 	if err != nil {
 		return adapter.ExternalObservation{}, err
@@ -266,6 +291,9 @@ func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapt
 }
 
 func (b *Broker) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
+	if req.Lane.Reusable() {
+		return b.releaseOnNode(ctx, req, req.NativeRef, req.RunID)
+	}
 	executor, err := b.executorByID(ctx, req.WorkspaceID, req.ConnectionID)
 	if err != nil {
 		return adapter.ReleaseReceipt{}, err

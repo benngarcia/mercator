@@ -123,7 +123,10 @@ func startWithStateDir(t *testing.T, stateDir string) *harness {
 	)
 	server := httptest.NewServer(nodeapi.New(registry))
 	t.Cleanup(server.Close)
-	bootstrap, err := registry.Invite(context.Background(), testWorkspace, testNodeID, testRentalID, 1)
+	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
+		WorkspaceID: testWorkspace, NodeID: testNodeID, RentalID: testRentalID, Generation: 1,
+		ShadowPriceUSDPerHour: 1.5,
+	})
 	if err != nil {
 		t.Fatalf("invite node: %v", err)
 	}

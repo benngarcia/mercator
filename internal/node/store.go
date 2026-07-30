@@ -16,6 +16,11 @@ var ErrNotFound = errors.New("node: not found")
 // than a replay of the old one.
 var ErrEnrollmentSpent = errors.New("node: enrollment token already redeemed")
 
+// ErrIdentityExists is returned when an invitation names a node identity that
+// is already reserved. Identity is immutable, so reusing one would let a second
+// machine claim the first one's history.
+var ErrIdentityExists = errors.New("node: identity already exists")
+
 // ErrFenced is returned when a command carries a superseded fencing token. It
 // is the durable half of the fencing guarantee: even if a partitioned session
 // reaches the control plane, its work is refused rather than applied late.

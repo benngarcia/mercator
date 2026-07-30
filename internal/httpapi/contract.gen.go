@@ -158,6 +158,30 @@ func (e NetworkRequirementsInbound) Valid() bool {
 	}
 }
 
+// Defines values for NodeSummaryState.
+const (
+	Enrolling NodeSummaryState = "enrolling"
+	Lost      NodeSummaryState = "lost"
+	Ready     NodeSummaryState = "ready"
+	Retired   NodeSummaryState = "retired"
+)
+
+// Valid indicates whether the value is a known member of the NodeSummaryState enum.
+func (e NodeSummaryState) Valid() bool {
+	switch e {
+	case Enrolling:
+		return true
+	case Lost:
+		return true
+	case Ready:
+		return true
+	case Retired:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlacementPolicyObjective.
 const (
 	Balanced          PlacementPolicyObjective = "balanced"
@@ -447,6 +471,19 @@ type ImageCacheEvidence struct {
 	MissingBytes   int64 `json:"missing_bytes"`
 }
 
+// InviteNodeRequest defines model for InviteNodeRequest.
+type InviteNodeRequest struct {
+	// NodeId Node identity to reserve. Generated when omitted.
+	NodeId string `json:"node_id,omitempty"`
+
+	// RentalId The Rental this node belongs to. Generated when omitted.
+	RentalId string `json:"rental_id,omitempty"`
+
+	// ShadowPriceUsdPerHour What holding this machine costs. Placement needs a price to weigh a node against fresh capacity; a node invited at zero has unknown pricing and is refused rather than treated as free.
+	ShadowPriceUsdPerHour float32 `json:"shadow_price_usd_per_hour"`
+	WorkspaceId           string  `json:"workspace_id"`
+}
+
 // LifecycleCapabilities defines model for LifecycleCapabilities.
 type LifecycleCapabilities struct {
 	CancelQueued     bool   `json:"cancel_queued"`
@@ -509,6 +546,42 @@ type NetworkRequirements struct {
 
 // NetworkRequirementsInbound defines model for NetworkRequirements.Inbound.
 type NetworkRequirementsInbound string
+
+// NodeBootstrapResponse defines model for NodeBootstrapResponse.
+type NodeBootstrapResponse struct {
+	AgentVersion    string `json:"agent_version"`
+	ControlPlaneUrl string `json:"control_plane_url"`
+
+	// EnrollmentToken Short-lived and redeemable once. It is returned exactly this once and is never stored in a readable form.
+	EnrollmentToken string `json:"enrollment_token"`
+	Generation      int64  `json:"generation"`
+	NodeId          string `json:"node_id"`
+	RentalId        string `json:"rental_id"`
+}
+
+// NodeListResponse defines model for NodeListResponse.
+type NodeListResponse struct {
+	Nodes []NodeSummary `json:"nodes"`
+}
+
+// NodeSummary defines model for NodeSummary.
+type NodeSummary struct {
+	Accelerators          int       `json:"accelerators,omitempty"`
+	AgentVersion          string    `json:"agent_version,omitempty"`
+	ContainerRuntime      string    `json:"container_runtime,omitempty"`
+	Generation            int64     `json:"generation"`
+	Id                    string    `json:"id"`
+	LastHeartbeatAt       time.Time `json:"last_heartbeat_at,omitempty"`
+	LeaseExpires          time.Time `json:"lease_expires,omitempty"`
+	RentalId              string    `json:"rental_id"`
+	ShadowPriceUsdPerHour float32   `json:"shadow_price_usd_per_hour"`
+
+	// State What the control plane believes about this node. A lost node is unobserved, not dead.
+	State NodeSummaryState `json:"state"`
+}
+
+// NodeSummaryState What the control plane believes about this node. A lost node is unobserved, not dead.
+type NodeSummaryState string
 
 // ObservabilityCapabilities defines model for ObservabilityCapabilities.
 type ObservabilityCapabilities struct {
@@ -745,6 +818,11 @@ type StreamConsoleEventsParams struct {
 	LastEventID string `json:"Last-Event-ID,omitempty"`
 }
 
+// ListNodesParams defines parameters for ListNodes.
+type ListNodesParams struct {
+	WorkspaceId string `form:"workspace_id" json:"workspace_id"`
+}
+
 // ListOffersParams defines parameters for ListOffers.
 type ListOffersParams struct {
 	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
@@ -840,6 +918,9 @@ type CreateConnectionJSONRequestBody = CreateConnectionRequest
 // ResolveImageJSONRequestBody defines body for ResolveImage for application/json ContentType.
 type ResolveImageJSONRequestBody = ResolveImageRequest
 
+// InviteNodeJSONRequestBody defines body for InviteNode for application/json ContentType.
+type InviteNodeJSONRequestBody = InviteNodeRequest
+
 // PreviewPlacementJSONRequestBody defines body for PreviewPlacement for application/json ContentType.
 type PreviewPlacementJSONRequestBody = PlacementPreviewRequest
 
@@ -893,6 +974,12 @@ type ServerInterface interface {
 
 	// (POST /v1/images:resolve)
 	ResolveImage(w http.ResponseWriter, r *http.Request)
+	// List the nodes enrolled in a workspace
+	// (GET /v1/nodes)
+	ListNodes(w http.ResponseWriter, r *http.Request, params ListNodesParams)
+	// Reserve a node identity and mint its enrollment material
+	// (POST /v1/nodes)
+	InviteNode(w http.ResponseWriter, r *http.Request)
 
 	// (GET /v1/offers)
 	ListOffers(w http.ResponseWriter, r *http.Request, params ListOffersParams)
@@ -1276,6 +1363,66 @@ func (siw *ServerInterfaceWrapper) ResolveImage(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ResolveImage(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListNodes operation middleware
+func (siw *ServerInterfaceWrapper) ListNodes(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListNodesParams
+
+	// ------------- Required query parameter "workspace_id" -------------
+
+	if paramValue := r.URL.Query().Get("workspace_id"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "workspace_id"})
+		return
+	}
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListNodes(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// InviteNode operation middleware
+func (siw *ServerInterfaceWrapper) InviteNode(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.InviteNode(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2291,6 +2438,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("POST "+options.BaseURL+"/v1/connections/{connection_id}/authorize", wrapper.AuthorizeConnection)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/console/events", wrapper.StreamConsoleEvents)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/images:resolve", wrapper.ResolveImage)
+	m.HandleFunc("GET "+options.BaseURL+"/v1/nodes", wrapper.ListNodes)
+	m.HandleFunc("POST "+options.BaseURL+"/v1/nodes", wrapper.InviteNode)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/offers", wrapper.ListOffers)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/placements:preview", wrapper.PreviewPlacement)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/runs", wrapper.ListRuns)
@@ -2794,6 +2943,103 @@ type ResolveImage501JSONResponse ErrorResponse
 func (response ResolveImage501JSONResponse) VisitResolveImageResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListNodesRequestObject struct {
+	Params ListNodesParams
+}
+
+type ListNodesResponseObject interface {
+	VisitListNodesResponse(w http.ResponseWriter) error
+}
+
+type ListNodes200JSONResponse NodeListResponse
+
+func (response ListNodes200JSONResponse) VisitListNodesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListNodes400JSONResponse ErrorResponse
+
+func (response ListNodes400JSONResponse) VisitListNodesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListNodes401JSONResponse ErrorResponse
+
+func (response ListNodes401JSONResponse) VisitListNodesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListNodes500JSONResponse ErrorResponse
+
+func (response ListNodes500JSONResponse) VisitListNodesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type InviteNodeRequestObject struct {
+	Body *InviteNodeJSONRequestBody
+}
+
+type InviteNodeResponseObject interface {
+	VisitInviteNodeResponse(w http.ResponseWriter) error
+}
+
+type InviteNode201JSONResponse NodeBootstrapResponse
+
+func (response InviteNode201JSONResponse) VisitInviteNodeResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type InviteNode400JSONResponse ErrorResponse
+
+func (response InviteNode400JSONResponse) VisitInviteNodeResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type InviteNode401JSONResponse ErrorResponse
+
+func (response InviteNode401JSONResponse) VisitInviteNodeResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type InviteNode409JSONResponse ErrorResponse
+
+func (response InviteNode409JSONResponse) VisitInviteNodeResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type InviteNode500JSONResponse ErrorResponse
+
+func (response InviteNode500JSONResponse) VisitInviteNodeResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -4054,6 +4300,12 @@ type StrictServerInterface interface {
 
 	// (POST /v1/images:resolve)
 	ResolveImage(ctx context.Context, request ResolveImageRequestObject) (ResolveImageResponseObject, error)
+	// List the nodes enrolled in a workspace
+	// (GET /v1/nodes)
+	ListNodes(ctx context.Context, request ListNodesRequestObject) (ListNodesResponseObject, error)
+	// Reserve a node identity and mint its enrollment material
+	// (POST /v1/nodes)
+	InviteNode(ctx context.Context, request InviteNodeRequestObject) (InviteNodeResponseObject, error)
 
 	// (GET /v1/offers)
 	ListOffers(ctx context.Context, request ListOffersRequestObject) (ListOffersResponseObject, error)
@@ -4407,6 +4659,63 @@ func (sh *strictHandler) ResolveImage(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ResolveImageResponseObject); ok {
 		if err := validResponse.VisitResolveImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListNodes operation middleware
+func (sh *strictHandler) ListNodes(w http.ResponseWriter, r *http.Request, params ListNodesParams) {
+	var request ListNodesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListNodes(ctx, request.(ListNodesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListNodes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListNodesResponseObject); ok {
+		if err := validResponse.VisitListNodesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// InviteNode operation middleware
+func (sh *strictHandler) InviteNode(w http.ResponseWriter, r *http.Request) {
+	var request InviteNodeRequestObject
+
+	var body InviteNodeJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.InviteNode(ctx, request.(InviteNodeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "InviteNode")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(InviteNodeResponseObject); ok {
+		if err := validResponse.VisitInviteNodeResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

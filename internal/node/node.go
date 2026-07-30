@@ -71,6 +71,11 @@ type Record struct {
 	LastHeartbeatAt   time.Time            `json:"last_heartbeat_at,omitzero"`
 	AgentVersion      string               `json:"agent_version,omitempty"`
 	Facts             capability.NodeFacts `json:"facts"`
+	// ShadowPriceUSDPerHour is what holding this machine costs, as the operator
+	// configured it. Placement needs a price to weigh a node against fresh
+	// capacity; a node with none has unknown pricing and is refused rather than
+	// treated as free.
+	ShadowPriceUSDPerHour float64 `json:"shadow_price_usd_per_hour,omitempty"`
 }
 
 // Ref is this record's address in the capability contract.

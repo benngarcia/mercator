@@ -42,7 +42,7 @@ func (store *memoryStore) Invite(_ context.Context, record Record) error {
 	defer store.mu.Unlock()
 	key := nodeKey(record.WorkspaceID, record.ID)
 	if _, exists := store.records[key]; exists {
-		return fmt.Errorf("node: %q is already invited", record.ID)
+		return fmt.Errorf("%w: %s", ErrIdentityExists, record.ID)
 	}
 	store.records[key] = record
 	return nil

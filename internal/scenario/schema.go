@@ -69,6 +69,11 @@ const (
 	// through an enrolled node agent, which is what makes capacity reusable at
 	// all: without it, provisioned capacity executes one workload and is gone.
 	CapabilityNodeRuntime Capability = "node_runtime"
+	// CapabilityNodeBootstrap is provisioned capacity arriving with a node
+	// agent already enrolled on it. Without it, a fresh machine is capacity
+	// nothing can execute on, so only a node an operator enrolled by hand is
+	// reusable.
+	CapabilityNodeBootstrap Capability = "node_bootstrap"
 	// CapabilityHostFacts is providers advertising SSH and NVIDIA-driver
 	// facts on offers, rejected loudly when absent or false.
 	CapabilityHostFacts Capability = "host_facts"
@@ -97,6 +102,7 @@ const (
 
 var knownCapabilities = map[Capability]bool{
 	CapabilityNodeRuntime:         true,
+	CapabilityNodeBootstrap:       true,
 	CapabilityRentalSchedule:      true,
 	CapabilityScheduleAdvancement: true,
 	CapabilityHostFacts:           true,

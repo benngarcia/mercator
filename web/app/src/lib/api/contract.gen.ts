@@ -196,6 +196,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the nodes enrolled in a workspace */
+        get: operations["listNodes"];
+        put?: never;
+        /** Reserve a node identity and mint its enrollment material */
+        post: operations["inviteNode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces": {
         parameters: {
             query?: never;
@@ -982,6 +1000,47 @@ export interface components {
         WorkspaceResponse: {
             workspace: components["schemas"]["Workspace"];
         };
+        InviteNodeRequest: {
+            workspace_id: string;
+            /** @description Node identity to reserve. Generated when omitted. */
+            node_id?: string;
+            /** @description The Rental this node belongs to. Generated when omitted. */
+            rental_id?: string;
+            /** @description What holding this machine costs. Placement needs a price to weigh a node against fresh capacity; a node invited at zero has unknown pricing and is refused rather than treated as free. */
+            shadow_price_usd_per_hour: number;
+        };
+        NodeBootstrapResponse: {
+            control_plane_url: string;
+            node_id: string;
+            rental_id: string;
+            /** Format: int64 */
+            generation: number;
+            /** @description Short-lived and redeemable once. It is returned exactly this once and is never stored in a readable form. */
+            enrollment_token: string;
+            agent_version: string;
+        };
+        NodeSummary: {
+            id: string;
+            rental_id: string;
+            /** Format: int64 */
+            generation: number;
+            /**
+             * @description What the control plane believes about this node. A lost node is unobserved, not dead.
+             * @enum {string}
+             */
+            state: "enrolling" | "ready" | "lost" | "retired";
+            agent_version?: string;
+            /** Format: date-time */
+            lease_expires?: string;
+            /** Format: date-time */
+            last_heartbeat_at?: string;
+            shadow_price_usd_per_hour: number;
+            container_runtime?: string;
+            accelerators?: number;
+        };
+        NodeListResponse: {
+            nodes: components["schemas"]["NodeSummary"][];
+        };
         WorkspaceListResponse: {
             workspaces: components["schemas"]["Workspace"][];
         };
@@ -1742,6 +1801,115 @@ export interface operations {
             };
             /** @description Offer query failed */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listNodes: {
+        parameters: {
+            query: {
+                workspace_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Enrolled nodes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeListResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Node registry failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    inviteNode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InviteNodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Node invited */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeBootstrapResponse"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Node identity already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Node registry failed */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

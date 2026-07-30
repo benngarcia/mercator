@@ -86,6 +86,11 @@ type LaunchRequest struct {
 	SelectedOfferConnectionID string `json:"selected_offer_connection_id"`
 	SelectedOfferAdapterType  string `json:"selected_offer_adapter_type"`
 	SelectedOfferNativeRef    string `json:"selected_offer_native_ref"`
+	// SelectedOfferLane is the RECORDED reuse semantics of the selected offer.
+	// The run lifecycle dispatches on this value, never on a lane re-read from
+	// live offers, so a Run that landed on an enrolled node still reaches that
+	// node after a restart or an offer catalog change.
+	SelectedOfferLane domain.ExecutionLane `json:"selected_offer_lane,omitempty"`
 	// Disposition is the RECORDED cleanup intent, derived from the selected
 	// offer's Kind at launch time (provisionable->terminate, standing->release)
 	// and persisted on the launch_intent_recorded event. Cleanup dispatches on
@@ -114,6 +119,13 @@ type ObserveRequest struct {
 	LaunchKey      string
 	OwnershipToken string
 	RequestHash    string
+	// Lane, NativeRef, RunID, and AttemptID come from the recorded launch
+	// intent. A reusable-lane observation asks the node that holds the
+	// container; an ephemeral one asks the provider.
+	Lane      domain.ExecutionLane
+	NativeRef string
+	RunID     string
+	AttemptID string
 }
 
 type ExternalObservation struct {
@@ -133,6 +145,12 @@ type ReleaseRequest struct {
 	LaunchKey         string
 	OwnershipToken    string
 	LaunchRequestHash string
+	// Lane, NativeRef, and RunID come from the recorded launch intent, so
+	// releasing a container from a node Mercator keeps never turns into
+	// destroying the machine.
+	Lane      domain.ExecutionLane
+	NativeRef string
+	RunID     string
 }
 
 type ReleaseReceipt struct {
