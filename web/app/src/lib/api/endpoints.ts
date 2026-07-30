@@ -9,10 +9,16 @@ import type {
   PlacementPreviewRequest,
   ReplaySinkRequest,
   ResolveImageRequest,
+  Run,
 } from "./types";
 
 interface WorkspaceArg {
   readonly workspaceId?: string;
+}
+
+interface RunPageArg extends WorkspaceArg {
+  readonly cursor?: string;
+  readonly limit?: number;
 }
 
 interface MutationArg extends WorkspaceArg {
@@ -82,17 +88,39 @@ export const archiveWorkspace = Effect.fn("Api.archiveWorkspace")(function* (
 });
 
 export const listRuns = Effect.fn("Api.listRuns")(function* (
-  arg: WorkspaceArg = {},
+  arg: RunPageArg = {},
 ) {
   const api = yield* Api;
   const headers = yield* api.headers;
   return yield* api.request("Api.listRuns", (signal) =>
     api.client.GET("/v1/runs", {
       headers,
-      params: { query: { workspace_id: arg.workspaceId } },
+      params: {
+        query: {
+          workspace_id: arg.workspaceId,
+          cursor: arg.cursor,
+          limit: arg.limit,
+        },
+      },
       signal,
     }),
   );
+});
+
+// listAllRuns walks every page of /v1/runs. Run ids are UUIDv7 and the
+// projection lists them ascending, so reading only the first page would hide
+// the most recently created Runs, which are the ones an operator is watching.
+export const listAllRuns = Effect.fn("Api.listAllRuns")(function* (
+  arg: WorkspaceArg = {},
+) {
+  const runs: Run[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = yield* listRuns({ workspaceId: arg.workspaceId, cursor });
+    runs.push(...page.runs);
+    cursor = page.next_cursor;
+  } while (cursor !== undefined && cursor !== "");
+  return runs;
 });
 
 export const getRun = Effect.fn("Api.getRun")(function* (

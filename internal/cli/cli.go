@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -216,6 +217,8 @@ func buildRunRequest(ctx context.Context, s *session, args []string) (*http.Requ
 	idempotencyKey := fs.String("idempotency-key", "", "idempotency key (optional on create; derived from the run when omitted)")
 	workloadJSON := fs.String("workload-json", "", "workload revision json")
 	image := fs.String("image", "", "container image shorthand (alternative to --workload-json)")
+	cursor := fs.String("cursor", "", "opaque pagination cursor (list only)")
+	limit := fs.Int("limit", 0, "page size from 1 to 100 (list only)")
 	positional, err := parseFlagsAnywhere(fs, flagArgs)
 	if err != nil {
 		return nil, err
@@ -224,6 +227,9 @@ func buildRunRequest(ctx context.Context, s *session, args []string) (*http.Requ
 	// anywhere else a stray token is a mistake worth a loud error.
 	if command != "create" && len(positional) > 0 {
 		return nil, fmt.Errorf("unexpected argument %q", positional[0])
+	}
+	if command != "list" && (*cursor != "" || *limit != 0) {
+		return nil, fmt.Errorf("--cursor and --limit belong to run list")
 	}
 	// Every run command is workspace-scoped, so resolve it once here rather
 	// than making each branch restate the requirement.
@@ -305,7 +311,14 @@ func buildRunRequest(ctx context.Context, s *session, args []string) (*http.Requ
 		req.Header.Set("Idempotency-Key", key)
 		return req, nil
 	case "list":
-		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, "/v1/runs", query("workspace_id", *workspaceID)), nil)
+		values := query("workspace_id", *workspaceID)
+		if *cursor != "" {
+			values.Set("cursor", *cursor)
+		}
+		if *limit != 0 {
+			values.Set("limit", strconv.Itoa(*limit))
+		}
+		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, "/v1/runs", values), nil)
 	case "get", "wait", "events", "decision":
 		path := "/v1/runs/" + url.PathEscape(*runID)
 		if command == "wait" {

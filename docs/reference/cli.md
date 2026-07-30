@@ -126,6 +126,15 @@ mercator run refresh
 mercator run cancel
 ```
 
+`mercator run list` returns at most 50 Runs by default. A response with
+`next_cursor` has another page:
+
+```sh
+mercator run list --limit 100 --cursor "$NEXT_CURSOR"
+```
+
+Treat the cursor as opaque and pass it back unchanged.
+
 Follow-up commands after the README quickstart. Each one defaults the
 workspace and the run, so nothing here restates an id:
 

@@ -276,6 +276,26 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the previous page.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
           }
         ],
         "responses": {
@@ -2684,6 +2704,10 @@
             "items": {
               "$ref": "#/components/schemas/Run"
             }
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Opaque cursor for the next page. Omitted on the final page."
           }
         }
       },

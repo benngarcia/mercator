@@ -722,7 +722,9 @@ type Run = domain.RunRecord
 
 // RunListResponse defines model for RunListResponse.
 type RunListResponse struct {
-	Runs []Run `json:"runs"`
+	// NextCursor Opaque cursor for the next page. Omitted on the final page.
+	NextCursor string `json:"next_cursor,omitempty"`
+	Runs       []Run  `json:"runs"`
 }
 
 // RunResponse defines model for RunResponse.
@@ -842,6 +844,10 @@ type PreviewPlacementParams struct {
 // ListRunsParams defines parameters for ListRuns.
 type ListRunsParams struct {
 	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+
+	// Cursor Opaque cursor returned by the previous page.
+	Cursor string `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // CreateRunParams defines parameters for CreateRun.
@@ -1503,6 +1509,22 @@ func (siw *ServerInterfaceWrapper) ListRuns(w http.ResponseWriter, r *http.Reque
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
 		return
 	}
 

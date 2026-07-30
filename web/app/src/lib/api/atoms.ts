@@ -85,12 +85,7 @@ export const workspacesAtom = Atom.family((includeArchived: boolean) =>
 );
 
 export const runsAtom = Atom.family((workspaceId: string) =>
-  resource(
-    resourceKey.runs(workspaceId),
-    endpoints
-      .listRuns({ workspaceId })
-      .pipe(Effect.map((response) => response.runs)),
-  ),
+  resource(resourceKey.runs(workspaceId), endpoints.listAllRuns({ workspaceId })),
 );
 
 const runFamily = Atom.family((workspaceId: string) =>

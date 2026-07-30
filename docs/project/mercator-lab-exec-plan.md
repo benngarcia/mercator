@@ -48,7 +48,11 @@ The core implementation rule is:
   placement scenarios load through Blueprint v1 while preserving four green
   and eight target classifications. The catalog also validates the complete
   15-checkpoint target demonstration and its UI sidecar.
-- [ ] Slice 02: stable read models.
+- [x] 2026-07-23: Complete Slice 02 stable read models. Global scans stop at
+  a captured filtered head. The SQLite Run projection commits with every Run
+  fact, including the coupled Rental Schedule transaction, and serves bounded
+  cursor pages plus the open-Run index. Existing databases rebuild once from
+  the event log before the daemon serves requests.
 - [ ] Slice 03: deterministic kernel, entropy, and World Tape.
 - [ ] Slice 04: World Truth, Observed State, effects, and real control plane.
 - [ ] Slice 05: invariants, metamorphic tests, and reference solver.
@@ -66,9 +70,9 @@ The core implementation rule is:
   simulated state, so truth and observations are currently the same object.
 - intake IDs and several HTTP/SSE identities still use nondeterministic UUIDs.
 - daemon reconciliation and dashboard playback use wall-clock tickers.
-- `GET /v1/runs` rebuilds state by scanning the full event history. #142 and
-  #140 define the bounded scan and durable projection work needed before Lab can
-  compare projection rebuilds.
+- before Slice 02, `GET /v1/runs` rebuilt state by scanning the full event
+  history. #142 and #140 now resolve through snapshot-bounded scans and the
+  atomic indexed Run projection.
 - dashboard playback owns three hard-coded transcripts and a special 250 ms SSE
   path beside the normal API/SSE feed.
 - the current top-level placement corpus contains 12 scenarios: four green and
@@ -104,6 +108,35 @@ bun run test
 bun run build
 git diff --check
 ```
+
+### Slice 02
+
+On 2026-07-23, the exact reviewed worktree passed:
+
+```text
+go generate ./...
+go test ./...
+go vet ./...
+go build ./...
+go test -race ./internal/eventlog ./internal/storage/sqlite ./internal/orchestrator ./internal/httpapi ./internal/daemon ./internal/cli ./internal/rentalschedule ./internal/broker
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice02
+scripts/check-open-source-launch.sh
+git diff --check
+```
+
+A temporary local measurement issued 500 indexed reads of the first 50-Run
+page, then deleted the measurement harness:
+
+```text
+5,000 Runs:  69.215us per page
+50,000 Runs: 59.395us per page
+```
+
+The stable primary-key cursor keeps page work independent of total Run history.
 
 ## Public contracts
 

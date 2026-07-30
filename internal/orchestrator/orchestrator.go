@@ -18,6 +18,7 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/rentalschedule"
 	"github.com/benngarcia/mercator/internal/reporting"
+	"github.com/benngarcia/mercator/internal/runprojection"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
@@ -86,6 +87,7 @@ func IsRunEventType(candidate string) bool {
 
 type Orchestrator struct {
 	log                eventlog.WorkspaceEventLog
+	runs               runprojection.Store
 	scheduler          scheduler.Scheduler
 	adapter            Adapter
 	schedules          rentalschedule.Store
@@ -136,9 +138,18 @@ func WithRentalSchedules(schedules rentalschedule.Store) Option {
 	}
 }
 
+// WithRunProjection installs the durable Run read model. Production uses the
+// SQLite projection; focused compositions default to an event-derived adapter.
+func WithRunProjection(runs runprojection.Store) Option {
+	return func(o *Orchestrator) {
+		o.runs = runs
+	}
+}
+
 func New(log eventlog.WorkspaceEventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
 	o := &Orchestrator{
 		log:       log,
+		runs:      historyRunProjection{log: log},
 		scheduler: scheduler,
 		adapter:   adapter,
 		schedules: rentalschedule.NewMemory(log),
@@ -257,7 +268,7 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if err != nil {
 		return CreateRunResult{}, err
 	}
-	result, err := o.log.AppendIfWorkspaceActive(ctx, eventlog.AppendRequest{
+	result, err := o.appendRunIfWorkspaceActive(ctx, eventlog.AppendRequest{
 		Stream:                runStream(req.WorkspaceID, req.RunID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            req.CommandKey,
@@ -480,7 +491,7 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 		if requestErr != nil {
 			return requestErr
 		}
-		_, err = o.schedules.Commit(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
+		_, err = o.commitSchedule(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
 		return err
 	}
 	reportPublicURL, reportToken := "", ""
@@ -500,7 +511,7 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	if err != nil {
 		return err
 	}
-	_, err = o.schedules.Commit(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
+	_, err = o.commitSchedule(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
 	return err
 }
 
@@ -595,12 +606,31 @@ func (o *Orchestrator) GetRun(ctx context.Context, workspaceID, runID string) (d
 	return runRecordFromState(workspaceID, runID, state), nil
 }
 
-func (o *Orchestrator) ListRuns(ctx context.Context, workspaceID string) ([]domain.RunRecord, error) {
+func (o *Orchestrator) ListRuns(ctx context.Context, workspaceID string, request runprojection.PageRequest) (runprojection.Page, error) {
+	return o.runs.List(ctx, workspaceID, request)
+}
+
+// RebuildRunProjection replaces one Workspace projection from the event log,
+// which remains the source of truth.
+func (o *Orchestrator) RebuildRunProjection(ctx context.Context, workspaceID string) error {
+	records, err := o.runRecordsFromHistory(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	return o.runs.Replace(ctx, workspaceID, records)
+}
+
+func (o *Orchestrator) runRecordsFromHistory(ctx context.Context, workspaceID string) ([]domain.RunRecord, error) {
 	states := make(map[string]*runState)
-	for event, err := range eventlog.ScanAll(ctx, o.log, eventlog.EventFilter{
+	filter := eventlog.EventFilter{
 		WorkspaceID: workspaceID,
 		StreamTypes: []string{"run"},
-	}) {
+	}
+	head, err := o.log.LatestPosition(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	for event, err := range eventlog.ScanAll(ctx, o.log, head, filter) {
 		if err != nil {
 			return nil, err
 		}
@@ -681,30 +711,7 @@ func (o *Orchestrator) AdvanceOpenRuns(ctx context.Context, workspaceID string) 
 // a workspace whose history is all closed runs costs one filtered index scan
 // and zero stream reads per tick.
 func (o *Orchestrator) listOpenRunIDs(ctx context.Context, workspaceID string) ([]string, error) {
-	var requested []string
-	closed := map[string]bool{}
-	for event, err := range eventlog.ScanAll(ctx, o.log, eventlog.EventFilter{
-		WorkspaceID: workspaceID,
-		StreamTypes: []string{"run"},
-		EventTypes:  []string{EventRunRequested, EventRunClosed},
-	}) {
-		if err != nil {
-			return nil, err
-		}
-		switch event.Type {
-		case EventRunRequested:
-			requested = append(requested, event.StreamID)
-		case EventRunClosed:
-			closed[event.StreamID] = true
-		}
-	}
-	var open []string
-	for _, runID := range requested {
-		if !closed[runID] {
-			open = append(open, runID)
-		}
-	}
-	return open, nil
+	return o.runs.ListOpenIDs(ctx, workspaceID)
 }
 
 func (o *Orchestrator) GetBookingDecision(ctx context.Context, workspaceID, runID string) (domain.BookingDecision, error) {
@@ -823,7 +830,7 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID stri
 				return err
 			}
 		}
-		_, appendErr := o.log.Append(ctx, eventlog.AppendRequest{
+		_, appendErr := o.appendRun(ctx, eventlog.AppendRequest{
 			Stream:                runStream(workspaceID, runID),
 			ExpectedStreamVersion: version,
 			CommandKey:            commandKey,
@@ -1010,8 +1017,21 @@ func (o *Orchestrator) completeBookingAndAppend(ctx context.Context, workspaceID
 	if err != nil {
 		return err
 	}
-	_, err = o.schedules.Commit(ctx, request, schedule.Version, next)
+	_, err = o.commitSchedule(ctx, request, schedule.Version, next)
 	return err
+}
+
+func (o *Orchestrator) commitSchedule(
+	ctx context.Context,
+	request eventlog.AppendRequest,
+	expectedVersion uint64,
+	next domain.RentalSchedule,
+) (eventlog.AppendResult, error) {
+	run, err := o.projectRunAppend(ctx, request)
+	if err != nil {
+		return eventlog.AppendResult{}, err
+	}
+	return o.schedules.Commit(ctx, request, expectedVersion, next, run)
 }
 
 func (o *Orchestrator) cleanup(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
@@ -1067,8 +1087,71 @@ func (o *Orchestrator) appendEventsAs(ctx context.Context, actor json.RawMessage
 	if err != nil {
 		return err
 	}
-	_, err = o.log.Append(ctx, request)
+	_, err = o.appendRun(ctx, request)
 	return err
+}
+
+func (o *Orchestrator) appendRunIfWorkspaceActive(
+	ctx context.Context,
+	request eventlog.AppendRequest,
+) (eventlog.AppendResult, error) {
+	next, err := o.projectRunAppend(ctx, request)
+	if err != nil {
+		return eventlog.AppendResult{}, err
+	}
+	return o.runs.AppendIfWorkspaceActive(ctx, request, next)
+}
+
+func (o *Orchestrator) appendRun(
+	ctx context.Context,
+	request eventlog.AppendRequest,
+) (eventlog.AppendResult, error) {
+	next, err := o.projectRunAppend(ctx, request)
+	if err != nil {
+		return eventlog.AppendResult{}, err
+	}
+	return o.runs.Append(ctx, request, next)
+}
+
+func (o *Orchestrator) projectRunAppend(
+	ctx context.Context,
+	request eventlog.AppendRequest,
+) (domain.RunRecord, error) {
+	history, err := eventlog.ReadFullStream(ctx, o.log, request.Stream)
+	if err != nil {
+		return domain.RunRecord{}, err
+	}
+	var state runState
+	for _, stored := range history.Events {
+		if err := applyStoredEvent(&state, stored); err != nil {
+			return domain.RunRecord{}, err
+		}
+	}
+	if history.LastVersion == request.ExpectedStreamVersion {
+		for index, event := range request.Events {
+			stored := eventlog.StoredEvent{
+				ID:            event.ID,
+				WorkspaceID:   request.Stream.WorkspaceID,
+				StreamType:    request.Stream.Type,
+				StreamID:      request.Stream.ID,
+				StreamVersion: request.ExpectedStreamVersion + uint64(index) + 1,
+				Type:          event.Type,
+				SchemaVersion: event.SchemaVersion,
+				OccurredAt:    event.OccurredAt,
+				Actor:         request.Actor,
+				Visibility:    event.Visibility,
+				Data:          event.Data,
+				PrivateData:   event.PrivateData,
+			}
+			if err := applyStoredEvent(&state, stored); err != nil {
+				return domain.RunRecord{}, err
+			}
+		}
+	}
+	if err := state.validate(); err != nil {
+		return domain.RunRecord{}, err
+	}
+	return runRecordFromState(request.Stream.WorkspaceID, request.Stream.ID, state), nil
 }
 
 func runAppendRequest(actor json.RawMessage, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) (eventlog.AppendRequest, error) {

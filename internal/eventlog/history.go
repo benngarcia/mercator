@@ -35,7 +35,9 @@ func ReadFullStream(ctx context.Context, reader StreamReader, stream StreamKey) 
 	return history, nil
 }
 
-// ScanStream yields every event in a stream without retaining its full history.
+// ScanStream yields every event in a bounded aggregate stream without
+// retaining its full history. Mercator Run streams terminate and cap retries;
+// callers that need an open-ended feed use Subscribe instead.
 func ScanStream(ctx context.Context, reader StreamReader, stream StreamKey) iter.Seq2[StoredEvent, error] {
 	return func(yield func(StoredEvent, error) bool) {
 		var after uint64
@@ -62,12 +64,12 @@ func ScanStream(ctx context.Context, reader StreamReader, stream StreamKey) iter
 	}
 }
 
-// ScanAll yields every event matching a global filter without retaining the
-// complete result in memory.
-func ScanAll(ctx context.Context, reader GlobalReader, filter EventFilter) iter.Seq2[StoredEvent, error] {
+// ScanAll yields every event matching a global filter through the captured
+// global position without retaining the complete result in memory.
+func ScanAll(ctx context.Context, reader GlobalReader, through GlobalPosition, filter EventFilter) iter.Seq2[StoredEvent, error] {
 	return func(yield func(StoredEvent, error) bool) {
 		var after GlobalPosition
-		for {
+		for after < through {
 			page, err := reader.ReadAll(ctx, after, historyPageSize, filter)
 			if err != nil {
 				yield(StoredEvent{}, err)
@@ -77,6 +79,9 @@ func ScanAll(ctx context.Context, reader GlobalReader, filter EventFilter) iter.
 				return
 			}
 			for _, event := range page {
+				if event.GlobalPosition > through {
+					return
+				}
 				if event.GlobalPosition <= after {
 					yield(StoredEvent{}, fmt.Errorf("eventlog: global scan did not advance beyond position %d", after))
 					return

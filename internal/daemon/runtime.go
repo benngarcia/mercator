@@ -121,12 +121,30 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 
 	signer := reporting.NewSigner(reporting.DeriveKey(cfg.MasterKey))
 	sched := scheduler.New()
-	orchestratorOptions := []orchestrator.Option{}
+	orchestratorOptions := []orchestrator.Option{
+		orchestrator.WithRunProjection(storage.Runs()),
+	}
 	orchestratorOptions = append(orchestratorOptions, orchestrator.WithRentalSchedules(providerBroker))
 	if signer.Enabled() && cfg.PublicURL != "" {
 		orchestratorOptions = append(orchestratorOptions, orchestrator.WithReporting(cfg.PublicURL, signer))
 	}
 	orch := orchestrator.New(logStore, sched, providerBroker, orchestratorOptions...)
+	if rebuild, rebuildErr := storage.Runs().RequiresRebuild(ctx); rebuildErr != nil {
+		return nil, fmt.Errorf("daemon: inspect Run projection: %w", rebuildErr)
+	} else if rebuild {
+		workspaceIDs, listErr := orch.ListRunWorkspaces(ctx)
+		if listErr != nil {
+			return nil, fmt.Errorf("daemon: list Run projection workspaces: %w", listErr)
+		}
+		for _, workspaceID := range workspaceIDs {
+			if rebuildErr := orch.RebuildRunProjection(ctx, workspaceID); rebuildErr != nil {
+				return nil, fmt.Errorf("daemon: rebuild Run projection for %s: %w", workspaceID, rebuildErr)
+			}
+		}
+		if rebuildErr := storage.Runs().MarkRebuilt(ctx); rebuildErr != nil {
+			return nil, fmt.Errorf("daemon: finish Run projection rebuild: %w", rebuildErr)
+		}
+	}
 
 	serverOptions := []httpapi.Option{
 		httpapi.WithBearerAuth(cfg.OperatorToken),
