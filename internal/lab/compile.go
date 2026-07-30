@@ -3,6 +3,7 @@ package lab
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -38,18 +39,24 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 	if err != nil {
 		return WorldTape{}, nil, err
 	}
-	events := make([]WorldEvent, 0, len(blueprint.Arrivals.Runs))
-	samples := make([]Sample, 0, len(blueprint.Arrivals.Runs))
-	for index, arrival := range blueprint.Arrivals.Runs {
-		actualRuntime, sample, err := sampleActualRuntime(entropy, arrival)
+	arrivals, err := blueprint.Arrivals.ExpandedRuns()
+	if err != nil {
+		return WorldTape{}, nil, err
+	}
+	events := make([]WorldEvent, 0, len(arrivals))
+	samples := make([]Sample, 0, len(arrivals))
+	for index, arrival := range arrivals {
+		actualRuntime, actualByOffer, runtimeSamples, err := sampleActualRuntimes(entropy, blueprint.World, arrival)
 		if err != nil {
 			return WorldTape{}, nil, err
 		}
-		samples = append(samples, sample)
+		samples = append(samples, runtimeSamples...)
 		data, err := json.Marshal(RunArrival{
-			Name:          arrival.Name,
-			Request:       arrival.Request,
-			ActualRuntime: scenario.Duration(actualRuntime),
+			Name:                 arrival.Name,
+			Group:                arrival.Group,
+			Request:              arrival.Request,
+			ActualRuntime:        scenario.Duration(actualRuntime),
+			ActualRuntimeByOffer: actualByOffer,
 		})
 		if err != nil {
 			return WorldTape{}, nil, fmt.Errorf("encode Run arrival %q: %w", arrival.Name, err)
@@ -86,25 +93,75 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 	return tape, samples, nil
 }
 
-func sampleActualRuntime(entropy Entropy, arrival scenario.RunArrivalSpec) (time.Duration, Sample, error) {
+func sampleActualRuntimes(entropy Entropy, world scenario.WorldSpec, arrival scenario.RunArrivalSpec) (time.Duration, map[string]scenario.Duration, []Sample, error) {
+	actual, sample, err := sampleActualRuntime(entropy, arrival, "", time.Nanosecond, maximumRuntime(arrival))
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	models := slices.Clone(world.RuntimeModels)
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].Run == models[j].Run {
+			return models[i].Candidate < models[j].Candidate
+		}
+		return models[i].Run < models[j].Run
+	})
+	byOffer := map[string]scenario.Duration{}
+	samples := []Sample{sample}
+	for _, model := range models {
+		if model.Run != "" && model.Run != arrival.Name {
+			continue
+		}
+		value, candidateSample, err := sampleActualRuntime(
+			entropy,
+			arrival,
+			model.Candidate,
+			model.Minimum.Duration(),
+			model.Maximum.Duration(),
+		)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		byOffer[model.Candidate] = scenario.Duration(value)
+		samples = append(samples, candidateSample)
+	}
+	if len(byOffer) == 0 {
+		byOffer = nil
+	}
+	return actual, byOffer, samples, nil
+}
+
+func sampleActualRuntime(entropy Entropy, arrival scenario.RunArrivalSpec, candidate string, minimum, maximum time.Duration) (time.Duration, Sample, error) {
 	key := "world.actual-runtime/run/" + arrival.Name
+	if candidate != "" {
+		key += "/candidate/" + candidate
+	}
 	draw, err := entropy.Uint64(key)
 	if err != nil {
 		return 0, Sample{}, err
 	}
-	maximum := time.Hour
-	if arrival.Request.MaxRuntime != nil {
-		maximum = arrival.Request.MaxRuntime.Duration()
+	if minimum <= 0 || maximum < minimum {
+		return 0, Sample{}, fmt.Errorf("actual runtime bounds for %q are invalid", arrival.Name)
 	}
-	maximumNanos := uint64(max(maximum, time.Nanosecond))
-	actual := time.Duration(1 + draw%maximumNanos)
+	span := uint64(maximum - minimum + 1)
+	actual := minimum + time.Duration(draw%span)
 	encoded, err := json.Marshal(actual.String())
 	if err != nil {
 		return 0, Sample{}, fmt.Errorf("encode actual runtime sample for %q: %w", arrival.Name, err)
 	}
+	distribution := "uniform_duration_inclusive"
+	if candidate == "" && minimum == time.Nanosecond {
+		distribution = "uniform_duration_1ns_to_max_runtime"
+	}
 	return actual, Sample{
 		Key:          key,
-		Distribution: "uniform_duration_1ns_to_max_runtime",
+		Distribution: distribution,
 		Value:        encoded,
 	}, nil
+}
+
+func maximumRuntime(arrival scenario.RunArrivalSpec) time.Duration {
+	if arrival.Request.MaxRuntime != nil {
+		return arrival.Request.MaxRuntime.Duration()
+	}
+	return time.Hour
 }

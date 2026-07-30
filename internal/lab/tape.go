@@ -35,10 +35,12 @@ type WorldEvent struct {
 }
 
 type RunArrival struct {
-	Name          string               `json:"name"`
-	Request       scenario.RequestSpec `json:"request"`
-	ActualRuntime scenario.Duration    `json:"actual_runtime"`
-	Policy        string               `json:"-"`
+	Name                 string                       `json:"name"`
+	Group                string                       `json:"group,omitempty"`
+	Request              scenario.RequestSpec         `json:"request"`
+	ActualRuntime        scenario.Duration            `json:"actual_runtime"`
+	ActualRuntimeByOffer map[string]scenario.Duration `json:"actual_runtime_by_offer,omitempty"`
+	Policy               string                       `json:"-"`
 }
 
 func (tape WorldTape) Validate() error {
@@ -64,6 +66,11 @@ func (tape WorldTape) Validate() error {
 			}
 			if arrival.Name == "" || arrival.ActualRuntime.Duration() <= 0 {
 				return fmt.Errorf("World Tape Run arrival %q needs a name and positive actual runtime", event.ID)
+			}
+			for offerID, runtime := range arrival.ActualRuntimeByOffer {
+				if offerID == "" || runtime.Duration() <= 0 {
+					return fmt.Errorf("World Tape Run arrival %q has invalid candidate runtime", event.ID)
+				}
 			}
 		}
 		if ids[event.ID] {

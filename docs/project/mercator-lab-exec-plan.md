@@ -68,7 +68,11 @@ The core implementation rule is:
   liveness, reusable metamorphic checks, and the independent small-world
   Placement solver. Sixteen default invariants run after every transition,
   carry stable IDs, and persist their latest result in the Run Bundle.
-- [ ] Slice 06: generators, fuzzing, and semantic shrinking.
+- [x] 2026-07-24: Complete Slice 06 typed generation, Go fuzzing, and
+  deterministic semantic shrinking. Generated Blueprints cover provider
+  catalogs, Rentals, exact image graphs, Artifact DAGs, workload phases,
+  candidate runtime models, path throughput, three arrival families, and
+  provider faults.
 - [ ] Slice 07: Lab server and normal UI path.
 - [ ] Slice 08: complete vertical proof, CI tiers, and documentation.
 
@@ -255,6 +259,49 @@ consumer entered placement before its immutable input existed. Run arrivals
 with unresolved Artifact inputs now remain pending at the Lab admission
 boundary and enter the real control plane only after the simulated Artifact
 store contains a replica.
+
+### Slice 06
+
+On 2026-07-24, the exact reviewed worktree passed:
+
+```text
+go test -race ./internal/scenario ./internal/lab -count=1
+go test ./...
+go vet ./...
+go build ./...
+go test ./internal/lab -run '^$' -fuzz '^FuzzGeneratedBlueprintCompilesAndPreservesInvariants$' -fuzztime=5s -parallel=1
+cd web/app
+bun install --frozen-lockfile
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice06
+scripts/check-open-source-launch.sh
+MERCATOR_BROWSER_TEST=1 go test -count=1 ./internal/httpapi -run '^TestConsoleRunsNavigation$'
+git diff --check
+```
+
+The bounded fuzz campaign completed its three seed cases and five generated
+executions in 6.600 seconds with one worker. The browser test passed outside
+the command sandbox in 5.935 seconds.
+
+`scenario.GenerateBlueprint` derives every choice from `seed + semantic key`;
+adding an unrelated generated value leaves existing samples unchanged. Fixed,
+periodic, and burst arrival plans expand into the same ordered Run arrival
+contract. Candidate-specific actual runtime ranges compile into policy-neutral
+World Tape samples, and the selected offer chooses the matching actual without
+consulting Mercator's prediction.
+
+`scenario.ShrinkBlueprint` removes timeline operations, Runs, Rentals, provider
+offers, image layers, Artifacts, faults, and optional fields. It validates each
+candidate and keeps a reduction only when the supplied failure fingerprint
+still reproduces. The provider-rejection campaign case is persisted as
+`scenarios/minimized/provider-rejection-single-run.json`; it is irreducible
+under its fingerprint and reproduces byte-equivalent normalized output from
+one Run Bundle.
 
 ## Public contracts
 
