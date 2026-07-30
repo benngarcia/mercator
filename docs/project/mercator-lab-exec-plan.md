@@ -53,7 +53,11 @@ The core implementation rule is:
   fact, including the coupled Rental Schedule transaction, and serves bounded
   cursor pages plus the open-Run index. Existing databases rebuild once from
   the event log before the daemon serves requests.
-- [ ] Slice 03: deterministic kernel, entropy, and World Tape.
+- [x] 2026-07-24: Complete Slice 03 deterministic kernel, entropy, World
+  Tape, and Run Bundle skeleton. Execution owns immutable copies of its inputs,
+  enforces every configured limit, and supports step, duration, event,
+  predicate, and quiescence drives. Replay accepts only the strict, canonical
+  uncompressed tar contract.
 - [ ] Slice 04: World Truth, Observed State, effects, and real control plane.
 - [ ] Slice 05: invariants, metamorphic tests, and reference solver.
 - [ ] Slice 06: generators, fuzzing, and semantic shrinking.
@@ -137,6 +141,35 @@ page, then deleted the measurement harness:
 ```
 
 The stable primary-key cursor keeps page work independent of total Run history.
+
+### Slice 03
+
+On 2026-07-24, the exact reviewed worktree passed:
+
+```text
+go test ./internal/lab ./internal/scenario -count=1
+go test -race ./internal/lab ./internal/scenario -count=1
+go generate ./...
+go test ./...
+go vet ./...
+go build ./...
+cd web/app
+bun install --frozen-lockfile
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice03
+scripts/check-open-source-launch.sh
+MERCATOR_BROWSER_TEST=1 go test -count=1 ./internal/httpapi -run '^TestConsoleRunsNavigation$'
+git diff --check
+```
+
+The browser test needed an unsandboxed local rerun because Chromium's macOS
+Mach-port registration is denied inside the command sandbox. The same test
+then passed in 5.981 seconds.
 
 ## Public contracts
 
@@ -349,5 +382,13 @@ keeps #146 open.
   boundaries and missing read models, not from a need to replace the runner.
 - The console reducer and normal SSE client are reusable. The dashboard
   transcript and playback protocol are the parallel path to delete.
+- Blueprint values need explicit JSON marshaling for durations, relative
+  moments, and exact numeric bounds. Without those reciprocal encoders, a
+  bundle can serialize a valid in-memory Blueprint into a document its strict
+  decoder cannot replay.
+- Repeated-event livelock detection must include virtual time. Identical
+  periodic events at different timestamps are progress; only consecutive
+  identical transitions at one timestamp count toward the repeated-event
+  limit.
 
 Add dated findings here as implementation changes the plan.
