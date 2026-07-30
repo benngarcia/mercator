@@ -38,6 +38,21 @@ func (o *Orchestrator) PreviewPlacement(ctx context.Context, workspaceID, runID 
 	return decision, err
 }
 
+// imageManifest resolves what this Run's image contains. A resolver that is
+// absent or that fails leaves the manifest unknown, which is recorded on every
+// candidate's transfer estimate rather than treated as nothing to fetch.
+func (o *Orchestrator) imageManifest(ctx context.Context, workload domain.WorkloadRevision) domain.ImageManifest {
+	if o.manifests == nil || len(workload.Spec.Containers) == 0 {
+		return domain.ImageManifest{}
+	}
+	container := workload.Spec.Containers[0]
+	manifest, err := o.manifests.ResolveManifest(ctx, container.Image, container.Platform)
+	if err != nil {
+		return domain.ImageManifest{}
+	}
+	return manifest
+}
+
 // ValidationError carries domain violations from preview (and similar) validation.
 type ValidationError struct {
 	Violations []domain.Violation
@@ -86,6 +101,7 @@ func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, work
 	decision, err := o.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
 		RunID:                    runID,
 		Workload:                 workload,
+		Image:                    o.imageManifest(ctx, workload),
 		Offers:                   offers,
 		Schedules:                schedules,
 		ExcludedOfferSnapshotIDs: excludedOfferSnapshotIDs,

@@ -88,7 +88,9 @@ func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapsh
 		// MissingBytes 0 scores as a free pull (estimatePullSeconds returns
 		// 0), understating start latency. RunPod reports the same value; the
 		// contract gap is tracked as a follow-up issue.
-		ImageCache: domain.ImageCacheEvidence{Known: true},
+		// A fresh instance reports nothing about what it holds, so its inventory
+		// is silent rather than empty.
+		Images: domain.ImageInventory{Known: false},
 	}
 	if t.BootTime != nil && t.BootTime.MaxBootInSec > 0 {
 		offer.Provisioning = &domain.Estimate{

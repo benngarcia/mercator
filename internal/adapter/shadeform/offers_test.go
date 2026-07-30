@@ -48,8 +48,8 @@ func TestListOffersMapsCatalogTriplesToOffers(t *testing.T) {
 	if !o.Capabilities.Lifecycle.ProviderTTL {
 		t.Error("auto_delete is set on every launch; ProviderTTL must be advertised")
 	}
-	if !o.ImageCache.Known || o.ImageCache.ManifestCached {
-		t.Errorf("image cache must be a known miss, got %+v", o.ImageCache)
+	if o.Images.Known {
+		t.Errorf("a fresh instance cannot enumerate what it holds; its inventory must be silent, got %+v", o.Images)
 	}
 	if !o.ExpiresAt.After(o.ObservedAt) {
 		t.Errorf("offer must expire after observation: %+v", o)

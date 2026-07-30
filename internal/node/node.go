@@ -116,6 +116,16 @@ func (kind CommandKind) Valid() bool {
 	}
 }
 
+// MayLeaveEffectOnFailure reports whether a command that returned an error
+// might still have changed the machine. Launching and stopping a workload
+// might: the container may exist, or may already have been signalled, and doing
+// either twice is worse than not retrying. Preparing content cannot: a failed
+// pull or fetch leaves nothing, and it is idempotent, so retrying is both safe
+// and necessary.
+func (kind CommandKind) MayLeaveEffectOnFailure() bool {
+	return kind == CommandLaunchWorkload || kind == CommandStopWorkload
+}
+
 // Command is one instruction in flight to a node. OperationID makes it
 // idempotent: however many times it is delivered, the node applies it once and
 // reports Duplicate afterwards.

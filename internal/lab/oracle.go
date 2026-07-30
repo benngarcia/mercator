@@ -78,7 +78,6 @@ func referenceFeasible(input scheduler.SchedulingInput, offer domain.OfferSnapsh
 		container.Entrypoint != nil && !offer.Capabilities.Container.SupportsEntrypointOverride ||
 		!referenceCapacityAvailable(input, offer) ||
 		referenceQueueFull(input, offer) ||
-		!offer.ImageCache.Known ||
 		!offer.Pricing.Known && !input.Workload.Spec.Placement.AllowUnknownPricing {
 		return false
 	}
@@ -140,7 +139,8 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
 		provision = offer.Provisioning.Expected
 	}
-	pull := referenceTransferSeconds(offer.ImageCache.MissingBytes, registryBandwidth(offer))
+	missing, _ := input.Image.TransferBytes(offer.Images)
+	pull := referenceTransferSeconds(missing, registryBandwidth(offer))
 	start := queue + provision + pull + 1
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
@@ -183,7 +183,7 @@ func referenceUncertainty(offer domain.OfferSnapshot) float64 {
 	if offer.Reliability.Confidence > 0 && offer.Reliability.Confidence < 1 {
 		penalty += 1 - offer.Reliability.Confidence
 	}
-	if !offer.ImageCache.Known {
+	if !offer.Images.Known {
 		penalty++
 	}
 	if !offer.Pricing.Known {
@@ -227,9 +227,23 @@ func CheckDominatedOfferDoesNotChangeWinner(ctx context.Context, production sche
 	return nil
 }
 
-func CheckWarmingDoesNotIncreaseMissingBytes(before, after domain.OfferSnapshot) error {
-	if after.ImageCache.MissingBytes > before.ImageCache.MissingBytes {
-		return fmt.Errorf("warming increased missing bytes from %d to %d", before.ImageCache.MissingBytes, after.ImageCache.MissingBytes)
+// CheckWarmingDoesNotShrinkInventory is the metamorphic law that warming is
+// monotone: a host that pulled content still holds what it held before. It
+// reads the inventory rather than a missing-byte count, because what is missing
+// depends on which image is being asked about and what is held does not.
+func CheckWarmingDoesNotShrinkInventory(before, after domain.OfferSnapshot) error {
+	if before.Images.Known && !after.Images.Known {
+		return fmt.Errorf("warming made a host that could enumerate its content stop being able to")
+	}
+	for _, layer := range before.Images.LayerDigests {
+		if !after.Images.HoldsLayer(layer) {
+			return fmt.Errorf("warming lost layer %s the host already held", layer)
+		}
+	}
+	for _, image := range before.Images.ImageDigests {
+		if !after.Images.Holds(image) {
+			return fmt.Errorf("warming lost image %s the host already held", image)
+		}
 	}
 	return nil
 }

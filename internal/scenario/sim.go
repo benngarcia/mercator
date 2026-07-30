@@ -79,6 +79,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		scheduler.New(),
 		world,
 		orchestrator.WithClock(clock.Now),
+		orchestrator.WithImageManifests(world),
 	)
 	return session, nil
 }

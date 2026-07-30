@@ -53,9 +53,11 @@ func TestBuildOffersFiltersByAllowlistStockAndPrice(t *testing.T) {
 	if !o.Capacity.Available {
 		t.Errorf("capacity should be available")
 	}
-	// Image-cache fact must be KNOWN or the scheduler rejects the offer with UNKNOWN_FACT.
-	if !o.ImageCache.Known {
-		t.Errorf("image cache fact must be known (scheduler rejects unknown)")
+	// A pod that does not exist yet cannot enumerate what it holds. Saying so
+	// is the honest answer, and Placement prices the silence rather than
+	// rejecting the offer or mistaking it for warmth.
+	if o.Images.Known {
+		t.Errorf("a fresh pod cannot report an inventory, got %+v", o.Images)
 	}
 }
 

@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -213,7 +214,7 @@ type OfferSnapshot struct {
 	Pricing      PriceModel          `json:"pricing"`
 	Queue        *QueueSnapshot      `json:"queue,omitempty"`
 	Provisioning *Estimate           `json:"provisioning,omitempty"`
-	ImageCache   ImageCacheEvidence  `json:"image_cache"`
+	Images       ImageInventory      `json:"images"`
 	Capacity     CapacityEvidence    `json:"capacity"`
 	Reliability  ReliabilityEvidence `json:"reliability,omitempty"`
 }
@@ -325,10 +326,84 @@ type Estimate struct {
 	ModelVersion string  `json:"model_version,omitempty"`
 }
 
-type ImageCacheEvidence struct {
-	ManifestCached bool  `json:"manifest_cached"`
-	MissingBytes   int64 `json:"missing_bytes"`
-	Known          bool  `json:"known"`
+// ImageInventory is what one host SAYS IT HOLDS. It answers "what is here" and
+// never "what is missing", because missing is a function of what is here and
+// what the Run needs, and only the scheduler holds both. The evidence it
+// replaced carried a MissingBytes that asserted an answer about an image the
+// offer never named, which is why every offer in the tree claimed zero missing
+// bytes and every candidate looked fully warm.
+type ImageInventory struct {
+	// Known is whether the holder enumerated its content at all. False is an
+	// honest answer, not a failure: a provider that cannot tell Mercator what a
+	// fresh machine holds says so, and the uncertainty is priced rather than
+	// mistaken for warmth.
+	Known bool `json:"known"`
+	// ObservedAt is when the holder last looked. Locality decays: content can
+	// be reclaimed between one heartbeat and the next, so the age of this
+	// answer is material to how much it is worth.
+	ObservedAt time.Time `json:"observed_at,omitzero"`
+	// ImageDigests is every image manifest the host holds whole.
+	ImageDigests []string `json:"image_digests,omitempty"`
+	// LayerDigests is every layer blob the host holds. A host can hold layers
+	// of an image it has never held whole, which is the entire reason a second
+	// version of the same image starts faster than a first.
+	LayerDigests []string `json:"layer_digests,omitempty"`
+}
+
+// Holds reports whether this host holds one image whole.
+func (inventory ImageInventory) Holds(imageDigest string) bool {
+	return imageDigest != "" && slices.Contains(inventory.ImageDigests, imageDigest)
+}
+
+// HoldsLayer reports whether this host holds one layer blob.
+func (inventory ImageInventory) HoldsLayer(layerDigest string) bool {
+	return layerDigest != "" && slices.Contains(inventory.LayerDigests, layerDigest)
+}
+
+// ImageManifest is one image's exact content. It is a property of the image, so
+// it travels with the request rather than on an offer: every candidate is being
+// asked about the same image, and an offer that restated it could disagree with
+// the others.
+type ImageManifest struct {
+	// Known is false when nothing resolved the manifest. Then no candidate can
+	// be told apart on image locality, so the term is zero for all of them and
+	// the comparison is unaffected. The only cost is understating absolute
+	// start latency, which is recorded rather than hidden.
+	Known  bool         `json:"known"`
+	Digest string       `json:"digest,omitempty"`
+	Layers []ImageLayer `json:"layers,omitempty"`
+}
+
+// TransferBytes is what a host holding inventory would still have to fetch to
+// run this image. An unknown manifest transfers an unknown amount, which is not
+// the same as nothing.
+func (manifest ImageManifest) TransferBytes(inventory ImageInventory) (bytes int64, known bool) {
+	if !manifest.Known || !inventory.Known {
+		return 0, false
+	}
+	if inventory.Holds(manifest.Digest) {
+		return 0, true
+	}
+	// A manifest that names no layers can confirm a hit and cannot price a
+	// miss. Subtracting an empty layer set would charge a host that holds
+	// nothing the same zero as one holding the whole image, which is the error
+	// this type replaced.
+	if len(manifest.Layers) == 0 {
+		return 0, false
+	}
+	for _, layer := range manifest.Layers {
+		if !inventory.HoldsLayer(layer.Digest) {
+			bytes += layer.CompressedBytes
+		}
+	}
+	return bytes, true
+}
+
+// ImageLayer is one layer blob. CompressedBytes is the only size that predicts
+// transfer; what it costs on disk once unpacked answers a different question.
+type ImageLayer struct {
+	Digest          string `json:"digest"`
+	CompressedBytes int64  `json:"compressed_bytes"`
 }
 
 type CapacityEvidence struct {

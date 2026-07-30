@@ -101,7 +101,9 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 			Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 			// Vast pulls the image on the rented host; cache state is unknown
 			// but the fact must be KNOWN or the scheduler rejects the offer.
-			ImageCache: domain.ImageCacheEvidence{Known: true},
+			// A fresh instance reports nothing about what it holds, so its inventory
+			// is silent rather than empty.
+			Images: domain.ImageInventory{Known: false},
 		})
 	}
 	return snapshots

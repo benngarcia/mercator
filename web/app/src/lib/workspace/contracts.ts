@@ -176,10 +176,11 @@ export const OfferSnapshot = Schema.Struct({
     }),
   ),
   provisioning: Schema.optionalKey(Estimate),
-  image_cache: Schema.Struct({
-    manifest_cached: Schema.Boolean,
-    missing_bytes: Schema.Number,
+  images: Schema.Struct({
     known: Schema.Boolean,
+    observed_at: Schema.optionalKey(Schema.String),
+    image_digests: Schema.optionalKey(mutableArray(Schema.String)),
+    layer_digests: Schema.optionalKey(mutableArray(Schema.String)),
   }),
   capacity: Schema.Struct({
     available: Schema.Boolean,

@@ -211,6 +211,23 @@ func (w *World) ListOffers(context.Context, adapter.OfferRequest) ([]domain.Offe
 	return offers, nil
 }
 
+// ResolveManifest answers what an image contains from this world's catalog. It
+// is the simulated stand-in for a registry: the scheduler subtracts what a host
+// holds from what this returns.
+func (w *World) ResolveManifest(_ context.Context, imageDigest string, _ domain.Platform) (domain.ImageManifest, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	layers, known := w.images[imageDigest]
+	if !known {
+		return domain.ImageManifest{}, nil
+	}
+	manifest := domain.ImageManifest{Known: true, Digest: imageDigest}
+	for _, layer := range layers {
+		manifest.Layers = append(manifest.Layers, domain.ImageLayer{Digest: layer.Digest, CompressedBytes: layer.Bytes})
+	}
+	return manifest, nil
+}
+
 func (w *World) daemonOffer(daemon *Daemon, now time.Time, layers []Layer) domain.OfferSnapshot {
 	offer := daemon.Offer
 	offer.Kind = domain.OfferKindStanding
@@ -226,13 +243,14 @@ func (w *World) daemonOffer(daemon *Daemon, now time.Time, layers []Layer) domai
 	}
 	offer.ObservedAt = now
 	offer.ExpiresAt = now.Add(5 * time.Minute)
-	missing := int64(0)
+	// The daemon states which layers it holds. What is missing is the
+	// scheduler's subtraction, not a number this world asserts.
+	offer.Images = domain.ImageInventory{Known: true, ObservedAt: now}
 	for _, layer := range layers {
-		if _, held := daemon.HeldLayers[layer.Digest]; !held {
-			missing += layer.Bytes
+		if _, held := daemon.HeldLayers[layer.Digest]; held {
+			offer.Images.LayerDigests = append(offer.Images.LayerDigests, layer.Digest)
 		}
 	}
-	offer.ImageCache = domain.ImageCacheEvidence{ManifestCached: missing == 0, MissingBytes: missing, Known: true}
 	if daemon.busyAt(now) {
 		// Today's offer vocabulary marks a busy Rental unavailable. The target
 		// Broker-owned RentalSchedule will keep it feasible and create a
@@ -256,11 +274,8 @@ func (w *World) marketplaceOffer(offer domain.OfferSnapshot, now time.Time, laye
 	}
 	offer.ObservedAt = now
 	offer.ExpiresAt = now.Add(5 * time.Minute)
-	missing := int64(0)
-	for _, layer := range layers {
-		missing += layer.Bytes
-	}
-	offer.ImageCache = domain.ImageCacheEvidence{MissingBytes: missing, Known: true}
+	// A machine that does not exist yet holds nothing, and says so.
+	offer.Images = domain.ImageInventory{Known: true, ObservedAt: now}
 	offer.Capacity = domain.CapacityEvidence{Available: true, Confidence: 1}
 	return offer
 }

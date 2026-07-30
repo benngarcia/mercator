@@ -92,6 +92,7 @@ type Orchestrator struct {
 	adapter            Adapter
 	schedules          rentalschedule.Store
 	now                func() time.Time
+	manifests          ImageManifests
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
 	runLocks           keyedMutex
@@ -117,6 +118,22 @@ func WithReporting(publicURL string, signer *reporting.Signer) Option {
 	return func(o *Orchestrator) {
 		o.reportingPublicURL = publicURL
 		o.reportingSigner = signer
+	}
+}
+
+// ImageManifests resolves what an image contains, so Placement can subtract
+// what a candidate already holds from what the Run needs. A resolver that
+// cannot answer returns a manifest whose Known is false, which leaves every
+// candidate indistinguishable on locality rather than silently free.
+type ImageManifests interface {
+	ResolveManifest(ctx context.Context, imageDigest string, platform domain.Platform) (domain.ImageManifest, error)
+}
+
+// WithImageManifests supplies the manifest source. Without one, Mercator cannot
+// tell a warm candidate from a cold one and says so in every decision.
+func WithImageManifests(manifests ImageManifests) Option {
+	return func(o *Orchestrator) {
+		o.manifests = manifests
 	}
 }
 

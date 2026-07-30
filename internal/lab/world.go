@@ -593,16 +593,15 @@ func (world *simulatedWorld) offerSnapshots(source map[string]observedOffer) []d
 		offer := state.offer
 		offer.ObservedAt = world.now
 		offer.ExpiresAt = world.now.Add(5 * time.Minute)
-		missing := int64(0)
+		// The world states what each host holds. What a Run would still have
+		// to fetch is the scheduler's subtraction against the manifest, so
+		// this world no longer asserts an answer about an image the offer
+		// does not name.
+		offer.Images = domain.ImageInventory{Known: true, ObservedAt: world.now}
 		for _, layer := range layers {
-			if _, held := state.heldLayers[layer.Digest]; !held {
-				missing += int64(layer.Size)
+			if _, held := state.heldLayers[layer.Digest]; held {
+				offer.Images.LayerDigests = append(offer.Images.LayerDigests, layer.Digest)
 			}
-		}
-		offer.ImageCache = domain.ImageCacheEvidence{
-			ManifestCached: missing == 0 && len(layers) > 0,
-			MissingBytes:   missing,
-			Known:          true,
 		}
 		offers = append(offers, offer)
 	}
@@ -851,6 +850,23 @@ func (world *simulatedWorld) recordEffect(
 		Consequence:   mustJSON(consequence),
 		FaultID:       faultID,
 	})
+}
+
+// ResolveManifest answers what an image contains from the World Tape's catalog.
+// It is the simulated registry: Placement subtracts what a host holds from what
+// this returns, exactly as it would against a real one.
+func (world *simulatedWorld) ResolveManifest(_ context.Context, imageDigest string, _ domain.Platform) (domain.ImageManifest, error) {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	layers, known := world.images[imageDigest]
+	if !known {
+		return domain.ImageManifest{}, nil
+	}
+	manifest := domain.ImageManifest{Known: true, Digest: imageDigest}
+	for _, layer := range layers {
+		manifest.Layers = append(manifest.Layers, domain.ImageLayer{Digest: layer.Digest, CompressedBytes: int64(layer.Size)})
+	}
+	return manifest, nil
 }
 
 func labOffer(id string, kind domain.OfferKind, lane domain.ExecutionLane, ratePerHourUSD float64, resources *scenario.ResourcesSpec) domain.OfferSnapshot {

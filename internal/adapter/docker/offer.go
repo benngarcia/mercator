@@ -228,8 +228,12 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 			GranularitySeconds:   1,
 			Known:                true,
 		},
-		ImageCache: domain.ImageCacheEvidence{Known: true},
-		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
+		// This daemon can enumerate its own content, and nothing here asks it
+		// to yet. A silent inventory is the honest answer: claiming it holds
+		// nothing would price every image as a full transfer, and claiming it
+		// holds everything is the error this contract exists to delete.
+		Images:   domain.ImageInventory{Known: false},
+		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }
 

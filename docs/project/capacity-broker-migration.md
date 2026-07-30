@@ -63,6 +63,14 @@ complete because it works against a live provider.
   orchestrator commit path, and the Lab's simulated world.
 - [x] 2026-07-24: Approve the lane ontology and the three contracts. ADR 0005.
 - [x] 2026-07-24: Create tracking issue #155.
+- [x] 2026-07-24: Make image locality a fact about content. An offer states what
+  its host holds; the scheduler subtracts that from the image's manifest. The
+  contract it replaced carried a missing-byte count that asserted an answer about
+  an image the offer never named, which is why every offer in the tree claimed
+  zero missing bytes and every candidate looked fully warm. Unknown locality is
+  now uncertainty recorded on the estimate rather than a hard rejection, and an
+  unresolved manifest leaves every candidate indistinguishable rather than
+  favouring whoever reports most.
 - [x] 2026-07-24: Route Placement to nodes. Enrolled nodes are aggregated as
   reusable-lane offers beside provider offers, priced from the shadow price the
   operator configured at invitation. The launch intent records the selected
@@ -96,7 +104,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | not started |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory done; manifest resolution, artifacts, caches, and prefetch remain |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |

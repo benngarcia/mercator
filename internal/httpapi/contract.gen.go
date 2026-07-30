@@ -464,11 +464,19 @@ type ExecutionPolicy struct {
 	MaxRuntimeSeconds   int64 `json:"max_runtime_seconds"`
 }
 
-// ImageCacheEvidence defines model for ImageCacheEvidence.
-type ImageCacheEvidence struct {
-	Known          bool  `json:"known"`
-	ManifestCached bool  `json:"manifest_cached"`
-	MissingBytes   int64 `json:"missing_bytes"`
+// ImageInventory What this host says it holds. It answers what is here and never what is missing: what a Run would still have to fetch depends on which image is being asked about, and only the scheduler holds both halves.
+type ImageInventory struct {
+	// ImageDigests Image manifests this host holds whole.
+	ImageDigests []string `json:"image_digests,omitempty"`
+
+	// Known Whether the holder enumerated its content at all. False is an honest answer rather than a failure: a provider that cannot say what a fresh machine holds says so, and the uncertainty is priced rather than mistaken for warmth.
+	Known bool `json:"known"`
+
+	// LayerDigests Layer blobs this host holds. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first.
+	LayerDigests []string `json:"layer_digests,omitempty"`
+
+	// ObservedAt When the holder last looked. Locality decays, so the age of this answer is material.
+	ObservedAt time.Time `json:"observed_at,omitempty"`
 }
 
 // InviteNodeRequest defines model for InviteNodeRequest.

@@ -215,6 +215,7 @@ func (runtime *controlPlane) restartOrchestrator() {
 		scheduler.New(),
 		runtime.world,
 		orchestrator.WithClock(runtime.world.nowTime),
+		orchestrator.WithImageManifests(runtime.world),
 		orchestrator.WithRentalSchedules(runtime.storage.RentalSchedules()),
 		orchestrator.WithRunProjection(runtime.storage.Runs()),
 	)
