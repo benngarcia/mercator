@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/google/uuid v1.6.0
-	github.com/oapi-codegen/runtime v1.6.0
+	github.com/oapi-codegen/runtime v1.7.0
 	golang.org/x/oauth2 v0.36.0
 	modernc.org/sqlite v1.52.0
 )
