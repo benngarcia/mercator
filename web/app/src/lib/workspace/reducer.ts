@@ -1,5 +1,4 @@
 import type {
-  BookingDecision,
   CloudEvent,
   OfferSnapshot,
   WorkloadRevision,
@@ -16,6 +15,7 @@ import {
   RentalBookingData,
   RentalRemovalData,
   RequestedData,
+  type StoredBookingDecision,
 } from "./contracts";
 
 export type WorkspaceRunPhase =
@@ -32,7 +32,7 @@ export interface WorkspaceRun {
   expectedRuntimeSeconds: number | null;
   maxRuntimeSeconds: number;
   phase: WorkspaceRunPhase;
-  decision?: BookingDecision;
+  decision?: StoredBookingDecision;
   selectedOfferID?: string;
   bookingID?: string;
   runningAt?: string;
@@ -258,7 +258,7 @@ function requestRun(workspace: Workspace, event: CloudEvent): Workspace {
 
 function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
   const data = decodeEventData(BookingDecidedData, event);
-  const decision: BookingDecision = data.decision;
+  const decision: StoredBookingDecision = data.decision;
   const runID = decision.run_id ?? event.correlationid;
   if (!runID) throw new Error(`${event.type} requires decision.run_id`);
   const run = requiredRun(workspace, runID, event.type);

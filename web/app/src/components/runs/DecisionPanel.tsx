@@ -1,13 +1,13 @@
 import { CircleSlash } from "lucide-react";
 
-import type { BookingDecision } from "@/lib/api/types";
+import type { StoredBookingDecision } from "@/lib/workspace/contracts";
 import { cn } from "@/lib/utils";
 import { phaseLabel, shortDigest } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { StatBlock, CopyButton, RelativeTime } from "@/components/common";
 
 export interface DecisionPanelProps {
-  decision: BookingDecision;
+  decision: StoredBookingDecision;
   className?: string;
 }
 

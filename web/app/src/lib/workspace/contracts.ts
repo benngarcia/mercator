@@ -238,7 +238,10 @@ export const BookingDecision = Schema.Struct({
       connection_id: Schema.optionalKey(Schema.String),
       adapter_type: Schema.optionalKey(Schema.String),
       native_ref: Schema.optionalKey(Schema.String),
-      disposition: CandidateDisposition,
+      // Optional: events written before dispositions existed are still in
+      // durable history, and a required key here bricks the canvas for any
+      // workspace replaying them. Absent renders as unrecorded.
+      disposition: Schema.optionalKey(CandidateDisposition),
       feasible: Schema.Boolean,
       rejections: Schema.optionalKey(mutableArray(Violation)),
       estimates: CandidateEstimateSet,
@@ -347,3 +350,13 @@ export const RentalRemovalData = Schema.Struct({
   booking_id: Schema.optionalKey(Schema.String),
   id: Schema.optionalKey(Schema.String),
 });
+
+// What durable history can hold, as distinct from what the current writer
+// produces: replayed decisions may predate fields the API contract now
+// requires (disposition, for one), so surfaces that render stored decisions
+// type against these rather than the generated REST contract.
+export type StoredBookingDecision = Schema.Schema.Type<
+  typeof BookingDecidedData
+>["decision"];
+export type StoredCandidateDecision =
+  StoredBookingDecision["candidates"][number];

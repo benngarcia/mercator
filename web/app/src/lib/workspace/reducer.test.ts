@@ -194,3 +194,57 @@ test("replaces a failed provider booking for the same Run", () => {
     "booking-replacement-provider",
   );
 });
+
+test("applies a stored decision whose candidates predate dispositions", () => {
+  // Durable history holds booking decisions written before candidates carried
+  // a disposition. Replaying one must degrade to "unrecorded", not throw --
+  // a reducer throw is a non-retryable feed error that bricks the canvas.
+  const requested = structuredClone(requestedEvent) as WorkspaceMessage;
+  if (requested.type !== "domain_event") {
+    throw new Error("fixture needs a requested event");
+  }
+  requested.event.subject = "runs/run-legacy";
+  requested.event.correlationid = "run-legacy";
+  (requested.event.data as { run_id: string }).run_id = "run-legacy";
+
+  const decided = bookingDecidedMessage({
+    eventID: "evt_booking_legacy",
+    globalPosition: 2,
+    runID: "run-legacy",
+    bookingID: "booking-legacy",
+    state: "running",
+  });
+  if (decided.type !== "domain_event") {
+    throw new Error("helper returns a domain event");
+  }
+  (
+    decided.event.data as {
+      decision: { candidates: Record<string, unknown>[] };
+    }
+  ).decision.candidates = [
+    {
+      offer_snapshot_id: "offer-legacy",
+      connection_id: "conn-legacy",
+      adapter_type: "docker",
+      native_ref: "loopback",
+      // no disposition: this is the pre-disposition wire shape
+      feasible: true,
+      estimates: {
+        queue_seconds: { source: "offer" },
+        provision_seconds: { source: "offer" },
+        pull_seconds: { source: "image_cache" },
+        start_seconds: { p50: 1, p90: 2 },
+        cost_usd: { expected: 0 },
+      },
+    },
+  ];
+
+  const workspace = [requested, decided].reduce(
+    reduceWorkspace,
+    createWorkspace("ws_scenario"),
+  );
+
+  const run = workspace.runs["run-legacy"];
+  expect(run?.decision?.candidates[0]?.offer_snapshot_id).toBe("offer-legacy");
+  expect(run?.decision?.candidates[0]?.disposition).toBeUndefined();
+});
