@@ -3,7 +3,11 @@ import { ChevronRight, Radio } from "lucide-react";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-import type { BookingDecision, CandidateDecision, CloudEvent } from "@/lib/api/types";
+import type { CloudEvent } from "@/lib/api/types";
+import type {
+  StoredBookingDecision,
+  StoredCandidateDecision,
+} from "@/lib/workspace/contracts";
 import { cn } from "@/lib/utils";
 import { humanizeEventType, usd } from "@/lib/format";
 import { JsonViewer, RelativeTime, EmptyState, CopyButton } from "@/components/common";
@@ -143,13 +147,13 @@ function EventRow({ event, isLast, dense, highlighted }: EventRowProps) {
   );
 }
 
-function decisionForEvent(event: CloudEvent): BookingDecision | null {
+function decisionForEvent(event: CloudEvent): StoredBookingDecision | null {
   if (event.type !== "compute.run.booking_decided.v1") return null;
   const decoded = Schema.decodeUnknownResult(BookingDecidedData)(event.data);
   return Result.isSuccess(decoded) ? decoded.success.decision : null;
 }
 
-function SelectedDecision({ decision }: { decision: BookingDecision }) {
+function SelectedDecision({ decision }: { decision: StoredBookingDecision }) {
   const selected = decision.candidates.find(
     (candidate) => candidate.offer_snapshot_id === decision.selected_offer_snapshot_id,
   );
@@ -169,7 +173,7 @@ function SelectedDecision({ decision }: { decision: BookingDecision }) {
   );
 }
 
-function CandidateEvidence({ candidates }: { candidates: CandidateDecision[] }) {
+function CandidateEvidence({ candidates }: { candidates: StoredCandidateDecision[] }) {
   return (
     <div className="overflow-hidden rounded-md border bg-background/60">
       {candidates.map((candidate) => (
@@ -199,8 +203,10 @@ function CandidateEvidence({ candidates }: { candidates: CandidateDecision[] }) 
   );
 }
 
-function dispositionLabel(disposition: CandidateDecision["disposition"]): string {
+function dispositionLabel(disposition: StoredCandidateDecision["disposition"]): string {
   switch (disposition) {
+    case undefined:
+      return "unrecorded";
     case "run_now_existing_rental":
       return "reuse now";
     case "queue_existing_rental":
