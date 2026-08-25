@@ -1,6 +1,6 @@
 import { CircleSlash } from "lucide-react";
 
-import type { BookingDecision } from "@/lib/api/types";
+import type { StoredBookingDecision } from "@/lib/workspace/contracts";
 import { cn } from "@/lib/utils";
 import { phaseLabel, shortDigest } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,7 @@ import { StatBlock, CopyButton, RelativeTime } from "@/components/common";
 // on purpose: a Run nothing has decided about has no panel to draw, and stating
 // that in the type is what keeps the answer that stands from being a value every
 // reader below has to re-check for absence.
-export type DecisionChainOf = readonly [BookingDecision, ...BookingDecision[]];
+export type DecisionChainOf = readonly [StoredBookingDecision, ...StoredBookingDecision[]];
 
 export interface DecisionPanelProps {
   // decisions is every decision recorded for this Run, oldest first. The panel is
@@ -23,7 +23,7 @@ export interface DecisionPanelProps {
 }
 
 // standingDecision is the answer that stands: the last entry of the chain.
-export function standingDecision(decisions: DecisionChainOf): BookingDecision {
+export function standingDecision(decisions: DecisionChainOf): StoredBookingDecision {
   const [first, ...later] = decisions;
   return later.at(-1) ?? first;
 }
@@ -37,7 +37,7 @@ function serviceClassLabel(serviceClass: string): string {
 // to the Run, and to which moment it was counted. It is the exchange rate the
 // score was computed over, so a reader who wants to know why the costliest
 // machine won reads it here rather than inferring it.
-function waitingRate(weights: BookingDecision["weights"]): string | null {
+function waitingRate(weights: StoredBookingDecision["weights"]): string | null {
   const start = weights.start_latency_usd_per_second ?? 0;
   const completion = weights.completion_latency_usd_per_second ?? 0;
   if (start > 0) return `$${start}/s to start`;

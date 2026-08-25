@@ -314,3 +314,38 @@ function executionStartedMessage(
     },
   } as unknown as WorkspaceMessage;
 }
+
+test("applies a stored decision whose candidates predate dispositions", () => {
+  // Durable history holds booking decisions written before candidates carried
+  // a disposition. Replaying one must degrade to "unrecorded", not throw --
+  // a reducer throw is a non-retryable feed error that bricks the canvas.
+  const decided = bookingDecidedMessage({
+    eventID: "evt_booking_legacy",
+    globalPosition: 2,
+    runID: "run-legacy",
+    bookingID: "booking-legacy",
+    state: "running",
+    candidateDisposition: "run_now_existing_rental",
+  });
+  if (decided.type !== "domain_event") {
+    throw new Error("helper returns a domain event");
+  }
+  const candidates = (
+    decided.event.data as {
+      decision: { candidates: Record<string, unknown>[] };
+    }
+  ).decision.candidates;
+  delete candidates[0]?.disposition;
+
+  const workspace = [
+    requestedMessage("run-legacy", "evt_requested_legacy", 1),
+    decided,
+  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+
+  // The canvas does not store the decision itself; applying without a throw
+  // and advancing the Run is the whole claim -- decodeEventData rejected this
+  // event outright when disposition was a required key.
+  const run = workspace.runs["run-legacy"];
+  expect(run?.phase).toBe("running");
+  expect(run?.bookingID).toBe("booking-legacy");
+});

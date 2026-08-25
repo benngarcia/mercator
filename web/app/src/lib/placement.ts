@@ -1,11 +1,11 @@
-import type { CandidateDecision } from "@/lib/api/types";
+import type { StoredCandidateDecision } from "@/lib/workspace/contracts";
 
 /**
  * priced reports whether the dollars in a candidate's cost estimate are a price
  * somebody quoted. It reads the source of the cost estimate, which is where the
  * decision states that nobody did.
  */
-export function priced(candidate: CandidateDecision): boolean {
+export function priced(candidate: StoredCandidateDecision): boolean {
   return candidate.estimates?.cost_usd?.source !== "unpriced";
 }
 
@@ -22,9 +22,9 @@ export function priced(candidate: CandidateDecision): boolean {
  * reasons, and this is the same rule in the view of it.
  */
 export function orderCandidates(
-  candidates: CandidateDecision[],
+  candidates: StoredCandidateDecision[],
   selectedOfferId?: string,
-): CandidateDecision[] {
+): StoredCandidateDecision[] {
   return [...candidates].sort((a, b) => {
     if (a.offer_snapshot_id === selectedOfferId) return -1;
     if (b.offer_snapshot_id === selectedOfferId) return 1;

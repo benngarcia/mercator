@@ -2,9 +2,9 @@ import * as React from "react";
 import { ChevronRight, Star } from "lucide-react";
 
 import type {
-  CandidateDecision,
   Estimate,
 } from "@/lib/api/types";
+import type { StoredCandidateDecision } from "@/lib/workspace/contracts";
 import { cn } from "@/lib/utils";
 import { duration, usd } from "@/lib/format";
 import { orderCandidates, priced } from "@/lib/placement";
@@ -21,7 +21,7 @@ import { CopyButton } from "@/components/common";
 import { ViolationList } from "./ViolationList";
 
 export interface CandidateTableProps {
-  candidates: CandidateDecision[];
+  candidates: StoredCandidateDecision[];
   /** The winning offer; its row is highlighted and badged. */
   selectedOfferId?: string;
   className?: string;
@@ -89,7 +89,7 @@ const ESTIMATE_COLUMNS: Array<{
   key: string;
   label: string;
   kind: EstimateKind;
-  read: (estimates: CandidateDecision["estimates"]) => Estimate | undefined;
+  read: (estimates: StoredCandidateDecision["estimates"]) => Estimate | undefined;
 }> = [
   { key: "queue", label: "Queue", kind: "duration", read: (e) => e?.queue_seconds },
   {
@@ -138,7 +138,7 @@ const ESTIMATE_COLUMNS: Array<{
 const COLUMN_COUNT = 5 + ESTIMATE_COLUMNS.length; // offer, adapter, disposition, feasible, score + estimates
 
 interface CandidateRowProps {
-  candidate: CandidateDecision;
+  candidate: StoredCandidateDecision;
   selected: boolean;
 }
 
@@ -344,8 +344,10 @@ export function CandidateTable({
   );
 }
 
-function dispositionLabel(disposition: CandidateDecision["disposition"]): string {
+function dispositionLabel(disposition: StoredCandidateDecision["disposition"]): string {
   switch (disposition) {
+    case undefined:
+      return "unrecorded";
     case "run_now_existing_rental":
       return "Reuse now";
     case "queue_existing_rental":
