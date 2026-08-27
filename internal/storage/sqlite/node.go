@@ -17,8 +17,7 @@ import (
 )
 
 const createNodes = `CREATE TABLE IF NOT EXISTS nodes (
-	workspace_id TEXT NOT NULL,
-	node_id TEXT NOT NULL,
+	node_id TEXT PRIMARY KEY,
 	rental_id TEXT NOT NULL,
 	generation INTEGER NOT NULL,
 	state TEXT NOT NULL,
@@ -31,8 +30,7 @@ const createNodes = `CREATE TABLE IF NOT EXISTS nodes (
 	agent_version TEXT NOT NULL,
 	facts_json BLOB NOT NULL,
 	shadow_price_usd_per_hour REAL NOT NULL DEFAULT 0,
-	purchase_json BLOB NOT NULL DEFAULT '{}',
-	PRIMARY KEY(workspace_id, node_id)
+	purchase_json BLOB NOT NULL DEFAULT '{}'
 )`
 
 // addNodePurchase carries the terms a machine is bought on into a table that
@@ -41,10 +39,7 @@ const createNodes = `CREATE TABLE IF NOT EXISTS nodes (
 // registry that could not read the column would refuse every node it holds.
 const addNodePurchase = `ALTER TABLE nodes ADD COLUMN purchase_json BLOB NOT NULL DEFAULT '{}'`
 
-const createNodeIdentityIndex = `CREATE UNIQUE INDEX IF NOT EXISTS nodes_identity ON nodes(node_id)`
-
 const createNodeOperations = `CREATE TABLE IF NOT EXISTS node_operations (
-	workspace_id TEXT NOT NULL,
 	node_id TEXT NOT NULL,
 	operation_id TEXT NOT NULL,
 	kind TEXT NOT NULL,
@@ -55,34 +50,94 @@ const createNodeOperations = `CREATE TABLE IF NOT EXISTS node_operations (
 	failure TEXT NOT NULL,
 	payload BLOB NOT NULL,
 	sequence INTEGER NOT NULL,
-	PRIMARY KEY(workspace_id, node_id, operation_id)
+	PRIMARY KEY(node_id, operation_id)
 )`
 
 const createNodeEvents = `CREATE TABLE IF NOT EXISTS node_events (
-	workspace_id TEXT NOT NULL,
 	node_id TEXT NOT NULL,
 	event_id TEXT NOT NULL,
-	PRIMARY KEY(workspace_id, node_id, event_id)
+	PRIMARY KEY(node_id, event_id)
 )`
 
 const createNodeWorkloads = `CREATE TABLE IF NOT EXISTS node_workloads (
-	workspace_id TEXT NOT NULL,
 	node_id TEXT NOT NULL,
 	run_id TEXT NOT NULL,
 	attempt_id TEXT NOT NULL,
 	observed_at TEXT NOT NULL,
 	observation_json BLOB NOT NULL,
-	PRIMARY KEY(workspace_id, node_id, run_id, attempt_id)
+	PRIMARY KEY(node_id, run_id, attempt_id)
 )`
 
 func migrateNodes(ctx context.Context, db *sql.DB) error {
-	for _, statement := range []string{createNodes, createNodeIdentityIndex, createNodeOperations, createNodeEvents, createNodeWorkloads} {
+	if _, err := db.ExecContext(ctx, createNodes); err != nil {
+		return fmt.Errorf("migrate nodes: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, addNodePurchase); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("migrate nodes: %w", err)
+	}
+	if err := flattenNodes(ctx, db); err != nil {
+		return err
+	}
+	for _, statement := range []string{createNodeOperations, createNodeEvents, createNodeWorkloads} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("migrate nodes: %w", err)
 		}
 	}
-	if _, err := db.ExecContext(ctx, addNodePurchase); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-		return fmt.Errorf("migrate nodes: %w", err)
+	return nil
+}
+
+func flattenNodes(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := flattenNodesTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func flattenNodesTx(ctx context.Context, tx *sql.Tx) error {
+	partitioned, err := tableHasColumn(ctx, tx, "nodes", "workspace_id")
+	if err != nil || !partitioned {
+		return err
+	}
+	checks := []struct{ table, identity string }{
+		{"nodes", "node_id"},
+		{"node_operations", "node_id || '/' || operation_id"},
+		{"node_events", "node_id || '/' || event_id"},
+		{"node_workloads", "node_id || '/' || run_id || '/' || attempt_id"},
+	}
+	for _, check := range checks {
+		var collision string
+		err := tx.QueryRowContext(ctx, `SELECT `+check.identity+` FROM `+check.table+` GROUP BY `+check.identity+` HAVING COUNT(*) > 1 LIMIT 1`).Scan(&collision)
+		if err == nil {
+			return fmt.Errorf("migrate nodes: duplicate %s identity %q across workspaces", check.table, collision)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+	}
+	for _, statement := range []string{
+		`ALTER TABLE nodes RENAME TO nodes_workspace_legacy`,
+		`ALTER TABLE node_operations RENAME TO node_operations_workspace_legacy`,
+		`ALTER TABLE node_events RENAME TO node_events_workspace_legacy`,
+		`ALTER TABLE node_workloads RENAME TO node_workloads_workspace_legacy`,
+		createNodes, createNodeOperations, createNodeEvents, createNodeWorkloads,
+		`INSERT INTO nodes (node_id, rental_id, generation, state, fencing_token, enrollment_token_id, enrollment_expires, enrolled_at, lease_expires, last_heartbeat_at, agent_version, facts_json, shadow_price_usd_per_hour, purchase_json)
+		 SELECT node_id, rental_id, generation, state, fencing_token, enrollment_token_id, enrollment_expires, enrolled_at, lease_expires, last_heartbeat_at, agent_version, facts_json, shadow_price_usd_per_hour, purchase_json FROM nodes_workspace_legacy`,
+		`INSERT INTO node_operations (node_id, operation_id, kind, fencing_token, state, issued_at, settled_at, failure, payload, sequence)
+		 SELECT node_id, operation_id, kind, fencing_token, state, issued_at, settled_at, failure, payload, sequence FROM node_operations_workspace_legacy`,
+		`INSERT INTO node_events (node_id, event_id) SELECT node_id, event_id FROM node_events_workspace_legacy`,
+		`INSERT INTO node_workloads (node_id, run_id, attempt_id, observed_at, observation_json)
+		 SELECT node_id, run_id, attempt_id, observed_at, observation_json FROM node_workloads_workspace_legacy`,
+		`DROP TABLE nodes_workspace_legacy`, `DROP TABLE node_operations_workspace_legacy`,
+		`DROP TABLE node_events_workspace_legacy`, `DROP TABLE node_workloads_workspace_legacy`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("migrate nodes: flatten workspaces: %w", err)
+		}
 	}
 	return nil
 }
@@ -106,12 +161,12 @@ func (store *NodeStore) Invite(ctx context.Context, record node.Record) error {
 	}
 	_, err = store.db.ExecContext(ctx, `
 		INSERT INTO nodes (
-			workspace_id, node_id, rental_id, generation, state, fencing_token,
+			node_id, rental_id, generation, state, fencing_token,
 			enrollment_token_id, enrollment_expires, enrolled_at, lease_expires,
 			last_heartbeat_at, agent_version, facts_json, shadow_price_usd_per_hour,
 			purchase_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		record.WorkspaceID, record.ID, record.RentalID, record.Generation, string(record.State),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.ID, record.RentalID, record.Generation, string(record.State),
 		record.FencingToken, record.EnrollmentTokenID, stamp(record.EnrollmentExpires),
 		stamp(record.EnrolledAt), stamp(record.LeaseExpires), stamp(record.LastHeartbeatAt),
 		record.AgentVersion, facts, record.ShadowPriceUSDPerHour, purchase,
@@ -126,9 +181,7 @@ func (store *NodeStore) Invite(ctx context.Context, record node.Record) error {
 }
 
 // isConstraintViolation reports whether the driver refused a write because the
-// schema did, matched on the code rather than on the message. Both keys over
-// this table name the same fact: the primary key holds one record per identity
-// in a workspace, and the identity index holds one across all of them.
+// schema did, matched on the code rather than on the message.
 //
 // It is what makes ErrIdentityExists an answer this store can give. Provisioning
 // asks for an identity again on every attempt, precisely because it cannot know
@@ -140,16 +193,16 @@ func isConstraintViolation(err error) bool {
 	return errors.As(err, &sqliteError) && sqliteError.Code()&0xff == sqlite3.SQLITE_CONSTRAINT
 }
 
-func (store *NodeStore) Get(ctx context.Context, workspaceID, nodeID string) (node.Record, error) {
-	return store.scanOne(ctx, `WHERE workspace_id = ? AND node_id = ?`, workspaceID, nodeID)
+func (store *NodeStore) Get(ctx context.Context, nodeID string) (node.Record, error) {
+	return store.scanOne(ctx, `WHERE node_id = ?`, nodeID)
 }
 
 func (store *NodeStore) Find(ctx context.Context, nodeID string) (node.Record, error) {
 	return store.scanOne(ctx, `WHERE node_id = ?`, nodeID)
 }
 
-func (store *NodeStore) List(ctx context.Context, workspaceID string) ([]node.Record, error) {
-	rows, err := store.db.QueryContext(ctx, nodeColumns+` WHERE workspace_id = ? ORDER BY node_id`, workspaceID)
+func (store *NodeStore) List(ctx context.Context) ([]node.Record, error) {
+	rows, err := store.db.QueryContext(ctx, nodeColumns+` ORDER BY node_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list nodes: %w", err)
 	}
@@ -167,7 +220,7 @@ func (store *NodeStore) List(ctx context.Context, workspaceID string) ([]node.Re
 
 func (store *NodeStore) Enroll(
 	ctx context.Context,
-	workspaceID, nodeID string,
+	nodeID string,
 	enrollment node.Enrollment,
 ) (node.Record, error) {
 	facts, err := json.Marshal(enrollment.Facts)
@@ -181,8 +234,8 @@ func (store *NodeStore) Enroll(
 	defer func() { _ = tx.Rollback() }()
 	var state, tokenID string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT state, enrollment_token_id FROM nodes WHERE workspace_id = ? AND node_id = ?`,
-		workspaceID, nodeID,
+		`SELECT state, enrollment_token_id FROM nodes WHERE node_id = ?`,
+		nodeID,
 	).Scan(&state, &tokenID); errors.Is(err, sql.ErrNoRows) {
 		return node.Record{}, fmt.Errorf("%w: %s", node.ErrNotFound, nodeID)
 	} else if err != nil {
@@ -198,33 +251,33 @@ func (store *NodeStore) Enroll(
 		UPDATE nodes SET
 			state = ?, fencing_token = fencing_token + 1, enrollment_token_id = '',
 			agent_version = ?, facts_json = ?, enrolled_at = ?, last_heartbeat_at = ?, lease_expires = ?
-		WHERE workspace_id = ? AND node_id = ?`,
+		WHERE node_id = ?`,
 		string(node.StateReady), enrollment.AgentVersion, facts,
 		stamp(enrollment.EnrolledAt), stamp(enrollment.EnrolledAt), stamp(enrollment.LeaseExpires),
-		workspaceID, nodeID,
+		nodeID,
 	); err != nil {
 		return node.Record{}, fmt.Errorf("enroll node %q: %w", nodeID, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return node.Record{}, err
 	}
-	return store.Get(ctx, workspaceID, nodeID)
+	return store.Get(ctx, nodeID)
 }
 
-func (store *NodeStore) Reinvite(ctx context.Context, workspaceID, nodeID, enrollmentTokenID string, expires time.Time) error {
+func (store *NodeStore) Reinvite(ctx context.Context, nodeID, enrollmentTokenID string, expires time.Time) error {
 	result, err := store.db.ExecContext(ctx,
-		`UPDATE nodes SET enrollment_token_id = ?, enrollment_expires = ? WHERE workspace_id = ? AND node_id = ?`,
-		enrollmentTokenID, stamp(expires), workspaceID, nodeID)
+		`UPDATE nodes SET enrollment_token_id = ?, enrollment_expires = ? WHERE node_id = ?`,
+		enrollmentTokenID, stamp(expires), nodeID)
 	if err != nil {
 		return fmt.Errorf("reinvite node %q: %w", nodeID, err)
 	}
 	return requireRow(result, nodeID)
 }
 
-func (store *NodeStore) Retire(ctx context.Context, workspaceID, nodeID string) error {
+func (store *NodeStore) Retire(ctx context.Context, nodeID string) error {
 	result, err := store.db.ExecContext(ctx,
-		`UPDATE nodes SET state = ? WHERE workspace_id = ? AND node_id = ?`,
-		string(node.StateRetired), workspaceID, nodeID)
+		`UPDATE nodes SET state = ? WHERE node_id = ?`,
+		string(node.StateRetired), nodeID)
 	if err != nil {
 		return fmt.Errorf("retire node %q: %w", nodeID, err)
 	}
@@ -233,7 +286,7 @@ func (store *NodeStore) Retire(ctx context.Context, workspaceID, nodeID string) 
 
 func (store *NodeStore) Heartbeat(
 	ctx context.Context,
-	workspaceID, nodeID string,
+	nodeID string,
 	facts capability.NodeFacts,
 	leaseExpires time.Time,
 ) (node.Record, error) {
@@ -248,9 +301,9 @@ func (store *NodeStore) Heartbeat(
 	// read first, so a retirement landing between the two cannot be missed.
 	result, err := store.db.ExecContext(ctx, `
 		UPDATE nodes SET state = ?, facts_json = ?, last_heartbeat_at = ?, lease_expires = ?
-		WHERE workspace_id = ? AND node_id = ? AND state != ?`,
+		WHERE node_id = ? AND state != ?`,
 		string(node.StateReady), encoded, stamp(facts.ObservedAt), stamp(leaseExpires),
-		workspaceID, nodeID, string(node.StateRetired))
+		nodeID, string(node.StateRetired))
 	if err != nil {
 		return node.Record{}, fmt.Errorf("heartbeat node %q: %w", nodeID, err)
 	}
@@ -259,17 +312,17 @@ func (store *NodeStore) Heartbeat(
 		return node.Record{}, err
 	}
 	if changed == 0 {
-		return node.Record{}, store.refusedHeartbeat(ctx, workspaceID, nodeID)
+		return node.Record{}, store.refusedHeartbeat(ctx, nodeID)
 	}
-	return store.Get(ctx, workspaceID, nodeID)
+	return store.Get(ctx, nodeID)
 }
 
 // refusedHeartbeat says which of the two reasons a heartbeat matched no row: an
 // identity this control plane never invited, or one whose generation is over.
 // They send an operator somewhere different, and a statement that changed nothing
 // cannot say which on its own.
-func (store *NodeStore) refusedHeartbeat(ctx context.Context, workspaceID, nodeID string) error {
-	record, err := store.Get(ctx, workspaceID, nodeID)
+func (store *NodeStore) refusedHeartbeat(ctx context.Context, nodeID string) error {
+	record, err := store.Get(ctx, nodeID)
 	if err != nil {
 		return err
 	}
@@ -283,8 +336,8 @@ func (store *NodeStore) RecordEvent(ctx context.Context, event node.Event) (bool
 	}
 	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO node_events (workspace_id, node_id, event_id) VALUES (?, ?, ?)`,
-		event.WorkspaceID, event.NodeID, event.ID)
+		`INSERT OR IGNORE INTO node_events (node_id, event_id) VALUES (?, ?)`,
+		event.NodeID, event.ID)
 	if err != nil {
 		return false, fmt.Errorf("record node event: %w", err)
 	}
@@ -301,12 +354,12 @@ func (store *NodeStore) RecordEvent(ctx context.Context, event node.Event) (bool
 			return false, fmt.Errorf("encode workload observation: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO node_workloads (workspace_id, node_id, run_id, attempt_id, observed_at, observation_json)
-			VALUES (?, ?, ?, ?, ?, ?)
-			ON CONFLICT(workspace_id, node_id, run_id, attempt_id)
+			INSERT INTO node_workloads (node_id, run_id, attempt_id, observed_at, observation_json)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(node_id, run_id, attempt_id)
 			DO UPDATE SET observed_at = excluded.observed_at, observation_json = excluded.observation_json
 			WHERE excluded.observed_at >= node_workloads.observed_at`,
-			event.WorkspaceID, event.NodeID, event.Workload.RunID, event.Workload.AttemptID,
+			event.NodeID, event.Workload.RunID, event.Workload.AttemptID,
 			stamp(event.Workload.ObservedAt), encoded,
 		); err != nil {
 			return false, fmt.Errorf("record workload observation: %w", err)
@@ -317,13 +370,13 @@ func (store *NodeStore) RecordEvent(ctx context.Context, event node.Event) (bool
 
 func (store *NodeStore) LatestWorkload(
 	ctx context.Context,
-	workspaceID, nodeID, runID, attemptID string,
+	nodeID, runID, attemptID string,
 ) (capability.WorkloadObservation, bool, error) {
 	var encoded []byte
 	err := store.db.QueryRowContext(ctx, `
 		SELECT observation_json FROM node_workloads
-		WHERE workspace_id = ? AND node_id = ? AND run_id = ? AND attempt_id = ?`,
-		workspaceID, nodeID, runID, attemptID).Scan(&encoded)
+		WHERE node_id = ? AND run_id = ? AND attempt_id = ?`,
+		nodeID, runID, attemptID).Scan(&encoded)
 	if errors.Is(err, sql.ErrNoRows) {
 		return capability.WorkloadObservation{}, false, nil
 	}
@@ -337,11 +390,11 @@ func (store *NodeStore) LatestWorkload(
 	return observation, true, nil
 }
 
-func (store *NodeStore) Workloads(ctx context.Context, workspaceID, nodeID string) ([]capability.WorkloadObservation, error) {
+func (store *NodeStore) Workloads(ctx context.Context, nodeID string) ([]capability.WorkloadObservation, error) {
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT observation_json FROM node_workloads
-		WHERE workspace_id = ? AND node_id = ?
-		ORDER BY run_id, attempt_id`, workspaceID, nodeID)
+		WHERE node_id = ?
+		ORDER BY run_id, attempt_id`, nodeID)
 	if err != nil {
 		return nil, fmt.Errorf("list workload observations: %w", err)
 	}
@@ -367,7 +420,7 @@ func (store *NodeStore) AppendOperation(ctx context.Context, operation node.Oper
 		return node.Operation{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	existing, found, err := scanOperation(ctx, tx, operation.WorkspaceID, operation.NodeID, operation.OperationID)
+	existing, found, err := scanOperation(ctx, tx, operation.NodeID, operation.OperationID)
 	if err != nil {
 		return node.Operation{}, false, err
 	}
@@ -382,9 +435,9 @@ func (store *NodeStore) AppendOperation(ctx context.Context, operation node.Oper
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE node_operations
 			SET kind = ?, fencing_token = ?, state = ?, issued_at = ?, settled_at = '', failure = '', payload = ?
-			WHERE workspace_id = ? AND node_id = ? AND operation_id = ?`,
+			WHERE node_id = ? AND operation_id = ?`,
 			string(operation.Kind), operation.FencingToken, string(operation.State), stamp(operation.IssuedAt),
-			operation.Payload, operation.WorkspaceID, operation.NodeID, operation.OperationID,
+			operation.Payload, operation.NodeID, operation.OperationID,
 		); err != nil {
 			return node.Operation{}, false, fmt.Errorf("reissue node operation: %w", err)
 		}
@@ -392,16 +445,16 @@ func (store *NodeStore) AppendOperation(ctx context.Context, operation node.Oper
 	}
 	var sequence int64
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(sequence), 0) + 1 FROM node_operations WHERE workspace_id = ? AND node_id = ?`,
-		operation.WorkspaceID, operation.NodeID).Scan(&sequence); err != nil {
+		`SELECT COALESCE(MAX(sequence), 0) + 1 FROM node_operations WHERE node_id = ?`,
+		operation.NodeID).Scan(&sequence); err != nil {
 		return node.Operation{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO node_operations (
-			workspace_id, node_id, operation_id, kind, fencing_token, state,
+			node_id, operation_id, kind, fencing_token, state,
 			issued_at, settled_at, failure, payload, sequence
-		) VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)`,
-		operation.WorkspaceID, operation.NodeID, operation.OperationID, string(operation.Kind),
+		) VALUES (?, ?, ?, ?, ?, ?, '', '', ?, ?)`,
+		operation.NodeID, operation.OperationID, string(operation.Kind),
 		operation.FencingToken, string(operation.State), stamp(operation.IssuedAt),
 		operation.Payload, sequence,
 	); err != nil {
@@ -410,16 +463,16 @@ func (store *NodeStore) AppendOperation(ctx context.Context, operation node.Oper
 	return operation, false, tx.Commit()
 }
 
-func (store *NodeStore) SettleOperation(ctx context.Context, workspaceID, nodeID string, result node.Result) error {
+func (store *NodeStore) SettleOperation(ctx context.Context, nodeID string, result node.Result) error {
 	state := node.OperationApplied
 	if !result.Applied {
 		state = node.OperationRefused
 	}
 	settled, err := store.db.ExecContext(ctx, `
 		UPDATE node_operations SET state = ?, failure = ?, settled_at = ?
-		WHERE workspace_id = ? AND node_id = ? AND operation_id = ? AND state = ?`,
+		WHERE node_id = ? AND operation_id = ? AND state = ?`,
 		string(state), result.Failure, stamp(result.ReportedAt),
-		workspaceID, nodeID, result.OperationID, string(node.OperationPending))
+		nodeID, result.OperationID, string(node.OperationPending))
 	if err != nil {
 		return fmt.Errorf("settle node operation: %w", err)
 	}
@@ -432,7 +485,7 @@ func (store *NodeStore) SettleOperation(ctx context.Context, workspaceID, nodeID
 	}
 	// Already settled is not an error: a node that reports twice after a lost
 	// response must not be told it did something wrong.
-	if _, found, err := scanOperation(ctx, store.db, workspaceID, nodeID, result.OperationID); err != nil {
+	if _, found, err := scanOperation(ctx, store.db, nodeID, result.OperationID); err != nil {
 		return err
 	} else if !found {
 		return fmt.Errorf("node: %q has no operation %q to settle", nodeID, result.OperationID)
@@ -440,12 +493,12 @@ func (store *NodeStore) SettleOperation(ctx context.Context, workspaceID, nodeID
 	return nil
 }
 
-func (store *NodeStore) PendingOperations(ctx context.Context, workspaceID, nodeID string) ([]node.Operation, error) {
-	return store.operations(ctx, workspaceID, nodeID, node.OperationPending)
+func (store *NodeStore) PendingOperations(ctx context.Context, nodeID string) ([]node.Operation, error) {
+	return store.operations(ctx, nodeID, node.OperationPending)
 }
 
-func (store *NodeStore) AppliedOperationIDs(ctx context.Context, workspaceID, nodeID string) ([]string, error) {
-	applied, err := store.operations(ctx, workspaceID, nodeID, node.OperationApplied)
+func (store *NodeStore) AppliedOperationIDs(ctx context.Context, nodeID string) ([]string, error) {
+	applied, err := store.operations(ctx, nodeID, node.OperationApplied)
 	if err != nil {
 		return nil, err
 	}
@@ -477,27 +530,27 @@ func (store *NodeStore) ExpireLeases(ctx context.Context, now time.Time) ([]node
 	}
 	for _, record := range expired {
 		if _, err := store.db.ExecContext(ctx,
-			`UPDATE nodes SET state = ? WHERE workspace_id = ? AND node_id = ?`,
-			string(node.StateLost), record.WorkspaceID, record.ID); err != nil {
+			`UPDATE nodes SET state = ? WHERE node_id = ?`,
+			string(node.StateLost), record.ID); err != nil {
 			return nil, fmt.Errorf("mark node %q lost: %w", record.ID, err)
 		}
 	}
 	return expired, nil
 }
 
-func (store *NodeStore) operations(ctx context.Context, workspaceID, nodeID string, state node.OperationState) ([]node.Operation, error) {
+func (store *NodeStore) operations(ctx context.Context, nodeID string, state node.OperationState) ([]node.Operation, error) {
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT operation_id, kind, fencing_token, state, issued_at, settled_at, failure, payload
 		FROM node_operations
-		WHERE workspace_id = ? AND node_id = ? AND state = ?
-		ORDER BY sequence`, workspaceID, nodeID, string(state))
+		WHERE node_id = ? AND state = ?
+		ORDER BY sequence`, nodeID, string(state))
 	if err != nil {
 		return nil, fmt.Errorf("list node operations: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var operations []node.Operation
 	for rows.Next() {
-		operation := node.Operation{WorkspaceID: workspaceID, NodeID: nodeID}
+		operation := node.Operation{NodeID: nodeID}
 		var kind, operationState, issued, settled string
 		if err := rows.Scan(&operation.OperationID, &kind, &operation.FencingToken, &operationState,
 			&issued, &settled, &operation.Failure, &operation.Payload); err != nil {
@@ -512,7 +565,7 @@ func (store *NodeStore) operations(ctx context.Context, workspaceID, nodeID stri
 	return operations, rows.Err()
 }
 
-const nodeColumns = `SELECT workspace_id, node_id, rental_id, generation, state, fencing_token,
+const nodeColumns = `SELECT node_id, rental_id, generation, state, fencing_token,
 	enrollment_token_id, enrollment_expires, enrolled_at, lease_expires, last_heartbeat_at,
 	agent_version, facts_json, shadow_price_usd_per_hour, purchase_json FROM nodes`
 
@@ -537,7 +590,7 @@ func scanNode(rows scanner) (node.Record, error) {
 	var record node.Record
 	var state, enrollmentExpires, enrolledAt, leaseExpires, heartbeat string
 	var facts, purchase []byte
-	if err := rows.Scan(&record.WorkspaceID, &record.ID, &record.RentalID, &record.Generation,
+	if err := rows.Scan(&record.ID, &record.RentalID, &record.Generation,
 		&state, &record.FencingToken, &record.EnrollmentTokenID, &enrollmentExpires,
 		&enrolledAt, &leaseExpires, &heartbeat, &record.AgentVersion, &facts,
 		&record.ShadowPriceUSDPerHour, &purchase); err != nil {
@@ -561,13 +614,13 @@ type querier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func scanOperation(ctx context.Context, db querier, workspaceID, nodeID, operationID string) (node.Operation, bool, error) {
-	operation := node.Operation{WorkspaceID: workspaceID, NodeID: nodeID, OperationID: operationID}
+func scanOperation(ctx context.Context, db querier, nodeID, operationID string) (node.Operation, bool, error) {
+	operation := node.Operation{NodeID: nodeID, OperationID: operationID}
 	var kind, state, issued, settled string
 	err := db.QueryRowContext(ctx, `
 		SELECT kind, fencing_token, state, issued_at, settled_at, failure, payload
-		FROM node_operations WHERE workspace_id = ? AND node_id = ? AND operation_id = ?`,
-		workspaceID, nodeID, operationID,
+		FROM node_operations WHERE node_id = ? AND operation_id = ?`,
+		nodeID, operationID,
 	).Scan(&kind, &operation.FencingToken, &state, &issued, &settled, &operation.Failure, &operation.Payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return node.Operation{}, false, nil

@@ -74,7 +74,7 @@ good audit docs for a pre-1.0 project."
 Strengths:
 
 - Honest maturity language instead of GA overclaiming.
-- Event log, idempotency, workspace auth, cleanup, and public-event redaction
+- Event log, idempotency, deployment auth, cleanup, and public-event redaction
   are visible in docs and tests.
 - Dependency maintenance is explicit instead of relying on ad hoc maintainer
   memory after the repository becomes public.

@@ -3,24 +3,24 @@ import { expect, test } from "vitest";
 import type { CloudEvent } from "../api/types";
 
 import {
-  initialWorkspaceFeedSnapshot,
-  reduceWorkspaceFeed,
+  initialDeploymentFeedSnapshot,
+  reduceDeploymentFeed,
 } from "./snapshot";
 
-test("Workspace feed orders the CloudEvents that drive the canvas", () => {
+test("Deployment feed orders the CloudEvents that drive the canvas", () => {
   const first = [cloudEvent(1), cloudEvent(2)].reduce(
     (snapshot, event) =>
-      reduceWorkspaceFeed(snapshot, {
+      reduceDeploymentFeed(snapshot, {
         type: "message",
         message: eventMessage(event),
       }),
-    initialWorkspaceFeedSnapshot("ws_1"),
+    initialDeploymentFeedSnapshot(),
   );
 
-  expect(first.workspace.throughGlobalPosition).toBe(2);
+  expect(first.deployment.throughGlobalPosition).toBe(2);
   expect(first.events.map((event) => event.id)).toEqual(["event-2", "event-1"]);
 
-  const duplicate = reduceWorkspaceFeed(first, {
+  const duplicate = reduceDeploymentFeed(first, {
     type: "message",
     message: eventMessage(cloudEvent(2)),
   });
@@ -28,32 +28,32 @@ test("Workspace feed orders the CloudEvents that drive the canvas", () => {
     "event-2",
     "event-1",
   ]);
-  expect(duplicate.workspace).toBe(first.workspace);
+  expect(duplicate.deployment).toBe(first.deployment);
 
 });
 
 test("skips replayed events already incorporated, even outside the id window", () => {
-  const live = reduceWorkspaceFeed(initialWorkspaceFeedSnapshot("ws_1"), {
+  const live = reduceDeploymentFeed(initialDeploymentFeedSnapshot(), {
     type: "message",
     message: { type: "ready", throughGlobalPosition: 10 },
   });
-  expect(live.workspace.throughGlobalPosition).toBe(10);
+  expect(live.deployment.throughGlobalPosition).toBe(10);
   expect(live.events).toEqual([]);
 
-  const replayed = reduceWorkspaceFeed(live, {
+  const replayed = reduceDeploymentFeed(live, {
     type: "message",
     message: eventMessage(cloudEvent(5)),
   });
 
-  expect(replayed.workspace).toBe(live.workspace);
+  expect(replayed.deployment).toBe(live.deployment);
   expect(replayed.events).toEqual([]);
 
-  const fresh = reduceWorkspaceFeed(live, {
+  const fresh = reduceDeploymentFeed(live, {
     type: "message",
     message: eventMessage(cloudEvent(11)),
   });
   expect(fresh.events.map((event) => event.id)).toEqual(["event-11"]);
-  expect(fresh.workspace.throughGlobalPosition).toBe(11);
+  expect(fresh.deployment.throughGlobalPosition).toBe(11);
 });
 
 function eventMessage(event: CloudEvent) {
@@ -68,7 +68,6 @@ function cloudEvent(position: number): CloudEvent {
     type: "compute.test.event.v1",
     subject: "runs/run-1",
     time: "2030-01-01T00:00:00Z",
-    workspaceid: "ws_1",
     streamversion: position,
     globalposition: position,
     correlationid: "run-1",

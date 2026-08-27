@@ -574,9 +574,9 @@ func TestSchedulerPopulatesDeterministicCollectionAndCandidateAuditData(t *testi
 	offA.NativeRef = "native_a"
 
 	decision, err := New().Evaluate(context.Background(), SchedulingInput{
-		RunID:        "run_1",
-		Workload:     schedulerRevision(),
-		Offers:       []domain.OfferSnapshot{offB, offA},
+		RunID:    "run_1",
+		Workload: schedulerRevision(),
+		Offers:   []domain.OfferSnapshot{offB, offA},
 		// The census is what the collection reported, and it is not derivable from
 		// the offers: conn_c was asked and published nothing, and conn_d was not
 		// asked at all. Derived from the offers those two were the same fact, and
@@ -605,10 +605,10 @@ func TestSchedulerPopulatesDeterministicCollectionAndCandidateAuditData(t *testi
 
 func schedulerRevision() domain.WorkloadRevision {
 	return domain.WorkloadRevision{
-		ID:          "wrev_1",
-		WorkspaceID: "ws_1",
-		WorkloadID:  "wrk_1",
-		Digest:      "sha256:revision",
+		ID: "wrev_1",
+
+		WorkloadID: "wrk_1",
+		Digest:     "sha256:revision",
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{
 				Name:     "main",
@@ -816,11 +816,11 @@ func TestAHostThatCannotEnumerateItsCopiesRecordsUnknownAndNotZero(t *testing.T)
 func schedulerArtifact() domain.ArtifactVersion {
 	const id = "artifact:imagenet:v2.41"
 	return domain.ArtifactVersion{
-		ID:            id,
-		WorkspaceID:   "ws_scheduler",
+		ID: id,
+
 		ContentDigest: "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
 		SizeBytes:     40_000_000_000,
-		Location:      domain.ArtifactLocation("ws_scheduler", id),
+		Location:      domain.ArtifactLocation(id),
 		PublishedAt:   time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC),
 	}
 }

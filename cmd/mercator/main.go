@@ -54,13 +54,13 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	}
 	if len(args) > 1 && args[1] != "serve" {
 		return cli.Run(ctx, cli.Config{
-			BaseURL:     envValue(env, "MERCATOR_API_URL", ""),
-			Token:       envValue(env, "MERCATOR_API_TOKEN", ""),
-			WorkspaceID: envValue(env, "MERCATOR_WORKSPACE_ID", ""),
-			ConfigPath:  cli.DefaultConfigPath(env),
-			Args:        args[1:],
-			Stdout:      stdout,
-			Stderr:      stderr,
+			BaseURL: envValue(env, "MERCATOR_API_URL", ""),
+			Token:   envValue(env, "MERCATOR_API_TOKEN", ""),
+
+			ConfigPath: cli.DefaultConfigPath(env),
+			Args:       args[1:],
+			Stdout:     stdout,
+			Stderr:     stderr,
 		})
 	}
 	options, err := parseServeOptions(args)
@@ -108,7 +108,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("configure TLS: MERCATOR_ADDR %s is not loopback and no TLS material is configured; set %s and %s, or bind a loopback address", addr, tlsmaterial.CertFileVar, tlsmaterial.KeyFileVar)
 		return 1
 	}
-	// Creating a tenant, inviting a machine and forcing a sink to deliver are
+	// Inviting a machine and forcing a sink to deliver are
 	// not operations the audience of the public API has any business reaching.
 	// A deployment that is reachable beyond this host must therefore say where
 	// those answer instead, and there is no address they answer on by default.
@@ -119,7 +119,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	}
 	adminAddr := env[adminAddrVar]
 	if exposure := publicExposure(addr, announced); exposure != "" && adminAddr == "" {
-		stdlog.Printf("configure the administrative listener: %s, so %s must name a private address for workspace creation, node invitation and sink delivery", exposure, adminAddrVar)
+		stdlog.Printf("configure the administrative listener: %s, so %s must name a private address for node invitation and sink delivery", exposure, adminAddrVar)
 		return 1
 	}
 	listeners, err := bindListeners(addr, adminAddr)

@@ -69,10 +69,9 @@ type NodeSupport struct {
 // NodeRef names one enrolled node and the generation it is bound to. A ref
 // whose generation no longer matches the Rental is stale by construction.
 type NodeRef struct {
-	WorkspaceID string
-	NodeID      string
-	RentalID    string
-	Generation  uint64
+	NodeID     string
+	RentalID   string
+	Generation uint64
 }
 
 // EnrollmentRequest is what a node presents to join. Identity is immutable:
@@ -159,7 +158,7 @@ type NodeFacts struct {
 	// silence is priced rather than refused.
 	Artifacts domain.ArtifactInventory `json:"artifacts,omitzero"`
 	// Caches is the mutable, application-owned state on this node's disk:
-	// whether it enumerated at all, and each cache it found under the workspace
+	// whether it enumerated at all, and each cache it found in the deployment
 	// that owns it. It is best-effort by construction, because the contents are
 	// the application's business and nothing here can be checked against
 	// anything. It is the record the control plane already keeps, for the same
@@ -417,9 +416,8 @@ type LaunchWorkloadCommand struct {
 	ManifestDigest string
 	Environment    []EnvironmentBinding
 	// CacheMounts is the mutable caches to attach, as the workload declared
-	// them. The workspace they belong to is the one on this command's NodeRef:
-	// a cache's identity is workspace-scoped, so a runtime that took a name
-	// alone would be free to hand one workspace another's bytes.
+	// them. Cache identity is the declared name plus compatibility key, shared
+	// across the deployment.
 	CacheMounts []domain.CacheMountRequirement
 	// It carries no Artifact mounts. A field naming the immutable copies to
 	// attach read-only was declared here, populated by nothing, and read by

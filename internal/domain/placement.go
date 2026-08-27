@@ -155,7 +155,7 @@ const (
 // of the refusals rather than of the Bookings. A machine that is both busy and
 // too small is busy and too small: reading the Booking alone made every occupied
 // machine in the fleet look like a wait this Run was in, so one ask nothing could
-// hold emptied a workspace as soon as anything else was running.
+// hold emptied a deployment as soon as anything else was running.
 //
 // A stated refusal outranks a silence, because a machine that is too small to
 // ever hold this Run is too small whatever else it failed to say about itself.
@@ -268,7 +268,7 @@ func round(value float64, places int) float64 {
 // the fleet did publish is waiting for one of those machines. A simulated world
 // that returned its whole inventory whatever was asked could state the second and
 // never the first, so the corpus could not go red on the case that empties a
-// workspace.
+// deployment.
 //
 // It is asked only of a listing, which is a search result. Capacity Mercator
 // holds is not searched for: an enrolled node and a Rental under lease are

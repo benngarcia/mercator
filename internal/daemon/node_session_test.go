@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"testing"
 	"time"
-
-	"github.com/benngarcia/mercator/internal/daemon"
 )
 
 // TestAMachineGoesOnWorkingAfterItsFirstSessionCredentialLapses is the highest
@@ -58,8 +56,8 @@ func TestNothingAnOperatorCanReadCarriesTheInvitationAMachineJoinedWith(t *testi
 	fleet.completeWorkload(t, runID, 0)
 
 	for _, path := range []string{
-		"/v1/runs/" + runID + "/events?workspace_id=" + daemon.DefaultWorkspaceID,
-		"/v1/nodes?workspace_id=" + daemon.DefaultWorkspaceID,
+		"/v1/runs/" + runID + "/events",
+		"/v1/nodes",
 	} {
 		recorded := fleet.raw(t, path)
 		if bytes.Contains(recorded, []byte(fleet.bootstrapToken)) {

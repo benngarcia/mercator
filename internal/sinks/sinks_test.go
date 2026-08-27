@@ -110,7 +110,7 @@ func appendSinkEvents(t *testing.T, log *eventlog.SQLiteEventLog, runID, command
 		})
 	}
 	if _, err := log.Append(context.Background(), eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: "ws_1", Type: "run", ID: runID},
+		Stream:                eventlog.StreamKey{Type: "run", ID: runID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            commandKey,
 		RequestHash:           "sha256:" + commandKey,

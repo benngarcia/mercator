@@ -258,12 +258,12 @@ func (a *Adapter) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]
 			continue
 		}
 		env := i.env()
-		if req.WorkspaceID != "" && env["MERCATOR_WORKSPACE_ID"] != req.WorkspaceID {
+		if env["MERCATOR_RUN_ID"] == "" {
 			continue
 		}
 		owned = append(owned, adapter.OwnedExternalObject{
-			ExternalID:     strconv.FormatInt(i.ID, 10),
-			WorkspaceID:    env["MERCATOR_WORKSPACE_ID"],
+			ExternalID: strconv.FormatInt(i.ID, 10),
+
 			RunID:          env["MERCATOR_RUN_ID"],
 			AttemptID:      env["MERCATOR_ATTEMPT_ID"],
 			OwnershipToken: env["MERCATOR_OWNERSHIP_TOKEN"],
@@ -306,7 +306,6 @@ func (a *Adapter) launchEnv(req adapter.LaunchRequest) map[string]string {
 		}
 	}
 	// Ownership/identity keys are authoritative here; they intentionally match the orchestrator-injected reporting vars of the same name (identical values).
-	env["MERCATOR_WORKSPACE_ID"] = req.WorkspaceID
 	env["MERCATOR_RUN_ID"] = req.RunID
 	env["MERCATOR_ATTEMPT_ID"] = req.AttemptID
 	env["MERCATOR_LAUNCH_KEY"] = req.LaunchKey

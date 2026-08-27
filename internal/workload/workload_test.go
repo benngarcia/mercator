@@ -9,24 +9,16 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
-type workspaceTestLog struct {
-	eventlog.EventLog
-}
-
-func (l workspaceTestLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
-	return l.Append(ctx, request)
-}
-
 func TestServiceCreatesImmutableWorkloadRevisionsFromEvents(t *testing.T) {
 	ctx := context.Background()
 	log := openWorkloadTestLog(t)
 	svc := New(log)
 
-	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
+	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
 		t.Fatalf("create workload: %v", err)
 	}
 	rev := validRevision()
-	created, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Revision: rev})
+	created, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkloadID: "wrk_1", Revision: rev})
 	if err != nil {
 		t.Fatalf("create revision: %v", err)
 	}
@@ -34,14 +26,14 @@ func TestServiceCreatesImmutableWorkloadRevisionsFromEvents(t *testing.T) {
 		t.Fatalf("unexpected created revision: %+v", created)
 	}
 
-	got, err := svc.GetRevision(ctx, "ws_1", "wrk_1", "wrev_1")
+	got, err := svc.GetRevision(ctx, "wrk_1", "wrev_1")
 	if err != nil {
 		t.Fatalf("get revision: %v", err)
 	}
 	if got.ID != "wrev_1" || got.WorkloadID != "wrk_1" {
 		t.Fatalf("unexpected revision: %+v", got)
 	}
-	revisions, err := svc.ListRevisions(ctx, "ws_1", "wrk_1")
+	revisions, err := svc.ListRevisions(ctx, "wrk_1")
 	if err != nil {
 		t.Fatalf("list revisions: %v", err)
 	}
@@ -56,24 +48,24 @@ func TestServiceCreatesImmutableWorkloadRevisionsFromEvents(t *testing.T) {
 func TestServiceAcceptsMutableTagsRejectsInvalidRevisions(t *testing.T) {
 	ctx := context.Background()
 	svc := New(openWorkloadTestLog(t))
-	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
+	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
 		t.Fatalf("create workload: %v", err)
 	}
 
 	tagRev := validRevision()
 	tagRev.Spec.Containers[0].Image = "ghcr.io/acme/trainer:latest"
-	if _, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Revision: tagRev}); err != nil {
+	if _, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkloadID: "wrk_1", Revision: tagRev}); err != nil {
 		t.Fatalf("mutable tag revision should now be accepted (resolution is deferred to run-create): %v", err)
 	}
 
 	badRev := validRevision()
 	badRev.Spec.Containers[0].Image = ""
-	if _, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Revision: badRev}); err == nil {
+	if _, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkloadID: "wrk_1", Revision: badRev}); err == nil {
 		t.Fatal("expected an empty-image revision to be rejected")
 	}
 }
 
-func openWorkloadTestLog(t *testing.T) eventlog.WorkspaceEventLog {
+func openWorkloadTestLog(t *testing.T) eventlog.EventLog {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -84,15 +76,15 @@ func openWorkloadTestLog(t *testing.T) eventlog.WorkspaceEventLog {
 			t.Fatalf("close event log: %v", err)
 		}
 	})
-	return workspaceTestLog{EventLog: log}
+	return log
 }
 
 func validRevision() domain.WorkloadRevision {
 	return domain.WorkloadRevision{
-		ID:          "wrev_1",
-		WorkspaceID: "ws_1",
-		WorkloadID:  "wrk_1",
-		Digest:      "sha256:revision",
+		ID: "wrev_1",
+
+		WorkloadID: "wrk_1",
+		Digest:     "sha256:revision",
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{
 				Name:     "main",
@@ -114,25 +106,25 @@ func validRevision() domain.WorkloadRevision {
 // TestAStoredRevisionKeepsItsSecretsOutOfThePublicEvent is the door that stores a
 // revision held to the rule the run door has always held. An environment value is
 // where a caller puts a token, this event is public, and the console streams every
-// public event of a workspace to every reader of it, so writing the whole revision
+// public event of a deployment to every reader of it, so writing the whole revision
 // into the public payload published the token. The private payload is the copy a
 // Run is created from, so the value has to survive there and nowhere else.
 func TestAStoredRevisionKeepsItsSecretsOutOfThePublicEvent(t *testing.T) {
 	ctx := context.Background()
 	log := openWorkloadTestLog(t)
 	svc := New(log)
-	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
+	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
 		t.Fatalf("create workload: %v", err)
 	}
 	secret := "hf_live_SECRETVALUE"
 	revision := validRevision()
 	revision.Spec.Containers[0].Env = map[string]domain.EnvBinding{"HF_TOKEN": {Value: &secret}}
 
-	if _, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Revision: revision}); err != nil {
+	if _, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkloadID: "wrk_1", Revision: revision}); err != nil {
 		t.Fatalf("create revision: %v", err)
 	}
 
-	history, err := eventlog.ReadFullStream(ctx, log, workloadStream("ws_1", "wrk_1"))
+	history, err := eventlog.ReadFullStream(ctx, log, workloadStream("wrk_1"))
 	if err != nil {
 		t.Fatalf("read the workload stream: %v", err)
 	}
@@ -147,7 +139,7 @@ func TestAStoredRevisionKeepsItsSecretsOutOfThePublicEvent(t *testing.T) {
 			t.Fatalf("the public payload of %s says nothing about the variable at all: %s", event.ID, event.Data)
 		}
 	}
-	stored, err := svc.GetRevision(ctx, "ws_1", "wrk_1", "wrev_1")
+	stored, err := svc.GetRevision(ctx, "wrk_1", "wrev_1")
 	if err != nil {
 		t.Fatalf("get revision: %v", err)
 	}

@@ -14,7 +14,7 @@ rebuilt from the event log.
 ## Start Here
 
 1. Install and configure the process: [install-configuration.md](install-configuration.md).
-2. Lock down API access: [authentication-workspaces.md](authentication-workspaces.md).
+2. Lock down API access: [authentication.md](authentication.md).
 3. Exercise the local Docker adapter: [docker-adapter-operation.md](docker-adapter-operation.md).
 4. Launch a bounded provider trial: [provider-conformance.md](provider-conformance.md).
 5. Evaluate workload semantics: [workload-run-lifecycle.md](workload-run-lifecycle.md).
@@ -25,8 +25,8 @@ rebuilt from the event log.
 
 - [install-configuration.md](install-configuration.md): build, server start,
   environment variables, health checks, OpenAPI, and UI.
-- [authentication-workspaces.md](authentication-workspaces.md): authenticated
-  operator identities and explicit workspace partitions.
+- [authentication.md](authentication.md): authenticated operator and workload
+  identities for one deployment execution scope.
 - [docker-adapter-operation.md](docker-adapter-operation.md): Docker host adapter
   setup, labels, lifecycle, and cleanup checks.
 - [provider-conformance.md](provider-conformance.md): real provider launch,
@@ -74,7 +74,7 @@ export MERCATOR_API_TOKEN='<same token>'
 
 curl -fsS "$MERCATOR_API_URL/health/live"
 curl -fsS "$MERCATOR_API_URL/openapi.json" >/tmp/mercator-openapi.json
-go run ./cmd/mercator run list --workspace-id ws_eval
+go run ./cmd/mercator run list
 ```
 
 ## Production-Hardening Stance

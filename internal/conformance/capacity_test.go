@@ -333,10 +333,10 @@ func (provider *holdsTwoMachinesUnderOneLease) ListOwnedCapacity(
 			continue
 		}
 		owned = append(owned, capability.OwnedCapacity{
-			NativeRef:   nativeRef,
-			WorkspaceID: query.WorkspaceID,
-			RentalID:    orphanedRental,
-			State:       capability.CapacityStateActive,
+			NativeRef: nativeRef,
+
+			RentalID: orphanedRental,
+			State:    capability.CapacityStateActive,
 		})
 	}
 	return owned, nil

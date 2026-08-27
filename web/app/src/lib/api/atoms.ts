@@ -23,23 +23,18 @@ import type {
   RunResponse,
   SinkResult,
   SinkStatus,
-  Workspace,
 } from "./types";
 
 export const resourceKey = {
   adapters: "adapters",
   authSession: "auth-session",
-  connections: (workspaceId: string) => `connections:${workspaceId}`,
-  offers: (workspaceId: string) => `offers:${workspaceId}`,
-  run: (workspaceId: string, runId: string) => `run:${workspaceId}:${runId}`,
-  runDecision: (workspaceId: string, runId: string) =>
-    `run-decision:${workspaceId}:${runId}`,
-  runEvents: (workspaceId: string, runId: string) =>
-    `run-events:${workspaceId}:${runId}`,
-  runs: (workspaceId: string) => `runs:${workspaceId}`,
+  connections: "connections",
+  offers: "offers",
+  run: (runId: string) => `run:${runId}`,
+  runDecision: (runId: string) => `run-decision:${runId}`,
+  runEvents: (runId: string) => `run-events:${runId}`,
+  runs: "runs",
   sinkStatus: (sinkId: string) => `sink-status:${sinkId}`,
-  workspaces: (includeArchived: boolean) =>
-    `workspaces:${includeArchived ? "all" : "active"}`,
 } as const;
 
 function isTransient(error: ApiError): boolean {
@@ -77,84 +72,50 @@ export const logoutAtom = runtime.fn<void>()(
   }),
 );
 
-export const workspacesAtom = Atom.family((includeArchived: boolean) =>
+export const runsAtom = resource(resourceKey.runs, endpoints.listAllRuns());
+
+export const runAtom = Atom.family((runId: string) =>
   resource(
-    resourceKey.workspaces(includeArchived),
+    resourceKey.run(runId),
+    endpoints.getRun(runId).pipe(Effect.map((response) => response.run)),
+  ),
+);
+
+export const runEventsAtom = Atom.family((runId: string) =>
+  resource(
+    resourceKey.runEvents(runId),
     endpoints
-      .listWorkspaces(includeArchived)
-      .pipe(Effect.map((response) => response.workspaces)),
+      .getRunEvents(runId)
+      .pipe(Effect.map((response) => response.events)),
   ),
 );
 
-export const runsAtom = Atom.family((workspaceId: string) =>
-  resource(resourceKey.runs(workspaceId), endpoints.listAllRuns({ workspaceId })),
-);
-
-const runFamily = Atom.family((workspaceId: string) =>
-  Atom.family((runId: string) =>
-    resource(
-      resourceKey.run(workspaceId, runId),
-      endpoints
-        .getRun(runId, { workspaceId })
-        .pipe(Effect.map((response) => response.run)),
-    ),
-  ),
-);
-
-export const runAtom = (workspaceId: string, runId: string) =>
-  runFamily(workspaceId)(runId);
-
-const runEventsFamily = Atom.family((workspaceId: string) =>
-  Atom.family((runId: string) =>
-    resource(
-      resourceKey.runEvents(workspaceId, runId),
-      endpoints
-        .getRunEvents(runId, { workspaceId })
-        .pipe(Effect.map((response) => response.events)),
-    ),
-  ),
-);
-
-export const runEventsAtom = (workspaceId: string, runId: string) =>
-  runEventsFamily(workspaceId)(runId);
-
-// runDecisionFamily reads the whole chain of decisions recorded for one Run,
+// runDecisionsAtom reads the whole chain of decisions recorded for one Run,
 // oldest first. A decision is appended and never rewritten, so the answer that
 // stands is the last entry and the ones before it are what it replaced.
-const runDecisionFamily = Atom.family((workspaceId: string) =>
-  Atom.family((runId: string) =>
-    resource(
-      resourceKey.runDecision(workspaceId, runId),
-      endpoints.getRunDecision(runId, { workspaceId }).pipe(
-        Effect.map((response) => response.decisions),
-        Effect.catchIf(
-          (error) => error.notFound,
-          () => Effect.succeed(null),
-        ),
+export const runDecisionsAtom = Atom.family((runId: string) =>
+  resource(
+    resourceKey.runDecision(runId),
+    endpoints.getRunDecision(runId).pipe(
+      Effect.map((response) => response.decisions),
+      Effect.catchIf(
+        (error) => error.notFound,
+        () => Effect.succeed(null),
       ),
     ),
   ),
 );
 
-export const runDecisionsAtom = (workspaceId: string, runId: string) =>
-  runDecisionFamily(workspaceId)(runId);
-
-export const offersAtom = Atom.family((workspaceId: string) =>
-  resource(
-    resourceKey.offers(workspaceId),
-    endpoints
-      .listOffers({ workspaceId })
-      .pipe(Effect.map((response) => response.offers)),
-  ),
+export const offersAtom = resource(
+  resourceKey.offers,
+  endpoints.listOffers().pipe(Effect.map((response) => response.offers)),
 );
 
-export const connectionsAtom = Atom.family((workspaceId: string) =>
-  resource(
-    resourceKey.connections(workspaceId),
-    endpoints
-      .listConnections({ workspaceId })
-      .pipe(Effect.map((response) => response.connections)),
-  ),
+export const connectionsAtom = resource(
+  resourceKey.connections,
+  endpoints
+    .listConnections()
+    .pipe(Effect.map((response) => response.connections)),
 );
 
 export const adaptersAtom = resource<AdapterManifest[]>(
@@ -166,72 +127,38 @@ export const sinkStatusAtom = Atom.family((sinkId: string) =>
   resource(resourceKey.sinkStatus(sinkId), endpoints.getSinkStatus(sinkId)),
 );
 
-export const createWorkspaceAtom = runtime.fn<string>()(
-  Effect.fn("Workspace.create")(function* (displayName) {
-    const response = yield* endpoints.createWorkspace(displayName);
-    yield* invalidate(
-      resourceKey.workspaces(false),
-      resourceKey.workspaces(true),
-    );
-    return response.workspace;
-  }),
-);
-
-export const archiveWorkspaceAtom = runtime.fn<string>()(
-  Effect.fn("Workspace.archive")(function* (workspaceId) {
-    const response = yield* endpoints.archiveWorkspace(workspaceId);
-    yield* invalidate(
-      resourceKey.workspaces(false),
-      resourceKey.workspaces(true),
-    );
-    return response.workspace;
-  }),
-);
-
 interface CreateRunVariables {
   readonly body: CreateRunRequest;
-  readonly workspaceId?: string;
 }
 
 export const createRunAtom = runtime.fn<CreateRunVariables>()(
-  Effect.fn("Run.create")(function* ({ body, workspaceId }) {
-    const response = yield* endpoints.createRun(body, { workspaceId });
-    if (workspaceId !== undefined) {
-      yield* invalidate(
-        resourceKey.runs(workspaceId),
-        resourceKey.run(workspaceId, response.run_id),
-      );
-    }
+  Effect.fn("Run.create")(function* ({ body }) {
+    const response = yield* endpoints.createRun(body);
+    yield* invalidate(resourceKey.runs, resourceKey.run(response.run_id));
     return response;
   }),
 );
 
 interface RunActionVariables {
   readonly runId: string;
-  readonly workspaceId?: string;
 }
 
-function invalidateRun(response: RunResponse, workspaceId: string | undefined) {
-  return workspaceId === undefined
-    ? Effect.void
-    : invalidate(
-        resourceKey.runs(workspaceId),
-        resourceKey.run(workspaceId, response.run_id),
-      );
+function invalidateRun(response: RunResponse) {
+  return invalidate(resourceKey.runs, resourceKey.run(response.run_id));
 }
 
 export const cancelRunAtom = runtime.fn<RunActionVariables>()(
-  Effect.fn("Run.cancel")(function* ({ runId, workspaceId }) {
-    const response = yield* endpoints.cancelRun(runId, { workspaceId });
-    yield* invalidateRun(response, workspaceId);
+  Effect.fn("Run.cancel")(function* ({ runId }) {
+    const response = yield* endpoints.cancelRun(runId);
+    yield* invalidateRun(response);
     return response;
   }),
 );
 
 export const refreshRunAtom = runtime.fn<RunActionVariables>()(
-  Effect.fn("Run.refresh")(function* ({ runId, workspaceId }) {
-    const response = yield* endpoints.refreshRun(runId, { workspaceId });
-    yield* invalidateRun(response, workspaceId);
+  Effect.fn("Run.refresh")(function* ({ runId }) {
+    const response = yield* endpoints.refreshRun(runId);
+    yield* invalidateRun(response);
     return response;
   }),
 );
@@ -260,45 +187,36 @@ export const replaySinkAtom = runtime.fn<endpoints.ReplaySinkVariables>()(
 );
 
 interface ConnectionMutationVariables {
-  readonly workspaceId?: string;
   readonly body: CreateConnectionRequest;
 }
 
-function invalidateConnections(workspaceId: string | undefined) {
-  return workspaceId === undefined
-    ? Effect.void
-    : invalidate(
-        resourceKey.connections(workspaceId),
-        resourceKey.offers(workspaceId),
-      );
+function invalidateConnections() {
+  return invalidate(resourceKey.connections, resourceKey.offers);
 }
 
 export const createConnectionAtom = runtime.fn<ConnectionMutationVariables>()(
-  Effect.fn("Connection.create")(function* ({ body, workspaceId }) {
-    const response = yield* endpoints.createConnection(body, { workspaceId });
-    yield* invalidateConnections(workspaceId);
+  Effect.fn("Connection.create")(function* ({ body }) {
+    const response = yield* endpoints.createConnection(body);
+    yield* invalidateConnections();
     return response.connection;
   }),
 );
 
 interface ConnectionActionVariables {
   readonly connectionId: string;
-  readonly workspaceId?: string;
 }
 
 export const deleteConnectionAtom = runtime.fn<ConnectionActionVariables>()(
-  Effect.fn("Connection.delete")(function* ({ connectionId, workspaceId }) {
-    yield* endpoints.deleteConnection(connectionId, { workspaceId });
-    yield* invalidateConnections(workspaceId);
+  Effect.fn("Connection.delete")(function* ({ connectionId }) {
+    yield* endpoints.deleteConnection(connectionId);
+    yield* invalidateConnections();
   }),
 );
 
 export const authorizeConnectionAtom = runtime.fn<ConnectionActionVariables>()(
-  Effect.fn("Connection.authorize")(function* ({ connectionId, workspaceId }) {
-    const response = yield* endpoints.authorizeConnection(connectionId, {
-      workspaceId,
-    });
-    yield* invalidateConnections(workspaceId);
+  Effect.fn("Connection.authorize")(function* ({ connectionId }) {
+    const response = yield* endpoints.authorizeConnection(connectionId);
+    yield* invalidateConnections();
     return response.connection;
   }),
 );
@@ -312,10 +230,9 @@ export type {
   Run,
   SinkResult,
   SinkStatus,
-  Workspace,
 };
 
-// workspaceLocalityAtom is every placed Run's decision chain in one atom, so a
+// deploymentDecisionsAtom is every placed Run's decision chain in one atom, so a
 // view that needs all of them reads once instead of calling a hook per Run.
 //
 // It exists because a hook cannot be called in a loop over a list whose length
@@ -326,27 +243,21 @@ export type {
 // is the shape the reactivity layer already has: it re-derives when any Run's
 // decision changes and nothing synchronises anything.
 //
-// The key is the run list itself rather than the Workspace, because the family
-// caches per key and a Workspace whose Runs changed is a different question.
-export const workspaceDecisionsAtom = Atom.family((key: string) => {
-  const { workspaceId, runIds } = JSON.parse(key) as {
-    workspaceId: string;
-    runIds: readonly string[];
-  };
+// The key is the run list itself because the family caches per key and a
+// deployment whose Runs changed is a different question.
+export const deploymentDecisionsAtom = Atom.family((key: string) => {
+  const runIds = JSON.parse(key) as readonly string[];
   return Atom.make((get) =>
     runIds.map((runId) => ({
       runId,
       decisions: Option.getOrUndefined(
-        AsyncResult.value(get.get(runDecisionFamily(workspaceId)(runId))),
+        AsyncResult.value(get.get(runDecisionsAtom(runId))),
       ),
     })),
   );
 });
 
-// workspaceDecisionsKey builds that key. Run IDs are sorted so two renders of the
+// deploymentDecisionsKey builds that key. Run IDs are sorted so two renders of the
 // same set ask the same question.
-export const workspaceDecisionsKey = (
-  workspaceId: string,
-  runIds: readonly string[],
-): string =>
-  JSON.stringify({ workspaceId, runIds: [...runIds].sort() });
+export const deploymentDecisionsKey = (runIds: readonly string[]): string =>
+  JSON.stringify([...runIds].sort());

@@ -24,15 +24,6 @@ type trialClient struct {
 	client  *http.Client
 }
 
-func (client trialClient) createWorkspace(ctx context.Context, displayName string) (string, error) {
-	request := httpapi.CreateWorkspaceRequest{DisplayName: displayName}
-	var response httpapi.WorkspaceResponse
-	if err := client.do(ctx, http.MethodPost, "/v1/workspaces", "", request, &response); err != nil {
-		return "", fmt.Errorf("create trial workspace: %w", err)
-	}
-	return response.Workspace.ID, nil
-}
-
 func (client trialClient) ready(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
@@ -50,23 +41,23 @@ func (client trialClient) ready(ctx context.Context) error {
 }
 
 func (client trialClient) createAndAuthorizeConnection(ctx context.Context, identity trialIdentity, trial Trial) error {
-	request := httpapi.CreateConnectionRequest{WorkspaceId: identity.workspaceID, ConnectionId: identity.connectionID, AdapterType: trial.AdapterType, Config: trial.Config}
+	request := httpapi.CreateConnectionRequest{ConnectionId: identity.connectionID, AdapterType: trial.AdapterType, Config: trial.Config}
 	if trial.CredentialEnv != "" {
 		request.Credential = credential.Credential{Source: credential.SourceEnv, Ref: trial.CredentialEnv}
 	}
 	if err := client.do(ctx, http.MethodPost, "/v1/connections", "connection:create:"+identity.connectionID, request, &httpapi.ConnectionResponse{}); err != nil {
 		return fmt.Errorf("create trial connection: %w", err)
 	}
-	path := "/v1/connections/" + url.PathEscape(identity.connectionID) + "/authorize?workspace_id=" + url.QueryEscape(identity.workspaceID)
+	path := "/v1/connections/" + url.PathEscape(identity.connectionID) + "/authorize"
 	if err := client.do(ctx, http.MethodPost, path, "", nil, &httpapi.ConnectionResponse{}); err != nil {
 		return fmt.Errorf("authorize trial connection: %w", err)
 	}
 	return nil
 }
 
-func (client trialClient) affordableOffer(ctx context.Context, workspaceID string, trial Trial) (domain.OfferSnapshot, *TrialFailure, error) {
+func (client trialClient) affordableOffer(ctx context.Context, trial Trial) (domain.OfferSnapshot, *TrialFailure, error) {
 	var response httpapi.OfferListResponse
-	path := "/v1/offers?workspace_id=" + url.QueryEscape(workspaceID)
+	path := "/v1/offers"
 	if err := client.do(ctx, http.MethodGet, path, "", nil, &response); err != nil {
 		return domain.OfferSnapshot{}, nil, fmt.Errorf("list trial offers: %w", err)
 	}
@@ -96,8 +87,8 @@ func offerEvidence(offer domain.OfferSnapshot, timeout time.Duration) OfferEvide
 	return OfferEvidence{ID: offer.ID, ConnectionID: offer.ConnectionID, RatePerSecondUSD: offer.Pricing.RatePerSecondUSD, MaximumCostUSD: maximumCost(offer, timeout)}
 }
 
-func (client trialClient) createRun(ctx context.Context, workspaceID, runID string, trial Trial, offer domain.OfferSnapshot) (httpapi.RunResponse, error) {
-	request := httpapi.CreateRunRequest{WorkspaceId: workspaceID, RunId: runID, Workload: successWorkload(workspaceID, trial, offer.Platform)}
+func (client trialClient) createRun(ctx context.Context, runID string, trial Trial, offer domain.OfferSnapshot) (httpapi.RunResponse, error) {
+	request := httpapi.CreateRunRequest{RunId: runID, Workload: successWorkload(trial, offer.Platform)}
 	var response httpapi.RunResponse
 	if err := client.do(ctx, http.MethodPost, "/v1/runs", "run:create:"+runID, request, &response); err != nil {
 		return response, fmt.Errorf("create probe Run: %w", err)
@@ -105,7 +96,7 @@ func (client trialClient) createRun(ctx context.Context, workspaceID, runID stri
 	return response, nil
 }
 
-func successWorkload(workspaceID string, trial Trial, platform domain.Platform) domain.WorkloadRevision {
+func successWorkload(trial Trial, platform domain.Platform) domain.WorkloadRevision {
 	resources := domain.ResourceRequirements{}
 	if trial.AdapterType != "docker" {
 		resources.Accelerators = []domain.AcceleratorRequirement{{Vendor: "nvidia", Count: 1}}
@@ -116,7 +107,7 @@ func successWorkload(workspaceID string, trial Trial, platform domain.Platform) 
 		arguments = []string{"wait-for-cancel"}
 	}
 	return domain.WorkloadRevision{
-		ID: "wrev_conformance_probe", WorkspaceID: workspaceID, WorkloadID: "wrk_conformance_probe", Digest: "sha256:conformance-probe",
+		ID: "wrev_conformance_probe", WorkloadID: "wrk_conformance_probe", Digest: "sha256:conformance-probe",
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{Name: "main", Image: trial.Image, Platform: platform, Args: arguments}},
 			Resources:  resources,
@@ -129,10 +120,10 @@ func successWorkload(workspaceID string, trial Trial, platform domain.Platform) 
 	}
 }
 
-func (client trialClient) waitClosed(ctx context.Context, workspaceID, runID string) (httpapi.RunResponse, error) {
+func (client trialClient) waitClosed(ctx context.Context, runID string) (httpapi.RunResponse, error) {
 	for {
 		var response httpapi.RunResponse
-		path := "/v1/runs/" + url.PathEscape(runID) + "/wait?workspace_id=" + url.QueryEscape(workspaceID)
+		path := "/v1/runs/" + url.PathEscape(runID) + "/wait"
 		if err := client.do(ctx, http.MethodGet, path, "", nil, &response); err != nil {
 			return response, fmt.Errorf("wait for probe Run: %w", err)
 		}
@@ -142,8 +133,8 @@ func (client trialClient) waitClosed(ctx context.Context, workspaceID, runID str
 	}
 }
 
-func (client trialClient) cancelRun(ctx context.Context, workspaceID, runID string) error {
-	path := "/v1/runs/" + url.PathEscape(runID) + "/cancel?workspace_id=" + url.QueryEscape(workspaceID)
+func (client trialClient) cancelRun(ctx context.Context, runID string) error {
+	path := "/v1/runs/" + url.PathEscape(runID) + "/cancel"
 	err := client.do(ctx, http.MethodPost, path, "", nil, &httpapi.RunResponse{})
 	var responseErr *httpResponseError
 	if errors.As(err, &responseErr) && responseErr.status == http.StatusNotFound {
@@ -152,20 +143,20 @@ func (client trialClient) cancelRun(ctx context.Context, workspaceID, runID stri
 	return err
 }
 
-func (client trialClient) getRun(ctx context.Context, workspaceID, runID string) (httpapi.RunResponse, error) {
+func (client trialClient) getRun(ctx context.Context, runID string) (httpapi.RunResponse, error) {
 	var response httpapi.RunResponse
-	path := "/v1/runs/" + url.PathEscape(runID) + "?workspace_id=" + url.QueryEscape(workspaceID)
+	path := "/v1/runs/" + url.PathEscape(runID)
 	err := client.do(ctx, http.MethodGet, path, "", nil, &response)
 	return response, err
 }
 
-func (client trialClient) captureRunEvidence(ctx context.Context, workspaceID string, run httpapi.RunResponse, started time.Time) (RunEvidence, error) {
+func (client trialClient) captureRunEvidence(ctx context.Context, run httpapi.RunResponse, started time.Time) (RunEvidence, error) {
 	evidence := runEvidence(run.Run)
 	evidence.StartedAt = started
 	evidence.DurationSecs = time.Since(started).Seconds()
 	var responseErr error
 	var response httpapi.EventListResponse
-	path := "/v1/runs/" + url.PathEscape(run.Run.ID) + "/events?workspace_id=" + url.QueryEscape(workspaceID)
+	path := "/v1/runs/" + url.PathEscape(run.Run.ID) + "/events"
 	if err := client.do(ctx, http.MethodGet, path, "", nil, &response); err != nil {
 		responseErr = errors.Join(responseErr, fmt.Errorf("read probe events: %w", err))
 	} else {
@@ -175,7 +166,7 @@ func (client trialClient) captureRunEvidence(ctx context.Context, workspaceID st
 		}
 	}
 	var decisions httpapi.BookingDecisionResponse
-	path = "/v1/runs/" + url.PathEscape(run.Run.ID) + "/decision?workspace_id=" + url.QueryEscape(workspaceID)
+	path = "/v1/runs/" + url.PathEscape(run.Run.ID) + "/decision"
 	if err := client.do(ctx, http.MethodGet, path, "", nil, &decisions); err != nil {
 		responseErr = errors.Join(responseErr, fmt.Errorf("read probe booking decisions: %w", err))
 	} else {

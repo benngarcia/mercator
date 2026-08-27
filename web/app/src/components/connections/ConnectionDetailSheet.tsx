@@ -301,8 +301,8 @@ export function ConnectionDetailSheet({
               <SheetTitle>{manifest.display_name}</SheetTitle>
               <SheetDescription className="mt-0.5">
                 {connections.length === 1
-                  ? "1 connection in this workspace."
-                  : `${connections.length} connections in this workspace.`}
+                  ? "1 connection in this deployment."
+                  : `${connections.length} connections in this deployment.`}
               </SheetDescription>
             </div>
           </div>

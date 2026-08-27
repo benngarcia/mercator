@@ -1,7 +1,7 @@
 # Contributing To Mercator
 
 Mercator is pre-1.0 infrastructure software. Contributions are welcome, but the
-bar is intentionally high for behavior that affects run safety, workspace
+bar is intentionally high for behavior that affects run safety, deployment
 isolation, credentials, cleanup, or public event data.
 
 ## Development Setup

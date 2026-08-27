@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	labWorkspace  = "ws_lab"
 	labConnection = "connection:lab"
 	// labProvider is the backend a listing comes from when the Blueprint names no
 	// provider for it.
@@ -26,16 +25,16 @@ const (
 )
 
 type externalExecution struct {
-	ExternalID     string                `json:"external_id"`
-	RunID          string                `json:"run_id"`
-	AttemptID      string                `json:"attempt_id"`
-	LaunchKey      string                `json:"launch_key"`
-	OwnershipToken string                `json:"ownership_token"`
-	RequestHash    string                `json:"request_hash"`
-	OfferID        string                `json:"offer_id"`
-	WorkspaceID    string                `json:"workspace_id"`
-	Disposition    domain.Disposition    `json:"disposition"`
-	Phase          adapter.ExternalPhase `json:"phase"`
+	ExternalID     string `json:"external_id"`
+	RunID          string `json:"run_id"`
+	AttemptID      string `json:"attempt_id"`
+	LaunchKey      string `json:"launch_key"`
+	OwnershipToken string `json:"ownership_token"`
+	RequestHash    string `json:"request_hash"`
+	OfferID        string `json:"offer_id"`
+
+	Disposition domain.Disposition    `json:"disposition"`
+	Phase       adapter.ExternalPhase `json:"phase"`
 	// CacheMounts is the mutable state Mercator asked this launch to attach. It
 	// is taken from the launch command rather than from the arrival, so what the
 	// world reads and writes is what the control plane actually declared.
@@ -97,7 +96,7 @@ type orphanedCapacity struct {
 	OwnershipToken string `json:"ownership_token"`
 	RequestHash    string `json:"request_hash"`
 	OfferID        string `json:"offer_id"`
-	WorkspaceID    string `json:"workspace_id"`
+
 	// RunID is the Run identity this capacity still carries, and empty is the
 	// answer that makes it unattributable. It is what the orphan policy reads.
 	RunID string `json:"run_id,omitempty"`
@@ -113,17 +112,13 @@ type ArtifactReplica struct {
 }
 
 // CacheMountState is one mutable, application-owned cache in World Truth: which
-// machine holds it, whose it is, which generation of content is under the name,
+// machine holds it, which generation of content is under the name,
 // and how many times a workload has written it. The identity is stated beside
 // the three parts it is derived from rather than left for every reader to
-// recompute, because a rule about workspace isolation has to be able to catch a
-// world that keyed a cache by something narrower than its own identity.
+// recompute.
 type CacheMountState struct {
-	OfferID  string `json:"offer_id"`
-	Identity string `json:"identity"`
-	// WorkspaceID is who owns this cache. Two workspaces naming one cache on
-	// one host hold two caches, and this is the field that makes them two.
-	WorkspaceID      string `json:"workspace_id"`
+	OfferID          string `json:"offer_id"`
+	Identity         string `json:"identity"`
 	Name             string `json:"name"`
 	CompatibilityKey string `json:"compatibility_key,omitempty"`
 	Revision         uint64 `json:"revision"`
@@ -139,7 +134,7 @@ type CacheMountState struct {
 // mount is this cache as the machine holding it would report it.
 func (state CacheMountState) mount() domain.CacheMount {
 	return domain.CacheMount{
-		WorkspaceID:      state.WorkspaceID,
+
 		Name:             state.Name,
 		CompatibilityKey: state.CompatibilityKey,
 		CreatedAt:        state.CreatedAt,
@@ -508,8 +503,8 @@ type simulatedWorld struct {
 	// says landed on that host.
 	seededReplicas map[string]map[string]bool
 	// cacheMounts is the mutable state each host holds, keyed by offer and then
-	// by cache identity. The identity carries the workspace, which is what makes
-	// a cross-workspace leak a thing this world can be caught doing rather than
+	// by deployment-global cache identity, which is what makes
+	// a wrong-cache read a thing this world can be caught doing rather than
 	// a thing it cannot express.
 	cacheMounts map[string]map[string]CacheMountState
 
@@ -551,12 +546,8 @@ type simulatedWorld struct {
 	// prefetch Mercator abandoned was abandoned because it stopped wanting the
 	// content, and content it wants again arrives with the launch that needs it.
 	prepared map[string]bool
-	// desired is the last thing each tenant said it wanted prepared, keyed by
-	// workspace. A desired set speaks for one workspace, and a machine's link is
-	// shared by all of them, so what a host keeps fetching is the union: a
-	// transfer stops when no tenant wants it any more, and one tenant's set
-	// saying nothing about another's content is not that tenant withdrawing it.
-	desired map[string]map[string]bool
+	// desired is the deployment's latest desired preparation set.
+	desired map[string]bool
 
 	executions map[string]externalExecution
 	// orphans is capacity this world's provider holds that Mercator never
@@ -594,7 +585,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		truth:              map[string]hostState{},
 		observed:           map[string]hostState{},
 		runs:               map[string]RunArrival{},
-		store:              newObjectStore(labWorkspace, tape.InitialWorld.Artifacts, tape.Start),
+		store:              newObjectStore(tape.InitialWorld.Artifacts, tape.Start),
 		replicas:           map[string]map[string]domain.ArtifactReplica{},
 		seededLocality:     map[string]map[string]bool{},
 		seededReplicas:     map[string]map[string]bool{},
@@ -605,7 +596,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		paths:              slices.Clone(tape.InitialWorld.Paths),
 		launch:             tape.InitialWorld.Launch,
 		prepared:           map[string]bool{},
-		desired:            map[string]map[string]bool{},
+		desired:            map[string]bool{},
 		executions:         map[string]externalExecution{},
 		orphans:            map[string]orphanedCapacity{},
 		seededOrphans:      map[string]bool{},
@@ -789,8 +780,8 @@ func (world *simulatedWorld) seedOrphans(declared []scenario.OrphanSpec) {
 			OwnershipToken: "own-orphan-" + orphan.ID,
 			RequestHash:    "sha256:orphan-" + orphan.ID,
 			OfferID:        orphan.Rental,
-			WorkspaceID:    labWorkspace,
-			RunID:          runID,
+
+			RunID: runID,
 		}
 	}
 }
@@ -834,34 +825,23 @@ func (world *simulatedWorld) seedReplicas(offerID string, held []scenario.Artifa
 	}
 }
 
-// workspaceID is the Lab's own identity for one Blueprint workspace label. A
-// Blueprint names tenants and this world names workspaces: keeping the two apart
-// is what lets a fixture say "another tenant" without writing the Lab's naming
-// into the public contract.
-func workspaceID(label string) string {
-	if label == "" {
-		return labWorkspace
-	}
-	return labWorkspace + "_" + label
-}
-
 // seedCaches is the mutable state one machine was already holding when this
-// world began, each entry under the workspace that owns it. A seeded cache
+// world began. A seeded cache
 // starts at revision one: a fixture stating a cache is stating that some
 // workload wrote it, whatever happened before this world's clock started.
 func (world *simulatedWorld) seedCaches(offerID string, held []scenario.HeldCacheSpec, at time.Time) {
 	world.cacheMounts[offerID] = make(map[string]CacheMountState, len(held))
 	for _, declared := range held {
 		state := CacheMountState{
-			OfferID:          offerID,
-			WorkspaceID:      workspaceID(declared.Workspace),
+			OfferID: offerID,
+
 			Name:             declared.Name,
 			CompatibilityKey: declared.CompatibilityKey,
 			Revision:         1,
 			CreatedAt:        at,
 			SizeBytes:        int64(declared.Size),
 		}
-		state.Identity = domain.CacheIdentity(state.WorkspaceID, declared.Requirement())
+		state.Identity = domain.CacheIdentity(declared.Requirement())
 		world.cacheMounts[offerID][state.Identity] = state
 	}
 }
@@ -959,17 +939,9 @@ func (world *simulatedWorld) prepareRun(runID string, arrival RunArrival) error 
 // would make a Run admissible because some host happens to have bytes, and
 // inadmissible the moment that host goes away, which is the
 // distributed-filesystem model this architecture refuses.
-//
-// The catalog belongs to the workspace that declared it, which is the Blueprint's
-// default one. Another tenant asking about one of those versions gets nothing,
-// because an Artifact never crosses a workspace; a Blueprint that tried to state
-// otherwise is refused when its arrival plan is validated.
-func (world *simulatedWorld) ArtifactVersion(_ context.Context, workspaceID, artifactID string) (domain.ArtifactVersion, error) {
+func (world *simulatedWorld) ArtifactVersion(_ context.Context, artifactID string) (domain.ArtifactVersion, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
-	if workspaceID != labWorkspace {
-		return domain.ArtifactVersion{}, nil
-	}
 	version, _ := world.store.entry(artifactID)
 	return version, nil
 }
@@ -1145,7 +1117,7 @@ func (world *simulatedWorld) settlePublications() {
 			upload.runID,
 			"publish",
 			"",
-			map[string]any{"artifact_id": version.ID, "workspace_id": version.WorkspaceID},
+			map[string]any{"artifact_id": version.ID},
 			map[string]any{
 				"location":       version.Location,
 				"content_digest": version.ContentDigest,
@@ -1220,9 +1192,8 @@ func (world *simulatedWorld) preemptCapacity(rentalID string) error {
 			continue
 		}
 		interrupted = append(interrupted, map[string]any{
-			"run_id":       execution.RunID,
-			"launch_key":   execution.LaunchKey,
-			"workspace_id": execution.WorkspaceID,
+			"run_id":     execution.RunID,
+			"launch_key": execution.LaunchKey,
 			// Whether the process had begun at all. A launch reclaimed before its
 			// container started lost the machine and no work, which is a different
 			// fact about the same event and one nothing else in the record could
@@ -1428,7 +1399,7 @@ func (world *simulatedWorld) recordControlPlaneRestart(ordinal uint64) {
 		fmt.Sprintf("control-plane-restart/%d", ordinal),
 		EffectCommandAccepted,
 		EffectResponseDelivered,
-		labWorkspace,
+		"deployment",
 		"restart",
 		"",
 		map[string]any{"ordinal": ordinal},
@@ -1446,8 +1417,8 @@ func (world *simulatedWorld) observeOffers() []domain.OfferSnapshot {
 	return world.publishedOffers()
 }
 
-// ListOffers is the provider quoting its own capacity. It is told a workspace
-// and a shape, and never which Run is being placed: a provider has no Run
+// ListOffers is the provider quoting its own capacity. It is told a shape, and
+// never which Run is being placed: a provider has no Run
 // identity to answer with, and a world that resolved one would be reading
 // Mercator's mind about a decision it has not made yet.
 func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
@@ -1458,19 +1429,19 @@ func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.Offer
 	// was asked about and capacity Mercator holds is listed whole. Returning the
 	// whole inventory whatever was asked meant no world here could answer one ask
 	// with nothing while publishing machines for another, which is the case that
-	// empties a workspace. See domain.OfferSnapshot.PublishedTo.
+	// empties a deployment. See domain.OfferSnapshot.PublishedTo.
 	offers = slices.DeleteFunc(offers, func(offer domain.OfferSnapshot) bool {
 		return !offer.PublishedTo(request.Resources)
 	})
 	world.recordEffect(
 		OperationProviderListOffers,
-		"list-offers/"+request.WorkspaceID,
+		"list-offers",
 		EffectCommandAccepted,
 		EffectResponseDelivered,
-		request.WorkspaceID,
+		"",
 		"placement",
 		"",
-		map[string]any{"workspace_id": request.WorkspaceID},
+		nil,
 		map[string]any{"offer_ids": offerIDs(offers)},
 		"",
 	)
@@ -1556,11 +1527,11 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		OwnershipToken: request.OwnershipToken,
 		RequestHash:    request.RequestHash,
 		OfferID:        request.SelectedOfferSnapshotID,
-		WorkspaceID:    request.WorkspaceID,
-		CacheMounts:    slices.Clone(request.CacheMounts),
-		Disposition:    request.Disposition,
-		Phase:          adapter.ExternalPhaseRunning,
-		AcceptedAt:     world.now,
+
+		CacheMounts: slices.Clone(request.CacheMounts),
+		Disposition: request.Disposition,
+		Phase:       adapter.ExternalPhaseRunning,
+		AcceptedAt:  world.now,
 		// The machine exists by now: acquisition, boot, and the agent's arrival are
 		// spent under the capacity lease, before anything is launched here. What a
 		// launch still owes is content and a container.
@@ -1632,8 +1603,7 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 // provider, a node, and a container runtime can all see a process running, and
 // none of them can see whether it is serving.
 type ReadinessReport struct {
-	WorkspaceID string
-	RunID       string
+	RunID string
 	// ReadyAt is the application's own moment. It travels in the report because a
 	// readiness stamped when Mercator got round to recording it would move with the
 	// control plane's polling cadence, which is the defect the observed start
@@ -1658,8 +1628,8 @@ func (world *simulatedWorld) dueReadinessReports() []ReadinessReport {
 		execution.ReadinessReported = true
 		world.executions[launchKey] = execution
 		due = append(due, ReadinessReport{
-			WorkspaceID: execution.WorkspaceID,
-			RunID:       execution.RunID,
+
+			RunID: execution.RunID,
 			// The application reads the clock of the host it runs on, so the moment
 			// it states is world truth read on that clock. It is the same clock for
 			// every machine in this corpus but one, and the exception is the point: a
@@ -1782,15 +1752,9 @@ func (world *simulatedWorld) ListOwned(_ context.Context, request adapter.Owners
 	defer world.mu.Unlock()
 	objects := make([]adapter.OwnedExternalObject, 0, len(world.executions))
 	for _, execution := range world.executions {
-		// An owned-execution query is one tenant asking what of its own is still
-		// out there. Answering with another workspace's executions would make one
-		// tenant's work look like the asker's orphans.
-		if request.WorkspaceID != "" && request.WorkspaceID != execution.WorkspaceID {
-			continue
-		}
 		objects = append(objects, adapter.OwnedExternalObject{
-			ExternalID:     execution.ExternalID,
-			WorkspaceID:    execution.WorkspaceID,
+			ExternalID: execution.ExternalID,
+
 			ConnectionID:   labConnection,
 			RunID:          execution.RunID,
 			AttemptID:      execution.AttemptID,
@@ -1802,12 +1766,9 @@ func (world *simulatedWorld) ListOwned(_ context.Context, request adapter.Owners
 	}
 	for _, launchKey := range slices.Sorted(maps.Keys(world.orphans)) {
 		orphan := world.orphans[launchKey]
-		if request.WorkspaceID != "" && request.WorkspaceID != orphan.WorkspaceID {
-			continue
-		}
 		objects = append(objects, adapter.OwnedExternalObject{
-			ExternalID:     orphan.ExternalID,
-			WorkspaceID:    orphan.WorkspaceID,
+			ExternalID: orphan.ExternalID,
+
 			ConnectionID:   labConnection,
 			RunID:          orphan.RunID,
 			OwnershipToken: orphan.OwnershipToken,
@@ -1819,13 +1780,13 @@ func (world *simulatedWorld) ListOwned(_ context.Context, request adapter.Owners
 	sort.Slice(objects, func(i, j int) bool { return objects[i].LaunchKey < objects[j].LaunchKey })
 	world.recordEffect(
 		OperationProviderListOwned,
-		"list-owned/"+request.WorkspaceID,
+		"list-owned",
 		EffectCommandAccepted,
 		EffectResponseDelivered,
-		request.WorkspaceID,
+		"",
 		"reconcile-owned",
 		"",
-		map[string]any{"workspace_id": request.WorkspaceID},
+		nil,
 		map[string]any{"launch_keys": ownedLaunchKeys(objects)},
 		"",
 	)
@@ -2038,7 +1999,7 @@ func (world *simulatedWorld) launchFitsOnDisk(request adapter.LaunchRequest, arr
 		}
 	}
 	for _, mount := range request.CacheMounts {
-		identity := domain.CacheIdentity(request.WorkspaceID, mount)
+		identity := domain.CacheIdentity(mount)
 		if _, held := world.cacheMounts[state.offer.ID][identity]; !held {
 			needed += mount.SizeBytes
 		}
@@ -2324,14 +2285,14 @@ func (world *simulatedWorld) settleCacheAttachments() {
 }
 
 // attachCache is one cache opened for one execution: the storage the container
-// mounts, made here if this tenant and generation had none, and whatever the
+// mounts, made here if this deployment and generation had none, and whatever the
 // workload found in it. A cache costs no time either way, because it is the
 // application's own state and this world has no model of what the application
 // does with it.
 //
-// It is addressed by its full identity, which carries the workspace this
+// It is addressed by its full deployment-global identity, which carries the cache this
 // execution belongs to, so an attachment can only ever land in the cache the
-// Run's own tenant owns.
+// Run's deployment owns.
 //
 // Capacity that keeps nothing keeps no cache either, for the same two reasons it
 // keeps no image: a provisionable offer is a machine that does not exist yet,
@@ -2344,16 +2305,16 @@ func (world *simulatedWorld) attachCache(execution externalExecution, mount doma
 	if world.cacheMounts[execution.OfferID] == nil {
 		world.cacheMounts[execution.OfferID] = map[string]CacheMountState{}
 	}
-	identity := domain.CacheIdentity(execution.WorkspaceID, mount)
+	identity := domain.CacheIdentity(mount)
 	previous, found := world.cacheMounts[execution.OfferID][identity]
 	createdAt := previous.CreatedAt
 	if !found {
 		createdAt = execution.StartedAt
 	}
 	state := CacheMountState{
-		OfferID:          execution.OfferID,
-		Identity:         identity,
-		WorkspaceID:      execution.WorkspaceID,
+		OfferID:  execution.OfferID,
+		Identity: identity,
+
 		Name:             mount.Name,
 		CompatibilityKey: mount.CompatibilityKey,
 		Revision:         previous.Revision + 1,
@@ -2371,7 +2332,6 @@ func (world *simulatedWorld) attachCache(execution externalExecution, mount doma
 		"",
 		map[string]any{
 			"identity":          identity,
-			"workspace_id":      execution.WorkspaceID,
 			"name":              mount.Name,
 			"compatibility_key": mount.CompatibilityKey,
 			"offer_id":          execution.OfferID,
@@ -2434,8 +2394,8 @@ func (world *simulatedWorld) cacheMountStates() []CacheMountState {
 }
 
 // cacheInventory is the mutable state one host holds, in identity order so one
-// world state produces one offer. Every entry names the workspace that owns it,
-// because an offer is read by every workspace's Runs and only the identity keeps
+// world state produces one offer. Every entry names the deployment that owns it,
+// because an offer is read by every Run and only the identity keeps
 // them apart.
 func (world *simulatedWorld) cacheInventory(offerID string, at time.Time) domain.CacheInventory {
 	inventory := domain.CacheInventory{Known: true, ObservedAt: at}
@@ -2543,13 +2503,12 @@ func (world *simulatedWorld) recordLaunchEffect(request adapter.LaunchRequest, c
 		request.OperationKey,
 		request.RequestHash,
 		map[string]any{
-			"workspace_id": request.WorkspaceID,
-			"run_id":       request.RunID,
-			"attempt_id":   request.AttemptID,
-			"launch_key":   request.LaunchKey,
-			"image":        request.Image,
-			"offer_id":     request.SelectedOfferSnapshotID,
-			"disposition":  request.Disposition,
+			"run_id":      request.RunID,
+			"attempt_id":  request.AttemptID,
+			"launch_key":  request.LaunchKey,
+			"image":       request.Image,
+			"offer_id":    request.SelectedOfferSnapshotID,
+			"disposition": request.Disposition,
 		},
 		consequence,
 		faultID,
@@ -2565,7 +2524,7 @@ func (world *simulatedWorld) recordObservationEffect(request adapter.ObserveRequ
 		world.executions[request.LaunchKey].RunID,
 		request.LaunchKey,
 		request.RequestHash,
-		map[string]any{"workspace_id": request.WorkspaceID, "launch_key": request.LaunchKey},
+		map[string]any{"launch_key": request.LaunchKey},
 		consequence,
 		"",
 	)

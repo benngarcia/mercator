@@ -1,7 +1,7 @@
 // /runs/$runId — run detail. A RunPhaseTimeline header plus RunActions, then
 // three tabs: Overview (run facts via StatBlocks), Events (EventTimeline), and
 // Decision (DecisionPanel + CandidateTable, or a
-// "no decision yet" empty state on 404). The Workspace event feed appends
+// "no decision yet" empty state on 404). The Deployment event feed appends
 // events and refreshes the run aggregate.
 
 import { createRoute, notFound } from "@tanstack/react-router";
@@ -104,7 +104,6 @@ function RunDetailPage() {
               value={data.workload_revision_id || "—"}
               mono
             />
-            <StatBlock label="Workspace" value={data.workspace_id} mono />
             <StatBlock label="Created by" value={data.created_by ?? "—"} />
             <StatBlock label="Cancelled by" value={data.cancelled_by ?? "—"} />
           </div>

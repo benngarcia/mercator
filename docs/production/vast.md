@@ -44,13 +44,13 @@ configuration that relaxes this**:
      -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
      -H 'Idempotency-Key: conn-vast-1' \
      -H 'Content-Type: application/json' \
-     -d '{"workspace_id":"ws_1","connection_id":"conn_vast_main",
+     -d '{"connection_id":"conn_vast_main",
           "adapter_type":"vast",
           "credential":{"source":"env","ref":"VAST_API_KEY"}}'
    ```
 3. Authorize it (runs a cheap `GET /users/current/` to validate the key):
    ```sh
-   curl -X POST "$MERCATOR/v1/connections/conn_vast_main/authorize?workspace_id=ws_1" \
+   curl -X POST "$MERCATOR/v1/connections/conn_vast_main/authorize" \
      -H "Authorization: Bearer $MERCATOR_API_TOKEN"
    ```
 

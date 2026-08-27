@@ -18,7 +18,6 @@ function requiredEnv(name) {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const baseURL = requiredEnv("MERCATOR_API_URL").replace(/\/$/, "");
 const token = requiredEnv("MERCATOR_API_TOKEN");
-const workspaceID = requiredEnv("MERCATOR_WORKSPACE_ID");
 const outputDirectory = process.env.OUT
   ? path.resolve(process.env.OUT)
   : path.join(repoRoot, "docs/assets/output");
@@ -39,10 +38,7 @@ function localDockerArchitecture() {
 }
 
 async function seedRunIfEmpty() {
-  const response = await fetch(
-    `${baseURL}/v1/runs?workspace_id=${encodeURIComponent(workspaceID)}`,
-    { headers },
-  );
+  const response = await fetch(`${baseURL}/v1/runs`, { headers });
   if (!response.ok) {
     throw new Error(`list runs returned ${response.status}: ${await response.text()}`);
   }
@@ -57,9 +53,7 @@ async function seedRunIfEmpty() {
     ["inspect", "--format", "{{index .RepoDigests 0}}", "busybox:latest"],
     { encoding: "utf8" },
   ).trim();
-  const create = await fetch(
-    `${baseURL}/v1/runs?workspace_id=${encodeURIComponent(workspaceID)}`,
-    {
+  const create = await fetch(`${baseURL}/v1/runs`, {
       method: "POST",
       headers: {
         ...headers,
@@ -67,7 +61,6 @@ async function seedRunIfEmpty() {
       },
       body: JSON.stringify({
         workload: {
-          workspace_id: workspaceID,
           spec: {
             containers: [
               {
@@ -80,8 +73,7 @@ async function seedRunIfEmpty() {
           },
         },
       }),
-    },
-  );
+    });
   if (!create.ok) {
     throw new Error(`seed run returned ${create.status}: ${await create.text()}`);
   }
@@ -103,23 +95,12 @@ const context = await browser.newContext({
 });
 
 try {
-  await context.addInitScript(
-    ([sessionToken, sessionWorkspace]) => {
-      localStorage.setItem("mercator.token", sessionToken);
-      localStorage.setItem("mercator.workspace", sessionWorkspace);
-      localStorage.setItem(
-        "mercator.recentWorkspaces",
-        JSON.stringify([sessionWorkspace]),
-      );
-    },
-    [token, workspaceID],
-  );
+  await context.addInitScript((sessionToken) => {
+    localStorage.setItem("mercator.token", sessionToken);
+  }, token);
 
   const page = await context.newPage();
-  await page.goto(
-    `${baseURL}/runs?workspace_id=${encodeURIComponent(workspaceID)}`,
-    { waitUntil: "domcontentloaded" },
-  );
+  await page.goto(`${baseURL}/runs`, { waitUntil: "domcontentloaded" });
   await page.getByText("succeeded", { exact: false }).first().waitFor();
   await page.waitForTimeout(1_000);
 

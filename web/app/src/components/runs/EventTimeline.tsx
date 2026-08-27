@@ -7,12 +7,12 @@ import type { CloudEvent } from "@/lib/api/types";
 import type {
   StoredBookingDecision,
   StoredCandidateDecision,
-} from "@/lib/workspace/contracts";
+} from "@/lib/deployment/contracts";
 import { cn } from "@/lib/utils";
 import { humanizeEventType, usd } from "@/lib/format";
 import { priced } from "@/lib/placement";
 import { JsonViewer, RelativeTime, EmptyState, CopyButton } from "@/components/common";
-import { BookingDecidedData } from "@/lib/workspace/contracts";
+import { BookingDecidedData } from "@/lib/deployment/contracts";
 
 export interface EventTimelineProps {
   events: readonly CloudEvent[];
@@ -240,7 +240,7 @@ export function EventTimeline({
   highlightLatest = false,
 }: EventTimelineProps) {
   // Sort by global position descending so the latest event is on top; this is
-  // a total order across the workspace stream.
+  // a total order across the deployment stream.
   const ordered = React.useMemo(
     () => [...events].sort((a, b) => b.globalposition - a.globalposition),
     [events],

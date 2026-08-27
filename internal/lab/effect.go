@@ -76,13 +76,13 @@ const (
 	OperationArtifactReplicated = "artifact.replicated"
 	OperationArtifactPublished  = "artifact.published"
 	// OperationCacheMountAttach is a container being created with a cache
-	// mounted, named by its full workspace-scoped identity. Opening the storage
+	// mounted, named by its deployment-global identity. Opening the storage
 	// and reading what is in it are one act rather than two, because that is what
 	// a container runtime does and the whole of what it can report: it makes the
-	// volume the mount point names if this tenant and generation had none, hands
+	// volume the mount point names if this deployment and generation had none, hands
 	// the workload whatever is inside, and can say nothing about what the
 	// application does with it afterwards. Recording the attachment is what makes
-	// a cross-workspace touch of mutable state something the ledger can be caught
+	// a wrong-cache touch of mutable state something the ledger can be caught
 	// doing, whether or not the workload went on to write anything.
 	OperationCacheMountAttach = "cache_mount.attach"
 	// The three preparation operations are Mercator getting a machine ready for

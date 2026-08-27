@@ -15,23 +15,12 @@ import (
 
 func (s *Server) CreateRun(ctx context.Context, request CreateRunRequestObject) (CreateRunResponseObject, error) {
 	body := request.Body
-	bodyWS := body.WorkspaceId
-	if bodyWS == "" {
-		bodyWS = body.Workload.WorkspaceID
-	}
-	workspaceID, workspaceErr := s.resolveWorkspace(ctx, bodyWS, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		if workspaceErr.Forbidden {
-			return CreateRun403JSONResponse(workspaceErr.Response), nil
-		}
-		return CreateRun400JSONResponse(workspaceErr.Response), nil
-	}
 	workloadRevision := body.Workload
 	if body.WorkloadRevisionId != "" {
 		if s.workloads == nil {
 			return CreateRun400JSONResponse(apiError("WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")), nil
 		}
-		revision, err := s.workloads.GetRevision(ctx, workspaceID, body.WorkloadId, body.WorkloadRevisionId)
+		revision, err := s.workloads.GetRevision(ctx, body.WorkloadId, body.WorkloadRevisionId)
 		if err != nil {
 			return CreateRun404JSONResponse(apiError("WORKLOAD_REVISION_NOT_FOUND", err.Error())), nil
 		}
@@ -39,7 +28,7 @@ func (s *Server) CreateRun(ctx context.Context, request CreateRunRequestObject) 
 	}
 
 	result, err := s.orch.Intake(ctx, orchestrator.IntakeRequest{
-		WorkspaceID:    workspaceID,
+
 		RunID:          body.RunId,
 		IdempotencyKey: request.Params.IdempotencyKey,
 		Actor:          requestActor(ctx),
@@ -51,9 +40,6 @@ func (s *Server) CreateRun(ctx context.Context, request CreateRunRequestObject) 
 		ResolveImage:   s.resolveImageFn(),
 	})
 	if err != nil {
-		if response, ok := workspaceAPIError(err); ok {
-			return CreateRun400JSONResponse(response), nil
-		}
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
 			return CreateRun409JSONResponse(apiError("IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")), nil
 		}
@@ -62,27 +48,20 @@ func (s *Server) CreateRun(ctx context.Context, request CreateRunRequestObject) 
 		}
 		return CreateRun400JSONResponse(apiError(errorCode(err, "CREATE_RUN_FAILED"), errorMessage(err))), nil
 	}
-	return CreateRun202JSONResponse(newRunResponse(workspaceID, result.Run, result.Duplicate)), nil
+	return CreateRun202JSONResponse(newRunResponse(result.Run, result.Duplicate)), nil
 }
 
-func newRunResponse(workspaceID string, record domain.RunRecord, duplicate bool) RunResponse {
+func newRunResponse(record domain.RunRecord, duplicate bool) RunResponse {
 	return RunResponse{
 		RunId:     record.ID,
 		Run:       record,
-		Links:     runLinks(workspaceID, record.ID),
+		Links:     runLinks(record.ID),
 		Duplicate: duplicate,
 	}
 }
 
 func (s *Server) ListRunEvents(ctx context.Context, request ListRunEventsRequestObject) (ListRunEventsResponseObject, error) {
-	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		if workspaceErr.Forbidden {
-			return ListRunEvents403JSONResponse(workspaceErr.Response), nil
-		}
-		return ListRunEvents400JSONResponse(workspaceErr.Response), nil
-	}
-	events, err := s.orch.GetRunEvents(ctx, workspaceID, request.RunId)
+	events, err := s.orch.GetRunEvents(ctx, request.RunId)
 	if err != nil {
 		return ListRunEvents500JSONResponse(internalAPIError(http.StatusInternalServerError, "READ_EVENTS_FAILED", err)), nil
 	}
@@ -97,18 +76,11 @@ func (s *Server) ListRunEvents(ctx context.Context, request ListRunEventsRequest
 }
 
 func (s *Server) GetRun(ctx context.Context, request GetRunRequestObject) (GetRunResponseObject, error) {
-	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		if workspaceErr.Forbidden {
-			return GetRun403JSONResponse(workspaceErr.Response), nil
-		}
-		return GetRun400JSONResponse(workspaceErr.Response), nil
-	}
-	record, err := s.orch.GetRun(ctx, workspaceID, request.RunId)
+	record, err := s.orch.GetRun(ctx, request.RunId)
 	if err != nil {
 		return GetRun404JSONResponse(apiError("RUN_NOT_FOUND", err.Error())), nil
 	}
-	return GetRun200JSONResponse(newRunResponse(workspaceID, record, false)), nil
+	return GetRun200JSONResponse(newRunResponse(record, false)), nil
 }
 
 // waitDeadline bounds how long waitRun will long-poll for a terminal state.
@@ -120,27 +92,20 @@ var waitDeadline = 30 * time.Second
 var waitPollInterval = 100 * time.Millisecond
 
 func (s *Server) WaitRun(ctx context.Context, request WaitRunRequestObject) (WaitRunResponseObject, error) {
-	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		if workspaceErr.Forbidden {
-			return WaitRun403JSONResponse(workspaceErr.Response), nil
-		}
-		return WaitRun400JSONResponse(workspaceErr.Response), nil
-	}
 	// Confirm the run exists (and the caller is authorized) before looping.
-	record, err := s.orch.GetRun(ctx, workspaceID, request.RunId)
+	record, err := s.orch.GetRun(ctx, request.RunId)
 	if err != nil {
 		return WaitRun404JSONResponse(apiError("RUN_NOT_FOUND", err.Error())), nil
 	}
 	deadline := time.Now().Add(waitDeadline)
 	for {
 		if record.Closed {
-			return WaitRun200JSONResponse(newRunResponse(workspaceID, record, false)), nil
+			return WaitRun200JSONResponse(newRunResponse(record, false)), nil
 		}
 		if !time.Now().Before(deadline) {
 			// Bounded-deadline timeout: return the latest open run with a clean
 			// 202 signal so the caller can decide to re-issue the wait.
-			return WaitRun202JSONResponse(newRunResponse(workspaceID, record, false)), nil
+			return WaitRun202JSONResponse(newRunResponse(record, false)), nil
 		}
 		select {
 		case <-ctx.Done():
@@ -149,11 +114,11 @@ func (s *Server) WaitRun(ctx context.Context, request WaitRunRequestObject) (Wai
 		}
 		// Actively drive the run toward terminal rather than passively re-reading
 		// stale state. RefreshRun advances the run then returns the latest record.
-		next, err := s.orch.RefreshRun(ctx, workspaceID, request.RunId)
+		next, err := s.orch.RefreshRun(ctx, request.RunId)
 		if err != nil {
 			// Advancement may legitimately error mid-flight (e.g. indeterminate
 			// launch); fall back to the last readable state and keep waiting.
-			next, err = s.orch.GetRun(ctx, workspaceID, request.RunId)
+			next, err = s.orch.GetRun(ctx, request.RunId)
 			if err != nil {
 				return WaitRun404JSONResponse(apiError("RUN_NOT_FOUND", err.Error())), nil
 			}
@@ -163,13 +128,6 @@ func (s *Server) WaitRun(ctx context.Context, request WaitRunRequestObject) (Wai
 }
 
 func (s *Server) ListRuns(ctx context.Context, request ListRunsRequestObject) (ListRunsResponseObject, error) {
-	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		if workspaceErr.Forbidden {
-			return ListRuns403JSONResponse(workspaceErr.Response), nil
-		}
-		return ListRuns400JSONResponse(workspaceErr.Response), nil
-	}
 	pageRequest, err := (runprojection.PageRequest{
 		After: request.Params.Cursor,
 		Limit: request.Params.Limit,
@@ -177,7 +135,7 @@ func (s *Server) ListRuns(ctx context.Context, request ListRunsRequestObject) (L
 	if err != nil {
 		return ListRuns400JSONResponse(apiError("INVALID_RUN_PAGE", err.Error())), nil
 	}
-	page, err := s.orch.ListRuns(ctx, workspaceID, pageRequest)
+	page, err := s.orch.ListRuns(ctx, pageRequest)
 	if err != nil {
 		return ListRuns500JSONResponse(internalAPIError(http.StatusInternalServerError, "LIST_RUNS_FAILED", err)), nil
 	}
@@ -185,45 +143,27 @@ func (s *Server) ListRuns(ctx context.Context, request ListRunsRequestObject) (L
 }
 
 func (s *Server) CancelRun(ctx context.Context, request CancelRunRequestObject) (CancelRunResponseObject, error) {
-	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		if workspaceErr.Forbidden {
-			return CancelRun403JSONResponse(workspaceErr.Response), nil
-		}
-		return CancelRun400JSONResponse(workspaceErr.Response), nil
-	}
-	record, err := s.orch.CancelRun(ctx, workspaceID, request.RunId, requestActor(ctx))
+	record, err := s.orch.CancelRun(ctx, request.RunId, requestActor(ctx))
 	if err != nil {
 		return CancelRun502JSONResponse(apiError("CANCEL_RUN_FAILED", "Run cancellation failed.")), nil
 	}
-	return CancelRun200JSONResponse(newRunResponse(workspaceID, record, false)), nil
+	return CancelRun200JSONResponse(newRunResponse(record, false)), nil
 }
 
 func (s *Server) RefreshRun(ctx context.Context, request RefreshRunRequestObject) (RefreshRunResponseObject, error) {
-	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		if workspaceErr.Forbidden {
-			return RefreshRun403JSONResponse(workspaceErr.Response), nil
-		}
-		return RefreshRun400JSONResponse(workspaceErr.Response), nil
-	}
-	record, err := s.orch.RefreshRun(ctx, workspaceID, request.RunId)
+	record, err := s.orch.RefreshRun(ctx, request.RunId)
 	if err != nil {
 		return RefreshRun502JSONResponse(apiError("REFRESH_RUN_FAILED", "Run refresh failed.")), nil
 	}
-	return RefreshRun200JSONResponse(newRunResponse(workspaceID, record, false)), nil
+	return RefreshRun200JSONResponse(newRunResponse(record, false)), nil
 }
 
 func (s *Server) ReportRun(ctx context.Context, request ReportRunRequestObject) (ReportRunResponseObject, error) {
 	if s.reportSigner == nil || !s.reportSigner.Enabled() {
 		return ReportRun501JSONResponse(apiError("REPORTING_DISABLED", "Reporting is not configured.")), nil
 	}
-	workspaceID := request.Params.WorkspaceId
-	if workspaceID == "" {
-		return ReportRun400JSONResponse(apiError("WORKSPACE_REQUIRED", "workspace_id query parameter is required.")), nil
-	}
 	token := strings.TrimPrefix(request.Params.Authorization, "Bearer ")
-	if !s.reportSigner.Verify(workspaceID, request.RunId, token) {
+	if !s.reportSigner.Verify(request.RunId, token) {
 		return ReportRun401JSONResponse(apiError("INVALID_RUN_TOKEN", "Invalid or missing run token.")), nil
 	}
 	body := request.Body
@@ -231,7 +171,7 @@ func (s *Server) ReportRun(ctx context.Context, request ReportRunRequestObject) 
 	if err != nil {
 		return ReportRun400JSONResponse(apiError("INVALID_REPORT", err.Error())), nil
 	}
-	if err := s.orch.RecordReport(ctx, workspaceID, request.RunId, report); err != nil {
+	if err := s.orch.RecordReport(ctx, request.RunId, report); err != nil {
 		switch {
 		case errors.Is(err, orchestrator.ErrRunNotFound):
 			return ReportRun404JSONResponse(apiError("RUN_NOT_FOUND", "Run not found.")), nil
@@ -244,14 +184,7 @@ func (s *Server) ReportRun(ctx context.Context, request ReportRunRequestObject) 
 }
 
 func (s *Server) GetRunDecision(ctx context.Context, request GetRunDecisionRequestObject) (GetRunDecisionResponseObject, error) {
-	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		if workspaceErr.Forbidden {
-			return GetRunDecision403JSONResponse(workspaceErr.Response), nil
-		}
-		return GetRunDecision400JSONResponse(workspaceErr.Response), nil
-	}
-	decisions, err := s.orch.GetBookingDecisions(ctx, workspaceID, request.RunId)
+	decisions, err := s.orch.GetBookingDecisions(ctx, request.RunId)
 	if err != nil {
 		return GetRunDecision404JSONResponse(apiError("DECISION_NOT_FOUND", err.Error())), nil
 	}

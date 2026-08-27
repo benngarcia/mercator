@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/benngarcia/mercator/internal/daemon"
 	_ "modernc.org/sqlite"
 )
 
@@ -42,7 +41,6 @@ func TestAKilledContainerLeavesEverythingItAnsweredForOnDisk(t *testing.T) {
 	// Arrange: a connection whose credential the server sealed and answered for,
 	// which is an append that has committed by the time the response arrives.
 	container.post(t, "/v1/connections", map[string]any{
-		"workspace_id":  daemon.DefaultWorkspaceID,
 		"connection_id": "runpod",
 		"adapter_type":  "runpod",
 		"credential":    map[string]any{"source": "mercator"},
@@ -61,7 +59,7 @@ func TestAKilledContainerLeavesEverythingItAnsweredForOnDisk(t *testing.T) {
 
 	// Assert: a control plane boots on what it left and serves the write back.
 	restarted := serveDatabase(t, dsn, hex.EncodeToString(retiredMasterKey))
-	if connections := restarted.get(t, "/v1/connections?workspace_id="+daemon.DefaultWorkspaceID); !strings.Contains(connections, `"runpod"`) {
+	if connections := restarted.get(t, "/v1/connections"); !strings.Contains(connections, `"runpod"`) {
 		t.Fatalf("after the kill the control plane serves %s, want the connection it had answered for", connections)
 	}
 }
@@ -85,7 +83,7 @@ func buildStaticMercator(t *testing.T) string {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "mercator")
 	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, ".")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build mercator for the container: %v\n%s", err, output)
 	}

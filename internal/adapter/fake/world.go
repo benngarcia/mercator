@@ -118,8 +118,8 @@ type Machine struct {
 	// publication in the object store, which no machine owns.
 	ArtifactReplicas map[string]domain.ArtifactReplica
 	// HeldCaches is the mutable, application-owned state this machine holds,
-	// keyed by cache identity. The identity carries the workspace, because that
-	// is what makes two tenants naming one cache two caches on one host.
+	// keyed by deployment-global cache identity, because that
+	// is what makes two generations naming one cache two caches on one host.
 	HeldCaches map[string]domain.CacheMount
 	// BusyUntil is when the running work's enforced maximum runtime elapses;
 	// zero means idle. It is the hard ceiling behind latest-start guarantees.
@@ -232,7 +232,7 @@ type transfer struct {
 // because creating the container is what creates the storage. The Lab attaches
 // one at that same moment and a container runtime reports one on the same
 // evidence, so all three say a machine holds a cache from when a workload of
-// that tenant and generation started here: one cancelled halfway leaves the
+// that deployment and generation started here: one cancelled halfway leaves the
 // cache it was attached to, and one that never started leaves nothing.
 // It answers when the container starts, which is when the machine exists and the
 // bytes it needs have landed on it. That answer is made for every machine,
@@ -285,7 +285,7 @@ func (m *Machine) settle(now time.Time) {
 }
 
 // openCaches is the mutable state a workload that started here left behind,
-// filed under the full identity so a second tenant naming one cache gets its
+// filed under the full identity so a second generation naming one cache gets its
 // own. The generation this machine already had keeps the moment it began: a
 // holder can say when a cache started existing here and nothing about what was
 // written into it since.
@@ -611,9 +611,8 @@ type World struct {
 // application's own: a readiness stamped when the control plane recorded it would
 // move with how often the control plane looks.
 type ReadinessReport struct {
-	WorkspaceID string
-	RunID       string
-	ReadyAt     time.Time
+	RunID   string
+	ReadyAt time.Time
 }
 
 func NewWorld(clock *Clock, options ...Option) *World {
@@ -672,14 +671,12 @@ func (w *World) DefineRuntime(runID, offerID string, runtime time.Duration) {
 }
 
 // ArtifactVersion is the object store answering what one version is. A name it
-// never heard of, and a name belonging to another workspace, both come back
-// zero, which is not durable: Artifacts are never shared across workspaces, and
-// from a consumer's side an unknown version and an unpublished one are one fact.
-func (w *World) ArtifactVersion(_ context.Context, workspaceID, artifactID string) (domain.ArtifactVersion, error) {
+// never heard of comes back zero, which is not durable.
+func (w *World) ArtifactVersion(_ context.Context, artifactID string) (domain.ArtifactVersion, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	version, known := w.artifacts[artifactID]
-	if !known || version.WorkspaceID != workspaceID {
+	if !known {
 		return domain.ArtifactVersion{}, nil
 	}
 	return version, nil
@@ -846,8 +843,8 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 	readyAt := startsAt.Add(machine.applicationReadySpend(w.ApplicationReadySpend))
 	w.readyAt[request.LaunchKey] = readyAt
 	w.readiness[request.LaunchKey] = ReadinessReport{
-		WorkspaceID: request.WorkspaceID,
-		RunID:       request.RunID,
+
+		RunID: request.RunID,
 		// The application reads the clock of the host it runs on, so what it states
 		// is the moment above on that machine's clock. World truth stays in readyAt:
 		// this world knows when the workload really began serving, and the workload
@@ -945,15 +942,11 @@ func (w *World) exited(observation adapter.ExternalObservation) adapter.External
 	return observation
 }
 
-// declaredCaches is the mutable state this launch asks its host to attach, named
-// by the identity that carries the workspace the Run belongs to. A workload
-// cannot choose its own workspace, so the scoping is the request's and never the
-// declaration's.
+// declaredCaches is the mutable state this launch asks its host to attach.
 func declaredCaches(request adapter.LaunchRequest) []domain.CacheMount {
 	caches := make([]domain.CacheMount, 0, len(request.CacheMounts))
 	for _, mount := range request.CacheMounts {
 		caches = append(caches, domain.CacheMount{
-			WorkspaceID:      request.WorkspaceID,
 			Name:             mount.Name,
 			CompatibilityKey: mount.CompatibilityKey,
 		})

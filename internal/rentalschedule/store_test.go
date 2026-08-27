@@ -1,7 +1,6 @@
 package rentalschedule
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -17,7 +16,7 @@ func TestMemoryStoreCommitsScheduleWithRunEvent(t *testing.T) {
 		t.Fatalf("open event log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	store := NewMemory(activeLog{EventLog: log})
+	store := NewMemory(log)
 	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 	next, _, err := domain.NewRentalSchedule("rental-warm").Reserve(domain.BookingRequest{
 		BookingID: "booking-1", RunID: "run-1", ExpectedRuntimeSeconds: 60, MaxRuntimeSeconds: 120, ReservedAt: now,
@@ -26,19 +25,19 @@ func TestMemoryStoreCommitsScheduleWithRunEvent(t *testing.T) {
 		t.Fatalf("reserve: %v", err)
 	}
 
-	run := domain.RunRecord{ID: "run-1", WorkspaceID: "ws-1", Phase: "launching"}
+	run := domain.RunRecord{ID: "run-1", Phase: "launching"}
 	_, err = store.Commit(t.Context(), appendRequest(now), 0, next, run)
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	schedules, err := store.List(t.Context(), "ws-1")
+	schedules, err := store.List(t.Context())
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if schedules["rental-warm"].Version != 1 || schedules["rental-warm"].Bookings[0].Booking.RunID != "run-1" {
 		t.Fatalf("stored schedules = %+v", schedules)
 	}
-	events, err := log.ReadStream(t.Context(), eventlog.StreamKey{WorkspaceID: "ws-1", Type: "run", ID: "run-1"}, 0, 10)
+	events, err := log.ReadStream(t.Context(), eventlog.StreamKey{Type: "run", ID: "run-1"}, 0, 10)
 	if err != nil || len(events) != 1 || events[0].Type != "compute.run.booking_decided.v1" {
 		t.Fatalf("stored events = %+v, %v", events, err)
 	}
@@ -75,25 +74,19 @@ func TestASeededScheduleCountsTheTransitionsItsBookingsTook(t *testing.T) {
 	}
 
 	schedule.Version = 1
-	if err := store.Seed("ws-1", schedule); err == nil {
+	if err := store.Seed(schedule); err == nil {
 		t.Fatalf("the store accepted two Bookings at version one, which is one reservation for two occupants")
 	}
 	schedule.Version = 7
-	if err := store.Seed("ws-1", schedule); err != nil {
+	if err := store.Seed(schedule); err != nil {
 		t.Fatalf("a schedule that has seen more transitions than it holds occupants is a Rental that has run work: %v", err)
 	}
-}
-
-type activeLog struct{ eventlog.EventLog }
-
-func (l activeLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
-	return l.Append(ctx, request)
 }
 
 func appendRequest(now time.Time) eventlog.AppendRequest {
 	data, _ := json.Marshal(map[string]string{"decision": "fixture"})
 	return eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: "ws-1", Type: "run", ID: "run-1"},
+		Stream:                eventlog.StreamKey{Type: "run", ID: "run-1"},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "run-1:place",
 		RequestHash:           "sha256:fixture",

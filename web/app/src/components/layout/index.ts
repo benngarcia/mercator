@@ -2,8 +2,6 @@
 export { AppShell } from "./AppShell";
 export { Sidebar } from "./Sidebar";
 export { Topbar } from "./Topbar";
-export { WorkspaceSwitcher } from "./WorkspaceSwitcher";
-export type { WorkspaceSwitcherProps } from "./WorkspaceSwitcher";
 export { TokenField } from "./TokenField";
 export { IdentityControls } from "./IdentityControls";
 export { ThemeToggle } from "./ThemeToggle";

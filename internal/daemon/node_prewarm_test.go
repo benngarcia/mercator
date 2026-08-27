@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/benngarcia/mercator/internal/daemon"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 )
@@ -137,7 +136,7 @@ func (f *fleet) placedOn(t *testing.T, runID string) string {
 	var response struct {
 		Decisions []bookingDecision `json:"decisions"`
 	}
-	path := "/v1/runs/" + runID + "/decision?workspace_id=" + daemon.DefaultWorkspaceID
+	path := "/v1/runs/" + runID + "/decision"
 	if status := f.get(t, path, &response); status != http.StatusOK || len(response.Decisions) == 0 {
 		return ""
 	}
@@ -156,7 +155,7 @@ func (f *fleet) launchRecordedAt(t *testing.T, runID string) time.Time {
 				Time time.Time `json:"time"`
 			} `json:"events"`
 		}
-		f.call(t, http.MethodGet, "/v1/runs/"+runID+"/events?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
+		f.call(t, http.MethodGet, "/v1/runs/"+runID+"/events", nil, &response, http.StatusOK)
 		for _, event := range response.Events {
 			if event.Type != orchestrator.EventLaunchAccepted {
 				continue
@@ -268,8 +267,8 @@ func (f *fleet) holdsImageAlready(t *testing.T, digest string) {
 // often Mercator looks rather than that looking is the only way it happens.
 func (f *fleet) prepare(t *testing.T) {
 	t.Helper()
-	if _, err := f.control.ReconcileWorkspace(context.Background(), daemon.DefaultWorkspaceID); err != nil {
-		t.Fatalf("reconcile the workspace: %v", err)
+	if _, err := f.control.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile the deployment: %v", err)
 	}
 }
 
@@ -331,7 +330,7 @@ func TestAMachineIsAskedAgainForContentItRefused(t *testing.T) {
 // Mercator stops asking for.
 func (f *fleet) cancelRun(t *testing.T, runID string) {
 	t.Helper()
-	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/cancel?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusOK)
+	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/cancel", nil, nil, http.StatusOK)
 }
 
 // The account an operator logged in to this fleet's registry with. It is the one
@@ -372,9 +371,6 @@ func TestTheShippedDaemonMintsThePullItAsksAMachineToMake(t *testing.T) {
 	}
 	if pull.Content != rebuiltIndexDigest {
 		t.Fatalf("the pull was minted for %q, want the one digest it was asked to fetch", pull.Content)
-	}
-	if pull.WorkspaceID != daemon.DefaultWorkspaceID {
-		t.Fatalf("the pull reaches workspace %q", pull.WorkspaceID)
 	}
 	if window := time.Until(pull.ExpiresAt); window <= 0 || window > time.Hour {
 		t.Fatalf("the pull stays presentable for %s, and a credential a machine keeps is the account behind it", window)

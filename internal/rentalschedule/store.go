@@ -10,7 +10,7 @@ import (
 )
 
 type Store interface {
-	List(ctx context.Context, workspaceID string) (map[string]domain.RentalSchedule, error)
+	List(ctx context.Context) (map[string]domain.RentalSchedule, error)
 	Commit(
 		ctx context.Context,
 		event eventlog.AppendRequest,
@@ -22,15 +22,15 @@ type Store interface {
 
 type Memory struct {
 	mu        sync.Mutex
-	log       eventlog.WorkspaceEventLog
-	schedules map[string]map[string]domain.RentalSchedule
+	log       eventlog.EventLog
+	schedules map[string]domain.RentalSchedule
 	commands  map[string]eventlog.AppendResult
 }
 
-func NewMemory(log eventlog.WorkspaceEventLog) *Memory {
+func NewMemory(log eventlog.EventLog) *Memory {
 	return &Memory{
 		log:       log,
-		schedules: map[string]map[string]domain.RentalSchedule{},
+		schedules: map[string]domain.RentalSchedule{},
 		commands:  map[string]eventlog.AppendResult{},
 	}
 }
@@ -41,16 +41,13 @@ func NewMemory(log eventlog.WorkspaceEventLog) *Memory {
 // belong to Runs no event log ever saw. It writes the schedule whole rather than
 // merging, so a caller changing seeded state reads the current schedule first
 // and hands back what it should now be.
-func (store *Memory) Seed(workspaceID string, schedule domain.RentalSchedule) error {
+func (store *Memory) Seed(schedule domain.RentalSchedule) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if err := validSeed(workspaceID, schedule); err != nil {
+	if err := validSeed(schedule); err != nil {
 		return err
 	}
-	if store.schedules[workspaceID] == nil {
-		store.schedules[workspaceID] = map[string]domain.RentalSchedule{}
-	}
-	store.schedules[workspaceID][schedule.RentalID] = cloneSchedule(schedule)
+	store.schedules[schedule.RentalID] = cloneSchedule(schedule)
 	return nil
 }
 
@@ -61,9 +58,9 @@ func (store *Memory) Seed(workspaceID string, schedule domain.RentalSchedule) er
 // past the version, so a schedule holding two Bookings at version one hands the
 // arriving Run the version a Booking already on it consumed, and the store would
 // then hold two Bookings created at one transition.
-func validSeed(workspaceID string, schedule domain.RentalSchedule) error {
-	if workspaceID == "" || schedule.RentalID == "" {
-		return fmt.Errorf("Rental Schedule seed requires Workspace and Rental identity")
+func validSeed(schedule domain.RentalSchedule) error {
+	if schedule.RentalID == "" {
+		return fmt.Errorf("Rental Schedule seed requires Rental identity")
 	}
 	if schedule.Version < uint64(len(schedule.Bookings)) {
 		return fmt.Errorf(
@@ -74,11 +71,11 @@ func validSeed(workspaceID string, schedule domain.RentalSchedule) error {
 	return nil
 }
 
-func (store *Memory) List(_ context.Context, workspaceID string) (map[string]domain.RentalSchedule, error) {
+func (store *Memory) List(_ context.Context) (map[string]domain.RentalSchedule, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	result := map[string]domain.RentalSchedule{}
-	for rentalID, schedule := range store.schedules[workspaceID] {
+	for rentalID, schedule := range store.schedules {
 		result[rentalID] = cloneSchedule(schedule)
 	}
 	return result, nil
@@ -96,30 +93,27 @@ func (store *Memory) Commit(
 	if err := validCommit(event, expectedVersion, next); err != nil {
 		return eventlog.AppendResult{}, err
 	}
-	commandID := event.Stream.WorkspaceID + ":" + event.CommandKey
+	commandID := event.CommandKey
 	if result, ok := store.commands[commandID]; ok {
 		result.Duplicate = true
 		return result, nil
 	}
-	current := store.schedules[event.Stream.WorkspaceID][next.RentalID]
+	current := store.schedules[next.RentalID]
 	if current.Version != expectedVersion {
 		return eventlog.AppendResult{}, eventlog.ErrConcurrencyConflict
 	}
-	result, err := store.log.AppendIfWorkspaceActive(ctx, event)
+	result, err := store.log.Append(ctx, event)
 	if err != nil {
 		return eventlog.AppendResult{}, err
 	}
-	if store.schedules[event.Stream.WorkspaceID] == nil {
-		store.schedules[event.Stream.WorkspaceID] = map[string]domain.RentalSchedule{}
-	}
-	store.schedules[event.Stream.WorkspaceID][next.RentalID] = cloneSchedule(next)
+	store.schedules[next.RentalID] = cloneSchedule(next)
 	store.commands[commandID] = result
 	return result, nil
 }
 
 func validCommit(event eventlog.AppendRequest, expectedVersion uint64, next domain.RentalSchedule) error {
-	if event.Stream.WorkspaceID == "" || next.RentalID == "" {
-		return fmt.Errorf("Rental Schedule commit requires Workspace and Rental identity")
+	if next.RentalID == "" {
+		return fmt.Errorf("Rental Schedule commit requires Rental identity")
 	}
 	if next.Version != expectedVersion+1 {
 		return fmt.Errorf("Rental Schedule version %d does not follow %d", next.Version, expectedVersion)

@@ -12,11 +12,11 @@ import { duration, usd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type {
   Rental,
-  Workspace,
-  WorkspaceBooking,
-  WorkspaceRun,
-} from "@/lib/workspace";
-import { WorkspaceEventFeed } from "./WorkspaceEventFeed";
+  Deployment,
+  DeploymentBooking,
+  DeploymentRun,
+} from "@/lib/deployment";
+import { DeploymentEventFeed } from "./DeploymentEventFeed";
 
 const BASE_PIXELS_PER_MINUTE = 24;
 const MINIMUM_RUN_WIDTH = 72;
@@ -28,36 +28,36 @@ const MAXIMUM_HORIZON_MINUTES = 2 * 24 * 60;
 const QUEUE_CAPACITY = 4;
 const LANE_LABEL_WIDTH = 224;
 
-export function WorkspaceCanvas({
+export function DeploymentCanvas({
   events,
-  workspace,
+  deployment,
 }: {
   events: readonly CloudEvent[];
-  workspace: Workspace;
+  deployment: Deployment;
 }) {
-  const now = workspaceNow(events);
-  const rentals = Object.values(workspace.rentals).sort((a, b) => {
+  const now = deploymentNow(events);
+  const rentals = Object.values(deployment.rentals).sort((a, b) => {
     const sourceOrder = sourceRank(a) - sourceRank(b);
     return sourceOrder || a.id.localeCompare(b.id);
   });
-  const incoming = Object.values(workspace.runs)
+  const incoming = Object.values(deployment.runs)
     .filter((run) => run.phase === "requested" && !run.bookingID)
     .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
-  const marketplace = workspace.offers.filter(
+  const marketplace = deployment.offers.filter(
     (offer) => offer.kind === "provisionable",
   );
-  const pixelsPerMinute = readablePixelsPerMinute(workspace);
-  const horizonMinutes = workspaceHorizon(workspace, now);
+  const pixelsPerMinute = readablePixelsPerMinute(deployment);
+  const horizonMinutes = deploymentHorizon(deployment, now);
   const timelineWidth = horizonMinutes * pixelsPerMinute;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b px-5 py-4">
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-base font-semibold tracking-tight">Workspace</h1>
+          <h1 className="text-base font-semibold tracking-tight">Deployment</h1>
           <div className="flex items-center gap-5">
             <span className="font-mono text-xs text-muted-foreground">
-              {workspace.id}
+              {deployment.id}
             </span>
           </div>
         </div>
@@ -103,7 +103,7 @@ export function WorkspaceCanvas({
               <RentalLane
                 key={rental.id}
                 rental={rental}
-                workspace={workspace}
+                deployment={deployment}
                 horizonMinutes={horizonMinutes}
                 pixelsPerMinute={pixelsPerMinute}
                 now={now}
@@ -113,10 +113,10 @@ export function WorkspaceCanvas({
 
           <Marketplace
             offers={marketplace}
-            available={workspace.offersAvailable}
+            available={deployment.offersAvailable}
           />
         </div>
-        <WorkspaceEventFeed events={events} />
+        <DeploymentEventFeed events={events} />
       </div>
     </div>
   );
@@ -191,21 +191,21 @@ function RentalLane({
   now,
   pixelsPerMinute,
   rental,
-  workspace,
+  deployment,
 }: {
   horizonMinutes: number;
   now: number;
   pixelsPerMinute: number;
   rental: Rental;
-  workspace: Workspace;
+  deployment: Deployment;
 }) {
   const running = rental.runningBookingID
-    ? workspace.bookings[rental.runningBookingID]
+    ? deployment.bookings[rental.runningBookingID]
     : undefined;
   const queued = rental.queuedBookingIDs
-    .map((id) => workspace.bookings[id])
-    .filter((booking): booking is WorkspaceBooking => Boolean(booking));
-  const runningRun = running ? workspace.runs[running.runID] : undefined;
+    .map((id) => deployment.bookings[id])
+    .filter((booking): booking is DeploymentBooking => Boolean(booking));
+  const runningRun = running ? deployment.runs[running.runID] : undefined;
   const provision = rental.phase === "provisioning" ? rental.offer?.provisioning : undefined;
   const { expected: provisionExpected, max: provisionMax } =
     provisioningWindow(provision);
@@ -266,7 +266,7 @@ function RentalLane({
           />
         ) : null}
         {queued.map((booking) => {
-          const run = workspace.runs[booking.runID];
+          const run = deployment.runs[booking.runID];
           if (!run) return null;
           const left =
             secondsUntil(booking.projectedStartAt, now) || nextStartSeconds;
@@ -357,7 +357,7 @@ function RunBlock({
   maxSeconds: number;
   pixelsPerMinute: number;
   queued?: boolean;
-  run: WorkspaceRun;
+  run: DeploymentRun;
 }) {
   const maxWidth = Math.max(24, (maxSeconds / 60) * pixelsPerMinute);
   const expectedWidth =
@@ -558,14 +558,14 @@ function MarketplaceOffer({ offer }: { offer: OfferSnapshot }) {
   );
 }
 
-// workspaceNow is the moment this workspace last said something, which is the
+// deploymentNow is the moment this deployment last said something, which is the
 // clock every other timestamp on this canvas was written by. Reading the viewer's
 // own clock instead compares two frames of reference: a Lab execution runs on
 // virtual time years from today, so a Booking queued in one projected a start
-// three years out and the axis was asked for the whole distance. A workspace that
+// three years out and the axis was asked for the whole distance. A deployment that
 // has said nothing has no clock of its own and also nothing placed on the
 // timeline, so the viewer's clock is what the empty axis is labelled from.
-function workspaceNow(events: readonly CloudEvent[]): number {
+function deploymentNow(events: readonly CloudEvent[]): number {
   const latest = events[0];
   if (!latest) return Date.now();
   const stated = Date.parse(latest.time);
@@ -592,17 +592,17 @@ function hourlyRate(offer: OfferSnapshot): string {
     : "—";
 }
 
-function readablePixelsPerMinute(workspace: Workspace): number {
+function readablePixelsPerMinute(deployment: Deployment): number {
   let shortestExpectedSeconds = Number.POSITIVE_INFINITY;
-  for (const rental of Object.values(workspace.rentals)) {
+  for (const rental of Object.values(deployment.rentals)) {
     for (const bookingID of [
       rental.runningBookingID,
       ...rental.queuedBookingIDs,
     ]) {
       if (!bookingID) continue;
-      const booking = workspace.bookings[bookingID];
+      const booking = deployment.bookings[bookingID];
       const expected = booking
-        ? workspace.runs[booking.runID]?.expectedRuntimeSeconds
+        ? deployment.runs[booking.runID]?.expectedRuntimeSeconds
         : null;
       if (expected && expected > 0) {
         shortestExpectedSeconds = Math.min(shortestExpectedSeconds, expected);
@@ -618,27 +618,27 @@ function readablePixelsPerMinute(workspace: Workspace): number {
   );
 }
 
-// workspaceHorizon is how far ahead this canvas has to reach to show everything
+// deploymentHorizon is how far ahead this canvas has to reach to show everything
 // already committed: the machine still being provisioned, the Run occupying each
 // one, and the Runs queued behind them.
 //
 // It is bounded, because every term in it is a difference between two clocks. A
 // projected start is a moment the control plane wrote down, `now` is the moment
-// this workspace last said something, and a canvas that trusts their difference
+// this deployment last said something, and a canvas that trusts their difference
 // without limit renders one column per ten minutes of it. Asked for a start a
 // few years out it built 723,040 elements and held the tab's main thread for
 // seventy seconds, which is not a slow canvas, it is an unusable one. Past the
 // bound the far end of the axis is honest about the window it shows and the work
 // beyond it stays in the queue where it is listed.
-function workspaceHorizon(workspace: Workspace, now: number): number {
+function deploymentHorizon(deployment: Deployment, now: number): number {
   let seconds = MINIMUM_HORIZON_MINUTES * 60;
-  for (const rental of Object.values(workspace.rentals)) {
+  for (const rental of Object.values(deployment.rentals)) {
     const provision = rental.offer?.provisioning;
     if (rental.phase === "provisioning" && provision) {
       const booking = rental.runningBookingID
-        ? workspace.bookings[rental.runningBookingID]
+        ? deployment.bookings[rental.runningBookingID]
         : undefined;
-      const run = booking ? workspace.runs[booking.runID] : undefined;
+      const run = booking ? deployment.runs[booking.runID] : undefined;
       seconds = Math.max(
         seconds,
         provisioningWindow(provision).max + (run?.maxRuntimeSeconds ?? 0),
@@ -649,8 +649,8 @@ function workspaceHorizon(workspace: Workspace, now: number): number {
       ...rental.queuedBookingIDs,
     ]) {
       if (!bookingID) continue;
-      const booking = workspace.bookings[bookingID];
-      const run = booking ? workspace.runs[booking.runID] : undefined;
+      const booking = deployment.bookings[bookingID];
+      const run = booking ? deployment.runs[booking.runID] : undefined;
       if (!booking || !run) continue;
       seconds = Math.max(
         seconds,
@@ -664,12 +664,12 @@ function workspaceHorizon(workspace: Workspace, now: number): number {
   );
 }
 
-function remainingExpected(run: WorkspaceRun | undefined, now: number): number {
+function remainingExpected(run: DeploymentRun | undefined, now: number): number {
   if (!run || run.expectedRuntimeSeconds === null) return 0;
   return Math.max(0, run.expectedRuntimeSeconds - elapsedSeconds(run, now));
 }
 
-function remainingMax(run: WorkspaceRun, now: number): number {
+function remainingMax(run: DeploymentRun, now: number): number {
   return Math.max(1, run.maxRuntimeSeconds - elapsedSeconds(run, now));
 }
 
@@ -677,7 +677,7 @@ function remainingMax(run: WorkspaceRun, now: number): number {
 // moment its machine said it began. A Run nothing has reported a start for has no
 // elapsed runtime to show: counting from when Mercator last looked would report a
 // workload as newly started every time the console reconnected.
-function elapsedSeconds(run: WorkspaceRun, now: number): number {
+function elapsedSeconds(run: DeploymentRun, now: number): number {
   if (!run.startedAt) return 0;
   return Math.max(0, (now - new Date(run.startedAt).getTime()) / 1000);
 }

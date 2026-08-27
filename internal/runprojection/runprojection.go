@@ -38,8 +38,7 @@ type Page struct {
 // bounded indexed reads. The event stream remains the source of truth.
 type Store interface {
 	Append(ctx context.Context, request eventlog.AppendRequest, next domain.RunRecord) (eventlog.AppendResult, error)
-	AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest, next domain.RunRecord) (eventlog.AppendResult, error)
-	List(ctx context.Context, workspaceID string, page PageRequest) (Page, error)
-	ListOpenIDs(ctx context.Context, workspaceID string) ([]string, error)
-	Replace(ctx context.Context, workspaceID string, records []domain.RunRecord) error
+	List(ctx context.Context, page PageRequest) (Page, error)
+	ListOpenIDs(ctx context.Context) ([]string, error)
+	Replace(ctx context.Context, records []domain.RunRecord) error
 }

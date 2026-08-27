@@ -1,41 +1,39 @@
 import type { CloudEvent } from "../api/types";
 
 import type {
-  WorkspaceFeedError,
-  WorkspaceFeedStatus,
-  WorkspaceSignal,
+  DeploymentFeedError,
+  DeploymentFeedStatus,
+  DeploymentSignal,
 } from "./feed";
 import {
-  createWorkspace,
-  reduceWorkspace,
-  type Workspace,
-  type WorkspaceMessage,
+  createDeployment,
+  reduceDeployment,
+  type Deployment,
+  type DeploymentMessage,
 } from "./reducer";
 
 const EVENT_LIMIT = 100;
 
-export interface WorkspaceFeedSnapshot {
-  readonly workspace: Workspace;
+export interface DeploymentFeedSnapshot {
+  readonly deployment: Deployment;
   readonly events: readonly CloudEvent[];
-  readonly status: WorkspaceFeedStatus;
-  readonly error: WorkspaceFeedError | null;
+  readonly status: DeploymentFeedStatus;
+  readonly error: DeploymentFeedError | null;
 }
 
-export function initialWorkspaceFeedSnapshot(
-  workspaceId: string,
-): WorkspaceFeedSnapshot {
+export function initialDeploymentFeedSnapshot(): DeploymentFeedSnapshot {
   return {
-    workspace: createWorkspace(workspaceId),
+    deployment: createDeployment("deployment"),
     events: [],
     status: "idle",
     error: null,
   };
 }
 
-export function reduceWorkspaceFeed(
-  current: WorkspaceFeedSnapshot,
-  signal: WorkspaceSignal,
-): WorkspaceFeedSnapshot {
+export function reduceDeploymentFeed(
+  current: DeploymentFeedSnapshot,
+  signal: DeploymentSignal,
+): DeploymentFeedSnapshot {
   switch (signal.type) {
     case "connecting":
       return { ...current, status: "connecting" };
@@ -45,41 +43,41 @@ export function reduceWorkspaceFeed(
 }
 
 function applyMessage(
-  current: WorkspaceFeedSnapshot,
-  message: WorkspaceMessage,
-): WorkspaceFeedSnapshot {
+  current: DeploymentFeedSnapshot,
+  message: DeploymentMessage,
+): DeploymentFeedSnapshot {
   // Positions already incorporated must be skipped, not just recent ids: a
   // reconnect without a cursor replays the whole history onto a retained
   // snapshot, and the id window only remembers the last EVENT_LIMIT events.
   if (
     message.type === "domain_event" &&
     (message.event.globalposition <=
-      current.workspace.throughGlobalPosition ||
+      current.deployment.throughGlobalPosition ||
       current.events.some((event) => event.id === message.event.id))
   ) {
     return current;
   }
-  const workspace = reduceWorkspace(current.workspace, message);
+  const deployment = reduceDeployment(current.deployment, message);
   const events =
     message.type === "domain_event"
       ? [message.event, ...current.events].slice(0, EVENT_LIMIT)
       : current.events;
   return {
     ...current,
-    workspace,
+    deployment,
     events,
-    status: messageStatus(current.status, message, workspace),
+    status: messageStatus(current.status, message, deployment),
     error: null,
   };
 }
 
 function messageStatus(
-  current: WorkspaceFeedStatus,
-  message: WorkspaceMessage,
-  workspace: Workspace,
-): WorkspaceFeedStatus {
+  current: DeploymentFeedStatus,
+  message: DeploymentMessage,
+  deployment: Deployment,
+): DeploymentFeedStatus {
   if (message.type === "ready") return "live";
   if (message.type === "offers_unavailable") return "degraded";
-  if (message.type === "offers_replaced" && workspace.ready) return "live";
+  if (message.type === "offers_replaced" && deployment.ready) return "live";
   return current;
 }

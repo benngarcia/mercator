@@ -16,7 +16,7 @@ import (
 // compute.workload.revision_created.v1 carried the whole revision in data_json
 // and nothing in private_data, so every environment value a caller stored,
 // including the tokens callers put there, was readable by every reader of the
-// public log and streamed to every console reader of the workspace. The run door
+// public log and streamed to every console reader of the deployment. The run door
 // has redacted exactly these values for as long as it has had a private payload.
 // Rewriting the door leaves that history behind, and history is what a console
 // reader reads.

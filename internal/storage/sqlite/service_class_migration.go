@@ -139,8 +139,7 @@ func refuseOpenLegacyObjectives(ctx context.Context, tx *sql.Tx) error {
 			  AND NOT EXISTS (
 				SELECT 1
 				FROM events AS closed
-				WHERE closed.workspace_id = legacy.workspace_id
-				  AND closed.stream_type = legacy.stream_type
+				WHERE closed.stream_type = legacy.stream_type
 				  AND closed.stream_id = legacy.stream_id
 				  AND closed.event_type = 'compute.run.closed.v1'
 			  )

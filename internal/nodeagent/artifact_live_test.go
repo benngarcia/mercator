@@ -223,7 +223,6 @@ func writeArtifactInsideAContainer(t *testing.T, runtime *DockerRuntime, runID s
 			)},
 		}}},
 	}
-	command.WorkspaceID = "ws_alpha"
 	if err := runtime.LaunchWorkload(context.Background(), command); err != nil {
 		t.Fatalf("launch the producer: %v", err)
 	}
@@ -322,7 +321,7 @@ func putVersion(t *testing.T, endpoint, artifactID string, content []byte) {
 // location the catalog states rather than chosen here. A test that picked its own
 // key would be proving that a URL somebody typed can be read.
 func versionKey(artifactID string) string {
-	return strings.TrimPrefix(domain.ArtifactLocation(liveWorkspace, artifactID), "mercator://")
+	return strings.TrimPrefix(domain.ArtifactLocation(artifactID), "mercator://")
 }
 
 // prepareArtifact is the command a node really receives for one version: the
@@ -343,18 +342,17 @@ func prepareArtifact(t *testing.T, endpoint, artifactID, contentDigest string, s
 	command := capability.PrepareArtifactCommand{
 		ArtifactID:       artifactID,
 		ContentDigest:    contentDigest,
-		Source:           domain.ArtifactLocation(liveWorkspace, artifactID),
+		Source:           domain.ArtifactLocation(artifactID),
 		SourceCredential: mintedRead(t, endpoint, operation, artifactID),
 		SizeBytes:        size,
 	}
-	command.WorkspaceID = liveWorkspace
 	command.OperationID = operation
 	return command
 }
 
 // mintedRead is the control plane handing one machine one read of one object. The
 // material is a URL because a presigned GET is a bearer credential written as a
-// location, and it names the operation, the workspace, the version and the moment
+// location, and it names the operation, the deployment, the version and the moment
 // it stops working, all of which the node checks before it spends it.
 func mintedRead(t *testing.T, endpoint, operation, artifactID string) domain.ArtifactRead {
 	t.Helper()
@@ -370,8 +368,8 @@ func mintedRead(t *testing.T, endpoint, operation, artifactID string) domain.Art
 	if err != nil {
 		t.Fatalf("hold the object store account: %v", err)
 	}
-	read, err := mint.ArtifactRead(context.Background(), operation, liveWorkspace, artifactID,
-		domain.ArtifactLocation(liveWorkspace, artifactID))
+	read, err := mint.ArtifactRead(context.Background(), operation, artifactID,
+		domain.ArtifactLocation(artifactID))
 	if err != nil {
 		t.Fatalf("mint a read of %s: %v", artifactID, err)
 	}
@@ -570,7 +568,7 @@ func placeAReadOfTheCorpus(
 	decision, err := scheduler.New().Evaluate(context.Background(), scheduler.SchedulingInput{
 		RunID: "run-reader",
 		Workload: domain.WorkloadRevision{
-			WorkspaceID: "ws_alpha",
+
 			Spec: domain.WorkloadSpec{
 				Containers: []domain.ContainerSpec{{
 					Name:     "reader",

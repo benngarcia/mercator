@@ -13,7 +13,7 @@ func TestListCapacityMapsCatalogTriplesToOffers(t *testing.T) {
 	fake.types = []instanceType{vmType()}
 	a := newTestAdapter(t, fake, nil)
 
-	offers, err := a.ListCapacity(context.Background(), capability.CapacityQuery{WorkspaceID: "ws_1"})
+	offers, err := a.ListCapacity(context.Background(), capability.CapacityQuery{})
 	if err != nil {
 		t.Fatalf("list capacity: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestOneRegionNameInTwoCloudsIsTwoPlaces(t *testing.T) {
 	fake.types = []instanceType{hyperstack, crusoe}
 	a := newTestAdapter(t, fake, nil)
 
-	offers, err := a.ListCapacity(context.Background(), capability.CapacityQuery{WorkspaceID: "ws_1"})
+	offers, err := a.ListCapacity(context.Background(), capability.CapacityQuery{})
 	if err != nil {
 		t.Fatalf("list capacity: %v", err)
 	}

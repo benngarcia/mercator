@@ -110,7 +110,7 @@ func NewRegistry(store Store, signer *Signer, controlPlaneURL string, opts ...Op
 // place work against, so anything declared here that the Docker runtime does not
 // do is Placement believing in locality nothing produces. Four of the five are
 // earned today: the agent enumerates the images and layers it unpacked and
-// reports the platform of each, it attaches and enumerates workspace-scoped
+// reports the platform of each, it attaches and enumerates deployment-scoped
 // cache volumes across workloads, it pulls an image it was not asked to launch
 // and answers Duplicate on a redelivery, and it replicates an immutable Artifact
 // from a location the control plane minted and reports the digest those bytes
@@ -131,10 +131,9 @@ func (registry *Registry) NodeSupport() capability.NodeSupport {
 // before it exists: which node it will be, which Rental generation it belongs
 // to, and what holding it costs.
 type Invitation struct {
-	WorkspaceID string
-	NodeID      string
-	RentalID    string
-	Generation  uint64
+	NodeID     string
+	RentalID   string
+	Generation uint64
 	// ShadowPriceUSDPerHour is what this machine costs to hold. Placement needs
 	// a price to weigh a node against fresh capacity, and a node without one is
 	// refused rather than treated as free.
@@ -181,8 +180,8 @@ func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (ca
 		return capability.NodeBootstrap{}, err
 	}
 	record := Record{
-		ID:                    nodeID,
-		WorkspaceID:           invitation.WorkspaceID,
+		ID: nodeID,
+
 		RentalID:              rentalID,
 		Generation:            generation,
 		State:                 StateEnrolling,
@@ -283,7 +282,7 @@ func (registry *Registry) Enroll(ctx context.Context, request capability.Enrollm
 			ErrEnrollmentInvalid, request.NodeID, request.Generation,
 		)
 	}
-	enrolled, err := registry.store.Enroll(ctx, record.WorkspaceID, record.ID, Enrollment{
+	enrolled, err := registry.store.Enroll(ctx, record.ID, Enrollment{
 		EnrollmentTokenID: TokenID(request.EnrollmentToken),
 		AgentVersion:      request.AgentVersion,
 		Facts:             request.Facts.Established(),
@@ -295,7 +294,7 @@ func (registry *Registry) Enroll(ctx context.Context, request capability.Enrollm
 	}
 	// A new enrollment supersedes any open session. Closing it here is what
 	// makes the fencing token meaningful rather than advisory.
-	registry.closeSession(enrolled.WorkspaceID, enrolled.ID)
+	registry.closeSession(enrolled.ID)
 	sessionExpires := registry.signer.Expiry(now.Add(registry.session))
 	token, err := registry.signer.Session(enrolled.ID, enrolled.FencingToken, sessionExpires)
 	if err != nil {
@@ -360,7 +359,7 @@ func (registry *Registry) ObserveWorkload(ctx context.Context, ref capability.Wo
 	if _, err := registry.record(ctx, ref.NodeRef); err != nil {
 		return capability.WorkloadObservation{}, err
 	}
-	observation, found, err := registry.store.LatestWorkload(ctx, ref.WorkspaceID, ref.NodeID, ref.RunID, ref.AttemptID)
+	observation, found, err := registry.store.LatestWorkload(ctx, ref.NodeID, ref.RunID, ref.AttemptID)
 	if err != nil {
 		return capability.WorkloadObservation{}, err
 	}
@@ -387,11 +386,11 @@ func (registry *Registry) Reconcile(ctx context.Context, ref capability.NodeRef)
 	if err != nil {
 		return capability.Reconciliation{}, err
 	}
-	applied, err := registry.store.AppliedOperationIDs(ctx, record.WorkspaceID, record.ID)
+	applied, err := registry.store.AppliedOperationIDs(ctx, record.ID)
 	if err != nil {
 		return capability.Reconciliation{}, err
 	}
-	workloads, err := registry.store.Workloads(ctx, record.WorkspaceID, record.ID)
+	workloads, err := registry.store.Workloads(ctx, record.ID)
 	if err != nil {
 		return capability.Reconciliation{}, err
 	}
@@ -441,9 +440,9 @@ func (registry *Registry) dispatch(
 	}
 	now := registry.now().UTC()
 	stored, duplicate, err := registry.store.AppendOperation(ctx, Operation{
-		OperationID:  operationID,
-		NodeID:       record.ID,
-		WorkspaceID:  record.WorkspaceID,
+		OperationID: operationID,
+		NodeID:      record.ID,
+
 		Kind:         kind,
 		FencingToken: record.FencingToken,
 		State:        OperationPending,
@@ -466,7 +465,7 @@ func (registry *Registry) dispatch(
 	// desire is durable and a credential minted for one fetch is not.
 	delivered := commandFrom(stored)
 	delivered.Payload = wire
-	registry.deliver(record.WorkspaceID, record.ID, delivered)
+	registry.deliver(record.ID, delivered)
 	return capability.OperationReceipt{OperationID: operationID, AcceptedAt: now}, nil
 }
 
@@ -475,7 +474,7 @@ func (registry *Registry) dispatch(
 type materialHolder interface {
 	// WithoutMaterial is this command with every bearer credential taken out and
 	// the bound each was minted under left in. A registry secret and a signed
-	// location are what a holder can spend; the operation, workspace, content and
+	// location are what a holder can spend; the operation, content and
 	// expiry beside them are the record of what Mercator authorised and are
 	// presentable to nobody.
 	WithoutMaterial() any
@@ -504,7 +503,7 @@ func commandFrom(operation Operation) Command {
 }
 
 func (registry *Registry) record(ctx context.Context, ref capability.NodeRef) (Record, error) {
-	record, err := registry.store.Get(ctx, ref.WorkspaceID, ref.NodeID)
+	record, err := registry.store.Get(ctx, ref.NodeID)
 	if err != nil {
 		return Record{}, err
 	}
@@ -535,8 +534,8 @@ func (registry *Registry) record(ctx context.Context, ref capability.NodeRef) (R
 // cannot end in an enrolment whoever is holding it, so replacing it costs the
 // machine already out there nothing and gives the one about to be built material
 // that will still be good when it boots.
-func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID string, redeemableThrough time.Time) (capability.NodeBootstrap, error) {
-	record, err := registry.store.Get(ctx, workspaceID, nodeID)
+func (registry *Registry) Reinvite(ctx context.Context, nodeID string, redeemableThrough time.Time) (capability.NodeBootstrap, error) {
+	record, err := registry.store.Get(ctx, nodeID)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
 	}
@@ -554,7 +553,7 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 	if err != nil {
 		return capability.NodeBootstrap{}, err
 	}
-	if err := registry.store.Reinvite(ctx, workspaceID, nodeID, TokenID(token), expires); err != nil {
+	if err := registry.store.Reinvite(ctx, nodeID, TokenID(token), expires); err != nil {
 		return capability.NodeBootstrap{}, err
 	}
 	return registry.bootstrapFor(record, token), nil
@@ -613,11 +612,11 @@ func (registry *Registry) bootstrapFor(record Record, token string) capability.N
 // credential a fresh session preloaded with every command the last one never
 // acknowledged. Written first, a control plane that stops in between still offers
 // the machine to nobody and answers its next connection with ErrRetired.
-func (registry *Registry) Retire(ctx context.Context, workspaceID, nodeID string) error {
-	if err := registry.store.Retire(ctx, workspaceID, nodeID); err != nil {
+func (registry *Registry) Retire(ctx context.Context, nodeID string) error {
+	if err := registry.store.Retire(ctx, nodeID); err != nil {
 		return err
 	}
-	registry.closeSession(workspaceID, nodeID)
+	registry.closeSession(nodeID)
 	return nil
 }
 

@@ -45,7 +45,7 @@ func TestReportEndpointExemptFromOperatorAuth(t *testing.T) {
 
 	// Regression: GET /v1/runs without a token must still be 401.
 	t.Run("list_runs_still_requires_token", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+		req := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
@@ -113,15 +113,14 @@ type fleetOfOne interface {
 func newReportingTestHarnessWithProvider(t *testing.T, signerKey []byte, log eventlog.EventLog, provider fleetOfOne, ad *fake.Adapter, extra ...Option) reportingTestHarness {
 	t.Helper()
 	sched := scheduler.New()
-	workspaceLog := workspaceTestLog{EventLog: log}
-	orch := orchestrator.New(workspaceLog, sched, provider)
+	orch := orchestrator.New(log, sched, provider)
 	signer := reporting.NewSigner(signerKey)
 	opts := append([]Option{
 		WithReportSigner(signer),
 		WithBearerAuth("op-token"),
 	}, extra...)
 	return reportingTestHarness{
-		handler: New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: provider}, Workloads: workload.New(workspaceLog)}, opts...),
+		handler: New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: provider}, Workloads: workload.New(log)}, opts...),
 		orch:    orch,
 		adapter: ad,
 	}
@@ -175,8 +174,8 @@ func TestReportIngestEndpointRecordsEvent(t *testing.T) {
 		"type": "progress",
 		"data": map[string]any{"pct": 50},
 	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1", bytes.NewReader(reportPayload))
-	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report", bytes.NewReader(reportPayload))
+	req.Header.Set("Authorization", "Bearer "+signer.Token(runID))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -191,7 +190,7 @@ func TestReportIngestEndpointRecordsEvent(t *testing.T) {
 	}
 
 	// GET /v1/runs/{id}/events with the operator token should show the reported event.
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/"+runID+"/events?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/"+runID+"/events", nil)
 	req.Header.Set("Authorization", "Bearer op-token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -228,8 +227,8 @@ func TestReportIngestRejectsContradictoryReportShapes(t *testing.T) {
 
 	for _, fixture := range []string{"progress_with_exit_code.json", "exit_without_code.json"} {
 		t.Run(fixture, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1", bytes.NewReader(reportFixture(t, fixture)))
-			req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
+			req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report", bytes.NewReader(reportFixture(t, fixture)))
+			req.Header.Set("Authorization", "Bearer "+signer.Token(runID))
 			rec := httptest.NewRecorder()
 			harness.handler.ServeHTTP(rec, req)
 
@@ -239,7 +238,7 @@ func TestReportIngestRejectsContradictoryReportShapes(t *testing.T) {
 		})
 	}
 
-	events, err := harness.orch.GetRunEvents(t.Context(), "ws_1", runID)
+	events, err := harness.orch.GetRunEvents(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("get run events: %v", err)
 	}
@@ -256,15 +255,15 @@ func TestTerminalReportReturnsBeforeCleanupAndReconciles(t *testing.T) {
 	harness := newReportingTestHarness(t, key32)
 	runID := createReportingRun(t, harness.handler, "run_report_terminal_success")
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1", bytes.NewReader(reportFixture(t, "exit_succeeded.json")))
-	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report", bytes.NewReader(reportFixture(t, "exit_succeeded.json")))
+	req.Header.Set("Authorization", "Bearer "+signer.Token(runID))
 	rec := httptest.NewRecorder()
 	harness.handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("report: expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	reported, err := harness.orch.GetRun(t.Context(), "ws_1", runID)
+	reported, err := harness.orch.GetRun(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("get reported run: %v", err)
 	}
@@ -272,10 +271,10 @@ func TestTerminalReportReturnsBeforeCleanupAndReconciles(t *testing.T) {
 		t.Fatalf("report response must precede cleanup: closed=%v terminate_count=%d", reported.Closed, harness.adapter.TerminateCount())
 	}
 
-	if _, err := harness.orch.AdvanceOpenRuns(t.Context(), "ws_1"); err != nil {
+	if _, err := harness.orch.AdvanceOpenRuns(t.Context()); err != nil {
 		t.Fatalf("reconcile reported run: %v", err)
 	}
-	closed, err := harness.orch.GetRun(t.Context(), "ws_1", runID)
+	closed, err := harness.orch.GetRun(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("get reconciled run: %v", err)
 	}
@@ -293,18 +292,18 @@ func TestNonzeroTerminalReportFailsAndCleansUp(t *testing.T) {
 	harness := newReportingTestHarness(t, key32)
 	runID := createReportingRun(t, harness.handler, "run_report_terminal_failure")
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1", bytes.NewReader(reportFixture(t, "exit_failed_7.json")))
-	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report", bytes.NewReader(reportFixture(t, "exit_failed_7.json")))
+	req.Header.Set("Authorization", "Bearer "+signer.Token(runID))
 	rec := httptest.NewRecorder()
 	harness.handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("report: expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	if _, err := harness.orch.AdvanceOpenRuns(t.Context(), "ws_1"); err != nil {
+	if _, err := harness.orch.AdvanceOpenRuns(t.Context()); err != nil {
 		t.Fatalf("reconcile failed report: %v", err)
 	}
-	record, err := harness.orch.GetRun(t.Context(), "ws_1", runID)
+	record, err := harness.orch.GetRun(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("get failed run: %v", err)
 	}
@@ -322,7 +321,7 @@ func TestCancelEndpointUsesRecordedDispositionCleanupOnce(t *testing.T) {
 	runID := createReportingRun(t, harness.handler, "run_cancel_terminal")
 
 	for attempt := 1; attempt <= 2; attempt++ {
-		req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/cancel?workspace_id=ws_1", nil)
+		req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/cancel", nil)
 		req.Header.Set("Authorization", "Bearer op-token")
 		rec := httptest.NewRecorder()
 		harness.handler.ServeHTTP(rec, req)
@@ -340,7 +339,7 @@ func TestCancelEndpointUsesRecordedDispositionCleanupOnce(t *testing.T) {
 	if harness.adapter.TerminateCount() != 1 {
 		t.Fatalf("terminate count = %d, want 1", harness.adapter.TerminateCount())
 	}
-	events, err := harness.orch.GetRunEvents(t.Context(), "ws_1", runID)
+	events, err := harness.orch.GetRunEvents(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("get cancellation events: %v", err)
 	}
@@ -359,8 +358,8 @@ func TestTerminalReportReplayIsIdempotentAndConflictIsRejected(t *testing.T) {
 
 	postReport := func(name string) *httptest.ResponseRecorder {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1", bytes.NewReader(reportFixture(t, name)))
-		req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
+		req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report", bytes.NewReader(reportFixture(t, name)))
+		req.Header.Set("Authorization", "Bearer "+signer.Token(runID))
 		rec := httptest.NewRecorder()
 		harness.handler.ServeHTTP(rec, req)
 		return rec
@@ -390,7 +389,7 @@ func TestTerminalReportReplayIsIdempotentAndConflictIsRejected(t *testing.T) {
 		t.Fatalf("conflicting report: expected 409 TERMINAL_REPORT_CONFLICT, got %d body=%s", conflict.Code, conflict.Body.String())
 	}
 
-	events, err := harness.orch.GetRunEvents(t.Context(), "ws_1", runID)
+	events, err := harness.orch.GetRunEvents(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
@@ -404,10 +403,10 @@ func TestTerminalReportReplayIsIdempotentAndConflictIsRejected(t *testing.T) {
 		t.Fatalf("reported event count = %d, want 1", reported)
 	}
 
-	if _, err := harness.orch.AdvanceOpenRuns(t.Context(), "ws_1"); err != nil {
+	if _, err := harness.orch.AdvanceOpenRuns(t.Context()); err != nil {
 		t.Fatalf("reconcile reported run: %v", err)
 	}
-	record, err := harness.orch.GetRun(t.Context(), "ws_1", runID)
+	record, err := harness.orch.GetRun(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("get reconciled run: %v", err)
 	}
@@ -432,8 +431,8 @@ func TestCleanupFailureIsVisibleThroughRunAndEventAPIs(t *testing.T) {
 	harness := newReportingTestHarnessWithProvider(t, key32, log, provider, base)
 	runID := createReportingRun(t, harness.handler, "run_report_cleanup_failure")
 
-	report := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1", bytes.NewReader(reportFixture(t, "exit_succeeded.json")))
-	report.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
+	report := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report", bytes.NewReader(reportFixture(t, "exit_succeeded.json")))
+	report.Header.Set("Authorization", "Bearer "+signer.Token(runID))
 	reported := httptest.NewRecorder()
 	harness.handler.ServeHTTP(reported, report)
 	if reported.Code != http.StatusAccepted {
@@ -442,7 +441,7 @@ func TestCleanupFailureIsVisibleThroughRunAndEventAPIs(t *testing.T) {
 
 	refresh := func() *httptest.ResponseRecorder {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id=ws_1", nil)
+		req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/refresh", nil)
 		req.Header.Set("Authorization", "Bearer op-token")
 		rec := httptest.NewRecorder()
 		harness.handler.ServeHTTP(rec, req)
@@ -452,7 +451,7 @@ func TestCleanupFailureIsVisibleThroughRunAndEventAPIs(t *testing.T) {
 		t.Fatalf("failed refresh: expected 502 REFRESH_RUN_FAILED, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	getRun := httptest.NewRequest(http.MethodGet, "/v1/runs/"+runID+"?workspace_id=ws_1", nil)
+	getRun := httptest.NewRequest(http.MethodGet, "/v1/runs/"+runID+"", nil)
 	getRun.Header.Set("Authorization", "Bearer op-token")
 	runResponse := httptest.NewRecorder()
 	harness.handler.ServeHTTP(runResponse, getRun)
@@ -470,7 +469,7 @@ func TestCleanupFailureIsVisibleThroughRunAndEventAPIs(t *testing.T) {
 		t.Fatalf("cleanup error is not stable and redacted: %+v", blocked.Run.CleanupError)
 	}
 
-	getEvents := httptest.NewRequest(http.MethodGet, "/v1/runs/"+runID+"/events?workspace_id=ws_1", nil)
+	getEvents := httptest.NewRequest(http.MethodGet, "/v1/runs/"+runID+"/events", nil)
 	getEvents.Header.Set("Authorization", "Bearer op-token")
 	eventResponse := httptest.NewRecorder()
 	harness.handler.ServeHTTP(eventResponse, getEvents)
@@ -495,8 +494,8 @@ func TestReportIngestEndpointWrongToken(t *testing.T) {
 
 	runID := createReportingRun(t, handler, "run_report_wrong_tok")
 
-	otherRunToken := signer.Token("ws_1", "run_completely_different")
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1",
+	otherRunToken := signer.Token("run_completely_different")
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
 	req.Header.Set("Authorization", "Bearer "+otherRunToken)
 	rec := httptest.NewRecorder()
@@ -509,35 +508,13 @@ func TestReportIngestEndpointWrongToken(t *testing.T) {
 	}
 }
 
-// TestReportIngestEndpointMissingWorkspaceID verifies that omitting workspace_id
-// returns 400 WORKSPACE_REQUIRED.
-func TestReportIngestEndpointMissingWorkspaceID(t *testing.T) {
-	key32 := []byte("0123456789abcdef0123456789abcdef")
-	signer := reporting.NewSigner(key32)
-	handler := newReportingTestServer(t, key32)
-
-	runID := createReportingRun(t, handler, "run_report_no_ws")
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report",
-		bytes.NewReader([]byte(`{"type":"progress"}`)))
-	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("missing workspace: expected 400, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "INVALID_REQUEST") {
-		t.Fatalf("expected INVALID_REQUEST, got %s", rec.Body.String())
-	}
-}
-
 // TestReportIngestEndpointDisabledWithoutSigner verifies that a server without
 // WithReportSigner returns 501 REPORTING_DISABLED.
 func TestReportIngestEndpointDisabledWithoutSigner(t *testing.T) {
 	// Build a server WITHOUT WithReportSigner.
 	handler := newHTTPTestServerWithOptions(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_x/report?workspace_id=ws_1",
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_x/report",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
 	req.Header.Set("Authorization", "Bearer sometoken")
 	rec := httptest.NewRecorder()
@@ -559,7 +536,7 @@ func TestReportEndpointRejectsOperatorToken(t *testing.T) {
 	runID := createReportingRun(t, handler, "run_report_op_token_reject")
 
 	// POST /report with the operator token (not the run token) — should 401.
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1",
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
 	req.Header.Set("Authorization", "Bearer op-token")
 	rec := httptest.NewRecorder()
@@ -573,7 +550,7 @@ func TestReportEndpointRejectsOperatorToken(t *testing.T) {
 }
 
 // TestReportEndpointRunNotFound verifies that POSTing /report for a
-// non-existent run (with valid token and workspace_id) returns 404 RUN_NOT_FOUND.
+// non-existent run with a valid token returns 404 RUN_NOT_FOUND.
 func TestReportEndpointRunNotFound(t *testing.T) {
 	key32 := []byte("0123456789abcdef0123456789abcdef")
 	signer := reporting.NewSigner(key32)
@@ -582,9 +559,9 @@ func TestReportEndpointRunNotFound(t *testing.T) {
 	// Don't create a run; just try to report for a non-existent runID.
 	nonExistentRunID := "run_nonexistent_12345"
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+nonExistentRunID+"/report?workspace_id=ws_1",
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+nonExistentRunID+"/report",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
-	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", nonExistentRunID))
+	req.Header.Set("Authorization", "Bearer "+signer.Token(nonExistentRunID))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {

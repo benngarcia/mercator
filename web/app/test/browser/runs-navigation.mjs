@@ -14,7 +14,6 @@ const baseURL = requiredEnv("MERCATOR_BROWSER_BASE_URL").replace(/\/$/, "");
 const fixturePath = path.resolve(requiredEnv("MERCATOR_BROWSER_FIXTURE"));
 const outputDirectory = path.resolve(requiredEnv("MERCATOR_BROWSER_OUTPUT"));
 const fixture = JSON.parse(await fs.readFile(fixturePath, "utf8"));
-const workspaceID = requiredEnv("MERCATOR_BROWSER_WORKSPACE_ID");
 await fs.mkdir(outputDirectory, { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
@@ -61,24 +60,11 @@ function contextOptions(viewport) {
 }
 
 async function prepareContext(viewport) {
-  const context = await browser.newContext(contextOptions(viewport));
-  await context.addInitScript(
-    (workspace) => {
-      localStorage.setItem("mercator.workspace", workspace);
-      localStorage.setItem(
-        "mercator.recentWorkspaces",
-        JSON.stringify([workspace]),
-      );
-    },
-    workspaceID,
-  );
-  return context;
+  return browser.newContext(contextOptions(viewport));
 }
 
 function runsURL(pathname = "/runs") {
-  const url = new URL(pathname, baseURL);
-  url.searchParams.set("workspace_id", workspaceID);
-  return url.toString();
+  return new URL(pathname, baseURL).toString();
 }
 
 async function waitForRuns(page) {
@@ -185,7 +171,7 @@ async function runsScopeCancelledCreate(page) {
   // DOM node. The previous form compared node identity against a handle taken
   // before the dialog opened, and sampled document.activeElement the instant
   // waitForURL resolved, so it lost two races at once: the hand-back happens
-  // after the URL returns, and the Workspace event feed refetching useRuns
+  // after the URL returns, and the Deployment event feed refetching useRuns
   // re-renders the header, replacing the button element. It failed four runs in
   // six on a 24 core host while passing in CI. Asking for the focused button by
   // its accessible name, through the same waitFor idiom as every other wait in
@@ -227,10 +213,7 @@ async function minimalImageRunCreated(page) {
   // Assert
   assert.equal(response.status(), 202);
   assert.ok(request.headers()["idempotency-key"]);
-  assert.equal(
-    new URL(request.url()).searchParams.get("workspace_id"),
-    workspaceID,
-  );
+  assert.equal(new URL(request.url()).search, "");
   assert.deepEqual(request.postDataJSON(), {
     image: fixture.image.reference,
     args: fixture.image.args,
@@ -244,10 +227,7 @@ async function minimalImageRunCreated(page) {
   await page.waitForURL(
     (url) => url.pathname === `/runs/${responseBody.run_id}`,
   );
-  assert.equal(
-    new URL(page.url()).searchParams.get("workspace_id"),
-    workspaceID,
-  );
+  assert.equal(new URL(page.url()).search, "");
   await page.goBack();
   await page.waitForURL(originatingURL);
   await waitForRuns(page);
@@ -317,12 +297,9 @@ async function authoringRoutesRetired(page) {
   ]) {
     await page.goto(runsURL(retiredPath), { waitUntil: "domcontentloaded" });
     await page.getByRole("heading", { name: "Page not found" }).waitFor();
-    const returnLink = page.getByRole("link", { name: "Return to Workspace" });
+    const returnLink = page.getByRole("link", { name: "Return to deployment" });
     await returnLink.waitFor();
-    assert.equal(
-      await returnLink.getAttribute("href"),
-      `/canvas?workspace_id=${workspaceID}`,
-    );
+    assert.equal(await returnLink.getAttribute("href"), "/canvas");
   }
 }
 

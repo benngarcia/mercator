@@ -11,7 +11,6 @@ var leaseStart = time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 func leaseIdentity() RentalIdentity {
 	return RentalIdentity{
 		RentalID:       "rnt_1",
-		WorkspaceID:    "ws_1",
 		ConnectionID:   "con_simcloud",
 		OwnershipToken: "own_1",
 	}
@@ -199,7 +198,7 @@ func TestAGenerationRecordsOneEnding(t *testing.T) {
 func TestALeaseMercatorCouldNotHaveReachedIsRefused(t *testing.T) {
 	for name, lease := range map[string]Rental{
 		"a lease over nothing": {
-			ID: "rnt_1", WorkspaceID: "ws_1", ConnectionID: "con_1", OwnershipToken: "own_1", Version: 1,
+			ID: "rnt_1", ConnectionID: "con_1", OwnershipToken: "own_1", Version: 1,
 		},
 		"two generations open at once": withGenerations(
 			RentalGeneration{Number: 1, NodeID: "nod_1", BeganAt: leaseStart},
@@ -284,7 +283,6 @@ func mustOpen(t *testing.T) Rental {
 func withGenerations(generations ...RentalGeneration) Rental {
 	return Rental{
 		ID:             "rnt_1",
-		WorkspaceID:    "ws_1",
 		ConnectionID:   "con_1",
 		OwnershipToken: "own_1",
 		Version:        uint64(len(generations)),

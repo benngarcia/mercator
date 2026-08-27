@@ -17,20 +17,18 @@ const (
 )
 
 type Service struct {
-	log eventlog.WorkspaceEventLog
+	log eventlog.EventLog
 	now func() time.Time
 }
 
 type CreateWorkloadRequest struct {
-	WorkspaceID string
-	WorkloadID  string
-	Name        string
+	WorkloadID string
+	Name       string
 }
 
 type CreateRevisionRequest struct {
-	WorkspaceID string
-	WorkloadID  string
-	Revision    domain.WorkloadRevision
+	WorkloadID string
+	Revision   domain.WorkloadRevision
 }
 
 type workloadCreatedData struct {
@@ -49,20 +47,20 @@ type revisionCreatedData struct {
 // publicRevisionCreatedData is what a reader of the public log sees of the same
 // revision: every environment value replaced by its kind. This door wrote the
 // full revision into a public event, so a token a caller put in a container's
-// environment reached every console reader of the workspace over the event
+// environment reached every console reader of the deployment over the event
 // stream, while the run door has redacted exactly these values since it had a
 // public payload at all.
 type publicRevisionCreatedData struct {
 	Revision domain.PublicWorkloadRevision `json:"revision"`
 }
 
-func New(log eventlog.WorkspaceEventLog) *Service {
+func New(log eventlog.EventLog) *Service {
 	return &Service{log: log, now: time.Now}
 }
 
 func (s *Service) CreateWorkload(ctx context.Context, req CreateWorkloadRequest) error {
-	if req.WorkspaceID == "" || req.WorkloadID == "" {
-		return fmt.Errorf("workload: workspace_id and workload_id are required")
+	if req.WorkloadID == "" {
+		return fmt.Errorf("workload: workload_id is required")
 	}
 	data, err := json.Marshal(workloadCreatedData{WorkloadID: req.WorkloadID, Name: req.Name})
 	if err != nil {
@@ -72,8 +70,8 @@ func (s *Service) CreateWorkload(ctx context.Context, req CreateWorkloadRequest)
 	if err != nil {
 		return err
 	}
-	_, err = s.log.AppendIfWorkspaceActive(ctx, eventlog.AppendRequest{
-		Stream:                workloadStream(req.WorkspaceID, req.WorkloadID),
+	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+		Stream:                workloadStream(req.WorkloadID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            "workload:create:" + req.WorkloadID,
 		RequestHash:           hash,
@@ -92,11 +90,10 @@ func (s *Service) CreateWorkload(ctx context.Context, req CreateWorkloadRequest)
 }
 
 func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest) (domain.WorkloadRevision, error) {
-	if req.WorkspaceID == "" || req.WorkloadID == "" || req.Revision.ID == "" {
-		return domain.WorkloadRevision{}, fmt.Errorf("workload: workspace_id, workload_id, and revision id are required")
+	if req.WorkloadID == "" || req.Revision.ID == "" {
+		return domain.WorkloadRevision{}, fmt.Errorf("workload: workload_id and revision id are required")
 	}
 	revision := req.Revision
-	revision.WorkspaceID = req.WorkspaceID
 	revision.WorkloadID = req.WorkloadID
 	// Fill the omissions a minimal create body leaves before validating, which is
 	// the order NormalizeWorkloadRevision documents and the order run intake
@@ -109,7 +106,7 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 	if violations := domain.ValidateWorkloadRevision(revision); len(violations) > 0 {
 		return domain.WorkloadRevision{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
 	}
-	history, err := eventlog.ReadFullStream(ctx, s.log, workloadStream(req.WorkspaceID, req.WorkloadID))
+	history, err := eventlog.ReadFullStream(ctx, s.log, workloadStream(req.WorkloadID))
 	if err != nil {
 		return domain.WorkloadRevision{}, err
 	}
@@ -141,8 +138,8 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 	if err != nil {
 		return domain.WorkloadRevision{}, err
 	}
-	_, err = s.log.AppendIfWorkspaceActive(ctx, eventlog.AppendRequest{
-		Stream:                workloadStream(req.WorkspaceID, req.WorkloadID),
+	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+		Stream:                workloadStream(req.WorkloadID),
 		ExpectedStreamVersion: history.LastVersion,
 		CommandKey:            commandKey,
 		RequestHash:           hash,
@@ -164,8 +161,8 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 	return revision, nil
 }
 
-func (s *Service) GetRevision(ctx context.Context, workspaceID, workloadID, revisionID string) (domain.WorkloadRevision, error) {
-	revisions, err := s.ListRevisions(ctx, workspaceID, workloadID)
+func (s *Service) GetRevision(ctx context.Context, workloadID, revisionID string) (domain.WorkloadRevision, error) {
+	revisions, err := s.ListRevisions(ctx, workloadID)
 	if err != nil {
 		return domain.WorkloadRevision{}, err
 	}
@@ -177,8 +174,8 @@ func (s *Service) GetRevision(ctx context.Context, workspaceID, workloadID, revi
 	return domain.WorkloadRevision{}, fmt.Errorf("workload: revision not found")
 }
 
-func (s *Service) ListRevisions(ctx context.Context, workspaceID, workloadID string) ([]domain.WorkloadRevision, error) {
-	history, err := eventlog.ReadFullStream(ctx, s.log, workloadStream(workspaceID, workloadID))
+func (s *Service) ListRevisions(ctx context.Context, workloadID string) ([]domain.WorkloadRevision, error) {
+	history, err := eventlog.ReadFullStream(ctx, s.log, workloadStream(workloadID))
 	if err != nil {
 		return nil, err
 	}
@@ -209,6 +206,6 @@ func storedRevision(event eventlog.StoredEvent) (domain.WorkloadRevision, error)
 	return data.Revision, nil
 }
 
-func workloadStream(workspaceID, workloadID string) eventlog.StreamKey {
-	return eventlog.StreamKey{WorkspaceID: workspaceID, Type: "workload", ID: workloadID}
+func workloadStream(workloadID string) eventlog.StreamKey {
+	return eventlog.StreamKey{Type: "workload", ID: workloadID}
 }

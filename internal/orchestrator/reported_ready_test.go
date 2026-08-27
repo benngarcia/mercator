@@ -21,7 +21,7 @@ func TestARunRecordsTheReadinessItsWorkloadReported(t *testing.T) {
 
 	reportReady(t, ctx, orch, ready)
 
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestAReadinessAheadOfTheReadThatCarriedItIsNotThisRunsReadiness(t *testing.
 
 	reportReady(t, ctx, orch, started.Add(time.Hour))
 
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestAReadinessAheadOfTheReadThatCarriedItIsNotThisRunsReadiness(t *testing.
 		t.Fatalf("the Run records a readiness of %s, which its workload published an hour ahead of the read that carried it",
 			record.ReadyAt.Format(time.RFC3339Nano))
 	}
-	events, err := orch.log.ReadStream(ctx, runStream("ws_1", "run_1"), 0, 1000)
+	events, err := orch.log.ReadStream(ctx, runStream("run_1"), 0, 1000)
 	if err != nil {
 		t.Fatalf("read stream: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestAReadinessBeforeItsContainerStartedIsNotThisRunsReadiness(t *testing.T)
 
 	reportReady(t, ctx, orch, started.Add(-time.Minute))
 
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestTheFirstReadinessAWorkloadReportsIsTheOneThatStands(t *testing.T) {
 	reportReady(t, ctx, orch, started)
 	reportReady(t, ctx, orch, started.Add(30*time.Second))
 
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -120,10 +120,10 @@ func runningRun(t *testing.T) (*Orchestrator, time.Time) {
 	)
 	orch := New(openOrchestratorLog(t), scheduler.New(), ad, WithClock(now), withTestCapacity())
 	createRun(t, ctx, orch)
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -139,7 +139,7 @@ func reportReady(t *testing.T, ctx context.Context, orch *Orchestrator, at time.
 	if err != nil {
 		t.Fatalf("build readiness report: %v", err)
 	}
-	if err := orch.RecordReport(ctx, "ws_1", "run_1", report); err != nil {
+	if err := orch.RecordReport(ctx, "run_1", report); err != nil {
 		t.Fatalf("record readiness report: %v", err)
 	}
 }

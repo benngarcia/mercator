@@ -27,8 +27,6 @@ const (
 	defaultHostDiskBytes   = int64(200e9)
 )
 
-const simWorkspace = "ws_scenario"
-
 // SimBackend executes scenarios against simulated capacity: the fake
 // adapter's World under the real orchestrator, scheduler, and a real SQLite
 // event log. Decision correctness only; no network, no machines.
@@ -49,7 +47,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		world.DefineImage(ref, fake.Image{Layers: layers, Registry: fake.RegistryAnswer(image.Registry)})
 	}
 	for _, artifact := range spec.Artifacts {
-		version := artifact.Version(simWorkspace)
+		version := artifact.Version()
 		if artifact.Prepublished() {
 			version.PublishedAt = spec.Start()
 		} else {
@@ -123,13 +121,13 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		node.WithClock(clock.Now),
 	)
 	world.Enroller = nodes
-	schedules, err := simSchedules(spec, alwaysActiveWorkspaceLog{log})
+	schedules, err := simSchedules(spec, log)
 	if err != nil {
 		return nil, err
 	}
 	session.schedules = schedules
 	session.orch = orchestrator.New(
-		alwaysActiveWorkspaceLog{log},
+		log,
 		scheduler.New(),
 		world,
 		orchestrator.WithClock(clock.Now),
@@ -150,7 +148,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 // dispatch read. A world whose Rentals hold nothing seeds an empty store, which
 // is the same store, so a scenario about queueing and one about idle capacity
 // read Broker state through one path.
-func simSchedules(spec WorldSpec, log eventlog.WorkspaceEventLog) (*simSeededSchedules, error) {
+func simSchedules(spec WorldSpec, log eventlog.EventLog) (*simSeededSchedules, error) {
 	seeded := &simSeededSchedules{store: rentalschedule.NewMemory(log)}
 	for _, rental := range spec.Rentals {
 		declared := spec.rentalSchedule(rental.ID)
@@ -253,7 +251,7 @@ func simSeededBookingEnd(declared RentalScheduleSpec, start time.Time) simBookin
 }
 
 func (seeded *simSeededSchedules) seed(schedule domain.RentalSchedule, end simBookingEnd) error {
-	if err := seeded.store.Seed(simWorkspace, schedule); err != nil {
+	if err := seeded.store.Seed(schedule); err != nil {
 		return err
 	}
 	seeded.ends = append(seeded.ends, end)
@@ -269,7 +267,7 @@ func (seeded *simSeededSchedules) elapsed(ctx context.Context, now time.Time) er
 	for len(seeded.ends) > 0 && !now.Before(seeded.ends[0].at) {
 		end := seeded.ends[0]
 		seeded.ends = seeded.ends[1:]
-		schedules, err := seeded.store.List(ctx, simWorkspace)
+		schedules, err := seeded.store.List(ctx)
 		if err != nil {
 			return err
 		}
@@ -277,7 +275,7 @@ func (seeded *simSeededSchedules) elapsed(ctx context.Context, now time.Time) er
 		if err != nil {
 			return fmt.Errorf("complete seeded Booking %q: %w", end.bookingID, err)
 		}
-		if err := seeded.store.Seed(simWorkspace, next); err != nil {
+		if err := seeded.store.Seed(next); err != nil {
 			return err
 		}
 	}
@@ -362,18 +360,12 @@ func simArtifactReplicas(spec WorldSpec, declared []ArtifactReplicaSpec, at time
 }
 
 // simHeldCaches is the mutable state one machine was already holding, keyed by
-// the identity that carries its workspace. A placement world has one workspace,
-// so a fixture that labels a cache with another one is stating a neighbour's
-// cache: content on this host that this backend's Runs must never be told about.
+// cache identity.
 func simHeldCaches(held []HeldCacheSpec, at time.Time) map[string]domain.CacheMount {
 	caches := make(map[string]domain.CacheMount, len(held))
 	for _, declared := range held {
-		workspaceID := simWorkspace
-		if declared.Workspace != "" {
-			workspaceID = simWorkspace + "_" + declared.Workspace
-		}
 		mount := domain.CacheMount{
-			WorkspaceID:      workspaceID,
+
 			Name:             declared.Name,
 			CompatibilityKey: declared.CompatibilityKey,
 			CreatedAt:        at,
@@ -668,7 +660,7 @@ func (s *simSession) advance(runID string) error {
 	if err := s.world.DeliverEnrolments(context.Background()); err != nil {
 		return err
 	}
-	return s.orch.AdvanceRun(context.Background(), simWorkspace, runID)
+	return s.orch.AdvanceRun(context.Background(), runID)
 }
 
 func (s *simSession) Submit(name string, req RequestSpec) error {
@@ -678,10 +670,10 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 	runID := "run-" + name
 	s.runs[name] = runID
 	_, err := s.orch.CreateRun(context.Background(), orchestrator.CreateRunRequest{
-		WorkspaceID:    simWorkspace,
+
 		RunID:          runID,
 		IdempotencyKey: "create:" + runID,
-		Workload:       WorkloadForRun(simWorkspace, runID, req),
+		Workload:       WorkloadForRun(runID, req),
 	})
 	if err != nil {
 		return err
@@ -719,7 +711,7 @@ func (s *simSession) deliverReadiness() error {
 		if err != nil {
 			return err
 		}
-		if err := s.orch.RecordReport(context.Background(), report.WorkspaceID, report.RunID, ready); err != nil {
+		if err := s.orch.RecordReport(context.Background(), report.RunID, ready); err != nil {
 			return fmt.Errorf("report readiness for Run %q: %w", report.RunID, err)
 		}
 	}
@@ -731,7 +723,7 @@ func (s *simSession) RunEvents(name string) ([]eventlog.StoredEvent, error) {
 	if !ok {
 		return nil, fmt.Errorf("run %q was never submitted", name)
 	}
-	return s.orch.GetRunEvents(context.Background(), simWorkspace, runID)
+	return s.orch.GetRunEvents(context.Background(), runID)
 }
 
 // RunRecord is this Run as Mercator's read model has it, which is where the
@@ -741,7 +733,7 @@ func (s *simSession) RunRecord(name string) (domain.RunRecord, error) {
 	if !ok {
 		return domain.RunRecord{}, fmt.Errorf("run %q was never submitted", name)
 	}
-	return s.orch.GetRun(context.Background(), simWorkspace, runID)
+	return s.orch.GetRun(context.Background(), runID)
 }
 
 func (s *simSession) Notes() []string { return s.notes }
@@ -752,7 +744,7 @@ func (s *simSession) Close() {
 
 // WorkloadForRun translates the canonical Blueprint request into the real
 // orchestrator input shared by placement scenarios and Lab execution.
-func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadRevision {
+func WorkloadForRun(runID string, req RequestSpec) domain.WorkloadRevision {
 	spec := domain.WorkloadSpec{
 		Containers: []domain.ContainerSpec{{
 			Name:     "main",
@@ -829,20 +821,10 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 	// reader that had been promised one of five words, and the console's own
 	// decoder is the reader that refused it.
 	return domain.NormalizeWorkloadRevision(domain.WorkloadRevision{
-		ID:          "wrev_" + runID,
-		WorkspaceID: workspaceID,
-		WorkloadID:  "wrk_" + runID,
-		Digest:      "sha256:" + runID,
-		Spec:        spec,
+		ID: "wrev_" + runID,
+
+		WorkloadID: "wrk_" + runID,
+		Digest:     "sha256:" + runID,
+		Spec:       spec,
 	})
-}
-
-// alwaysActiveWorkspaceLog treats every workspace as active: scenarios have
-// no workspace lifecycle.
-type alwaysActiveWorkspaceLog struct {
-	eventlog.EventLog
-}
-
-func (l alwaysActiveWorkspaceLog) AppendIfWorkspaceActive(ctx context.Context, req eventlog.AppendRequest) (eventlog.AppendResult, error) {
-	return l.EventLog.Append(ctx, req)
 }

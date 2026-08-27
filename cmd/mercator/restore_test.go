@@ -23,7 +23,6 @@ func TestARestoredDatabaseServesOnlyUnderTheKeyItWasSealedWith(t *testing.T) {
 	original := filepath.Join(t.TempDir(), "mercator.db")
 	live := serveDatabase(t, "file:"+original, hex.EncodeToString(retiredMasterKey))
 	live.post(t, "/v1/connections", "restore-drill-1", map[string]any{
-		"workspace_id":  "ws_default",
 		"connection_id": "runpod",
 		"adapter_type":  "runpod",
 		"credential":    map[string]any{"source": "mercator"},
@@ -37,7 +36,7 @@ func TestARestoredDatabaseServesOnlyUnderTheKeyItWasSealedWith(t *testing.T) {
 
 	// Assert: the connection is served from the restored copy, and a server that
 	// could not open its sealed credential would not be listening at all.
-	if connections := restoredServer.get(t, "/v1/connections?workspace_id=ws_default"); !strings.Contains(connections, `"runpod"`) {
+	if connections := restoredServer.get(t, "/v1/connections"); !strings.Contains(connections, `"runpod"`) {
 		t.Fatalf("restored connections = %s, want the runpod connection", connections)
 	}
 	restoredServer.stop()

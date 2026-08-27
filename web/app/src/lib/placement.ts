@@ -1,4 +1,4 @@
-import type { StoredCandidateDecision } from "@/lib/workspace/contracts";
+import type { StoredCandidateDecision } from "@/lib/deployment/contracts";
 
 /**
  * priced reports whether the dollars in a candidate's cost estimate are a price

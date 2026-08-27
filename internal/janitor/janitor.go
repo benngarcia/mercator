@@ -99,30 +99,22 @@ func New(adapter Adapter, options ...Option) *Janitor {
 	return j
 }
 
-// Sweep converges every piece of capacity this workspace owns that Mercator no
+// Sweep converges every piece of capacity this broker owns that Mercator no
 // longer holds live work for. Each one is decided by the stated policy, acted on,
 // and written down naming the policy that decided it.
-func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error) {
+func (j *Janitor) Sweep(ctx context.Context) (Result, error) {
 	if j.adapter == nil {
 		return Result{}, fmt.Errorf("janitor: adapter is required")
 	}
 	if j.log == nil {
 		return Result{}, fmt.Errorf("janitor: event log is required")
 	}
-	if workspaceID == "" {
-		return Result{}, fmt.Errorf("janitor: workspace_id is required")
-	}
-	owned, err := j.adapter.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: workspaceID})
+	owned, err := j.adapter.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		return Result{}, err
 	}
 	result := Result{Found: len(owned)}
 	for _, object := range owned {
-		if object.WorkspaceID == "" {
-			// An orphan listed without workspace labels still belongs to the
-			// swept workspace; requests need it to route through the broker.
-			object.WorkspaceID = workspaceID
-		}
 		decision, err := j.converge(ctx, object)
 		if err != nil {
 			return result, err
@@ -336,9 +328,9 @@ func byRecordedDisposition(disposition domain.Disposition) (orphanDecision, erro
 
 func (j *Janitor) recordedRun(ctx context.Context, object adapter.OwnedExternalObject) (recordedRun, error) {
 	history, err := eventlog.ReadFullStream(ctx, j.log, eventlog.StreamKey{
-		WorkspaceID: object.WorkspaceID,
-		Type:        "run",
-		ID:          object.RunID,
+
+		Type: "run",
+		ID:   object.RunID,
 	})
 	if err != nil {
 		return recordedRun{}, err
@@ -401,7 +393,7 @@ func (j *Janitor) reclaim(ctx context.Context, object adapter.OwnedExternalObjec
 
 func (j *Janitor) release(ctx context.Context, object adapter.OwnedExternalObject) error {
 	request := adapter.ReleaseRequest{
-		WorkspaceID:       object.WorkspaceID,
+
 		ConnectionID:      object.ConnectionID,
 		OperationKey:      "janitor:release:" + object.LaunchKey,
 		LaunchKey:         object.LaunchKey,
@@ -419,7 +411,7 @@ func (j *Janitor) release(ctx context.Context, object adapter.OwnedExternalObjec
 
 func (j *Janitor) terminate(ctx context.Context, object adapter.OwnedExternalObject) error {
 	request := adapter.TerminateRequest{
-		WorkspaceID:       object.WorkspaceID,
+
 		ConnectionID:      object.ConnectionID,
 		OperationKey:      "janitor:terminate:" + object.LaunchKey,
 		LaunchKey:         object.LaunchKey,
@@ -460,9 +452,9 @@ type OrphanConvergence struct {
 // against a record that has moved on.
 func (j *Janitor) recordedDecision(ctx context.Context, object adapter.OwnedExternalObject) (orphanDecision, error) {
 	history, err := eventlog.ReadFullStream(ctx, j.log, eventlog.StreamKey{
-		WorkspaceID: object.WorkspaceID,
-		Type:        "orphan",
-		ID:          orphanIdentity(object),
+
+		Type: "orphan",
+		ID:   orphanIdentity(object),
 	})
 	if err != nil {
 		return orphanDecision{}, err
@@ -504,7 +496,7 @@ func (j *Janitor) record(ctx context.Context, object adapter.OwnedExternalObject
 	}
 	identity := orphanIdentity(object)
 	_, err = j.log.Append(ctx, eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: object.WorkspaceID, Type: "orphan", ID: identity},
+		Stream:                eventlog.StreamKey{Type: "orphan", ID: identity},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "janitor:converge:" + identity,
 		RequestHash:           hash,

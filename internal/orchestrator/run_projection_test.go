@@ -32,10 +32,10 @@ func TestRebuildRunProjectionReproducesClosedRunRecords(t *testing.T) {
 	)
 	createRun(t, ctx, orch)
 	for attempt := 0; attempt < 10; attempt++ {
-		if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 			t.Fatalf("advance Run: %v", err)
 		}
-		record, err := orch.GetRun(ctx, "ws_1", "run_1")
+		record, err := orch.GetRun(ctx, "run_1")
 		if err != nil {
 			t.Fatalf("get Run: %v", err)
 		}
@@ -44,7 +44,7 @@ func TestRebuildRunProjectionReproducesClosedRunRecords(t *testing.T) {
 		}
 	}
 	historyReader := New(log, scheduler.New(), fake.New(), withTestCapacity())
-	before, err := historyReader.ListRuns(ctx, "ws_1", runprojection.PageRequest{})
+	before, err := historyReader.ListRuns(ctx, runprojection.PageRequest{})
 	if err != nil {
 		t.Fatalf("list before rebuild: %v", err)
 	}
@@ -57,10 +57,10 @@ func TestRebuildRunProjectionReproducesClosedRunRecords(t *testing.T) {
 	}
 
 	projection.records = map[string]domain.RunRecord{}
-	if err := orch.RebuildRunProjection(ctx, "ws_1"); err != nil {
+	if err := orch.RebuildRunProjection(ctx); err != nil {
 		t.Fatalf("rebuild Run projection: %v", err)
 	}
-	after, err := orch.ListRuns(ctx, "ws_1", runprojection.PageRequest{})
+	after, err := orch.ListRuns(ctx, runprojection.PageRequest{})
 	if err != nil {
 		t.Fatalf("list after rebuild: %v", err)
 	}
@@ -74,11 +74,11 @@ func TestRebuildRunProjectionReproducesClosedRunRecords(t *testing.T) {
 }
 
 type memoryRunProjection struct {
-	log     eventlog.WorkspaceEventLog
+	log     eventlog.EventLog
 	records map[string]domain.RunRecord
 }
 
-func newMemoryRunProjection(log eventlog.WorkspaceEventLog) *memoryRunProjection {
+func newMemoryRunProjection(log eventlog.EventLog) *memoryRunProjection {
 	return &memoryRunProjection{log: log, records: map[string]domain.RunRecord{}}
 }
 
@@ -92,16 +92,6 @@ func (projection *memoryRunProjection) Append(
 	return result, err
 }
 
-func (projection *memoryRunProjection) AppendIfWorkspaceActive(
-	ctx context.Context,
-	request eventlog.AppendRequest,
-	next domain.RunRecord,
-) (eventlog.AppendResult, error) {
-	result, err := projection.log.AppendIfWorkspaceActive(ctx, request)
-	projection.record(result, err, next)
-	return result, err
-}
-
 func (projection *memoryRunProjection) record(result eventlog.AppendResult, err error, next domain.RunRecord) {
 	if err == nil && !result.Duplicate {
 		projection.records[next.ID] = next
@@ -110,7 +100,6 @@ func (projection *memoryRunProjection) record(result eventlog.AppendResult, err 
 
 func (projection *memoryRunProjection) List(
 	_ context.Context,
-	_ string,
 	request runprojection.PageRequest,
 ) (runprojection.Page, error) {
 	request, err := request.Validated()
@@ -134,7 +123,7 @@ func (projection *memoryRunProjection) List(
 	return page, nil
 }
 
-func (projection *memoryRunProjection) ListOpenIDs(context.Context, string) ([]string, error) {
+func (projection *memoryRunProjection) ListOpenIDs(context.Context) ([]string, error) {
 	var runIDs []string
 	for _, record := range projection.records {
 		if !record.Closed {
@@ -147,7 +136,6 @@ func (projection *memoryRunProjection) ListOpenIDs(context.Context, string) ([]s
 
 func (projection *memoryRunProjection) Replace(
 	_ context.Context,
-	_ string,
 	records []domain.RunRecord,
 ) error {
 	projection.records = make(map[string]domain.RunRecord, len(records))

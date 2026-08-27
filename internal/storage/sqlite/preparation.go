@@ -28,7 +28,7 @@ func migratePreparationClock(ctx context.Context, db *sql.DB) error {
 // PreparationClock is when this control plane last began preparing content for
 // work it has not admitted. There is one row because the bound it serves is the
 // fleet's: what it protects is a machine's link and this process's own egress,
-// and every tenant shares both.
+// and every Run shares both.
 //
 // It records a decision Mercator made rather than anything a machine holds,
 // which is what makes it durable state Mercator is allowed to keep. The desired

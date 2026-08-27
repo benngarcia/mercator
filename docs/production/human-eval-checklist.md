@@ -11,16 +11,13 @@ environment.
 - [ ] `/health/live`, `/health/ready`, and `/openapi.json` return expected JSON.
 - [ ] UI loads at `/` on the intended bind address.
 
-## Auth And Workspace Partitioning
+## Authentication And Deployment Scope
 
-- [ ] Creating a workspace records the authenticated principal and exposes it
-  in the console chooser.
-- [ ] Archived workspaces appear only after choosing `Show archived`.
-- [ ] Unknown and archived workspaces reject new workspace-owned records.
-- [ ] Valid bearer token can access an explicit workspace.
+- [ ] Valid bearer, browser-session, and CLI tokens can read the deployment.
 - [ ] Invalid bearer token returns `UNAUTHORIZED`.
-- [ ] Missing workspace returns `WORKSPACE_ID_REQUIRED`.
-- [ ] All run reads use explicit `workspace_id`.
+- [ ] The OpenAPI document, CLI, and console expose no tenant selector.
+- [ ] Node invitation and forced sink delivery answer only on the administrative listener.
+- [ ] Product tenancy is enforced by the dispatching application or a separate broker deployment.
 
 ## Docker Adapter Quickstart
 

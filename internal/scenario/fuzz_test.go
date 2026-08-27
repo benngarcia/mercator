@@ -120,8 +120,8 @@ func assertGeneratedRunStream(
 	requested := 0
 	var previous eventlog.GlobalPosition
 	for index, event := range events {
-		if event.WorkspaceID != simWorkspace || event.StreamID != "run-"+name {
-			t.Fatalf("Run %q event scope = %q/%q", name, event.WorkspaceID, event.StreamID)
+		if event.StreamID != "run-"+name {
+			t.Fatalf("Run %q event stream = %q", name, event.StreamID)
 		}
 		if event.StreamVersion != uint64(index+1) {
 			t.Fatalf("Run %q stream version = %d, want %d", name, event.StreamVersion, index+1)

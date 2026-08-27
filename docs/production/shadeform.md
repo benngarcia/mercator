@@ -74,14 +74,14 @@ Mercator refuses a stop or a resume at the seam, before any API call, with
      -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
      -H 'Idempotency-Key: conn-shadeform-1' \
      -H 'Content-Type: application/json' \
-     -d '{"workspace_id":"ws_1","connection_id":"conn_shadeform_main",
+     -d '{"connection_id":"conn_shadeform_main",
           "adapter_type":"shadeform",
           "config":{"agent_download_url":"https://downloads.example.com/mercator-node/{version}/linux-amd64"},
           "credential":{"source":"env","ref":"SHADEFORM_API_KEY"}}'
    ```
 5. Authorize it (runs a cheap `GET /instances` to validate the key):
    ```sh
-   curl -X POST "$MERCATOR/v1/connections/conn_shadeform_main/authorize?workspace_id=ws_1" \
+   curl -X POST "$MERCATOR/v1/connections/conn_shadeform_main/authorize" \
      -H "Authorization: Bearer $MERCATOR_API_TOKEN"
    ```
 
@@ -154,7 +154,7 @@ on it.
 ## Lifecycle, ownership, and reconciliation
 
 - Instances are named `mercator-<rentalID>` and carry `mercator:*` **tags**:
-  rental, generation, workspace, and ownership token. Those are exactly the
+  rental, generation, and ownership token. Those are exactly the
   fields the reconciler reads back, because the account listing is the only place
   it can read them from.
 - Create has **no idempotency key**, so provisioning is made idempotent
@@ -189,19 +189,19 @@ response. Read the run's events and find `compute.run.launch_failed.v1` or
 `compute.run.launch_indeterminate.v1`:
 
 ```sh
-curl -fsS "$MERCATOR/v1/runs/$RUN_ID/events?workspace_id=$WORKSPACE_ID" \
+curl -fsS "$MERCATOR/v1/runs/$RUN_ID/events" \
   -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
   | jq '.events[] | select(.type == "compute.run.launch_failed.v1" or .type == "compute.run.launch_indeterminate.v1") | {correlationid, data}'
 ```
 
 The event's `data.code`, `data.retryable`, and `data.side_effect` are stable,
-provider-neutral fields. Use its `correlationid` (the run ID) with the workspace
-ID to find the matching `provider operation failed` process-log record. For the
+provider-neutral fields. Use its `correlationid` (the run ID) to find the
+matching `provider operation failed` process-log record. For the
 default text log, the correlation looks like:
 
 ```sh
 grep 'provider operation failed' /path/to/mercator.log \
-  | grep "workspace_id=$WORKSPACE_ID" \
+  | grep "correlationid=$RUN_ID" \
   | grep "run_id=$RUN_ID"
 ```
 
@@ -251,14 +251,14 @@ export MERCATOR=http://127.0.0.1:8080
 export MERCATOR_API_TOKEN=...
 
 # 1. Authorize the connection (validates the key with GET /instances).
-curl -fsS -X POST "$MERCATOR/v1/connections/conn_shadeform_main/authorize?workspace_id=ws_1" \
+curl -fsS -X POST "$MERCATOR/v1/connections/conn_shadeform_main/authorize" \
   -H "Authorization: Bearer $MERCATOR_API_TOKEN"
 
 # 2. Rent one machine and watch its agent enrol.
-go run ./cmd/mercator run create --workspace-id ws_1 ...   # a Run whose placement provisions
-go run ./cmd/mercator run events --workspace-id ws_1 --run-id "$RUN_ID" \
+go run ./cmd/mercator run create ...   # a Run whose placement provisions
+go run ./cmd/mercator run events --run-id "$RUN_ID" \
   | jq '.events[] | select(.type | startswith("compute.run.capacity")) | {type, data}'
-curl -fsS "$MERCATOR/v1/nodes?workspace_id=ws_1" -H "Authorization: Bearer $MERCATOR_API_TOKEN" | jq
+curl -fsS "$MERCATOR/v1/nodes" -H "Authorization: Bearer $MERCATOR_API_TOKEN" | jq
 
 # 3. Confirm the machine is destroyed and the account is empty of Mercator tags.
 curl -fsS https://api.shadeform.ai/v1/instances -H "X-API-KEY: $SHADEFORM_API_KEY" \

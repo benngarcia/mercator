@@ -277,7 +277,7 @@ An arrival-driven Lab Blueprint uses:
     "type": "fixed",
     "runs": [
       {"name": "producer", "at": "0s", "request": {}},
-      {"name": "consumer", "at": "0s", "workspace": "other-tenant", "request": {}}
+      {"name": "consumer", "at": "0s", "request": {}}
     ]
   },
   "faults": [],
@@ -312,19 +312,12 @@ one refusal and the redo that follows it takes `2`.
   stating whether that copy was checked against the catalog (`verified`) or is
   merely present (`unverified`). The object store is what makes an Artifact
   consumable; a replica only makes reading it faster.
-- Cache Mounts are mutable application-owned state. Their only identity is the
-  workspace-scoped `name`, and they never carry a content key: a key that
-  identifies content is what an Artifact version is for. A Run declares
-  `cache_mounts` with a `name`, the `compatibility_key` naming which generation
-  of content it can use, and the `size` it expects to take; a Rental holds
-  `cache_mounts` with the same fields plus the `workspace` that owns each one.
-  Mercator compares the compatibility key and never interprets it.
-- A Run arrival states the `workspace` it belongs to. It is a label rather than
-  an identity, because each backend mints its own workspace IDs, and an omitted
-  label is the Blueprint's default workspace. Two labelled tenants on one machine
-  is what makes cross-workspace isolation something a fixture can state, and an
-  Artifact belongs to the workspace that declared it, so a Run outside the
-  default workspace may not name one.
+- Cache Mounts are mutable application-owned state. Their deployment-global
+  identity is the `name` plus the `compatibility_key` naming which generation
+  of content a Run can use. They never carry a content key: a key that identifies
+  content is what an Artifact version is for. A Run declares `cache_mounts`
+  with that identity and the `size` it expects to take; a Rental holds the same
+  fields. Mercator compares the compatibility key and never interprets it.
 - The world clock starts at `2030-01-01T00:00:00Z` unless `world.clock` says
   otherwise. Placement deadlines are offsets such as `"+6m"`.
 

@@ -21,13 +21,13 @@ type objectStore struct {
 	publishedAt map[string]time.Time
 }
 
-func newObjectStore(workspaceID string, artifacts []scenario.ArtifactSpec, start time.Time) *objectStore {
+func newObjectStore(artifacts []scenario.ArtifactSpec, start time.Time) *objectStore {
 	store := &objectStore{
 		catalog:     make(map[string]domain.ArtifactVersion, len(artifacts)),
 		publishedAt: map[string]time.Time{},
 	}
 	for _, artifact := range artifacts {
-		store.catalog[artifact.ID] = artifact.Version(workspaceID)
+		store.catalog[artifact.ID] = artifact.Version()
 		// An Artifact no Run in this Blueprint produces is content that existed
 		// before the world started, which is what makes it consumable at once.
 		if artifact.Prepublished() {

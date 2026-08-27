@@ -96,7 +96,7 @@ func TestARunHeldByAdmissionIsVisible(t *testing.T) {
 	}
 	if _, err := execution.runtime.orchestrator.GetBookingDecisions(
 		context.Background(),
-		labWorkspace,
+
 		"run-checkpoint-consumer",
 	); err == nil {
 		t.Fatal("Mercator placed a Run whose input is not durable")

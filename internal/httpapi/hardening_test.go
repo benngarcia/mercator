@@ -59,6 +59,98 @@ func TestCreateRunReturnsUnifiedEnvelope(t *testing.T) {
 	}
 }
 
+func TestRemovedWorkspaceSelectorsFailInsteadOfWideningTheRequest(t *testing.T) {
+	handler := newHTTPTestServer(t)
+
+	query := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=retired", nil)
+	queryRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(queryRecorder, query)
+	if queryRecorder.Code != http.StatusBadRequest || !bytes.Contains(queryRecorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+		t.Fatalf("legacy query selector response = %d %s", queryRecorder.Code, queryRecorder.Body.String())
+	}
+
+	payload := map[string]any{
+		"run_id":       "run_must_not_exist",
+		"workspace_id": "retired",
+		"workload":     httpRevision(),
+	}
+	body := mustMarshal(t, payload)
+	command := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	command.Header.Set("Content-Type", "application/json")
+	command.Header.Set("Idempotency-Key", "removed-workspace-selector")
+	commandRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(commandRecorder, command)
+	if commandRecorder.Code != http.StatusBadRequest || !bytes.Contains(commandRecorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+		t.Fatalf("legacy body selector response = %d %s", commandRecorder.Code, commandRecorder.Body.String())
+	}
+
+	read := httptest.NewRequest(http.MethodGet, "/v1/runs/run_must_not_exist", nil)
+	readRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(readRecorder, read)
+	if readRecorder.Code != http.StatusNotFound {
+		t.Fatalf("rejected command still created a Run: %d %s", readRecorder.Code, readRecorder.Body.String())
+	}
+
+	commandWithoutContentType := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	commandWithoutContentType.Header.Set("Idempotency-Key", "removed-workspace-selector-no-content-type")
+	commandWithoutContentTypeRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(commandWithoutContentTypeRecorder, commandWithoutContentType)
+	if commandWithoutContentTypeRecorder.Code != http.StatusBadRequest || !bytes.Contains(commandWithoutContentTypeRecorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+		t.Fatalf("legacy body selector without content type = %d %s", commandWithoutContentTypeRecorder.Code, commandWithoutContentTypeRecorder.Body.String())
+	}
+}
+
+func TestApplicationWorkspaceMetadataRemainsOpaque(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	revision := httpRevision()
+	revision.Spec.Metadata = map[string]string{"workspace_id": "application-tenant"}
+	envValue := "application-tenant"
+	revision.Spec.Containers[0].Env = map[string]domain.EnvBinding{"WORKSPACE_ID": {Value: &envValue}}
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_application_metadata", Workload: revision})
+	command := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	command.Header.Set("Content-Type", "application/json")
+	command.Header.Set("Idempotency-Key", "application-workspace-metadata")
+	commandRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(commandRecorder, command)
+	if commandRecorder.Code != http.StatusAccepted {
+		t.Fatalf("application-owned workspace metadata was interpreted by Mercator: %d %s", commandRecorder.Code, commandRecorder.Body.String())
+	}
+}
+
+func TestNestedLegacyWorkloadSelectorsFailInsteadOfWideningTheRequest(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	legacyRevision := map[string]any{
+		"id":           "wrev_legacy",
+		"workspace_id": "retired",
+		"workload_id":  "wrk_legacy",
+		"digest":       "sha256:legacy",
+		"spec":         httpRevision().Spec,
+	}
+	for name, request := range map[string]*http.Request{
+		"inline Run workload": httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(mustMarshal(t, map[string]any{
+			"run_id": "run_nested_legacy", "workload": legacyRevision,
+		}))),
+		"case-insensitive Run workload": httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(mustMarshal(t, map[string]any{
+			"run_id": "run_nested_legacy_case", "Workload": legacyRevision,
+		}))),
+		"stored revision": httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_legacy/revisions", bytes.NewReader(mustMarshal(t, map[string]any{
+			"revision": legacyRevision,
+		}))),
+		"case-insensitive stored revision": httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_legacy/revisions", bytes.NewReader(mustMarshal(t, map[string]any{
+			"Revision": legacyRevision,
+		}))),
+	} {
+		t.Run(name, func(t *testing.T) {
+			request.Header.Set("Idempotency-Key", "nested-legacy-workspace")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest || !bytes.Contains(recorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+				t.Fatalf("nested legacy selector response = %d %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
 // Item 1 (HTTP): exit_code present on the create envelope and on GET.
 func TestCreateAndGetRunExposeExitCode(t *testing.T) {
 	handler := newHTTPTestServer(t)
@@ -76,7 +168,7 @@ func TestCreateAndGetRunExposeExitCode(t *testing.T) {
 		t.Fatalf("create envelope missing exit_code=0, got %+v", created.Run)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_exitcode?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_exitcode", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	var got RunResponse
@@ -103,7 +195,7 @@ func TestPublicEventPayloadsAreSnakeCase(t *testing.T) {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_casing/events?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_casing/events", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -184,7 +276,7 @@ func TestWaitRunDrivesOpenRunToTerminal(t *testing.T) {
 		t.Fatalf("precondition: run should be open after first advance, got %+v", created.Run)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_wait_open/wait?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_wait_open/wait", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -202,34 +294,6 @@ func TestWaitRunDrivesOpenRunToTerminal(t *testing.T) {
 	}
 	if waited.Run.ExitCode == nil || *waited.Run.ExitCode != 0 {
 		t.Fatalf("expected exit_code 0 after wait, got %+v", waited.Run.ExitCode)
-	}
-}
-
-// Item 6: workspace-scoped requests always name their durable partition;
-// authentication never supplies a default workspace.
-func TestAuthenticatedRequestsRequireExplicitWorkspaceID(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("test-token"))
-
-	// Create without any workspace_id (not in query, body, or nested workload).
-	rev := httpRevision()
-	rev.WorkspaceID = ""
-	body := mustMarshal(t, CreateRunRequest{RunId: "run_default_ws", Workload: rev})
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "idem_default_ws")
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("create without workspace expected 400, got %d body=%s", rec.Code, rec.Body.String())
-	}
-
-	// GET without workspace_id should resolve to the same single workspace.
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_default_ws", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("get without workspace expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -251,9 +315,9 @@ func newHTTPTestServerWithOpenObservations(t *testing.T, openObserves int) http.
 		fake.WithOpenObservations(openObserves),
 	)
 	sched := scheduler.New()
-	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
+	orch := orchestrator.New(log, sched, ad)
 	resolver := ociresolver.NewStaticResolver(nil)
-	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: resolver})
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver})
 }
 
 func TestOversizedRequestBodyIsRejected(t *testing.T) {

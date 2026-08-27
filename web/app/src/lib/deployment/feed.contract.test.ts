@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { CloudEvent, OfferCatalogReplacement } from "./contracts";
 import labConsoleFeed from "./testdata/lab-console-feed.json";
 
-// The console decodes every frame of the workspace feed against a hand-written
+// The console decodes every frame of the deployment feed against a hand-written
 // schema, and a frame it refuses ends the stream. Nothing then reaches the
 // reducer, `ready` never arrives, and the canvas draws its skeleton forever with
 // no console error, no uncaught exception, and no failed request. The only
@@ -20,7 +20,7 @@ import labConsoleFeed from "./testdata/lab-console-feed.json";
 // This runs in `bun run test` rather than behind a browser on purpose. What
 // broke is a disagreement between two documents about one payload, and proving
 // it needs the payload and the schema, not a rendered page.
-describe("the workspace feed the Lab actually serves", () => {
+describe("the deployment feed the Lab actually serves", () => {
   const schemas = {
     domain_event: CloudEvent,
     offers_replaced: OfferCatalogReplacement,

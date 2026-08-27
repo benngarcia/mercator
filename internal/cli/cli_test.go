@@ -11,8 +11,6 @@ import (
 
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/httpapi"
-	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
-	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 func TestRunCommandsEmitParseableJSON(t *testing.T) {
@@ -22,14 +20,14 @@ func TestRunCommandsEmitParseableJSON(t *testing.T) {
 
 	workload := mustJSON(t, cliRevision())
 	commands := [][]string{
-		{"run", "create", "--workspace-id", "ws_1", "--run-id", "run_cli", "--idempotency-key", "idem_cli", "--workload-json", workload},
-		{"run", "get", "--workspace-id", "ws_1", "--run-id", "run_cli"},
-		{"run", "list", "--workspace-id", "ws_1"},
-		{"run", "wait", "--workspace-id", "ws_1", "--run-id", "run_cli"},
-		{"run", "events", "--workspace-id", "ws_1", "--run-id", "run_cli"},
-		{"run", "decision", "--workspace-id", "ws_1", "--run-id", "run_cli"},
-		{"run", "refresh", "--workspace-id", "ws_1", "--run-id", "run_cli"},
-		{"run", "cancel", "--workspace-id", "ws_1", "--run-id", "run_cli"},
+		{"run", "create", "--run-id", "run_cli", "--idempotency-key", "idem_cli", "--workload-json", workload},
+		{"run", "get", "--run-id", "run_cli"},
+		{"run", "list"},
+		{"run", "wait", "--run-id", "run_cli"},
+		{"run", "events", "--run-id", "run_cli"},
+		{"run", "decision", "--run-id", "run_cli"},
+		{"run", "refresh", "--run-id", "run_cli"},
+		{"run", "cancel", "--run-id", "run_cli"},
 	}
 	for _, args := range commands {
 		var stdout, stderr bytes.Buffer
@@ -102,53 +100,48 @@ func TestHelpDoesNotRequireBaseURL(t *testing.T) {
 	}
 }
 
-func TestWorkspaceIDDefaultsFromConfig(t *testing.T) {
+func TestRunCommandsNeedNoExecutionScopeFlag(t *testing.T) {
 	handler := newCLITestServer(t)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
 	workload := mustJSON(t, cliRevision())
 
-	// With Config.WorkspaceID set (sourced from MERCATOR_WORKSPACE_ID), commands
-	// may omit --workspace-id entirely.
 	create := []string{"run", "create", "--run-id", "run_ws_default", "--idempotency-key", "idem_ws_default", "--workload-json", workload}
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), Config{
-		BaseURL:     server.URL,
-		WorkspaceID: "ws_1",
-		Args:        create,
-		Stdout:      &stdout,
-		Stderr:      &stderr,
+		BaseURL: server.URL,
+
+		Args:   create,
+		Stdout: &stdout,
+		Stderr: &stderr,
 	})
 	if code != 0 {
-		t.Fatalf("create with default workspace failed code=%d stderr=%s", code, stderr.String())
+		t.Fatalf("create failed code=%d stderr=%s", code, stderr.String())
 	}
 	var created struct {
 		Run struct {
-			ID          string `json:"id"`
-			WorkspaceID string `json:"workspace_id"`
+			ID string `json:"id"`
 		} `json:"run"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
 		t.Fatalf("decode create response %q: %v", stdout.String(), err)
 	}
-	if created.Run.ID != "run_ws_default" || created.Run.WorkspaceID != "ws_1" {
+	if created.Run.ID != "run_ws_default" {
 		t.Fatalf("unexpected create run: %+v", created.Run)
 	}
 
-	// A read also works without --workspace-id, and an explicit flag still
-	// overrides the default.
 	stdout.Reset()
 	stderr.Reset()
 	code = Run(context.Background(), Config{
-		BaseURL:     server.URL,
-		WorkspaceID: "ws_1",
-		Args:        []string{"run", "get", "--run-id", "run_ws_default"},
-		Stdout:      &stdout,
-		Stderr:      &stderr,
+		BaseURL: server.URL,
+
+		Args:   []string{"run", "get", "--run-id", "run_ws_default"},
+		Stdout: &stdout,
+		Stderr: &stderr,
 	})
 	if code != 0 {
-		t.Fatalf("get with default workspace failed code=%d stderr=%s", code, stderr.String())
+		t.Fatalf("get failed code=%d stderr=%s", code, stderr.String())
 	}
 }
 
@@ -159,30 +152,25 @@ func TestRunCreatePositionalImageShorthand(t *testing.T) {
 
 	// The simplest possible invocation: positional image, no --run-id (the
 	// server generates and returns one), no --idempotency-key (the CLI mints a
-	// fresh one), workspace from MERCATOR_WORKSPACE_ID. Args after `--` become
-	// the container args.
+	// fresh one). Args after `--` become the container args.
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), Config{
-		BaseURL:     server.URL,
-		WorkspaceID: "ws_1",
-		Args:        []string{"run", "create", "busybox", "--", "echo", "hi"},
-		Stdout:      &stdout,
-		Stderr:      &stderr,
+		BaseURL: server.URL,
+
+		Args:   []string{"run", "create", "busybox", "--", "echo", "hi"},
+		Stdout: &stdout,
+		Stderr: &stderr,
 	})
 	if code != 0 {
 		t.Fatalf("positional shorthand create failed code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
 	var created struct {
 		Run struct {
-			ID          string `json:"id"`
-			WorkspaceID string `json:"workspace_id"`
+			ID string `json:"id"`
 		} `json:"run"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
 		t.Fatalf("decode shorthand create response %q: %v", stdout.String(), err)
-	}
-	if created.Run.WorkspaceID != "ws_1" {
-		t.Fatalf("expected workspace ws_1, got %+v", created.Run)
 	}
 	if created.Run.ID == "" {
 		t.Fatalf("expected a server-generated run id, got empty: %s", stdout.String())
@@ -196,11 +184,11 @@ func TestRunCreateRequiresImageOrWorkload(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), Config{
-		BaseURL:     server.URL,
-		WorkspaceID: "ws_1",
-		Args:        []string{"run", "create"},
-		Stdout:      &stdout,
-		Stderr:      &stderr,
+		BaseURL: server.URL,
+
+		Args:   []string{"run", "create"},
+		Stdout: &stdout,
+		Stderr: &stderr,
 	})
 	if code != 2 {
 		t.Fatalf("expected arg validation exit 2, got %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
@@ -222,7 +210,7 @@ func TestIdempotencyConflictIsReportedAsJSON(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), Config{
 		BaseURL: server.URL,
-		Args:    []string{"run", "create", "--workspace-id", "ws_1", "--run-id", "run_cli_conflict", "--idempotency-key", "idem_conflict", "--workload-json", first},
+		Args:    []string{"run", "create", "--run-id", "run_cli_conflict", "--idempotency-key", "idem_conflict", "--workload-json", first},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 	})
@@ -234,7 +222,7 @@ func TestIdempotencyConflictIsReportedAsJSON(t *testing.T) {
 	stderr.Reset()
 	code = Run(context.Background(), Config{
 		BaseURL: server.URL,
-		Args:    []string{"run", "create", "--workspace-id", "ws_1", "--run-id", "run_cli_conflict", "--idempotency-key", "idem_conflict", "--workload-json", second},
+		Args:    []string{"run", "create", "--run-id", "run_cli_conflict", "--idempotency-key", "idem_conflict", "--workload-json", second},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 	})
@@ -259,7 +247,7 @@ func TestRunAcceptsGlobalAPIURLFlag(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), Config{
-		Args:   []string{"--api-url", server.URL, "run", "list", "--workspace-id", "ws_1"},
+		Args:   []string{"--api-url", server.URL, "run", "list"},
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
@@ -286,7 +274,6 @@ func TestRunListSendsCursorAndLimit(t *testing.T) {
 		BaseURL: server.URL,
 		Args: []string{
 			"run", "list",
-			"--workspace-id", "ws_1",
 			"--cursor", "run_050",
 			"--limit", "25",
 		},
@@ -297,15 +284,14 @@ func TestRunListSendsCursorAndLimit(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run list failed with code %d stderr=%s", code, stderr.String())
 	}
-	if query != "cursor=run_050&limit=25&workspace_id=ws_1" {
-		t.Fatalf("query = %q, want cursor, limit, and Workspace", query)
+	if query != "cursor=run_050&limit=25" {
+		t.Fatalf("query = %q, want cursor and limit", query)
 	}
 }
 
 func newCLITestServer(t *testing.T) http.Handler {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
-	seedCLIWorkspace(t, dsn)
 	return handlerForDSN(t, dsn)
 }
 
@@ -323,30 +309,13 @@ func handlerForDSN(t *testing.T, dsn string, options ...httpapi.Option) http.Han
 	return handler
 }
 
-func seedCLIWorkspace(t *testing.T, dsn string) {
-	t.Helper()
-	storage, err := sqlitestore.Open(t.Context(), dsn)
-	if err != nil {
-		t.Fatalf("open workspace storage: %v", err)
-	}
-	if _, err := storage.Workspaces().Create(t.Context(), workspace.Create{
-		ID:          "ws_1",
-		DisplayName: "CLI test",
-		CreatedAt:   time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
-		CreatedBy:   "test:cli",
-	}); err != nil {
-		t.Fatalf("create CLI workspace: %v", err)
-	}
-	t.Cleanup(func() { _ = storage.Close() })
-}
-
 func cliRevision() domain.WorkloadRevision {
 	value := "debug"
 	return domain.WorkloadRevision{
-		ID:          "wrev_cli",
-		WorkspaceID: "ws_1",
-		WorkloadID:  "wl_cli",
-		Digest:      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ID: "wrev_cli",
+
+		WorkloadID: "wl_cli",
+		Digest:     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{
 				Name:     "main",

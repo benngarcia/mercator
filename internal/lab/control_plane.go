@@ -21,16 +21,11 @@ import (
 	"github.com/benngarcia/mercator/internal/scenario"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
-	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 type controlPlane struct {
-	storage *sqlitestore.Storage
-	world   *simulatedWorld
-	// workspaces is every tenant this Blueprint runs work for. One Mercator
-	// serves all of them, which is the point: the machines are shared and the
-	// caches, Artifacts, and Runs on them are not.
-	workspaces   []string
+	storage      *sqlitestore.Storage
+	world        *simulatedWorld
 	orchestrator *orchestrator.Orchestrator
 	// janitor is what converges capacity the control plane does not recognise. It
 	// is a controller beside the Runs rather than a step in any of them, exactly as
@@ -69,10 +64,8 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 	if err != nil {
 		return InvariantObservation{}, err
 	}
-	for _, workspace := range runtime.workspaces {
-		if err := runtime.orchestrator.RebuildRunProjection(ctx, workspace); err != nil {
-			return InvariantObservation{}, err
-		}
+	if err := runtime.orchestrator.RebuildRunProjection(ctx); err != nil {
+		return InvariantObservation{}, err
 	}
 	rebuiltRuns, err := runtime.allRuns(ctx)
 	if err != nil {
@@ -144,45 +137,30 @@ func (runtime *controlPlane) holdsOpenRun(ctx context.Context) (bool, error) {
 	return slices.ContainsFunc(runs, func(run domain.RunRecord) bool { return !run.Closed }), nil
 }
 
-// allRuns is every Run Mercator holds, across every tenant this Blueprint runs
-// work for. A rule stated over one workspace would be blind to the other's Runs,
-// which is exactly the blindness a cross-workspace claim has to be checked
-// against.
+// allRuns is every Run Mercator holds.
 func (runtime *controlPlane) allRuns(ctx context.Context) ([]domain.RunRecord, error) {
 	var records []domain.RunRecord
-	for _, workspace := range runtime.workspaces {
-		request := runprojection.PageRequest{Limit: runprojection.MaxPageSize}
-		for {
-			page, err := runtime.orchestrator.ListRuns(ctx, workspace, request)
-			if err != nil {
-				return nil, err
-			}
-			records = append(records, page.Records...)
-			if page.NextCursor == "" {
-				break
-			}
-			request.After = page.NextCursor
+	request := runprojection.PageRequest{Limit: runprojection.MaxPageSize}
+	for {
+		page, err := runtime.orchestrator.ListRuns(ctx, request)
+		if err != nil {
+			return nil, err
 		}
+		records = append(records, page.Records...)
+		if page.NextCursor == "" {
+			break
+		}
+		request.After = page.NextCursor
 	}
 	return records, nil
 }
 
 // allSchedules is every Rental Schedule Mercator owns. A Rental is one machine
-// whichever tenant booked it, so the schedules of every workspace are read
+// whichever caller booked it, so the deployment schedule is read
 // together: a rule about one machine carrying one running Booking is a rule about
-// the machine and not about a tenant's view of it.
+// the machine and not about one workload's view of it.
 func (runtime *controlPlane) allSchedules(ctx context.Context) (map[string]domain.RentalSchedule, error) {
-	schedules := map[string]domain.RentalSchedule{}
-	for _, workspace := range runtime.workspaces {
-		owned, err := runtime.storage.RentalSchedules().List(ctx, workspace)
-		if err != nil {
-			return nil, err
-		}
-		for rentalID, schedule := range owned {
-			schedules[rentalID] = schedule
-		}
-	}
-	return schedules, nil
+	return runtime.storage.RentalSchedules().List(ctx)
 }
 
 func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error) {
@@ -193,17 +171,6 @@ func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error)
 	closeWith := func(err error) (*controlPlane, error) {
 		_ = storage.Close()
 		return nil, err
-	}
-	workspaces := tape.Workspaces()
-	for _, id := range workspaces {
-		if _, err := storage.Workspaces().Create(ctx, workspace.Create{
-			ID:          id,
-			DisplayName: "Mercator Lab " + id,
-			CreatedAt:   tape.Start,
-			CreatedBy:   "system:lab",
-		}); err != nil {
-			return closeWith(fmt.Errorf("create Lab workspace %s: %w", id, err))
-		}
 	}
 	if err := storage.Runs().MarkRebuilt(ctx); err != nil {
 		return closeWith(fmt.Errorf("initialize Lab Run projection: %w", err))
@@ -219,7 +186,6 @@ func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error)
 	runtime := &controlPlane{
 		storage:     storage,
 		world:       world,
-		workspaces:  workspaces,
 		prewarm:     prewarmPolicy(tape.InitialWorld.Prewarm),
 		credentials: mint,
 		janitor:     janitor.New(world, janitor.WithEventLog(storage.EventLog())),
@@ -326,16 +292,15 @@ func (runtime *controlPlane) handleRunCancellation(ctx context.Context, event Wo
 	if err := json.Unmarshal(event.Data, &cancellation); err != nil {
 		return fmt.Errorf("decode Run cancellation event %q: %w", event.ID, err)
 	}
-	workspace := workspaceID(cancellation.Workspace)
-	if _, err := runtime.orchestrator.CancelRun(ctx, workspace, "run-"+cancellation.Name, nil); err != nil {
+	if _, err := runtime.orchestrator.CancelRun(ctx, "run-"+cancellation.Name, nil); err != nil {
 		return fmt.Errorf("cancel Lab Run %q: %w", cancellation.Name, err)
 	}
-	return runtime.advanceWorkspace(ctx, workspace)
+	return runtime.advanceRuns(ctx)
 }
 
 // handleCapacityPreemption is the provider taking a machine back. Nothing is asked
 // of Mercator and nothing is told to it: the world removes the capacity and the
-// executions on it, and then every tenant's open Runs are advanced, which is the
+// executions on it, and then every open Run is advanced, which is the
 // sweep that finds the launch missing. That is how a control plane learns of a
 // reclamation it was never notified of, and it is the only way it can learn of one
 // here, because a provider that has taken its machine back answers no differently
@@ -348,12 +313,7 @@ func (runtime *controlPlane) handleCapacityPreemption(ctx context.Context, event
 	if err := runtime.world.preemptCapacity(preemption.Rental); err != nil {
 		return err
 	}
-	for _, workspace := range runtime.workspaces {
-		if err := runtime.advanceWorkspace(ctx, workspace); err != nil {
-			return err
-		}
-	}
-	return nil
+	return runtime.advanceRuns(ctx)
 }
 
 func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) error {
@@ -361,16 +321,15 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 	if err := runtime.world.prepareRun(runID, arrival); err != nil {
 		return err
 	}
-	workspace := workspaceID(arrival.Workspace)
 	if _, err := runtime.orchestrator.CreateRun(ctx, orchestrator.CreateRunRequest{
-		WorkspaceID:    workspace,
+
 		RunID:          runID,
 		IdempotencyKey: "create:" + runID,
-		Workload:       scenario.WorkloadForRun(workspace, runID, arrival.Request),
+		Workload:       scenario.WorkloadForRun(runID, arrival.Request),
 	}); err != nil {
 		return fmt.Errorf("create Lab Run %q: %w", arrival.Name, err)
 	}
-	if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil && !indeterminate(err) {
+	if err := runtime.orchestrator.AdvanceRun(ctx, runID); err != nil && !indeterminate(err) {
 		return fmt.Errorf("advance Lab Run %q: %w", arrival.Name, err)
 	}
 	return nil
@@ -393,12 +352,10 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 	if err := runtime.deliverReadiness(ctx); err != nil {
 		return err
 	}
-	for _, workspace := range runtime.workspaces {
-		if err := runtime.advanceWorkspace(ctx, workspace); err != nil {
-			return err
-		}
+	if err := runtime.advanceRuns(ctx); err != nil {
+		return err
 	}
-	// Preparation is reconciled after every tenant's Runs have moved, because
+	// Preparation is reconciled after all Runs have moved, because
 	// what Mercator wants prepared is derived from where they ended up: a Booking
 	// that was just dispatched is no longer speculative, and a Run that was just
 	// cancelled is no longer worth a byte. It is one pass over the fleet because
@@ -438,14 +395,14 @@ func (runtime *controlPlane) deliverReadiness(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := runtime.orchestrator.RecordReport(ctx, report.WorkspaceID, report.RunID, ready); err != nil {
+		if err := runtime.orchestrator.RecordReport(ctx, report.RunID, ready); err != nil {
 			return fmt.Errorf("report Lab readiness for Run %q: %w", report.RunID, err)
 		}
 	}
 	return nil
 }
 
-// advanceWorkspace drives one tenant's open Runs. An ambiguous launch and an
+// advanceRuns drives open Runs. An ambiguous launch and an
 // ambiguous provision end the sweep for that Run and are settled by the next
 // one, which is what the deployment's reconcile loop does: it records what it
 // could not settle and comes back to ask what Mercator is holding rather than
@@ -456,14 +413,14 @@ func (runtime *controlPlane) deliverReadiness(ctx context.Context) error {
 // told apart, and a bootstrap signs the moment it stops being redeemable, so the
 // second mint would come out byte for byte the first and no Blueprint could ever
 // show what a repeat costs the machine already holding one.
-func (runtime *controlPlane) advanceWorkspace(ctx context.Context, workspace string) error {
-	if _, err := runtime.orchestrator.AdvanceOpenRuns(ctx, workspace); err != nil && !indeterminate(err) {
+func (runtime *controlPlane) advanceRuns(ctx context.Context) error {
+	if _, err := runtime.orchestrator.AdvanceOpenRuns(ctx); err != nil && !indeterminate(err) {
 		return err
 	}
 	// The orphan sweep is last because what capacity Mercator holds live work for
 	// is whatever the Runs just settled into, so a sweep that ran first would find
 	// a machine orphaned that a Run was about to be launched on.
-	_, err := runtime.janitor.Sweep(ctx, workspace)
+	_, err := runtime.janitor.Sweep(ctx)
 	return err
 }
 
@@ -500,25 +457,19 @@ func (runtime *controlPlane) restartOrchestrator() {
 	)
 }
 
-// mercatorEvents is Mercator's whole public record for this execution, read one
-// tenant at a time and merged on the log's own global order. Reading with no
-// workspace filter would be one query and would also pick up whatever else ever
-// lands in this log, so the workspaces this execution created are named
-// explicitly.
+// mercatorEvents is Mercator's whole public record for this execution.
 func (runtime *controlPlane) mercatorEvents(ctx context.Context) ([]eventlog.StoredEvent, error) {
 	var events []eventlog.StoredEvent
-	for _, workspace := range runtime.workspaces {
-		filter := eventlog.EventFilter{WorkspaceID: workspace}
-		head, err := runtime.storage.EventLog().LatestPosition(ctx, filter)
+	filter := eventlog.EventFilter{}
+	head, err := runtime.storage.EventLog().LatestPosition(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	for event, err := range eventlog.ScanAll(ctx, runtime.storage.EventLog(), head, filter) {
 		if err != nil {
 			return nil, err
 		}
-		for event, err := range eventlog.ScanAll(ctx, runtime.storage.EventLog(), head, filter) {
-			if err != nil {
-				return nil, err
-			}
-			events = append(events, event)
-		}
+		events = append(events, event)
 	}
 	slices.SortStableFunc(events, func(left, right eventlog.StoredEvent) int {
 		return int(left.GlobalPosition) - int(right.GlobalPosition)

@@ -98,7 +98,7 @@ func TestTheSameReferenceIsRefusedWithNothingMintedForIt(t *testing.T) {
 }
 
 // TestMaterialMintedForAnotherOperationNeverReachesTheRegistry is the node's own
-// half. The credential is this workspace's and the registry would accept it, and
+// half. The credential is this deployment's and the registry would accept it, and
 // the machine refuses to present it because it was minted for a different
 // operation: the scope is something both ends enforce rather than a claim in a
 // comment, and the refusal happens before anything crosses the network.
@@ -135,7 +135,6 @@ func preparePrivateImage(t *testing.T, reference string) capability.PrepareImage
 		Reference:      reference,
 		Unpack:         true,
 	}
-	command.WorkspaceID = liveWorkspace
 	command.OperationID = item.Operation()
 	return command
 }
@@ -156,7 +155,7 @@ func mintedPull(t *testing.T, operation, reference string) domain.RegistryPull {
 	if err != nil {
 		t.Fatalf("hold the registry account: %v", err)
 	}
-	pull, err := mint.RegistryPull(context.Background(), operation, liveWorkspace, reference)
+	pull, err := mint.RegistryPull(context.Background(), operation, reference)
 	if err != nil {
 		t.Fatalf("mint a pull of %s: %v", reference, err)
 	}

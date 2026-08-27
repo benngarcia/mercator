@@ -31,16 +31,16 @@ type memoryStore struct {
 	workloads  map[string]capability.WorkloadObservation
 }
 
-func nodeKey(workspaceID, nodeID string) string { return workspaceID + "/" + nodeID }
+func nodeKey(nodeID string) string { return nodeID }
 
-func workloadKey(workspaceID, nodeID, runID, attemptID string) string {
-	return workspaceID + "/" + nodeID + "/" + runID + "/" + attemptID
+func workloadKey(nodeID, runID, attemptID string) string {
+	return nodeID + "/" + runID + "/" + attemptID
 }
 
 // Invite reserves one identity across the whole fleet and not one per
-// workspace. An enrolling machine names only the node it is, so Find resolves an
-// identity without a workspace, and an identity handed out twice would be two
-// machines answering to one name with the second one's tenant deciding which.
+// deployment. An enrolling machine names only the node it is, so Find resolves a
+// deployment-global identity, and an identity handed out twice would be two
+// machines answering to one name with the second observation deciding which.
 func (store *memoryStore) Invite(_ context.Context, record Record) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -49,14 +49,14 @@ func (store *memoryStore) Invite(_ context.Context, record Record) error {
 			return fmt.Errorf("%w: %s", ErrIdentityExists, record.ID)
 		}
 	}
-	store.records[nodeKey(record.WorkspaceID, record.ID)] = record
+	store.records[nodeKey(record.ID)] = record
 	return nil
 }
 
-func (store *memoryStore) Get(_ context.Context, workspaceID, nodeID string) (Record, error) {
+func (store *memoryStore) Get(_ context.Context, nodeID string) (Record, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	record, ok := store.records[nodeKey(workspaceID, nodeID)]
+	record, ok := store.records[nodeKey(nodeID)]
 	if !ok {
 		return Record{}, fmt.Errorf("%w: %s", ErrNotFound, nodeID)
 	}
@@ -74,23 +74,21 @@ func (store *memoryStore) Find(_ context.Context, nodeID string) (Record, error)
 	return Record{}, fmt.Errorf("%w: %s", ErrNotFound, nodeID)
 }
 
-func (store *memoryStore) List(_ context.Context, workspaceID string) ([]Record, error) {
+func (store *memoryStore) List(_ context.Context) ([]Record, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	var records []Record
 	for _, record := range store.records {
-		if record.WorkspaceID == workspaceID {
-			records = append(records, record)
-		}
+		records = append(records, record)
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
 	return records, nil
 }
 
-func (store *memoryStore) Enroll(_ context.Context, workspaceID, nodeID string, enrollment Enrollment) (Record, error) {
+func (store *memoryStore) Enroll(_ context.Context, nodeID string, enrollment Enrollment) (Record, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := nodeKey(workspaceID, nodeID)
+	key := nodeKey(nodeID)
 	record, ok := store.records[key]
 	if !ok {
 		return Record{}, fmt.Errorf("%w: %s", ErrNotFound, nodeID)
@@ -113,10 +111,10 @@ func (store *memoryStore) Enroll(_ context.Context, workspaceID, nodeID string, 
 	return record, nil
 }
 
-func (store *memoryStore) Reinvite(_ context.Context, workspaceID, nodeID, enrollmentTokenID string, expires time.Time) error {
+func (store *memoryStore) Reinvite(_ context.Context, nodeID, enrollmentTokenID string, expires time.Time) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := nodeKey(workspaceID, nodeID)
+	key := nodeKey(nodeID)
 	record, ok := store.records[key]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrNotFound, nodeID)
@@ -127,10 +125,10 @@ func (store *memoryStore) Reinvite(_ context.Context, workspaceID, nodeID, enrol
 	return nil
 }
 
-func (store *memoryStore) Retire(_ context.Context, workspaceID, nodeID string) error {
+func (store *memoryStore) Retire(_ context.Context, nodeID string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := nodeKey(workspaceID, nodeID)
+	key := nodeKey(nodeID)
 	record, ok := store.records[key]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrNotFound, nodeID)
@@ -142,13 +140,13 @@ func (store *memoryStore) Retire(_ context.Context, workspaceID, nodeID string) 
 
 func (store *memoryStore) Heartbeat(
 	_ context.Context,
-	workspaceID, nodeID string,
+	nodeID string,
 	facts capability.NodeFacts,
 	leaseExpires time.Time,
 ) (Record, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := nodeKey(workspaceID, nodeID)
+	key := nodeKey(nodeID)
 	record, ok := store.records[key]
 	if !ok {
 		return Record{}, fmt.Errorf("%w: %s", ErrNotFound, nodeID)
@@ -171,14 +169,14 @@ func (store *memoryStore) Heartbeat(
 func (store *memoryStore) RecordEvent(_ context.Context, event Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := nodeKey(event.WorkspaceID, event.NodeID) + "/" + event.ID
+	key := nodeKey(event.NodeID) + "/" + event.ID
 	if store.events[key] {
 		return false, nil
 	}
 	store.events[key] = true
 	if event.Kind == EventWorkload {
 		observation := *event.Workload
-		key := workloadKey(event.WorkspaceID, event.NodeID, observation.RunID, observation.AttemptID)
+		key := workloadKey(event.NodeID, observation.RunID, observation.AttemptID)
 		// A spool replayed after a reconnection can deliver an earlier
 		// observation late. Keeping the newest one is what stops a stale
 		// "running" from erasing a recorded exit.
@@ -191,18 +189,18 @@ func (store *memoryStore) RecordEvent(_ context.Context, event Event) (bool, err
 
 func (store *memoryStore) LatestWorkload(
 	_ context.Context,
-	workspaceID, nodeID, runID, attemptID string,
+	nodeID, runID, attemptID string,
 ) (capability.WorkloadObservation, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	observation, ok := store.workloads[workloadKey(workspaceID, nodeID, runID, attemptID)]
+	observation, ok := store.workloads[workloadKey(nodeID, runID, attemptID)]
 	return observation, ok, nil
 }
 
-func (store *memoryStore) Workloads(_ context.Context, workspaceID, nodeID string) ([]capability.WorkloadObservation, error) {
+func (store *memoryStore) Workloads(_ context.Context, nodeID string) ([]capability.WorkloadObservation, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	prefix := workspaceID + "/" + nodeID + "/"
+	prefix := nodeID + "/"
 	var observations []capability.WorkloadObservation
 	for key, observation := range store.workloads {
 		if len(key) > len(prefix) && key[:len(prefix)] == prefix {
@@ -221,7 +219,7 @@ func (store *memoryStore) Workloads(_ context.Context, workspaceID, nodeID strin
 func (store *memoryStore) AppendOperation(_ context.Context, operation Operation) (Operation, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := nodeKey(operation.WorkspaceID, operation.NodeID)
+	key := nodeKey(operation.NodeID)
 	for index, existing := range store.operations[key] {
 		if existing.OperationID != operation.OperationID {
 			continue
@@ -240,10 +238,10 @@ func (store *memoryStore) AppendOperation(_ context.Context, operation Operation
 	return operation, false, nil
 }
 
-func (store *memoryStore) SettleOperation(_ context.Context, workspaceID, nodeID string, result Result) error {
+func (store *memoryStore) SettleOperation(_ context.Context, nodeID string, result Result) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	key := nodeKey(workspaceID, nodeID)
+	key := nodeKey(nodeID)
 	operations := store.operations[key]
 	for index := range operations {
 		if operations[index].OperationID != result.OperationID {
@@ -263,11 +261,11 @@ func (store *memoryStore) SettleOperation(_ context.Context, workspaceID, nodeID
 	return fmt.Errorf("node: %q has no operation %q to settle", nodeID, result.OperationID)
 }
 
-func (store *memoryStore) PendingOperations(_ context.Context, workspaceID, nodeID string) ([]Operation, error) {
+func (store *memoryStore) PendingOperations(_ context.Context, nodeID string) ([]Operation, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	var pending []Operation
-	for _, operation := range store.operations[nodeKey(workspaceID, nodeID)] {
+	for _, operation := range store.operations[nodeKey(nodeID)] {
 		if operation.State == OperationPending {
 			pending = append(pending, operation)
 		}
@@ -275,11 +273,11 @@ func (store *memoryStore) PendingOperations(_ context.Context, workspaceID, node
 	return pending, nil
 }
 
-func (store *memoryStore) AppliedOperationIDs(_ context.Context, workspaceID, nodeID string) ([]string, error) {
+func (store *memoryStore) AppliedOperationIDs(_ context.Context, nodeID string) ([]string, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	var applied []string
-	for _, operation := range store.operations[nodeKey(workspaceID, nodeID)] {
+	for _, operation := range store.operations[nodeKey(nodeID)] {
 		if operation.State == OperationApplied {
 			applied = append(applied, operation.OperationID)
 		}

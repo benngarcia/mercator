@@ -97,8 +97,8 @@ const (
 	// CapabilityArtifactEvidence is per-candidate Artifact locality evidence.
 	CapabilityArtifactEvidence Capability = "artifact_evidence"
 	// CapabilityCacheMounts is mutable, application-owned caches carried across
-	// Runs: attached by identity, compared against the generation the
-	// application declared, and never shared between workspaces.
+	// Runs: attached by identity and compared against the generation the
+	// application declared.
 	CapabilityCacheMounts Capability = "cache_mounts"
 	// CapabilityPrewarm is Mercator preparing a host for work it has queued but
 	// not yet admitted: pulling an image, fetching an Artifact, and stopping
@@ -399,18 +399,18 @@ type ArtifactSpec struct {
 // produces.
 func (spec ArtifactSpec) Prepublished() bool { return spec.ProducedBy == "" }
 
-// Version is the catalog entry this declaration names, scoped to one workspace.
+// Version is the catalog entry this declaration names.
 // It states what the version is and never whether its bytes are here: a
 // publication is a moment, and only a world that has one may stamp it. The
 // object-store address is derived rather than authored, because a version is
 // immutable and there is exactly one place its bytes can be.
-func (spec ArtifactSpec) Version(workspaceID string) domain.ArtifactVersion {
+func (spec ArtifactSpec) Version() domain.ArtifactVersion {
 	return domain.ArtifactVersion{
-		ID:            spec.ID,
-		WorkspaceID:   workspaceID,
+		ID: spec.ID,
+
 		ContentDigest: spec.ContentDigest,
 		SizeBytes:     int64(spec.Size),
-		Location:      domain.ArtifactLocation(workspaceID, spec.ID),
+		Location:      domain.ArtifactLocation(spec.ID),
 	}
 }
 
@@ -557,8 +557,7 @@ type RentalSpec struct {
 	Unpacked         *bool                 `json:"unpacked,omitempty"`
 	ArtifactReplicas []ArtifactReplicaSpec `json:"artifact_replicas,omitempty"`
 	// CacheMounts is the mutable, application-owned state this machine was
-	// already holding when the world began, each entry under the workspace that
-	// owns it.
+	// already holding when the world began.
 	CacheMounts    []HeldCacheSpec `json:"cache_mounts,omitempty"`
 	RatePerHourUSD float64         `json:"rate_per_hour_usd"`
 	// Unpriced states that nobody has quoted a price for this machine, which is
@@ -688,16 +687,9 @@ func (spec RentalSpec) Confidence() float64 {
 	return *spec.CapacityConfidence
 }
 
-// HeldCacheSpec is one mutable cache a machine was found holding. The workspace
-// is part of it because a cache's identity is workspace-scoped: a fixture that
-// could only say "this machine holds compiler-cache" could not state the world
-// this whole model exists for, two tenants with one cache name on one host.
+// HeldCacheSpec is one mutable cache a machine was found holding.
 type HeldCacheSpec struct {
-	// Workspace is the label of the workspace that owns this cache. Empty means
-	// the Blueprint's default workspace, which is where a fixture with one tenant
-	// puts everything.
-	Workspace string `json:"workspace,omitempty"`
-	Name      string `json:"name"`
+	Name string `json:"name"`
 	// CompatibilityKey is the generation of content the application last wrote
 	// under this name.
 	CompatibilityKey string `json:"compatibility_key,omitempty"`
@@ -1512,8 +1504,7 @@ type RequestSpec struct {
 	// identical silent machine was admitted with nothing in the tree able to
 	// say so.
 	Download *DownloadRequirementSpec `json:"download,omitempty"`
-	// CacheMounts declare mutable, application-owned caches by their
-	// workspace-scoped names.
+	// CacheMounts declare mutable, application-owned caches by name.
 	CacheMounts []CacheMountSpec `json:"cache_mounts,omitempty"`
 	// ConsumesArtifacts and ProducesArtifacts refer to immutable Artifact IDs
 	// declared in the Blueprint world.
@@ -1557,10 +1548,9 @@ func (spec DownloadRequirementSpec) Requirement() *domain.NetworkDownloadRequire
 	}
 }
 
-// CacheMountSpec is one mutable cache a Run declares. Its identity is the name,
-// scoped to the workspace the Run belongs to; the compatibility key is the
-// application's own statement of which generation of content it can use, which
-// Mercator compares and never interprets.
+// CacheMountSpec is one mutable cache a Run declares. Its identity is the name;
+// the compatibility key is the application's own statement of which generation
+// of content it can use, which Mercator compares and never interprets.
 type CacheMountSpec struct {
 	Name string `json:"name"`
 	// CompatibilityKey separates generations of content under one name. A Run
@@ -2691,11 +2681,7 @@ func (w WorldSpec) validate() error {
 			if !domain.ValidCacheName(held.Name) {
 				return fmt.Errorf("rental %q holds a Cache Mount named %q, which is not a cache name", rental.ID, held.Name)
 			}
-			// One machine holds one cache per identity, and the identity carries
-			// the workspace. Two workspaces holding "compiler-cache" here is the
-			// world this whole model exists to keep apart, so it is not a
-			// duplicate.
-			identity := domain.CacheIdentity(held.Workspace, held.Requirement())
+			identity := domain.CacheIdentity(held.Requirement())
 			if cacheMounts[identity] {
 				return fmt.Errorf("rental %q holds Cache Mount %q twice", rental.ID, identity)
 			}

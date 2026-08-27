@@ -39,8 +39,7 @@ func (runner *Runner) verifyCapacity(ctx context.Context, trial Trial, identity 
 	if err != nil {
 		return evidence, err
 	}
-	evidence.WorkspaceID = subject.Lease.WorkspaceID
-	listingQuery := capability.CapacityQuery{WorkspaceID: subject.Lease.WorkspaceID}
+	listingQuery := capability.CapacityQuery{}
 	if listing, err := capacitytest.Affordable(ctx, provider, listingQuery, trial.MaxExpectedCostUSD, trial.Timeout); err == nil {
 		evidence.Offer = offerEvidence(listing, trial.Timeout)
 	}
@@ -100,7 +99,7 @@ func (runner *Runner) sweep(ctx context.Context, subject capacitytest.Subject, e
 	return evidence
 }
 
-// reclaim destroys everything this trial's workspace still owns and answers with
+// reclaim destroys everything this trial's deployment still owns and answers with
 // what survived the attempt.
 //
 // Each destruction is keyed by the machine as well as the lease it was taken out
@@ -124,7 +123,7 @@ func reclaim(ctx context.Context, subject capacitytest.Subject) ([]capability.Ow
 		for _, machine := range owned {
 			_, err := subject.Provider.TerminateCapacity(ctx, capability.CapacityCommand{
 				CapacityRef: capability.CapacityRef{
-					WorkspaceID:    machine.WorkspaceID,
+
 					ConnectionID:   subject.Lease.ConnectionID,
 					RentalID:       machine.RentalID,
 					NativeRef:      machine.NativeRef,
@@ -166,7 +165,7 @@ func (runner *Runner) capacityProvider(trial Trial) (capability.CapacityProvider
 }
 
 // subject is the trial's own identity, which every machine it rents is tagged
-// with. The workspace is minted here rather than created through the API because
+// with. The trial identity is minted here rather than created through the API because
 // a capacity trial runs no control plane: what the identity has to do is let the
 // sweep find this trial's machines and nobody else's.
 func (runner *Runner) subject(trial Trial, identity trialIdentity, provider capability.CapacityProvider) (capacitytest.Subject, error) {
@@ -175,8 +174,8 @@ func (runner *Runner) subject(trial Trial, identity trialIdentity, provider capa
 		return capacitytest.Subject{}, err
 	}
 	lease := capacitytest.Lease{
-		TrialID:      identity.suffix,
-		WorkspaceID:  "ws_" + identity.suffix,
+		TrialID: identity.suffix,
+
 		ConnectionID: identity.connectionID,
 		// The origin a rented machine is told to report to, which is the one an
 		// operator routed to this verifier. Nothing here waits for a machine to
@@ -198,7 +197,7 @@ func (runner *Runner) subject(trial Trial, identity trialIdentity, provider capa
 			listing, err := capacitytest.Affordable(
 				ctx,
 				provider,
-				capability.CapacityQuery{WorkspaceID: lease.WorkspaceID},
+				capability.CapacityQuery{},
 				trial.MaxExpectedCostUSD,
 				trial.Timeout,
 			)
@@ -213,7 +212,7 @@ func (runner *Runner) subject(trial Trial, identity trialIdentity, provider capa
 const trialAgentVersion = "v0.7.1"
 
 func ownershipQuery(subject capacitytest.Subject) capability.OwnershipQuery {
-	return capability.OwnershipQuery{WorkspaceID: subject.Lease.WorkspaceID}
+	return capability.OwnershipQuery{}
 }
 
 func ownedRefs(owned []capability.OwnedCapacity) error {

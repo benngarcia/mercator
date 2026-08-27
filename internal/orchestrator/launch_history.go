@@ -11,7 +11,7 @@ import (
 	"github.com/benngarcia/mercator/internal/runprojection"
 )
 
-// launchHistory is what this Workspace's earlier launches really spent, built
+// launchHistory is what this deployment's earlier launches really spent, built
 // from Mercator's own record of them and handed to Placement so a candidate this
 // fleet has already used is predicted from what it did rather than from what
 // somebody published about it.
@@ -25,20 +25,20 @@ import (
 // Mercator publishes a readiness an hour in the future, and the projection is
 // where that is already decided.
 //
-// It is rebuilt per placement. A Workspace pays one page walk of its Runs and
+// It is rebuilt per placement. A deployment pays one page walk of its Runs and
 // one scan of its decisions to place a Run, which is honest and is not free; the
 // cheaper form is a projection maintained on append, and it is worth building
-// when a Workspace's history is long enough for this to show up rather than
+// when a deployment's history is long enough for this to show up rather than
 // before.
-func (o *Orchestrator) launchHistory(ctx context.Context, workspaceID string) (prediction.History, error) {
-	candidates, err := o.launchedCandidates(ctx, workspaceID)
+func (o *Orchestrator) launchHistory(ctx context.Context) (prediction.History, error) {
+	candidates, err := o.launchedCandidates(ctx)
 	if err != nil {
 		return prediction.History{}, err
 	}
 	if len(candidates) == 0 {
 		return prediction.History{}, nil
 	}
-	records, err := o.everyRunRecord(ctx, workspaceID)
+	records, err := o.everyRunRecord(ctx)
 	if err != nil {
 		return prediction.History{}, err
 	}
@@ -61,9 +61,9 @@ func (o *Orchestrator) launchHistory(ctx context.Context, workspaceID string) (p
 // The last decision on a Run stands: a Run that was replaced onto other capacity
 // after a failed launch ran on the machine its final decision named, and the
 // moments the projection holds are that launch's.
-func (o *Orchestrator) launchedCandidates(ctx context.Context, workspaceID string) (map[string]domain.CandidateIdentity, error) {
+func (o *Orchestrator) launchedCandidates(ctx context.Context) (map[string]domain.CandidateIdentity, error) {
 	filter := eventlog.EventFilter{
-		WorkspaceID: workspaceID,
+
 		StreamTypes: []string{"run"},
 		EventTypes:  []string{EventBookingDecided},
 	}
@@ -110,11 +110,11 @@ func selectedCandidate(decision domain.BookingDecision) (domain.CandidateIdentit
 	return domain.CandidateIdentity{}, false
 }
 
-func (o *Orchestrator) everyRunRecord(ctx context.Context, workspaceID string) ([]domain.RunRecord, error) {
+func (o *Orchestrator) everyRunRecord(ctx context.Context) ([]domain.RunRecord, error) {
 	var records []domain.RunRecord
 	request := runprojection.PageRequest{Limit: runprojection.MaxPageSize}
 	for {
-		page, err := o.runs.List(ctx, workspaceID, request)
+		page, err := o.runs.List(ctx, request)
 		if err != nil {
 			return nil, err
 		}

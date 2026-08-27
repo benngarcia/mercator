@@ -89,7 +89,7 @@ type AcceleratorDriver struct {
 // floor is what turns that into a refusal in the Booking Decision. Mercator
 // never answers it by installing a stack onto the host: the host's driver is
 // the operator's, and a control plane that upgraded one would be changing a
-// machine underneath every other tenant of it.
+// machine underneath every other workload on it.
 type HostRequirements struct {
 	// Facts are the promises this Run refuses to run without. A machine that
 	// never stated one is refused as loudly as a machine that stated its

@@ -14,11 +14,10 @@ import "encoding/json"
 
 // PublicWorkloadRevision is one revision as a public reader may see it.
 type PublicWorkloadRevision struct {
-	ID          string             `json:"id"`
-	WorkspaceID string             `json:"workspace_id"`
-	WorkloadID  string             `json:"workload_id"`
-	Digest      string             `json:"digest"`
-	Spec        publicWorkloadSpec `json:"spec"`
+	ID         string             `json:"id"`
+	WorkloadID string             `json:"workload_id"`
+	Digest     string             `json:"digest"`
+	Spec       publicWorkloadSpec `json:"spec"`
 }
 
 type publicWorkloadSpec struct {
@@ -54,10 +53,9 @@ type publicEnvBinding struct {
 // of them is set to.
 func (rev WorkloadRevision) Public() PublicWorkloadRevision {
 	out := PublicWorkloadRevision{
-		ID:          rev.ID,
-		WorkspaceID: rev.WorkspaceID,
-		WorkloadID:  rev.WorkloadID,
-		Digest:      rev.Digest,
+		ID:         rev.ID,
+		WorkloadID: rev.WorkloadID,
+		Digest:     rev.Digest,
 		Spec: publicWorkloadSpec{
 			Resources: rev.Spec.Resources,
 			Network:   rev.Spec.Network,

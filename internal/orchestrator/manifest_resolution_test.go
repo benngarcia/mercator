@@ -35,7 +35,7 @@ func TestPlacementBoundsWhatItWaitsForAManifest(t *testing.T) {
 	resolver := &recordingResolver{answer: domain.ImageManifest{Known: true}}
 	orch := New(openOrchestratorLog(t), scheduler.New(), fake.New(), WithImageManifests(resolver), withTestCapacity())
 
-	if _, err := orch.PreviewPlacement(context.Background(), "ws_1", "run_preview", orchRevision()); err != nil {
+	if _, err := orch.PreviewPlacement(context.Background(), "run_preview", orchRevision()); err != nil {
 		t.Fatalf("preview placement: %v", err)
 	}
 
@@ -82,7 +82,7 @@ func TestPlacementRecordsWhyAManifestCouldNotBeRead(t *testing.T) {
 				withTestCapacity(),
 			)
 
-			decision, err := orch.PreviewPlacement(context.Background(), "ws_1", "run_preview", orchRevision())
+			decision, err := orch.PreviewPlacement(context.Background(), "run_preview", orchRevision())
 
 			if err != nil {
 				t.Fatalf("preview placement: %v", err)

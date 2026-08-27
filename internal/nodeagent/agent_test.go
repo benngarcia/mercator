@@ -124,7 +124,7 @@ func startWithStateDir(t *testing.T, stateDir string) *harness {
 	server := httptest.NewServer(nodeapi.New(registry))
 	t.Cleanup(server.Close)
 	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
-		WorkspaceID: testWorkspace, NodeID: testNodeID, RentalID: testRentalID, Generation: 1,
+		NodeID: testNodeID, RentalID: testRentalID, Generation: 1,
 		ShadowPriceUSDPerHour: 1.5,
 	})
 	if err != nil {
@@ -201,10 +201,10 @@ func (h *harness) clock() time.Time { return h.clockAt }
 
 func (h *harness) ref() capability.NodeRef {
 	return capability.NodeRef{
-		WorkspaceID: testWorkspace,
-		NodeID:      h.identity.NodeID,
-		RentalID:    h.identity.RentalID,
-		Generation:  h.identity.Generation,
+
+		NodeID:     h.identity.NodeID,
+		RentalID:   h.identity.RentalID,
+		Generation: h.identity.Generation,
 	}
 }
 

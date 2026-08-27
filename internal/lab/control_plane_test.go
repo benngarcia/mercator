@@ -49,7 +49,6 @@ func TestExecutionRunsTheRealControlPlaneAndReconcilesLostLaunchResponse(t *test
 
 	page, err := execution.runtime.orchestrator.ListRuns(
 		context.Background(),
-		labWorkspace,
 		runprojection.PageRequest{Limit: 50},
 	)
 	if err != nil {
@@ -100,7 +99,6 @@ func TestRestartPreservesExternalResourcesWithoutRepeatingLaunch(t *testing.T) {
 	}
 	page, err := execution.runtime.orchestrator.ListRuns(
 		context.Background(),
-		labWorkspace,
 		runprojection.PageRequest{Limit: 50},
 	)
 	if err != nil {
@@ -166,7 +164,7 @@ func TestEventFaultRestartsTheControlPlaneDeterministically(t *testing.T) {
 		t,
 		execution.runtime.world.effectRecords(),
 		OperationControlPlaneRestart,
-		labWorkspace,
+		"deployment",
 		EffectCommandAccepted,
 		EffectResponseDelivered,
 	)

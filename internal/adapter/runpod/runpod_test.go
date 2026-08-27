@@ -57,7 +57,7 @@ func TestListOffersRejectsOversizedProviderResponse(t *testing.T) {
 		return jsonResponse(http.StatusOK, body), nil
 	})
 
-	_, err := a.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	_, err := a.ListOffers(context.Background(), adapter.OfferRequest{})
 
 	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
 		t.Fatalf("list offers error = %v, want bounded response error", err)
@@ -76,7 +76,7 @@ func TestListOffersUsesGraphQLAndAllowlist(t *testing.T) {
 		}
 		return jsonResponse(200, `[]`), nil
 	})
-	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestRequestedAllocationSchedulesAndReachesPodCreation(t *testing.T) {
 		EphemeralDisk: domain.DiskRequirement{MinBytes: 75*gib + 1},
 	}
 
-	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1", Resources: resources})
+	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{Resources: resources})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestRequestedAllocationSchedulesAndReachesPodCreation(t *testing.T) {
 	}
 
 	_, err = a.Launch(context.Background(), adapter.LaunchRequest{
-		WorkspaceID:            "ws_1",
+
 		RunID:                  "run_2",
 		AttemptID:              "att_2",
 		LaunchKey:              "launch_2",
@@ -188,7 +188,7 @@ func TestLaunchPostsPodWithOwnershipEnvAndName(t *testing.T) {
 	})
 	val := "v"
 	receipt, err := a.Launch(context.Background(), adapter.LaunchRequest{
-		WorkspaceID:            "ws_1",
+
 		RunID:                  "run_1",
 		AttemptID:              "att_1",
 		LaunchKey:              "lk1",
@@ -242,7 +242,7 @@ func TestLaunchUsesConfiguredContainerRegistryAuthentication(t *testing.T) {
 	})
 
 	_, err = a.Launch(context.Background(), adapter.LaunchRequest{
-		WorkspaceID:            "ws_1",
+
 		RunID:                  "run_1",
 		AttemptID:              "att_1",
 		LaunchKey:              "lk1",
@@ -419,9 +419,9 @@ func readTerminateFixture(t *testing.T, name string) terminateFixture {
 
 func TestListOwnedMapsEnvBackToFields(t *testing.T) {
 	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","env":{"MERCATOR_WORKSPACE_ID":"ws_1","MERCATOR_RUN_ID":"run_1","MERCATOR_OWNERSHIP_TOKEN":"own1","MERCATOR_LAUNCH_KEY":"lk1","MERCATOR_REQUEST_HASH":"rh1"}}]`), nil
+		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","env":{"MERCATOR_RUN_ID":"run_1","MERCATOR_OWNERSHIP_TOKEN":"own1","MERCATOR_LAUNCH_KEY":"lk1","MERCATOR_REQUEST_HASH":"rh1"}}]`), nil
 	})
-	owned, err := a.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := a.ListOwned(context.Background(), adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}

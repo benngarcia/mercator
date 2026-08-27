@@ -3,13 +3,13 @@ import { expect, test } from "vitest";
 import replacementBookingEvents from "./testdata/replacement-booking-events.json";
 import requestedEvent from "./testdata/requested-event.json";
 import {
-  createWorkspace,
-  reduceWorkspace,
-  type WorkspaceMessage,
+  createDeployment,
+  reduceDeployment,
+  type DeploymentMessage,
 } from "./reducer";
 
 test("degrades a run whose expected runtime exceeds the enforced maximum", () => {
-  const requested = structuredClone(requestedEvent) as WorkspaceMessage;
+  const requested = structuredClone(requestedEvent) as DeploymentMessage;
   if (requested.type !== "domain_event") {
     throw new Error("fixture needs a requested event");
   }
@@ -24,9 +24,9 @@ test("degrades a run whose expected runtime exceeds the enforced maximum", () =>
   };
   data.workload_revision.spec.placement.expected_runtime_seconds = 121;
 
-  const workspace = reduceWorkspace(createWorkspace("ws_scenario"), requested);
+  const deployment = reduceDeployment(createDeployment("ws_scenario"), requested);
 
-  const run = workspace.runs[data.run_id];
+  const run = deployment.runs[data.run_id];
   expect(run?.phase).toBe("requested");
   expect(run?.expectedRuntimeSeconds).toBeNull();
   expect(run?.maxRuntimeSeconds).toBe(120);
@@ -48,7 +48,7 @@ test("keeps a rental active when a queued booking detaches while another runs", 
     state: "queued",
     afterBookingID: "booking-active",
   });
-  const closed: WorkspaceMessage = {
+  const closed: DeploymentMessage = {
     type: "domain_event",
     event: {
       specversion: "1.0",
@@ -57,35 +57,34 @@ test("keeps a rental active when a queued booking detaches while another runs", 
       type: "compute.run.closed.v1",
       subject: "runs/run-queued",
       time: "2030-01-01T00:00:05Z",
-      workspaceid: "ws_scenario",
       streamversion: 3,
       globalposition: 5,
       correlationid: "run-queued",
       data: { closed: true },
     },
-  } as unknown as WorkspaceMessage;
+  } as unknown as DeploymentMessage;
 
-  const workspace = [
+  const deployment = [
     requestedMessage("run-active", "evt_requested_active", 1),
     running,
     requestedMessage("run-queued", "evt_requested_queued", 3),
     queued,
     closed,
-  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+  ].reduce(reduceDeployment, createDeployment("ws_scenario"));
 
-  const rental = workspace.rentals["rental-warm"];
+  const rental = deployment.rentals["rental-warm"];
   expect(rental?.phase).toBe("active");
   expect(rental?.runningBookingID).toBe("booking-active");
   expect(rental?.queuedBookingIDs).toEqual([]);
-  expect(workspace.runs["run-queued"]?.phase).toBe("closed");
+  expect(deployment.runs["run-queued"]?.phase).toBe("closed");
 });
 
 function requestedMessage(
   runID: string,
   eventID: string,
   globalPosition: number,
-): WorkspaceMessage {
-  const requested = structuredClone(requestedEvent) as WorkspaceMessage;
+): DeploymentMessage {
+  const requested = structuredClone(requestedEvent) as DeploymentMessage;
   if (requested.type !== "domain_event") {
     throw new Error("fixture needs a requested event");
   }
@@ -111,16 +110,16 @@ test("reads a Booking Decision that launched a one-shot ephemeral execution", ()
     candidateDisposition: "launch_ephemeral",
   });
 
-  const workspace = [
+  const deployment = [
     requestedMessage("run-one-shot", "evt_requested_one_shot", 1),
     decided,
-  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+  ].reduce(reduceDeployment, createDeployment("ws_scenario"));
 
   // The decision reaching the canvas at all is the assertion. A disposition the
   // schema cannot spell throws on decode, and the reduce that throws leaves the
   // Run where it was requested with no Booking on it.
-  expect(workspace.runs["run-one-shot"]?.bookingID).toBe("booking-one-shot");
-  expect(workspace.runs["run-one-shot"]?.phase).toBe("running");
+  expect(deployment.runs["run-one-shot"]?.bookingID).toBe("booking-one-shot");
+  expect(deployment.runs["run-one-shot"]?.phase).toBe("running");
 });
 
 function bookingDecidedMessage(input: {
@@ -131,7 +130,7 @@ function bookingDecidedMessage(input: {
   state: "running" | "queued";
   afterBookingID?: string;
   candidateDisposition?: string;
-}): WorkspaceMessage {
+}): DeploymentMessage {
   return {
     type: "domain_event",
     event: {
@@ -141,7 +140,6 @@ function bookingDecidedMessage(input: {
       type: "compute.run.booking_decided.v1",
       subject: `runs/${input.runID}`,
       time: "2030-01-01T00:00:01Z",
-      workspaceid: "ws_scenario",
       streamversion: 2,
       globalposition: input.globalPosition,
       correlationid: input.runID,
@@ -195,7 +193,7 @@ function bookingDecidedMessage(input: {
         },
       },
     },
-  } as unknown as WorkspaceMessage;
+  } as unknown as DeploymentMessage;
 }
 
 test("replaces a failed provider booking for the same Run", () => {
@@ -209,8 +207,8 @@ test("replaces a failed provider booking for the same Run", () => {
       kind: "provisionable",
     },
   ];
-  const messages = replacementBookingEvents as unknown as WorkspaceMessage[];
-  const requested = structuredClone(requestedEvent) as WorkspaceMessage;
+  const messages = replacementBookingEvents as unknown as DeploymentMessage[];
+  const requested = structuredClone(requestedEvent) as DeploymentMessage;
   if (requested.type !== "domain_event") {
     throw new Error("fixture needs a requested event");
   }
@@ -219,19 +217,18 @@ test("replaces a failed provider booking for the same Run", () => {
   (requested.event.data as { run_id: string }).run_id = "run-1";
 
   const result = messages.reduce(
-    reduceWorkspace,
-    reduceWorkspace(
-      reduceWorkspace(createWorkspace("ws_scenario"), requested),
+    reduceDeployment,
+    reduceDeployment(
+      reduceDeployment(createDeployment("ws_scenario"), requested),
       {
         type: "offers_replaced",
         catalog: {
-          workspace_id: "ws_scenario",
           revision: "replacement-fixture",
           observed_at: "2026-07-22T12:00:00Z",
           offers,
           failures: [],
         },
-      } as unknown as WorkspaceMessage,
+      } as unknown as DeploymentMessage,
     ),
   );
 
@@ -265,13 +262,13 @@ test("counts a workload's runtime from the moment its machine said it began", ()
     "2030-01-01T00:04:48Z",
   );
 
-  const workspace = [
+  const deployment = [
     requestedMessage("run-observed", "evt_requested_observed", 1),
     decided,
     started,
-  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+  ].reduce(reduceDeployment, createDeployment("ws_scenario"));
 
-  const run = workspace.runs["run-observed"];
+  const run = deployment.runs["run-observed"];
   expect(run?.startedAt).toBe("2030-01-01T00:04:48Z");
   expect(run?.startedAt).not.toBe(decided.type === "domain_event" ? decided.event.time : undefined);
 });
@@ -279,7 +276,7 @@ test("counts a workload's runtime from the moment its machine said it began", ()
 // A Run nothing has reported a start for carries none. The console shows no
 // elapsed runtime for it rather than counting from whenever Mercator last looked.
 test("records no start moment for a Run nothing observed starting", () => {
-  const workspace = [
+  const deployment = [
     requestedMessage("run-quiet", "evt_requested_quiet", 1),
     bookingDecidedMessage({
       eventID: "evt_booking_quiet",
@@ -288,15 +285,15 @@ test("records no start moment for a Run nothing observed starting", () => {
       bookingID: "booking-quiet",
       state: "running",
     }),
-  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+  ].reduce(reduceDeployment, createDeployment("ws_scenario"));
 
-  expect(workspace.runs["run-quiet"]?.startedAt).toBeUndefined();
+  expect(deployment.runs["run-quiet"]?.startedAt).toBeUndefined();
 });
 
 function executionStartedMessage(
   runID: string,
   startedAt: string,
-): WorkspaceMessage {
+): DeploymentMessage {
   return {
     type: "domain_event",
     event: {
@@ -306,13 +303,12 @@ function executionStartedMessage(
       type: "compute.run.execution_started.v1",
       subject: `runs/${runID}`,
       time: "2030-01-01T00:05:00Z",
-      workspaceid: "ws_scenario",
       streamversion: 4,
       globalposition: 6,
       correlationid: runID,
       data: { launch_key: `launch-${runID}`, started_at: startedAt },
     },
-  } as unknown as WorkspaceMessage;
+  } as unknown as DeploymentMessage;
 }
 
 test("applies a stored decision whose candidates predate dispositions", () => {
@@ -337,15 +333,15 @@ test("applies a stored decision whose candidates predate dispositions", () => {
   ).decision.candidates;
   delete candidates[0]?.disposition;
 
-  const workspace = [
+  const deployment = [
     requestedMessage("run-legacy", "evt_requested_legacy", 1),
     decided,
-  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+  ].reduce(reduceDeployment, createDeployment("ws_scenario"));
 
   // The canvas does not store the decision itself; applying without a throw
   // and advancing the Run is the whole claim -- decodeEventData rejected this
   // event outright when disposition was a required key.
-  const run = workspace.runs["run-legacy"];
+  const run = deployment.runs["run-legacy"];
   expect(run?.phase).toBe("running");
   expect(run?.bookingID).toBe("booking-legacy");
 });

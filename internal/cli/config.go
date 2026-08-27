@@ -17,13 +17,11 @@ type FileConfig struct {
 	Contexts       map[string]*ContextConfig `json:"contexts,omitempty"`
 }
 
-// ContextConfig names one Mercator deployment: where it is, the default
-// workspace, and a credential — either a static API token or a login-minted
-// CLI token tied to a user identity.
+// ContextConfig names one Mercator deployment and its credential.
 type ContextConfig struct {
-	APIURL      string `json:"api_url,omitempty"`
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	APIToken    string `json:"api_token,omitempty"`
+	APIURL string `json:"api_url,omitempty"`
+
+	APIToken string `json:"api_token,omitempty"`
 
 	CLIToken          string `json:"cli_token,omitempty"`
 	CLITokenEmail     string `json:"cli_token_email,omitempty"`
@@ -146,24 +144,21 @@ func (f FileConfig) contextNames() []string {
 // resolveCredentials merges the environment-derived Config values (which win,
 // for CI) with the current context from the config file. It returns the
 // effective connection settings for API commands.
-func resolveCredentials(cfg Config, now time.Time) (baseURL, token, workspaceID string, warnings []string) {
-	baseURL, token, workspaceID = cfg.BaseURL, cfg.Token, cfg.WorkspaceID
+func resolveCredentials(cfg Config, now time.Time) (baseURL, token string, warnings []string) {
+	baseURL, token = cfg.BaseURL, cfg.Token
 	file, err := loadFileConfig(cfg.ConfigPath)
 	if err != nil {
 		// A corrupt config must not brick unrelated env-configured usage; it
 		// is surfaced as a warning and, for context commands, a hard error.
 		warnings = append(warnings, err.Error())
-		return baseURL, token, workspaceID, warnings
+		return baseURL, token, warnings
 	}
 	name, current := file.currentContext()
 	if current == nil {
-		return baseURL, token, workspaceID, warnings
+		return baseURL, token, warnings
 	}
 	if baseURL == "" {
 		baseURL = current.APIURL
-	}
-	if workspaceID == "" {
-		workspaceID = current.WorkspaceID
 	}
 	if token == "" {
 		switch {
@@ -178,5 +173,5 @@ func resolveCredentials(cfg Config, now time.Time) (baseURL, token, workspaceID 
 			token = current.APIToken
 		}
 	}
-	return baseURL, token, workspaceID, warnings
+	return baseURL, token, warnings
 }

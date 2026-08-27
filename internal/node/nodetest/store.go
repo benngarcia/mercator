@@ -21,9 +21,8 @@ import (
 type NewStore func(t *testing.T) node.Store
 
 const (
-	workspaceID = "ws_conformance"
-	nodeID      = "nod_conformance"
-	rentalID    = "rnt_conformance"
+	nodeID   = "nod_conformance"
+	rentalID = "rnt_conformance"
 )
 
 var start = time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -34,7 +33,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 	t.Run("an invited identity is readable before any machine enrolls", func(t *testing.T) {
 		store := invited(t, newStore)
 
-		record, err := store.Get(context.Background(), workspaceID, nodeID)
+		record, err := store.Get(context.Background(), nodeID)
 		if err != nil {
 			t.Fatalf("get invited node: %v", err)
 		}
@@ -62,28 +61,15 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		}
 	})
 
-	t.Run("an identity taken in one workspace is not free in another", func(t *testing.T) {
-		store := invited(t, newStore)
-		elsewhere := inviteRecord()
-		elsewhere.WorkspaceID = "ws_other"
-
-		err := store.Invite(context.Background(), elsewhere)
-
-		if !errors.Is(err, node.ErrIdentityExists) {
-			t.Fatalf("inviting %q into a second workspace = %v, want ErrIdentityExists", nodeID, err)
-		}
-	})
-
-	t.Run("an identity resolves without knowing its workspace", func(t *testing.T) {
+	t.Run("an identity resolves directly", func(t *testing.T) {
 		store := invited(t, newStore)
 
 		record, err := store.Find(context.Background(), nodeID)
 		if err != nil {
 			t.Fatalf("find node: %v", err)
 		}
-
-		if record.WorkspaceID != workspaceID {
-			t.Fatalf("workspace = %q, want %q", record.WorkspaceID, workspaceID)
+		if record.ID != nodeID {
+			t.Fatalf("node = %q, want %q", record.ID, nodeID)
 		}
 	})
 
@@ -95,7 +81,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if enrolled.FencingToken != 1 {
 			t.Fatalf("fencing token = %d, want 1", enrolled.FencingToken)
 		}
-		if _, err := store.Enroll(context.Background(), workspaceID, nodeID, enrollment("token-1")); !errors.Is(err, node.ErrEnrollmentSpent) {
+		if _, err := store.Enroll(context.Background(), nodeID, enrollment("token-1")); !errors.Is(err, node.ErrEnrollmentSpent) {
 			t.Fatalf("redeeming a spent invitation = %v, want ErrEnrollmentSpent", err)
 		}
 	})
@@ -104,7 +90,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		store := invited(t, newStore)
 		mustEnroll(t, store, "token-1")
 
-		if err := store.Reinvite(context.Background(), workspaceID, nodeID, "token-2", start.Add(time.Hour)); err != nil {
+		if err := store.Reinvite(context.Background(), nodeID, "token-2", start.Add(time.Hour)); err != nil {
 			t.Fatalf("reinvite: %v", err)
 		}
 		second := mustEnroll(t, store, "token-2")
@@ -140,7 +126,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if _, _, err := store.AppendOperation(context.Background(), prepareOperation("op-pull")); err != nil {
 			t.Fatalf("append preparation: %v", err)
 		}
-		if err := store.SettleOperation(context.Background(), workspaceID, nodeID, node.Result{
+		if err := store.SettleOperation(context.Background(), nodeID, node.Result{
 			OperationID: "op-pull", Applied: false, Failure: "pull failed: registry unreachable", ReportedAt: start,
 		}); err != nil {
 			t.Fatalf("settle refusal: %v", err)
@@ -157,7 +143,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if stored.State != node.OperationPending || stored.Failure != "" {
 			t.Fatalf("reissued operation = %+v, want a fresh pending command", stored)
 		}
-		pending, err := store.PendingOperations(context.Background(), workspaceID, nodeID)
+		pending, err := store.PendingOperations(context.Background(), nodeID)
 		if err != nil {
 			t.Fatalf("pending operations: %v", err)
 		}
@@ -172,7 +158,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if _, _, err := store.AppendOperation(context.Background(), operation("op-1")); err != nil {
 			t.Fatalf("append operation: %v", err)
 		}
-		if err := store.SettleOperation(context.Background(), workspaceID, nodeID, node.Result{
+		if err := store.SettleOperation(context.Background(), nodeID, node.Result{
 			OperationID: "op-1", Applied: false, Failure: "container create failed", ReportedAt: start,
 		}); err != nil {
 			t.Fatalf("settle refusal: %v", err)
@@ -197,20 +183,20 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 			}
 		}
 
-		if err := store.SettleOperation(context.Background(), workspaceID, nodeID, node.Result{
+		if err := store.SettleOperation(context.Background(), nodeID, node.Result{
 			OperationID: "op-applied", Applied: true, ReportedAt: start,
 		}); err != nil {
 			t.Fatalf("settle operation: %v", err)
 		}
 
-		pending, err := store.PendingOperations(context.Background(), workspaceID, nodeID)
+		pending, err := store.PendingOperations(context.Background(), nodeID)
 		if err != nil {
 			t.Fatalf("pending operations: %v", err)
 		}
 		if len(pending) != 1 || pending[0].OperationID != "op-pending" {
 			t.Fatalf("pending = %+v, want only the unacknowledged operation", pending)
 		}
-		applied, err := store.AppliedOperationIDs(context.Background(), workspaceID, nodeID)
+		applied, err := store.AppliedOperationIDs(context.Background(), nodeID)
 		if err != nil {
 			t.Fatalf("applied operations: %v", err)
 		}
@@ -226,11 +212,11 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 			t.Fatalf("append operation: %v", err)
 		}
 		result := node.Result{OperationID: "op-1", Applied: true, ReportedAt: start}
-		if err := store.SettleOperation(context.Background(), workspaceID, nodeID, result); err != nil {
+		if err := store.SettleOperation(context.Background(), nodeID, result); err != nil {
 			t.Fatalf("first settle: %v", err)
 		}
 
-		err := store.SettleOperation(context.Background(), workspaceID, nodeID, result)
+		err := store.SettleOperation(context.Background(), nodeID, result)
 
 		if err != nil {
 			t.Fatalf("a node reporting twice after a lost response must not be an error: %v", err)
@@ -254,7 +240,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if !first || second {
 			t.Fatalf("record = %v, replay = %v; want the replay to be recognized", first, second)
 		}
-		observation, found, err := store.LatestWorkload(context.Background(), workspaceID, nodeID, "run-1", "attempt-1")
+		observation, found, err := store.LatestWorkload(context.Background(), nodeID, "run-1", "attempt-1")
 		if err != nil || !found {
 			t.Fatalf("latest workload: found=%v err=%v", found, err)
 		}
@@ -274,7 +260,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 			t.Fatalf("record stale running: %v", err)
 		}
 
-		observation, _, err := store.LatestWorkload(context.Background(), workspaceID, nodeID, "run-1", "attempt-1")
+		observation, _, err := store.LatestWorkload(context.Background(), nodeID, "run-1", "attempt-1")
 		if err != nil {
 			t.Fatalf("latest workload: %v", err)
 		}
@@ -308,7 +294,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		store := invited(t, newStore)
 		mustEnroll(t, store, "token-1")
 
-		if _, err := store.Heartbeat(context.Background(), workspaceID, nodeID, capability.NodeFacts{
+		if _, err := store.Heartbeat(context.Background(), nodeID, capability.NodeFacts{
 			ObservedAt: start.Add(time.Minute),
 			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker", Disk: capability.DiskFacts{Known: true, FreeBytes: 42}},
 		}, start.Add(2*time.Hour)); err != nil {
@@ -322,7 +308,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if len(expired) != 0 {
 			t.Fatalf("a heartbeating node must keep its lease, got %+v", expired)
 		}
-		record, err := store.Get(context.Background(), workspaceID, nodeID)
+		record, err := store.Get(context.Background(), nodeID)
 		if err != nil {
 			t.Fatalf("get node: %v", err)
 		}
@@ -339,19 +325,19 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 	t.Run("a retired node can never enroll again", func(t *testing.T) {
 		store := invited(t, newStore)
 		mustEnroll(t, store, "token-1")
-		if err := store.Reinvite(context.Background(), workspaceID, nodeID, "token-2", start.Add(time.Hour)); err != nil {
+		if err := store.Reinvite(context.Background(), nodeID, "token-2", start.Add(time.Hour)); err != nil {
 			t.Fatalf("reinvite: %v", err)
 		}
-		if err := store.Retire(context.Background(), workspaceID, nodeID); err != nil {
+		if err := store.Retire(context.Background(), nodeID); err != nil {
 			t.Fatalf("retire node: %v", err)
 		}
 
-		_, err := store.Enroll(context.Background(), workspaceID, nodeID, enrollment("token-2"))
+		_, err := store.Enroll(context.Background(), nodeID, enrollment("token-2"))
 
 		if !errors.Is(err, node.ErrRetired) {
 			t.Fatalf("enrolling a retired node = %v, want ErrRetired", err)
 		}
-		record, err := store.Get(context.Background(), workspaceID, nodeID)
+		record, err := store.Get(context.Background(), nodeID)
 		if err != nil {
 			t.Fatalf("get retired node: %v", err)
 		}
@@ -363,11 +349,11 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 	t.Run("a retired node renews no lease with its next heartbeat", func(t *testing.T) {
 		store := invited(t, newStore)
 		mustEnroll(t, store, "token-1")
-		if err := store.Retire(context.Background(), workspaceID, nodeID); err != nil {
+		if err := store.Retire(context.Background(), nodeID); err != nil {
 			t.Fatalf("retire node: %v", err)
 		}
 
-		_, err := store.Heartbeat(context.Background(), workspaceID, nodeID, capability.NodeFacts{
+		_, err := store.Heartbeat(context.Background(), nodeID, capability.NodeFacts{
 			ObservedAt: start.Add(time.Minute),
 			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker"},
 		}, start.Add(2*time.Hour))
@@ -375,7 +361,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if !errors.Is(err, node.ErrRetired) {
 			t.Fatalf("heartbeat from a retired node = %v, want ErrRetired", err)
 		}
-		record, err := store.Get(context.Background(), workspaceID, nodeID)
+		record, err := store.Get(context.Background(), nodeID)
 		if err != nil {
 			t.Fatalf("get retired node: %v", err)
 		}
@@ -387,11 +373,11 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 	t.Run("retiring a retired node changes nothing", func(t *testing.T) {
 		store := invited(t, newStore)
 		mustEnroll(t, store, "token-1")
-		if err := store.Retire(context.Background(), workspaceID, nodeID); err != nil {
+		if err := store.Retire(context.Background(), nodeID); err != nil {
 			t.Fatalf("retire node: %v", err)
 		}
 
-		err := store.Retire(context.Background(), workspaceID, nodeID)
+		err := store.Retire(context.Background(), nodeID)
 
 		if err != nil {
 			t.Fatalf("retiring a retired node = %v, want a generation's end to be repeatable", err)
@@ -401,7 +387,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 	t.Run("an identity nobody invited cannot be retired", func(t *testing.T) {
 		store := newStore(t)
 
-		err := store.Retire(context.Background(), workspaceID, "nod_missing")
+		err := store.Retire(context.Background(), "nod_missing")
 
 		if !errors.Is(err, node.ErrNotFound) {
 			t.Fatalf("retiring an unknown identity = %v, want ErrNotFound", err)
@@ -411,7 +397,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 	t.Run("an unknown node is not found rather than empty", func(t *testing.T) {
 		store := newStore(t)
 
-		_, err := store.Get(context.Background(), workspaceID, "nod_missing")
+		_, err := store.Get(context.Background(), "nod_missing")
 
 		if !errors.Is(err, node.ErrNotFound) {
 			t.Fatalf("get unknown node = %v, want ErrNotFound", err)
@@ -430,8 +416,8 @@ func invited(t *testing.T, newStore NewStore) node.Store {
 
 func inviteRecord() node.Record {
 	return node.Record{
-		ID:                nodeID,
-		WorkspaceID:       workspaceID,
+		ID: nodeID,
+
 		RentalID:          rentalID,
 		Generation:        1,
 		State:             node.StateEnrolling,
@@ -442,7 +428,7 @@ func inviteRecord() node.Record {
 
 func mustEnroll(t *testing.T, store node.Store, tokenID string) node.Record {
 	t.Helper()
-	record, err := store.Enroll(context.Background(), workspaceID, nodeID, enrollment(tokenID))
+	record, err := store.Enroll(context.Background(), nodeID, enrollment(tokenID))
 	if err != nil {
 		t.Fatalf("enroll node: %v", err)
 	}
@@ -464,9 +450,9 @@ func enrollment(tokenID string) node.Enrollment {
 
 func operation(operationID string) node.Operation {
 	return node.Operation{
-		OperationID:  operationID,
-		NodeID:       nodeID,
-		WorkspaceID:  workspaceID,
+		OperationID: operationID,
+		NodeID:      nodeID,
+
 		Kind:         node.CommandLaunchWorkload,
 		FencingToken: 1,
 		State:        node.OperationPending,
@@ -487,11 +473,11 @@ func prepareOperation(operationID string) node.Operation {
 
 func workloadEvent(eventID string, phase capability.WorkloadPhase, observedAt time.Time) node.Event {
 	return node.Event{
-		ID:          eventID,
-		NodeID:      nodeID,
-		WorkspaceID: workspaceID,
-		Kind:        node.EventWorkload,
-		ObservedAt:  observedAt,
+		ID:     eventID,
+		NodeID: nodeID,
+
+		Kind:       node.EventWorkload,
+		ObservedAt: observedAt,
 		Workload: &capability.WorkloadObservation{
 			RunID:      "run-1",
 			AttemptID:  "attempt-1",

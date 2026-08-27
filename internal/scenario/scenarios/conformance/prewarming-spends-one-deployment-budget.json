@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "The depth bound alone, across two tenants. This world states how much may be arriving speculatively at once and states nothing about how often preparation may begin, so what holds the second tenant back is the fleet's one slot and nothing else. Two machines are occupied for the whole window and each already holds what its own tenant runs, so each queued Run wants exactly twenty gigabytes on its own host. Both Runs arrive at the same minute, the tenant whose Run starts soonest is prepared for, and the other waits until that transfer has landed. A control plane spending one budget per workspace has two transfers in flight on two machines at once, which is twice what the operator allowed, and this fixture fails it through safety.prewarm_yields_to_real_work.",
+  "summary": "The deployment-wide depth bound alone. This world states how much may be arriving speculatively at once and states nothing about how often preparation may begin, so what holds the second queued Run back is the fleet's one slot and nothing else. Two machines are occupied for the whole window and each already holds its occupant's image, so each queued Run wants exactly twenty gigabytes on its preferred host. Both Runs arrive at the same minute, the one expected to start soonest is prepared for, and the other waits until that transfer has landed. A control plane spending more than one deployment budget has two transfers in flight on two machines at once, twice what the operator allowed, and this fixture fails it through safety.prewarm_yields_to_real_work.",
   "seed": "mercator-lab-prewarm-fleet-budget-v1",
   "world": {
     "prewarm": {
@@ -115,7 +115,6 @@
       },
       {
         "name": "beta-occupant",
-        "workspace": "beta",
         "at": "0s",
         "request": {
           "image": "surveyor@sha256:2e4f6a8c0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a",
@@ -135,7 +134,6 @@
       },
       {
         "name": "beta-patient",
-        "workspace": "beta",
         "at": "5m",
         "request": {
           "image": "auditor@sha256:5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e",

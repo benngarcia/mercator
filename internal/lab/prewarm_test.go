@@ -14,7 +14,7 @@ const (
 	prewarmBlueprint     = "prewarming-never-starves-real-work"
 	rateBoundBlueprint   = "prewarming-holds-its-own-rate-bound"
 	fleetBoundBlueprint  = "prewarming-bounds-the-whole-fleet"
-	fleetBudgetBlueprint = "prewarming-spends-one-budget-across-tenants"
+	fleetBudgetBlueprint = "prewarming-spends-one-deployment-budget"
 	analystImage         = "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
 	bulkyImage           = "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d"
 	auditorImage         = "auditor@sha256:5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e"
@@ -291,62 +291,6 @@ func TestASecondSpeculativeFetchWaitsOutTheRateBound(t *testing.T) {
 		t.Fatalf(
 			"preparation of %q started %s after preparation of %q, and this world allows one no sooner than 5m",
 			starts[1].Content, gap, starts[0].Content,
-		)
-	}
-	if _, err := execution.Check(context.Background()); err != nil {
-		t.Fatalf("the execution violates a standing rule: %v", err)
-	}
-}
-
-// TestTheSecondTenantWaitsForTheFleetsOneTransfer is the multi-tenant claim.
-// Both bounds belong to the fleet: what they protect is a machine's link and
-// this process's egress, and a second tenant arriving ninety seconds after the
-// first shares both. Its corpus is wanted on a different machine, and it still
-// waits.
-func TestTheSecondTenantWaitsForTheFleetsOneTransfer(t *testing.T) {
-	execution := driveBlueprintForEightyMinutes(t, fleetBoundBlueprint)
-
-	starts := prefetchStarts(t, execution)
-	if len(starts) != 2 {
-		t.Fatalf("the ledger records %d preparations, want one per tenant: %+v", len(starts), starts)
-	}
-	if starts[0].Content != "artifact:corpus-alpha:v1" || starts[1].Content != domain.ReferenceDigest(auditorImage) {
-		t.Fatalf(
-			"the fleet prepared %q then %q, want the tenant whose Run starts soonest first",
-			starts[0].Content, starts[1].Content,
-		)
-	}
-	if starts[0].OfferID == starts[1].OfferID {
-		t.Fatalf("both preparations landed on %q, and this fixture is about two machines", starts[0].OfferID)
-	}
-	if gap := starts[1].At.Sub(starts[0].At); gap < 5*time.Minute {
-		t.Fatalf(
-			"the second tenant's corpus started %s after the first tenant's, and this world allows one no sooner than 5m",
-			gap,
-		)
-	}
-	if _, err := execution.Check(context.Background()); err != nil {
-		t.Fatalf("the execution violates a standing rule: %v", err)
-	}
-}
-
-// TestOneDepthBudgetIsSpentAcrossTenants is the depth half of the same claim,
-// on a world that states no interval at all. Two tenants want twenty gigabytes
-// each on their own machine at the same minute, and one slot exists: the Run
-// that starts soonest gets it, and the other tenant's transfer begins when that
-// one has landed. Nothing here is the rate bound holding it, because this world
-// states none.
-func TestOneDepthBudgetIsSpentAcrossTenants(t *testing.T) {
-	execution := driveBlueprintForEightyMinutes(t, fleetBudgetBlueprint)
-
-	starts := prefetchStarts(t, execution)
-	if len(starts) != 2 {
-		t.Fatalf("the ledger records %d preparations, want one per tenant: %+v", len(starts), starts)
-	}
-	if starts[0].Content != "artifact:corpus-alpha:v1" || starts[1].Content != domain.ReferenceDigest(auditorImage) {
-		t.Fatalf(
-			"the fleet prepared %q then %q, want the tenant whose Run starts soonest first",
-			starts[0].Content, starts[1].Content,
 		)
 	}
 	if _, err := execution.Check(context.Background()); err != nil {

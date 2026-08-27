@@ -86,14 +86,6 @@
         "operationId": "streamConsoleEvents",
         "parameters": [
           {
-            "name": "workspace_id",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "name": "Last-Event-ID",
             "in": "header",
             "required": false,
@@ -104,7 +96,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Replay-complete public Workspace event feed followed by live events",
+            "description": "Replay-complete public Deployment event feed followed by live events",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -144,8 +136,8 @@
               }
             }
           },
-          "502": {
-            "description": "Offer catalog unavailable",
+          "501": {
+            "description": "Event feed is unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -154,8 +146,8 @@
               }
             }
           },
-          "501": {
-            "description": "Event feed is unavailable",
+          "502": {
+            "description": "Offer catalog unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -171,14 +163,6 @@
       "get": {
         "operationId": "listRuns",
         "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
           {
             "name": "cursor",
             "in": "query",
@@ -260,14 +244,6 @@
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -378,14 +354,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -450,14 +418,6 @@
             "name": "run_id",
             "in": "path",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -548,14 +508,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -620,14 +572,6 @@
             "name": "run_id",
             "in": "path",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -698,14 +642,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -773,14 +709,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -840,16 +768,7 @@
     "/v1/placements:preview": {
       "post": {
         "operationId": "previewPlacement",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -927,21 +846,16 @@
     "/v1/nodes": {
       "get": {
         "operationId": "listNodes",
-        "summary": "List the nodes enrolled in a workspace",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": true,
-            "schema": { "type": "string" }
-          }
-        ],
+        "summary": "List the nodes enrolled in a deployment",
+        "parameters": [],
         "responses": {
           "200": {
             "description": "Enrolled nodes",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/NodeListResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/NodeListResponse"
+                }
               }
             }
           },
@@ -949,7 +863,9 @@
             "description": "Invalid request",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
               }
             }
           },
@@ -957,7 +873,9 @@
             "description": "Authentication failed",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
               }
             }
           },
@@ -965,7 +883,9 @@
             "description": "Node registry failed",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
               }
             }
           }
@@ -978,7 +898,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/InviteNodeRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/InviteNodeRequest"
+              }
             }
           }
         },
@@ -987,7 +909,9 @@
             "description": "Node invited",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/NodeBootstrapResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/NodeBootstrapResponse"
+                }
               }
             }
           },
@@ -995,7 +919,9 @@
             "description": "Invalid request",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
               }
             }
           },
@@ -1003,7 +929,9 @@
             "description": "Authentication failed",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
               }
             }
           },
@@ -1011,7 +939,9 @@
             "description": "Node identity already exists",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
               }
             }
           },
@@ -1019,154 +949,9 @@
             "description": "Node registry failed",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/workspaces": {
-      "get": {
-        "operationId": "listWorkspaces",
-        "parameters": [
-          {
-            "name": "include_archived",
-            "in": "query",
-            "required": false,
-            "schema": { "type": "boolean", "default": false }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Saved workspace list",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/WorkspaceListResponse" }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "500": {
-            "description": "Workspace catalog failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "operationId": "createWorkspace",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/CreateWorkspaceRequest" }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Workspace created",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/WorkspaceResponse" }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "409": {
-            "description": "Workspace ID conflict",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "500": {
-            "description": "Workspace catalog failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/workspaces/{workspace_id}/archive": {
-      "post": {
-        "operationId": "archiveWorkspace",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "path",
-            "required": true,
-            "schema": { "type": "string" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Workspace archived",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/WorkspaceResponse" }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "404": {
-            "description": "Workspace not found",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "500": {
-            "description": "Workspace catalog failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
               }
             }
           }
@@ -1176,16 +961,7 @@
     "/v1/connections": {
       "get": {
         "operationId": "listConnections",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "responses": {
           "200": {
             "description": "Connection list",
@@ -1246,14 +1022,6 @@
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -1365,14 +1133,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -1468,14 +1228,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -1555,7 +1307,7 @@
     "/v1/adapters": {
       "get": {
         "operationId": "listAdapters",
-        "description": "Registered provider adapters' onboarding manifests: display metadata, config fields, credential expectations, and ordered setup steps. Static per process; no workspace scoping.",
+        "description": "Registered provider adapters' onboarding manifests: display metadata, config fields, credential expectations, and ordered setup steps. Static per process; no deployment scoping.",
         "responses": {
           "200": {
             "description": "Adapter manifest list",
@@ -1589,14 +1341,6 @@
           {
             "name": "run_id",
             "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -1717,16 +1461,7 @@
     "/v1/offers": {
       "get": {
         "operationId": "listOffers",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "responses": {
           "200": {
             "description": "Offer list",
@@ -1887,14 +1622,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -1967,14 +1694,6 @@
             "name": "workload_id",
             "in": "path",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -2078,14 +1797,6 @@
             "name": "revision_id",
             "in": "path",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -2436,9 +2147,6 @@
         "type": "object",
         "description": "Create a run. The only required input is an image (top-level shorthand) or a full workload spec. run_id is optional and server-generated (uuidv7) when omitted; an Idempotency-Key header is required for retry-safe replay.",
         "properties": {
-          "workspace_id": {
-            "type": "string"
-          },
           "run_id": {
             "type": "string",
             "description": "Optional. When omitted the server generates a uuidv7-based run id and returns it."
@@ -2472,37 +2180,37 @@
           }
         }
       },
-	  "CleanupError": {
-		"type": "object",
-		"required": [
-		  "code",
-		  "message",
-		  "retryable",
-		  "launch_key",
-		  "disposition"
-		],
-		"properties": {
-		  "code": {
-			"type": "string"
-		  },
-		  "message": {
-			"type": "string"
-		  },
-		  "retryable": {
-			"type": "boolean"
-		  },
-		  "launch_key": {
-			"type": "string"
-		  },
-		  "disposition": {
-			"type": "string",
-			"enum": [
-			  "release",
-			  "terminate"
-			]
-		  }
-		}
-	  },
+      "CleanupError": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable",
+          "launch_key",
+          "disposition"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "launch_key": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "release",
+              "terminate"
+            ]
+          }
+        }
+      },
       "Admission": {
         "type": "object",
         "required": [
@@ -2643,7 +2351,6 @@
         "type": "object",
         "required": [
           "id",
-          "workspace_id",
           "workload_revision_id",
           "phase",
           "cleanup",
@@ -2651,9 +2358,6 @@
         ],
         "properties": {
           "id": {
-            "type": "string"
-          },
-          "workspace_id": {
             "type": "string"
           },
           "workload_revision_id": {
@@ -2717,9 +2421,9 @@
               "terminate"
             ]
           },
-		  "cleanup_error": {
-			"$ref": "#/components/schemas/CleanupError"
-		  },
+          "cleanup_error": {
+            "$ref": "#/components/schemas/CleanupError"
+          },
           "started_at": {
             "type": "string",
             "format": "date-time",
@@ -2749,14 +2453,10 @@
       "CreateWorkloadRequest": {
         "type": "object",
         "required": [
-          "workspace_id",
           "workload_id",
           "name"
         ],
         "properties": {
-          "workspace_id": {
-            "type": "string"
-          },
           "workload_id": {
             "type": "string"
           },
@@ -2910,9 +2610,6 @@
         ],
         "properties": {
           "run_id": {
-            "type": "string"
-          },
-          "workspace_id": {
             "type": "string"
           },
           "workload": {
@@ -3095,10 +2792,6 @@
           "adapter_type"
         ],
         "properties": {
-          "workspace_id": {
-            "type": "string",
-            "description": "Optional. Defaults to the request's authorized workspace."
-          },
           "connection_id": {
             "type": "string"
           },
@@ -3609,7 +3302,7 @@
       },
       "RunGroup": {
         "type": "object",
-        "description": "The family of Runs this one belongs to and the most of that family Mercator may have holding capacity at once. It is a bound on the work rather than a request for a machine: a member whose family is already that wide is queued GROUP_AT_PARALLELISM even where the fleet has capacity standing idle, and the wait ends when a member of the same family finishes. Every member states the width, because a group is a label the work carries rather than an object an operator creates: there is nothing to register before submitting, and a name without a width is refused with RUN_GROUP_INCOMPLETE. The name is scoped to the Run's own workspace, so two tenants naming one sweep are running two.",
+        "description": "The family of Runs this one belongs to and the most of that family Mercator may have holding capacity at once. It is a bound on the work rather than a request for a machine: a member whose family is already that wide is queued GROUP_AT_PARALLELISM even where the fleet has capacity standing idle, and the wait ends when a member of the same family finishes. Every member states the width, because a group is a label the work carries rather than an object an operator creates: there is nothing to register before submitting, and a name without a width is refused with RUN_GROUP_INCOMPLETE. The name is deployment-global.",
         "properties": {
           "id": {
             "type": "string"
@@ -3694,14 +3387,14 @@
       },
       "CacheMountRequirement": {
         "type": "object",
-        "description": "One mutable, application-owned cache a workload wants mounted across Runs. Its identity is the name, scoped to the workspace the Run belongs to: two tenants that both declare compiler-cache declare two caches, and neither is ever handed the other's bytes. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running.",
+        "description": "One mutable, application-owned cache a workload wants mounted across Runs. Its identity is its deployment-global name and compatibility key. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running.",
         "required": [
           "name"
         ],
         "properties": {
           "name": {
             "type": "string",
-            "description": "This cache's identity within its workspace. It also names durable storage on whatever host holds the cache, so it must be a lowercase label."
+            "description": "This cache's identity within its deployment. It also names durable storage on whatever host holds the cache, so it must be a lowercase label."
           },
           "compatibility_key": {
             "type": "string",
@@ -3718,14 +3411,9 @@
         "type": "object",
         "description": "One mutable cache on one host, as the holder reports it. It carries no digest and no verification state, because there is nothing to check it against: the contents are whatever the application last wrote. It carries no size either, because nothing on a real node measures one without walking every volume on the machine.",
         "required": [
-          "workspace_id",
           "name"
         ],
         "properties": {
-          "workspace_id": {
-            "type": "string",
-            "description": "The workspace that owns this cache. It is part of the identity rather than a label on it."
-          },
           "name": {
             "type": "string"
           },
@@ -3781,7 +3469,7 @@
               "cold",
               "unknown"
             ],
-            "description": "Hot is this workspace's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all."
+            "description": "Hot is this deployment's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all."
           },
           "held_compatibility_key": {
             "type": "string",
@@ -3905,7 +3593,7 @@
             "items": {
               "$ref": "#/components/schemas/CacheMountRequirement"
             },
-            "description": "The mutable, application-owned state this workload wants mounted across Runs. Every name is scoped to the Run's own workspace, which is what makes two tenants naming one cache two caches."
+            "description": "The mutable, application-owned state this workload wants mounted across Runs. Every cache name is deployment-global."
           },
           "metadata": {
             "type": "object",
@@ -3923,16 +3611,12 @@
         "type": "object",
         "required": [
           "id",
-          "workspace_id",
           "workload_id",
           "digest",
           "spec"
         ],
         "properties": {
           "id": {
-            "type": "string"
-          },
-          "workspace_id": {
             "type": "string"
           },
           "workload_id": {
@@ -4362,27 +4046,37 @@
           },
           "image_digests": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Image manifests this host holds whole and has unpacked, so it can start a container on one now."
           },
           "pulled_image_digests": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Image manifests whose content arrived here and which are not assembled into a runnable layer chain. Fetching and unpacking are separate acts, and a host that has done the first and not the second is neither warm nor cold: what is left is local work rather than a pull."
           },
           "unknown_image_digests": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Image manifests this host looked at and could not account for: a runtime that would not describe one, or a store reporting part of its content present and unable to name which part. A host that enumerates itself can still fail on one image, and an image absent from every other list would otherwise read as the confident claim that none of it is here."
           },
           "layer_digests": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Compressed layer blobs this host holds unpacked, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first."
           },
           "layer_diff_ids": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "The same unpacked content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in."
           }
         }
@@ -4424,7 +4118,13 @@
       "ServiceClass": {
         "type": "string",
         "description": "The kind of work a Run is, as its caller declared it. It is the only thing that can say what a second of waiting is worth, which is why it decides how a candidate is scored, and it is what capacity reserved for particular work is reserved by.",
-        "enum": ["interactive", "standard", "batch", "experimental", "opportunistic"],
+        "enum": [
+          "interactive",
+          "standard",
+          "batch",
+          "experimental",
+          "opportunistic"
+        ],
         "x-go-type": "domain.ServiceClass"
       },
       "CapacityTerms": {
@@ -4438,7 +4138,9 @@
           },
           "eligible_classes": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/ServiceClass" },
+            "items": {
+              "$ref": "#/components/schemas/ServiceClass"
+            },
             "description": "Which service classes may run here, and absent is capacity held for nobody in particular. It is how reserved capacity is stated, and a class that is not listed is refused the machine outright rather than priced on it, because a reservation is a statement about what the machine is for and no amount of waiting changes it."
           },
           "available_until": {
@@ -4452,14 +4154,25 @@
       "CostTerm": {
         "type": "object",
         "description": "One part of what a placement costs and what that part is worth. A price recorded as one number cannot be argued with: rent for seconds Mercator has already bought, rent the placement itself commits it to, and the tail of a billing increment nothing will use are three different claims about one machine.",
-        "required": ["name", "usd"],
+        "required": [
+          "name",
+          "usd"
+        ],
         "properties": {
           "name": {
             "type": "string",
-            "enum": ["setup_fee", "committed_rent", "keep_alive", "idle_tail"],
+            "enum": [
+              "setup_fee",
+              "committed_rent",
+              "keep_alive",
+              "idle_tail"
+            ],
             "description": "Which part of the sale this is. setup_fee is what a provider charges to hand over a machine, paid only by capacity Mercator has to acquire. committed_rent is rent for the seconds of this occupancy inside an interval Mercator already owes for, charged to the Run that spends them because nothing else can then have them. keep_alive is rent for the seconds beyond that interval, which this placement is what commits Mercator to. idle_tail is rent for seconds this placement forces Mercator to buy and nothing uses, which is the remainder of the last increment its publisher sells."
           },
-          "usd": { "type": "number", "format": "double" }
+          "usd": {
+            "type": "number",
+            "format": "double"
+          }
         },
         "x-go-type": "domain.CostTerm"
       },
@@ -4467,13 +4180,19 @@
         "type": "object",
         "description": "One machine's already-owed rent as one placement met it: when the interval ends, when this Run would start spending it, and how many of its seconds this Run would take. Capacity nothing is owed on carries none of it.",
         "properties": {
-          "until": { "type": "string", "format": "date-time" },
+          "until": {
+            "type": "string",
+            "format": "date-time"
+          },
           "from_seconds": {
             "type": "number",
             "format": "double",
             "description": "How long after the decision this Run would begin occupying the machine. Two Runs on one machine spend disjoint stretches of one interval, and without the offset a record of the seconds each of them spent cannot be told from a record of the same seconds sold twice."
           },
-          "seconds": { "type": "number", "format": "double" }
+          "seconds": {
+            "type": "number",
+            "format": "double"
+          }
         },
         "x-go-type": "domain.CommittedInterval"
       },
@@ -4714,7 +4433,9 @@
           },
           "cost_terms": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/CostTerm" },
+            "items": {
+              "$ref": "#/components/schemas/CostTerm"
+            },
             "description": "What those dollars are made of, one entry per part of the price this candidate was charged for. A machine nobody quoted carries none. The total alone cannot be argued with: a machine charged the shadow price of one Run's seconds and a machine charged the whole hour it is committed to are the same claim to a reader who sees only dollars, and the difference is which term they are in."
           },
           "committed_interval": {
@@ -4729,7 +4450,10 @@
         "properties": {
           "lane": {
             "type": "string",
-            "enum": ["reusable", "ephemeral"],
+            "enum": [
+              "reusable",
+              "ephemeral"
+            ],
             "description": "What this capacity is for: a machine Mercator controls through an enrolled runtime and can hand successive workloads to, or a provider-native one-shot execution that holds nothing once its workload exits. It is part of the identity because the two have different stages to predict and different disks afterwards, so one key over both would report each lane's history as the other's."
           },
           "machine": {
@@ -4823,7 +4547,7 @@
             "items": {
               "$ref": "#/components/schemas/CacheEvidence"
             },
-            "description": "What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name."
+            "description": "What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it distinguishes a machine that has never done this work from one holding the named cache."
           },
           "disk": {
             "$ref": "#/components/schemas/DiskDemand"
@@ -5170,7 +4894,6 @@
           "type",
           "subject",
           "time",
-          "workspaceid",
           "streamversion",
           "globalposition",
           "data"
@@ -5194,9 +4917,6 @@
           "time": {
             "type": "string",
             "format": "date-time"
-          },
-          "workspaceid": {
-            "type": "string"
           },
           "streamversion": {
             "type": "integer",
@@ -5246,44 +4966,12 @@
           "name": "credential"
         }
       },
-      "CreateWorkspaceRequest": {
-        "type": "object",
-        "required": ["display_name"],
-        "properties": {
-          "display_name": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      },
-      "Workspace": {
-        "type": "object",
-        "required": ["id", "display_name", "created_at", "created_by"],
-        "properties": {
-          "id": { "type": "string" },
-          "display_name": { "type": "string" },
-          "created_at": { "type": "string", "format": "date-time" },
-          "created_by": { "type": "string" },
-          "archived_at": { "type": "string", "format": "date-time" }
-        },
-        "x-go-type": "workspace.Workspace",
-        "x-go-type-import": {
-          "path": "github.com/benngarcia/mercator/internal/workspace",
-          "name": "workspace"
-        }
-      },
-      "WorkspaceResponse": {
-        "type": "object",
-        "required": ["workspace"],
-        "properties": {
-          "workspace": { "$ref": "#/components/schemas/Workspace" }
-        }
-      },
       "InviteNodeRequest": {
         "type": "object",
-        "required": ["workspace_id", "shadow_price_usd_per_hour"],
+        "required": [
+          "shadow_price_usd_per_hour"
+        ],
         "properties": {
-          "workspace_id": { "type": "string" },
           "node_id": {
             "type": "string",
             "description": "Node identity to reserve. Generated when omitted."
@@ -5303,7 +4991,9 @@
           },
           "eligible_service_classes": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/ServiceClass" },
+            "items": {
+              "$ref": "#/components/schemas/ServiceClass"
+            },
             "description": "The kinds of work this machine may be used for. Omitted is a machine held for nobody in particular. Work of any other class is refused this machine outright rather than priced on it."
           },
           "available_until": {
@@ -5315,40 +5005,96 @@
       },
       "NodeBootstrapResponse": {
         "type": "object",
-        "required": ["control_plane_url", "node_id", "rental_id", "generation", "enrollment_token", "agent_version"],
+        "required": [
+          "control_plane_url",
+          "node_id",
+          "rental_id",
+          "generation",
+          "enrollment_token",
+          "agent_version"
+        ],
         "properties": {
-          "control_plane_url": { "type": "string" },
-          "node_id": { "type": "string" },
-          "rental_id": { "type": "string" },
-          "generation": { "type": "integer", "format": "int64" },
+          "control_plane_url": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "rental_id": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
           "enrollment_token": {
             "type": "string",
             "description": "Short-lived and redeemable once. It is returned exactly this once and is never stored in a readable form."
           },
-          "agent_version": { "type": "string" }
+          "agent_version": {
+            "type": "string"
+          }
         }
       },
       "NodeSummary": {
         "type": "object",
-        "required": ["id", "rental_id", "generation", "state", "shadow_price_usd_per_hour", "disk_report", "disk_free_bytes"],
+        "required": [
+          "id",
+          "rental_id",
+          "generation",
+          "state",
+          "shadow_price_usd_per_hour",
+          "disk_report",
+          "disk_free_bytes"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "rental_id": { "type": "string" },
-          "generation": { "type": "integer", "format": "int64" },
+          "id": {
+            "type": "string"
+          },
+          "rental_id": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
           "state": {
             "type": "string",
-            "enum": ["enrolling", "ready", "lost", "retired"],
+            "enum": [
+              "enrolling",
+              "ready",
+              "lost",
+              "retired"
+            ],
             "description": "What the control plane believes about this node. A lost node is unobserved, not dead."
           },
-          "agent_version": { "type": "string" },
-          "lease_expires": { "type": "string", "format": "date-time" },
-          "last_heartbeat_at": { "type": "string", "format": "date-time" },
-          "shadow_price_usd_per_hour": { "type": "number" },
-          "container_runtime": { "type": "string" },
-          "accelerators": { "type": "integer" },
+          "agent_version": {
+            "type": "string"
+          },
+          "lease_expires": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_heartbeat_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "shadow_price_usd_per_hour": {
+            "type": "number"
+          },
+          "container_runtime": {
+            "type": "string"
+          },
+          "accelerators": {
+            "type": "integer"
+          },
           "disk_report": {
             "type": "string",
-            "enum": ["never_reported", "unmeasurable", "measured"],
+            "enum": [
+              "never_reported",
+              "unmeasurable",
+              "measured"
+            ],
             "description": "What is known about the room on the filesystem this node's daemon keeps content on, which is three answers and not two. never_reported is an identity nobody has heard from yet, so nothing has been measured because nothing has been asked. unmeasurable is a node that answered and could not measure: its daemon keeps content somewhere its agent cannot see, which costs it every placement that declares a disk floor and never its membership of the fleet. measured is a number this node established, and zero of it is a full machine."
           },
           "disk_free_bytes": {
@@ -5360,21 +5106,15 @@
       },
       "NodeListResponse": {
         "type": "object",
-        "required": ["nodes"],
+        "required": [
+          "nodes"
+        ],
         "properties": {
           "nodes": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/NodeSummary" }
-          }
-        }
-      },
-      "WorkspaceListResponse": {
-        "type": "object",
-        "required": ["workspaces"],
-        "properties": {
-          "workspaces": {
-            "type": "array",
-            "items": { "$ref": "#/components/schemas/Workspace" }
+            "items": {
+              "$ref": "#/components/schemas/NodeSummary"
+            }
           }
         }
       },
@@ -5382,15 +5122,11 @@
         "type": "object",
         "required": [
           "id",
-          "workspace_id",
           "adapter_type",
           "authorized"
         ],
         "properties": {
           "id": {
-            "type": "string"
-          },
-          "workspace_id": {
             "type": "string"
           },
           "adapter_type": {

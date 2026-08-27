@@ -35,7 +35,6 @@ import (
 	"github.com/benngarcia/mercator/internal/tlsmaterial"
 	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
-	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 // Config contains the typed inputs needed to construct a production runtime.
@@ -56,8 +55,8 @@ type Config struct {
 	// listen address.
 	TLS tlsmaterial.Material
 	// AdminAddr is the bound address of the administrative listener, wildcards
-	// resolved. Workspace creation and archiving, node invitation and sink
-	// delivery answer there and nowhere else. Empty serves every route on every
+	// resolved. Node invitation and sink delivery answer there and nowhere else.
+	// Empty serves every route on every
 	// listener, which is what a single-listener loopback deployment wants; the
 	// process entrypoint is what refuses a non-loopback deployment that has not
 	// named one.
@@ -172,9 +171,6 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		log.Printf("credential store: re-sealed %d credential(s) under the derived sealing key", migrated)
 	}
 
-	if err := seedFirstWorkspace(ctx, storage.Workspaces()); err != nil {
-		return nil, fmt.Errorf("daemon: seed first workspace: %w", err)
-	}
 	resolver := credential.NewResolver(cfg.Getenv, credentialStore, cfg.MasterKey)
 	connections, err := storage.Connections(resolver)
 	if err != nil {
@@ -257,14 +253,8 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if rebuild, rebuildErr := storage.Runs().RequiresRebuild(ctx); rebuildErr != nil {
 		return nil, fmt.Errorf("daemon: inspect Run projection: %w", rebuildErr)
 	} else if rebuild {
-		workspaceIDs, listErr := orch.ListRunWorkspaces(ctx)
-		if listErr != nil {
-			return nil, fmt.Errorf("daemon: list Run projection workspaces: %w", listErr)
-		}
-		for _, workspaceID := range workspaceIDs {
-			if rebuildErr := orch.RebuildRunProjection(ctx, workspaceID); rebuildErr != nil {
-				return nil, fmt.Errorf("daemon: rebuild Run projection for %s: %w", workspaceID, rebuildErr)
-			}
+		if rebuildErr := orch.RebuildRunProjection(ctx); rebuildErr != nil {
+			return nil, fmt.Errorf("daemon: rebuild Run projection: %w", rebuildErr)
 		}
 		if rebuildErr := storage.Runs().MarkRebuilt(ctx); rebuildErr != nil {
 			return nil, fmt.Errorf("daemon: finish Run projection rebuild: %w", rebuildErr)
@@ -304,7 +294,6 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		Sinks:        sinks.NewManager(logStore, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 		Connections:  connectionService,
 		Resolver:     ociresolver.NewDaemonResolver(inspectLocalImage),
-		Workspaces:   storage.Workspaces(),
 		Events:       logStore,
 	}, serverOptions...)
 	// The node protocol is mounted beside the operator API rather than inside
@@ -320,7 +309,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	}
 
 	reconcileCtx, stopReconcile := context.WithCancel(ctx)
-	workspaceJanitor := janitor.New(providerBroker, janitor.WithEventLog(logStore))
+	jan := janitor.New(providerBroker, janitor.WithEventLog(logStore))
 	runtime := &Runtime{
 		server: &http.Server{
 			Handler:           rootHandler,
@@ -334,7 +323,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		broker:        providerBroker,
 		storage:       storage,
 		orch:          orch,
-		janitor:       workspaceJanitor,
+		janitor:       jan,
 		stopReconcile: stopReconcile,
 		reconcileDone: make(chan struct{}),
 		prepareDone:   make(chan struct{}),
@@ -352,33 +341,6 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	return runtime, nil
 }
 
-// DefaultWorkspaceID names the workspace a fresh broker starts with. It is
-// readable on purpose: an operator reads it in URLs and audit records far more
-// often than they type it.
-const DefaultWorkspaceID = "ws_default"
-
-// seedFirstWorkspace gives an empty database one workspace. A broker with no
-// workspace can accept no connection and no run, so starting with zero makes
-// every first command fail on an id the operator has no way to know. Once any
-// workspace exists this does nothing, so it never fights an operator who
-// organizes their own.
-func seedFirstWorkspace(ctx context.Context, catalog *workspace.SQLiteCatalog) error {
-	existing, err := catalog.List(ctx, workspace.ListOptions{IncludeArchived: true})
-	if err != nil {
-		return err
-	}
-	if len(existing) > 0 {
-		return nil
-	}
-	_, err = catalog.Create(ctx, workspace.Create{
-		ID:          DefaultWorkspaceID,
-		DisplayName: "Default",
-		CreatedAt:   time.Now().UTC(),
-		CreatedBy:   "system:bootstrap",
-	})
-	return err
-}
-
 // DefaultDockerConnectionID names the Docker connection a fresh broker seeds.
 // It matches the CLI's own default connection id for `connection create
 // --adapter-type docker`, so the seeded connection and a hand-made one are the
@@ -394,7 +356,7 @@ var bootstrapActor = json.RawMessage(`{"kind":"system","id":"bootstrap"}`)
 // endpoint is unreachable it seeds nothing and returns, so a later start with
 // Docker running still seeds cleanly.
 func seedDockerConnection(ctx context.Context, conns *connection.Service, reachable func(context.Context) error) error {
-	inUse, err := conns.IDInUse(ctx, DefaultWorkspaceID, DefaultDockerConnectionID)
+	inUse, err := conns.IDInUse(ctx, DefaultDockerConnectionID)
 	if err != nil {
 		return err
 	}
@@ -406,25 +368,20 @@ func seedDockerConnection(ctx context.Context, conns *connection.Service, reacha
 		return nil
 	}
 	if _, err := conns.Create(ctx, connection.CreateRequest{
-		WorkspaceID:  DefaultWorkspaceID,
 		ConnectionID: DefaultDockerConnectionID,
 		AdapterType:  "docker",
 		Actor:        bootstrapActor,
 	}); err != nil {
-		if errors.Is(err, workspace.ErrNotFound) {
-			return nil
-		}
 		return err
 	}
 	if err := conns.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
-		WorkspaceID:  DefaultWorkspaceID,
 		ConnectionID: DefaultDockerConnectionID,
 		Authorized:   true,
 		Actor:        bootstrapActor,
 	}); err != nil {
 		return err
 	}
-	log.Printf("seeded and authorized the %q Docker connection in workspace %q", DefaultDockerConnectionID, DefaultWorkspaceID)
+	log.Printf("seeded and authorized the %q Docker connection", DefaultDockerConnectionID)
 	return nil
 }
 
@@ -605,10 +562,9 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 	return r.shutdownErr
 }
 
-// ListOwned returns every external object owned by the workspace across its
-// authorized connections.
-func (r *Runtime) ListOwned(ctx context.Context, workspaceID string) ([]adapter.OwnedExternalObject, error) {
-	return r.broker.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: workspaceID})
+// ListOwned returns every external object owned by this deployment.
+func (r *Runtime) ListOwned(ctx context.Context) ([]adapter.OwnedExternalObject, error) {
+	return r.broker.ListOwned(ctx, adapter.OwnershipQuery{})
 }
 
 type ReconcileResult struct {
@@ -617,13 +573,13 @@ type ReconcileResult struct {
 	Owned     []adapter.OwnedExternalObject
 }
 
-// ReconcileWorkspace drives run cleanup and orphan reclamation once, then
+// Reconcile drives run cleanup and orphan reclamation once, then
 // returns the provider inventory observed after both paths run.
-func (r *Runtime) ReconcileWorkspace(ctx context.Context, workspaceID string) (ReconcileResult, error) {
-	advanced, advanceErr := r.orch.AdvanceOpenRuns(ctx, workspaceID)
+func (r *Runtime) Reconcile(ctx context.Context) (ReconcileResult, error) {
+	advanced, advanceErr := r.orch.AdvanceOpenRuns(ctx)
 	_, prewarmErr := r.orch.Prewarm(ctx)
-	swept, sweepErr := r.janitor.Sweep(ctx, workspaceID)
-	owned, inventoryErr := r.ListOwned(ctx, workspaceID)
+	swept, sweepErr := r.janitor.Sweep(ctx)
+	owned, inventoryErr := r.ListOwned(ctx)
 	return ReconcileResult{Advanced: advanced, Reclaimed: swept.Converged(), Owned: owned},
 		errors.Join(advanceErr, prewarmErr, sweepErr, inventoryErr)
 }
@@ -656,7 +612,7 @@ func (r *Runtime) reconcile(ctx context.Context) {
 					log.Printf("node %s stopped heartbeating; its workloads need reconciliation", record.ID)
 				}
 			}
-			reconcileWorkspaces(ctx, r.orch, r.janitor)
+			reconcile(ctx, r.orch, r.janitor)
 		}
 	}
 }
@@ -699,7 +655,7 @@ func (r *Runtime) prepareWhenDesireChanges(ctx context.Context) {
 		if prepared, err := r.orch.Prewarm(ctx); err != nil {
 			log.Printf("prepare capacity for queued work: %v", err)
 		} else if prepared.Stated > 0 {
-			log.Printf("prepare capacity: asked %d workspaces for %d pieces of content", prepared.Stated, prepared.Wanted)
+			log.Printf("prepare capacity: asked %d nodes for %d pieces of content", prepared.Stated, prepared.Wanted)
 		}
 	}
 }
@@ -719,33 +675,21 @@ func drain[T any](deliveries <-chan T) {
 	}
 }
 
-func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor) {
-	workspaces, err := orch.ListRunWorkspaces(ctx)
+func reconcile(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor) {
+	advanced, err := orch.AdvanceOpenRuns(ctx)
 	if err != nil {
-		log.Printf("discover run workspaces: %v", err)
-		return
+		log.Printf("run advancement sweep: %v", err)
 	}
-	for _, workspaceID := range workspaces {
-		advanced, err := orch.AdvanceOpenRuns(ctx, workspaceID)
-		if err != nil {
-			log.Printf("run advancement sweep %s: %v", workspaceID, err)
-		}
-		if advanced.Closed > 0 {
-			log.Printf("run advancement sweep %s: closed %d of %d open runs", workspaceID, advanced.Closed, advanced.Open)
-		}
-		result, err := jan.Sweep(ctx, workspaceID)
-		if err != nil {
-			log.Printf("janitor sweep %s: %v", workspaceID, err)
-			continue
-		}
-		if result.Converged() > 0 {
-			log.Printf(
-				"janitor sweep %s: of %d owned objects the orphan policy adopted %d and terminated %d",
-				workspaceID, result.Found, result.Adopted, result.Terminated,
-			)
-		}
+	if advanced.Closed > 0 {
+		log.Printf("run advancement sweep: closed %d of %d open runs", advanced.Closed, advanced.Open)
 	}
-	// Preparation is reconciled after every tenant's Runs have moved, because
+	result, err := jan.Sweep(ctx)
+	if err != nil {
+		log.Printf("janitor sweep: %v", err)
+	} else if result.Converged() > 0 {
+		log.Printf("janitor sweep: of %d owned objects the orphan policy adopted %d and terminated %d", result.Found, result.Adopted, result.Terminated)
+	}
+	// Preparation is reconciled after all Runs have moved, because
 	// what Mercator wants prepared is derived from where they ended up, and in
 	// one pass over the fleet, because the bounds it stays inside are the
 	// fleet's. A machine that refuses it costs start latency and never
@@ -753,7 +697,7 @@ func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, j
 	if prepared, err := orch.Prewarm(ctx); err != nil {
 		log.Printf("prepare capacity sweep: %v", err)
 	} else if prepared.Stated > 0 {
-		log.Printf("prepare capacity sweep: asked %d workspaces for %d pieces of content", prepared.Stated, prepared.Wanted)
+		log.Printf("prepare capacity sweep: asked %d nodes for %d pieces of content", prepared.Stated, prepared.Wanted)
 	}
 }
 

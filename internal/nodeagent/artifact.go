@@ -37,8 +37,8 @@ import (
 // established. The digest is recomputed from the stream rather than copied from
 // the command, which is the whole of what verification is here.
 type artifactReplicaFile struct {
-	ArtifactID    string    `json:"artifact_id"`
-	WorkspaceID   string    `json:"workspace_id"`
+	ArtifactID string `json:"artifact_id"`
+
 	ContentDigest string    `json:"content_digest"`
 	SizeBytes     int64     `json:"size_bytes"`
 	VerifiedAt    time.Time `json:"verified_at"`
@@ -83,7 +83,7 @@ func (docker *DockerRuntime) PrepareArtifact(ctx context.Context, command capabi
 	if err := docker.authorisedRead(command); err != nil {
 		return fmt.Errorf("read Artifact %s: %w", command.ArtifactID, err)
 	}
-	directory := docker.artifactDirectory(command.WorkspaceID)
+	directory := docker.artifactDirectory()
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("prepare Artifact %s: %w", command.ArtifactID, err)
 	}
@@ -92,8 +92,8 @@ func (docker *DockerRuntime) PrepareArtifact(ctx context.Context, command capabi
 		return err
 	}
 	return writeArtifactRecord(filepath.Join(directory, artifactFileName(command.ArtifactID)+".json"), artifactReplicaFile{
-		ArtifactID:    command.ArtifactID,
-		WorkspaceID:   command.WorkspaceID,
+		ArtifactID: command.ArtifactID,
+
 		ContentDigest: digest,
 		SizeBytes:     size,
 		VerifiedAt:    docker.now().UTC(),
@@ -102,9 +102,8 @@ func (docker *DockerRuntime) PrepareArtifact(ctx context.Context, command capabi
 }
 
 // authorisedRead is the machine checking the read it was handed before it
-// spends it. The scope names the operation this fetch is, the workspace the
-// content belongs to, and the version itself, and a read that names any other is
-// material this command was not the one for.
+// spends it. The scope names the operation this fetch is and the version itself,
+// and a read that names any other is material this command was not the one for.
 //
 // No location is either of two things and both are the same refusal: a
 // deployment that minted nothing because it holds no object store, or a command
@@ -118,7 +117,7 @@ func (docker *DockerRuntime) authorisedRead(command capability.PrepareArtifactCo
 			command.Source,
 		)
 	}
-	return read.Authorises(command.OperationID, command.WorkspaceID, command.ArtifactID, docker.now().UTC())
+	return read.Authorises(command.OperationID, command.ArtifactID, docker.now().UTC())
 }
 
 // fetchArtifact streams the content to a temporary file and hashes it as it
@@ -220,23 +219,14 @@ func (docker *DockerRuntime) artifacts() domain.ArtifactInventory {
 		return domain.ArtifactInventory{}
 	}
 	inventory := domain.ArtifactInventory{Known: true, ObservedAt: docker.now().UTC()}
-	workspaces, err := os.ReadDir(docker.artifactRoot)
-	if err != nil && !os.IsNotExist(err) {
-		return domain.ArtifactInventory{}
-	}
-	for _, workspace := range workspaces {
-		if !workspace.IsDir() {
-			continue
-		}
-		inventory.Replicas = append(inventory.Replicas, docker.workspaceReplicas(filepath.Join(docker.artifactRoot, workspace.Name()))...)
-	}
+	inventory.Replicas = docker.artifactReplicas(docker.artifactRoot)
 	slices.SortFunc(inventory.Replicas, func(left, right domain.ArtifactReplica) int {
 		return strings.Compare(left.ArtifactID, right.ArtifactID)
 	})
 	return inventory
 }
 
-func (docker *DockerRuntime) workspaceReplicas(directory string) []domain.ArtifactReplica {
+func (docker *DockerRuntime) artifactReplicas(directory string) []domain.ArtifactReplica {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil
@@ -265,12 +255,8 @@ func (docker *DockerRuntime) workspaceReplicas(directory string) []domain.Artifa
 	return replicas
 }
 
-// artifactDirectory keeps one workspace's copies apart from another's on the
-// disk as well as in the record. An Artifact never crosses a workspace, and a
-// flat directory keyed by version ID would make two tenants naming one version
-// one file.
-func (docker *DockerRuntime) artifactDirectory(workspaceID string) string {
-	return filepath.Join(docker.artifactRoot, artifactFileName(workspaceID))
+func (docker *DockerRuntime) artifactDirectory() string {
+	return docker.artifactRoot
 }
 
 // artifactFileName makes one identity into one path component. Version IDs

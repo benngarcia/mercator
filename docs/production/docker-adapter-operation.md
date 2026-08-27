@@ -26,15 +26,12 @@ go run ./cmd/mercator serve
 ```
 
 On a loopback address a fresh broker already seeds and authorizes a `docker`
-connection in `ws_default` when the local daemon answers, so the local endpoint
-needs no setup there. Register one explicitly when you want a named connection,
-a non-default workspace, or a remote endpoint:
+connection when the local daemon answers, so the local endpoint needs no setup
+there. Register one explicitly when you want a named connection or a remote endpoint:
 
 ```sh
 export MERCATOR_API_URL=http://127.0.0.1:8080
 export MERCATOR_API_TOKEN='<same token>'
-export MERCATOR_WORKSPACE_ID=ws_eval
-
 go run ./cmd/mercator connection create \
   --connection-id conn_docker_loopback --adapter-type docker
 go run ./cmd/mercator connection authorize \
@@ -106,13 +103,12 @@ labels:
 
 ```sh
 docker ps -a \
-  --filter label=mercator.workspace_id=ws_eval \
+  --filter label=mercator.run_id=run_docker_1 \
   --format '{{.Names}} {{.Status}} {{.Labels}}'
 ```
 
 Important labels:
 
-- `mercator.workspace_id`
 - `mercator.run_id`
 - `mercator.attempt_id`
 - `mercator.launch_key`
@@ -127,7 +123,7 @@ Important labels:
 After a completed or cancelled run:
 
 ```sh
-go run ./cmd/mercator run get --workspace-id ws_eval --run-id run_docker_1 | jq .
+go run ./cmd/mercator run get --run-id run_docker_1 | jq .
 docker ps -a --filter label=mercator.run_id=run_docker_1
 ```
 
@@ -137,9 +133,8 @@ No container for that run should remain after cleanup confirmation.
 If an operator finds leftover owned containers, capture events first:
 
 ```sh
-go run ./cmd/mercator run events --workspace-id ws_eval --run-id run_docker_1 > /tmp/run_docker_1.events.json
+go run ./cmd/mercator run events --run-id run_docker_1 > /tmp/run_docker_1.events.json
 docker ps -a --filter label=mercator.run_id=run_docker_1
 ```
 
-Then remove only containers whose Mercator ownership labels match the affected
-workspace and run.
+Then remove only containers whose Mercator ownership labels match the affected Run.

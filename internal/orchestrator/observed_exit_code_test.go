@@ -30,18 +30,18 @@ func TestObservedRunningExitCodeDoesNotFinalizeRun(t *testing.T) {
 	)
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("create-time advance: %v", err)
 	}
 
 	// Mimic the v0.2.0 docker adapter's wire data (and the events real logs
 	// already contain): a RUNNING observation carrying exit_code 0.
-	events, err := orch.log.ReadStream(ctx, runStream("ws_1", "run_1"), 0, 1000)
+	events, err := orch.log.ReadStream(ctx, runStream("run_1"), 0, 1000)
 	if err != nil {
 		t.Fatalf("read stream: %v", err)
 	}
 	launchKey := launchKeyFromEvents(t, events)
-	err = orch.appendEvents(ctx, "ws_1", "run_1", uint64(len(events)), "test:poisoned-observation", []eventlog.NewEvent{
+	err = orch.appendEvents(ctx, "run_1", uint64(len(events)), "test:poisoned-observation", []eventlog.NewEvent{
 		mustEvent("run_1", "poisoned_running_observation", EventExternalStateObserved, map[string]any{
 			"launch_key":  launchKey,
 			"phase":       "running",
@@ -55,7 +55,7 @@ func TestObservedRunningExitCodeDoesNotFinalizeRun(t *testing.T) {
 
 	// A sweep over the poisoned log must leave the run open and the
 	// container untouched (pre-fix: outcome succeeded + release here).
-	result, err := orch.AdvanceOpenRuns(ctx, "ws_1")
+	result, err := orch.AdvanceOpenRuns(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestObservedRunningExitCodeDoesNotFinalizeRun(t *testing.T) {
 	if ad.ReleaseCount() != 0 {
 		t.Fatalf("sweep reclaimed a live container, release count=%d", ad.ReleaseCount())
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -74,10 +74,10 @@ func TestObservedRunningExitCodeDoesNotFinalizeRun(t *testing.T) {
 	}
 
 	// Once the container actually exits, the next sweep closes normally.
-	if _, err := orch.AdvanceOpenRuns(ctx, "ws_1"); err != nil {
+	if _, err := orch.AdvanceOpenRuns(ctx); err != nil {
 		t.Fatalf("terminal sweep: %v", err)
 	}
-	record, err = orch.GetRun(ctx, "ws_1", "run_1")
+	record, err = orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run after terminal sweep: %v", err)
 	}

@@ -25,7 +25,7 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { to: "/canvas", label: "Workspace", icon: LayoutDashboard },
+  { to: "/canvas", label: "Deployment", icon: LayoutDashboard },
   { to: "/locality", label: "Locality", icon: Database },
   { to: "/runs", label: "Runs", icon: ScrollText },
   { to: "/offers", label: "Offers", icon: Tags },

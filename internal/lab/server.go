@@ -20,8 +20,6 @@ import (
 	"github.com/benngarcia/mercator/internal/workload"
 )
 
-const WorkspaceID = labWorkspace
-
 type ServerConfig struct {
 	Execution     Config
 	OperatorToken string
@@ -50,7 +48,6 @@ type driveRequest struct {
 
 type statusResponse struct {
 	Blueprint  string     `json:"blueprint"`
-	Workspace  string     `json:"workspace_id"`
 	Checkpoint Checkpoint `json:"checkpoint"`
 }
 
@@ -100,7 +97,6 @@ func (server *Server) productionHandler() http.Handler {
 		Orchestrator: server.execution.runtime.orchestrator,
 		Offers:       labOfferAggregator{world: server.execution.runtime.world},
 		Workloads:    workload.New(server.execution.runtime.storage.EventLog()),
-		Workspaces:   server.execution.runtime.storage.Workspaces(),
 		Events:       server.execution.runtime.storage.EventLog(),
 	}, options...)
 }
@@ -198,7 +194,6 @@ func (server *Server) status(w http.ResponseWriter, _ *http.Request) {
 	defer server.mu.Unlock()
 	writeLabJSON(w, http.StatusOK, statusResponse{
 		Blueprint:  server.execution.config.Blueprint.Name,
-		Workspace:  WorkspaceID,
 		Checkpoint: server.execution.checkpoint(),
 	})
 }

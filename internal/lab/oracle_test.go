@@ -478,11 +478,11 @@ func TestNeitherModelTurnsArtifactSilenceIntoInfeasibility(t *testing.T) {
 func labArtifactVersion(publishedAt time.Time) domain.ArtifactVersion {
 	const id = "artifact:dataset:v1"
 	return domain.ArtifactVersion{
-		ID:            id,
-		WorkspaceID:   labWorkspace,
+		ID: id,
+
 		ContentDigest: "sha256:da7a5e7da7a5e7da7a5e7da7a5e7da7a5e7da7a5e7da7a5e7da7a5e7da7a5e700",
 		SizeBytes:     40_000_000_000,
-		Location:      domain.ArtifactLocation(labWorkspace, id),
+		Location:      domain.ArtifactLocation(id),
 		PublishedAt:   publishedAt,
 	}
 }
@@ -693,7 +693,7 @@ func smallSchedulingInput(t *testing.T) scheduler.SchedulingInput {
 	// A Run always states a class by the time Placement sees one: intake fills the
 	// omission and refuses a word it cannot price. The small world states standard,
 	// which prices a second of waiting at what the machine doing the waiting costs.
-	workload := scenario.WorkloadForRun(labWorkspace, "run-reference", request)
+	workload := scenario.WorkloadForRun("run-reference", request)
 	workload.Spec.Placement.Class = domain.ClassStandard
 	now := blueprint.World.Start()
 	warm := labOffer("rental-warm", domain.OfferKindStanding, domain.LaneReusable, labCandidate{machine: "rental-warm"}, 2.5, scenario.BillingSpec{}, request.Resources)

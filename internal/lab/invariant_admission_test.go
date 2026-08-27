@@ -57,23 +57,10 @@ func TestBackfillMayNotTakeTheSlotAStarvedRunIsWaitingFor(t *testing.T) {
 }
 
 // TestTheOrderingIsOverOneTenantsQueue is the same flat reading in the ordering
-// law, on the world it convicts. Mercator orders each workspace's queue on its own,
+// law, on the world it convicts. Mercator orders the deployment's queue,
 // so an interactive Run waiting in ws_alpha is not work an opportunistic Run in
 // ws_beta was admitted past: no ordering relates them, and Rentals being shared
-// across tenants is what makes such an execution expressible.
-func TestTheOrderingIsOverOneTenantsQueue(t *testing.T) {
-	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
-	observation := admissionObservation(now, map[string]domain.WorkloadRevision{
-		"run-spare": classedWorkload(domain.ClassOpportunistic),
-	}, []eventlog.CloudEvent{
-		inWorkspace(admissionDeferredEvent("run-watched", now, domain.ClassInteractive), "ws_alpha"),
-		inWorkspace(admittedDecisionEvent("run-spare", now.Add(6*time.Minute)), "ws_beta"),
-	})
-
-	if err := serviceClassAdmissionOrder(observation); err != nil {
-		t.Fatalf("a Run admitted in another tenant was ordered against a queue it is not in: %v", err)
-	}
-}
+// across concurrent Runs is what makes such an execution expressible.
 
 // TestAnImpossibleAskEmptiesNoFleetUnderTheRealControlPlane is the queue's second
 // law at L1. The placement corpus can show admission ordering two Runs; only this
@@ -456,24 +443,6 @@ func TestAWaitPastItsBoundIsJudgedWhateverTheRefusalIsNamedFor(t *testing.T) {
 	t.Logf("violation: %v", err)
 }
 
-// TestAWaitIsJudgedAgainstItsOwnTenantsQueue is a lawful execution the flat replay
-// convicted. Mercator orders each workspace's queue on its own, filtering the log by
-// workspace to build it, so no Run in another tenant is ever in a Run's ahead-list
-// and no ordering in ws_alpha could have placed ws_beta's work.
-func TestAWaitIsJudgedAgainstItsOwnTenantsQueue(t *testing.T) {
-	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
-		inWorkspace(admissionDeferredEvent("run-quiet", now, domain.ClassBatch), "ws_alpha"),
-		inWorkspace(admittedForClassEvent("run-other-tenant", domain.ClassInteractive, now.Add(1900*time.Second)), "ws_beta"),
-		inWorkspace(refusedWaitEvent("run-quiet", now.Add(3601*time.Second), domain.ClassBatch,
-			domain.RefusedQueueDelayExceeded, &domain.FleetAnswer{Weighed: 1, CouldHold: 1}), "ws_alpha"),
-	})
-
-	if err := agingPreventsStarvation(observation); err != nil {
-		t.Fatalf("an admission in another tenant convicted a queue it never competed with: %v", err)
-	}
-}
-
 // TestAReplacedRunCarriesTheWaitProductionHeldItAt is the other lawful execution the
 // replay convicted. A launch that failed for capacity nobody has left sends a Run
 // back through admission, and the second decision that takes a machine for it is a
@@ -852,13 +821,6 @@ func refusedWaitEvent(runID string, at time.Time, class domain.ServiceClass, rea
 		Fleet:  fleet,
 	})
 	event.Type = orchestrator.EventAdmissionRefused
-	return event
-}
-
-// inWorkspace is one recorded fact filed under the tenant it happened in, which is
-// how every event Mercator appends arrives and what the queue is partitioned by.
-func inWorkspace(event eventlog.CloudEvent, workspaceID string) eventlog.CloudEvent {
-	event.WorkspaceID = workspaceID
 	return event
 }
 

@@ -11,7 +11,7 @@ import (
 // historyRunProjection keeps focused and in-memory compositions lightweight.
 // Production injects the durable SQLite Run projection.
 type historyRunProjection struct {
-	log eventlog.WorkspaceEventLog
+	log eventlog.EventLog
 }
 
 func (projection historyRunProjection) Append(
@@ -22,24 +22,16 @@ func (projection historyRunProjection) Append(
 	return projection.log.Append(ctx, request)
 }
 
-func (projection historyRunProjection) AppendIfWorkspaceActive(
-	ctx context.Context,
-	request eventlog.AppendRequest,
-	_ domain.RunRecord,
-) (eventlog.AppendResult, error) {
-	return projection.log.AppendIfWorkspaceActive(ctx, request)
-}
-
 func (projection historyRunProjection) List(
 	ctx context.Context,
-	workspaceID string,
+
 	request runprojection.PageRequest,
 ) (runprojection.Page, error) {
 	request, err := request.Validated()
 	if err != nil {
 		return runprojection.Page{}, err
 	}
-	records, err := (&Orchestrator{log: projection.log}).runRecordsFromHistory(ctx, workspaceID)
+	records, err := (&Orchestrator{log: projection.log}).runRecordsFromHistory(ctx)
 	if err != nil {
 		return runprojection.Page{}, err
 	}
@@ -55,9 +47,9 @@ func (projection historyRunProjection) List(
 	return page, nil
 }
 
-func (projection historyRunProjection) ListOpenIDs(ctx context.Context, workspaceID string) ([]string, error) {
+func (projection historyRunProjection) ListOpenIDs(ctx context.Context) ([]string, error) {
 	filter := eventlog.EventFilter{
-		WorkspaceID: workspaceID,
+
 		StreamTypes: []string{"run"},
 		EventTypes:  []string{EventRunRequested, EventRunClosed},
 	}
@@ -87,6 +79,6 @@ func (projection historyRunProjection) ListOpenIDs(ctx context.Context, workspac
 	return runIDs, nil
 }
 
-func (historyRunProjection) Replace(context.Context, string, []domain.RunRecord) error {
+func (historyRunProjection) Replace(context.Context, []domain.RunRecord) error {
 	return nil
 }

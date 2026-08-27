@@ -18,9 +18,9 @@ or downstream sink health.
 ## Run Audit
 
 ```sh
-go run ./cmd/mercator run get --workspace-id ws_eval --run-id run_eval_1 | jq .
-go run ./cmd/mercator run events --workspace-id ws_eval --run-id run_eval_1 | jq .
-go run ./cmd/mercator run decision --workspace-id ws_eval --run-id run_eval_1 | jq .
+go run ./cmd/mercator run get --run-id run_eval_1 | jq .
+go run ./cmd/mercator run events --run-id run_eval_1 | jq .
+go run ./cmd/mercator run decision --run-id run_eval_1 | jq .
 ```
 
 Use events to establish lifecycle facts. Use the placement decision to inspect:
@@ -43,7 +43,7 @@ go run ./cmd/mercator sink replay --sink-id audit --from 0 --limit 25 --replay-i
 
 ```sh
 docker ps -a \
-  --filter label=mercator.workspace_id=ws_eval \
+  --filter label=mercator.run_id=run_eval_1 \
   --format '{{json .}}' | jq .
 ```
 

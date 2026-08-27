@@ -235,7 +235,7 @@ func replayQueueDepartures(observation InvariantObservation) (replayedQueue, err
 			if err != nil {
 				return replayedQueue{}, err
 			}
-			wait := queue.waits[runID].asked(event.WorkspaceID, deferral, at)
+			wait := queue.waits[runID].asked(deferral, at)
 			queue.waits[runID] = wait
 			if event.Type == orchestrator.EventAdmissionRefused {
 				queue.refused = append(queue.refused, wait.ended(runID, deferral, began[runID], at))
@@ -258,7 +258,7 @@ func replayQueueDepartures(observation InvariantObservation) (replayedQueue, err
 			}
 			queue.waits[decision.RunID] = queue.waits[decision.RunID].placed(at)
 			queue.admitted = append(queue.admitted, admittedRun{
-				runID: decision.RunID, workspace: event.WorkspaceID,
+				runID: decision.RunID,
 				class: decision.Policy.Class, at: at,
 				waited: waitedBy(began[decision.RunID], at),
 			})
@@ -271,7 +271,6 @@ func replayQueueDepartures(observation InvariantObservation) (replayedQueue, err
 // whose queue it is in, and whether anything ever said a machine could have taken
 // it.
 type queueWait struct {
-	workspace string
 	// fleetAnswered and fleetCouldHold are the whole account of the fleet during
 	// this wait. A wait nobody ever measured a fleet against establishes no
 	// exemption, and one measurement saying a machine could hold this Run is enough
@@ -285,8 +284,7 @@ type queueWait struct {
 }
 
 // asked is this wait after one more moment admission decided about it.
-func (wait queueWait) asked(workspace string, deferral domain.AdmissionDeferral, at time.Time) queueWait {
-	wait.workspace = workspace
+func (wait queueWait) asked(deferral domain.AdmissionDeferral, at time.Time) queueWait {
 	wait.divided = wait.divided.answered(at, deferral.SelfImposed())
 	if deferral.Fleet == nil {
 		return wait
@@ -369,7 +367,6 @@ func (wait queueWait) heldNothing() bool {
 func (wait queueWait) ended(runID string, deferral domain.AdmissionDeferral, since, at time.Time) refusedWait {
 	return refusedWait{
 		runID:            runID,
-		workspace:        wait.workspace,
 		class:            deferral.Class,
 		since:            since,
 		at:               at,
@@ -381,11 +378,10 @@ func (wait queueWait) ended(runID string, deferral domain.AdmissionDeferral, sin
 // admittedRun is one Run taking capacity at one moment, whose queue it left, and
 // how long it had itself been kept waiting when it did.
 type admittedRun struct {
-	runID     string
-	workspace string
-	class     domain.ServiceClass
-	at        time.Time
-	waited    float64
+	runID  string
+	class  domain.ServiceClass
+	at     time.Time
+	waited float64
 }
 
 // refusedWait is one wait admission would not go on holding: whose it was, which
@@ -393,7 +389,6 @@ type admittedRun struct {
 // was nothing here to wait for.
 type refusedWait struct {
 	runID            string
-	workspace        string
 	class            domain.ServiceClass
 	since            time.Time
 	at               time.Time
@@ -422,11 +417,7 @@ func agingShouldHaveTaken(wait refusedWait, admissions []admittedRun) error {
 	// nothing is not a wait anything passed.
 	promoted := halfTheBound(wait.class)
 	for _, admission := range admissions {
-		// One queue is one workspace's, which is how production builds it: a Run is
-		// ordered against the waits in its own tenant and against nothing else, so an
-		// admission in another workspace competed with this wait for nothing and
-		// convicts it of nothing.
-		if admission.workspace != wait.workspace || admission.runID == wait.runID {
+		if admission.runID == wait.runID {
 			continue
 		}
 		if admission.at.Before(wait.since) || admission.at.After(wait.at) {
@@ -536,7 +527,6 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 			// something the ordering has to respect, and one whose fleet emptied is
 			// not.
 			queue[runID] = queuedRun{
-				workspace:     event.WorkspaceID,
 				class:         deferral.Class,
 				since:         began[runID],
 				heldByNothing: deferral.HoldsNoQueue(),
@@ -561,11 +551,10 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 				return err
 			}
 			admitted := admittedRun{
-				runID:     decision.RunID,
-				workspace: event.WorkspaceID,
-				class:     observation.Workloads[decision.RunID].Spec.Placement.Class,
-				at:        at,
-				waited:    waitedBy(began[decision.RunID], at),
+				runID:  decision.RunID,
+				class:  observation.Workloads[decision.RunID].Spec.Placement.Class,
+				at:     at,
+				waited: waitedBy(began[decision.RunID], at),
 			}
 			if err := admittedInClassOrder(queue, admitted); err != nil {
 				return err
@@ -578,12 +567,8 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 
 // queuedRun is one Run waiting at one point in the replay.
 type queuedRun struct {
-	// workspace is whose queue this is. Mercator orders each tenant's queue on its
-	// own, building it with the workspace in the event filter, so a Run is weighed
-	// against the waits beside it and against nothing in another tenant.
-	workspace string
-	class     domain.ServiceClass
-	since     time.Time
+	class domain.ServiceClass
+	since time.Time
 	// heldByNothing is what the record last established about the fleet's answer
 	// to this Run: asked about it, and holding no machine that could ever take it.
 	// A Run in that state is waiting for capacity to be added, so the ordering is
@@ -599,7 +584,7 @@ func admittedInClassOrder(queue map[string]queuedRun, admitted admittedRun) erro
 			continue
 		}
 		held := queue[other]
-		if held.workspace != admitted.workspace || held.heldByNothing {
+		if held.heldByNothing {
 			continue
 		}
 		waited := admitted.at.Sub(held.since).Seconds()
@@ -625,7 +610,7 @@ func admittedInClassOrder(queue map[string]queuedRun, admitted admittedRun) erro
 // take it is waiting for capacity to be added, and work that fits the fleet as it
 // stands is not competing with it for anything.
 //
-// Without it one impossible submission empties a workspace. The Run that fits is
+// Without it one impossible submission empties a deployment. The Run that fits is
 // ordered behind an ask nothing can satisfy, and it stays there until the
 // impossible Run's own class deadline clears it, which for a class that declares no
 // deadline is never.
@@ -635,7 +620,7 @@ func admittedInClassOrder(queue map[string]queuedRun, admitted admittedRun) erro
 // this law had before, and they disagreed in both directions at once: the Lab could
 // not see a fleet that published nothing at all, and production called that fleet
 // an ordinary wait, so the strongest impossible ask there is was invisible to the
-// corpus and holding every workspace it landed in. The reason code is not read here
+// corpus and holding every deployment it landed in. The reason code is not read here
 // at all, and the rule it is derived from is.
 //
 // So this law is about the ordering, which is what its name says. A Run named as
@@ -860,7 +845,7 @@ func eventOccurredAt(event eventlog.CloudEvent) (time.Time, error) {
 // It may not be said over a machine that published nothing. A node whose disk
 // probe failed reports no room and has not said it is full, and every Run carries
 // a disk floor, so reading that silence as a measurement made every Run in the
-// workspace an ask no capacity can ever hold and took the ordering away from all
+// deployment an ask no capacity can ever hold and took the ordering away from all
 // of them at once.
 //
 // It recounts rather than trusting the answer beside the reason, which is the same

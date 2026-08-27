@@ -47,12 +47,12 @@ func TestFlagsWorkInAnyPosition(t *testing.T) {
 	// passed to the container. They now parse as flags.
 	code, _, errOut := runCLI(t, cfg,
 		"run", "create", "busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		"--workspace-id", "ws_x", "--run-id", "run_flags")
+		"--run-id", "run_flags")
 	if code != 0 {
 		t.Fatalf("trailing flags failed: %s", errOut)
 	}
 	last := (*seen)[len(*seen)-1]
-	if last.Body["workspace_id"] != "ws_x" || last.Body["run_id"] != "run_flags" {
+	if last.Body["run_id"] != "run_flags" {
 		t.Fatalf("flags after the image were not parsed: %+v", last.Body)
 	}
 	if _, hasArgs := last.Body["args"]; hasArgs {
@@ -61,7 +61,7 @@ func TestFlagsWorkInAnyPosition(t *testing.T) {
 
 	// Container args still pass verbatim after --.
 	code, _, errOut = runCLI(t, cfg,
-		"run", "create", "--workspace-id", "ws_x",
+		"run", "create",
 		"busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"--", "echo", "--not-a-flag")
 	if code != 0 {
@@ -75,7 +75,7 @@ func TestFlagsWorkInAnyPosition(t *testing.T) {
 
 	// The global --api-url works after the subcommand too.
 	code, _, errOut = runCLI(t, Config{ConfigPath: tempConfigPath(t)},
-		"run", "list", "--workspace-id", "ws_x", "--api-url", server.URL)
+		"run", "list", "--api-url", server.URL)
 	if code != 0 {
 		t.Fatalf("trailing --api-url failed: %s", errOut)
 	}
@@ -86,13 +86,13 @@ func TestUnknownAndStrayArgumentsErrorLoudly(t *testing.T) {
 	cfg := Config{BaseURL: server.URL, ConfigPath: tempConfigPath(t)}
 
 	// A misspelled flag is an error, not a silent container arg.
-	code, _, errOut := runCLI(t, cfg, "run", "create", "busybox", "--workspace", "ws_x")
+	code, _, errOut := runCLI(t, cfg, "run", "create", "busybox", "--run-idd", "run_x")
 	if code == 0 || !strings.Contains(errOut, "not defined") {
 		t.Fatalf("unknown flag must error loudly, got code=%d err=%q", code, errOut)
 	}
 
 	// A stray positional on a flags-only command is an error.
-	code, _, errOut = runCLI(t, cfg, "run", "list", "extra", "--workspace-id", "ws_x")
+	code, _, errOut = runCLI(t, cfg, "run", "list", "extra")
 	if code == 0 || !strings.Contains(errOut, "unexpected argument") {
 		t.Fatalf("stray positional must error loudly, got code=%d err=%q", code, errOut)
 	}
@@ -100,7 +100,7 @@ func TestUnknownAndStrayArgumentsErrorLoudly(t *testing.T) {
 
 func TestConnectionCommandsBuildTheRightRequests(t *testing.T) {
 	server, seen := recordingServer(t)
-	cfg := Config{BaseURL: server.URL, WorkspaceID: "ws_1", ConfigPath: tempConfigPath(t)}
+	cfg := Config{BaseURL: server.URL, ConfigPath: tempConfigPath(t)}
 
 	code, _, errOut := runCLI(t, cfg, "connection", "create",
 		"--connection-id", "conn_rp", "--adapter-type", "runpod",
@@ -130,7 +130,7 @@ func TestConnectionCommandsBuildTheRightRequests(t *testing.T) {
 		t.Fatalf("connection authorize failed: %s", errOut)
 	}
 	authorize := (*seen)[1]
-	if authorize.Method != http.MethodPost || authorize.Path != "/v1/connections/conn_rp/authorize?workspace_id=ws_1" {
+	if authorize.Method != http.MethodPost || authorize.Path != "/v1/connections/conn_rp/authorize" {
 		t.Fatalf("unexpected authorize request: %+v", authorize)
 	}
 
@@ -139,7 +139,7 @@ func TestConnectionCommandsBuildTheRightRequests(t *testing.T) {
 		t.Fatalf("connection delete failed: %s", errOut)
 	}
 	deleted := (*seen)[2]
-	if deleted.Method != http.MethodDelete || deleted.Path != "/v1/connections/conn_rp?workspace_id=ws_1" {
+	if deleted.Method != http.MethodDelete || deleted.Path != "/v1/connections/conn_rp" {
 		t.Fatalf("unexpected delete request: %+v", deleted)
 	}
 
@@ -148,7 +148,7 @@ func TestConnectionCommandsBuildTheRightRequests(t *testing.T) {
 		t.Fatalf("connection list failed: %s", errOut)
 	}
 	list := (*seen)[3]
-	if list.Method != http.MethodGet || list.Path != "/v1/connections?workspace_id=ws_1" {
+	if list.Method != http.MethodGet || list.Path != "/v1/connections" {
 		t.Fatalf("unexpected list request: %+v", list)
 	}
 }
@@ -156,10 +156,10 @@ func TestConnectionCommandsBuildTheRightRequests(t *testing.T) {
 func TestConnectionSecretFromStdin(t *testing.T) {
 	server, seen := recordingServer(t)
 	cfg := Config{
-		BaseURL:     server.URL,
-		WorkspaceID: "ws_1",
-		ConfigPath:  tempConfigPath(t),
-		Stdin:       bytes.NewBufferString("stdin-secret\n"),
+		BaseURL: server.URL,
+
+		ConfigPath: tempConfigPath(t),
+		Stdin:      bytes.NewBufferString("stdin-secret\n"),
 	}
 	code, _, errOut := runCLI(t, cfg, "connection", "create",
 		"--connection-id", "conn_s", "--adapter-type", "runpod",
@@ -174,7 +174,7 @@ func TestConnectionSecretFromStdin(t *testing.T) {
 
 func TestWorkloadCommandsBuildTheRightRequests(t *testing.T) {
 	server, seen := recordingServer(t)
-	cfg := Config{BaseURL: server.URL, WorkspaceID: "ws_1", ConfigPath: tempConfigPath(t)}
+	cfg := Config{BaseURL: server.URL, ConfigPath: tempConfigPath(t)}
 
 	code, _, errOut := runCLI(t, cfg, "workload", "create", "--workload-id", "wl_1", "--name", "trainer")
 	if code != 0 {
@@ -187,12 +187,12 @@ func TestWorkloadCommandsBuildTheRightRequests(t *testing.T) {
 	}
 
 	code, _, errOut = runCLI(t, cfg, "workload", "revision", "create",
-		"--workload-id", "wl_1", "--revision-json", `{"workspace_id":"ws_1"}`)
+		"--workload-id", "wl_1", "--revision-json", `{}`)
 	if code != 0 {
 		t.Fatalf("revision create failed: %s", errOut)
 	}
 	revision := (*seen)[1]
-	if revision.Method != http.MethodPost || revision.Path != "/v1/workloads/wl_1/revisions?workspace_id=ws_1" {
+	if revision.Method != http.MethodPost || revision.Path != "/v1/workloads/wl_1/revisions" {
 		t.Fatalf("unexpected revision create: %+v", revision)
 	}
 	if revision.IdempotencyKey == "" {
@@ -203,7 +203,7 @@ func TestWorkloadCommandsBuildTheRightRequests(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("revision list failed: %s", errOut)
 	}
-	if (*seen)[2].Path != "/v1/workloads/wl_1/revisions?workspace_id=ws_1" {
+	if (*seen)[2].Path != "/v1/workloads/wl_1/revisions" {
 		t.Fatalf("unexpected revision list: %+v", (*seen)[2])
 	}
 
@@ -211,7 +211,7 @@ func TestWorkloadCommandsBuildTheRightRequests(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("revision get failed: %s", errOut)
 	}
-	if (*seen)[3].Path != "/v1/workloads/wl_1/revisions/wrev_9?workspace_id=ws_1" {
+	if (*seen)[3].Path != "/v1/workloads/wl_1/revisions/wrev_9" {
 		t.Fatalf("unexpected revision get: %+v", (*seen)[3])
 	}
 }
@@ -223,7 +223,7 @@ func TestConnectionAndWorkloadCommandsAgainstRealHandler(t *testing.T) {
 	handler := newCLITestServer(t)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	cfg := Config{BaseURL: server.URL, WorkspaceID: "ws_1", ConfigPath: tempConfigPath(t)}
+	cfg := Config{BaseURL: server.URL, ConfigPath: tempConfigPath(t)}
 
 	code, _, errOut := runCLI(t, cfg, "connection", "create", "--connection-id", "conn_cli", "--adapter-type", "docker")
 	if code != 0 {

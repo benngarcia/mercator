@@ -26,7 +26,7 @@ type SchedulingInput struct {
 	// nothing publishes no offer to be counted, and neither does a connection
 	// nobody contacted. Deriving the census from the offers stated the two
 	// identically, so an operator reading a Run that nothing matched could not
-	// tell a marketplace selling no machine of that shape from a workspace whose
+	// tell a marketplace selling no machine of that shape from a deployment whose
 	// providers were never asked.
 	Collection domain.CollectionReport
 	Schedules  map[string]domain.RentalSchedule
@@ -235,10 +235,8 @@ func evaluateOffer(input SchedulingInput, weights domain.ScoreWeights, offer dom
 		// What each candidate holds of the Run's mutable caches is recorded and
 		// never scored. A warm cache saves work inside the application, which
 		// nothing here has measured, so pricing it would be an exchange rate this
-		// model invented. The workspace comparison is why it is worth recording:
-		// a cache of the same name in another workspace is a different cache, and
-		// it must never read as warmth on this Run's record.
-		CacheEvidence: domain.CacheWarmth(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches),
+		// model invented.
+		CacheEvidence: domain.CacheWarmth(input.Workload.Spec.Caches, offer.Caches),
 		// What this machine's publisher says it does to work: refuse to start it,
 		// or drop it once it is running. Recorded and not scored, because pricing a
 		// refusal needs a probability times a predicted start and nothing here
@@ -750,7 +748,7 @@ type candidateContent struct {
 func contentFor(input SchedulingInput, offer domain.OfferSnapshot) candidateContent {
 	work, locality := input.Image.StartWork(offer.Images)
 	fetch, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
-	caches := domain.CacheLandBytes(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches)
+	caches := domain.CacheLandBytes(input.Workload.Spec.Caches, offer.Caches)
 	return candidateContent{
 		image:    work,
 		locality: locality,

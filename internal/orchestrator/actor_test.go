@@ -23,7 +23,7 @@ func TestRunRecordSurfacesCreateAndCancelPrincipals(t *testing.T) {
 	canceller := json.RawMessage(`{"subject":"operator@example.com"}`)
 
 	if _, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
+
 		RunID:          "run_actor",
 		IdempotencyKey: "idem_actor",
 		Actor:          creator,
@@ -31,11 +31,11 @@ func TestRunRecordSurfacesCreateAndCancelPrincipals(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_actor"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_actor"); err != nil {
 		t.Fatalf("advance run: %v", err)
 	}
 
-	record, err := orch.GetRun(ctx, "ws_1", "run_actor")
+	record, err := orch.GetRun(ctx, "run_actor")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestRunRecordSurfacesCreateAndCancelPrincipals(t *testing.T) {
 		t.Fatalf("cancelled_by must be empty before a cancel, got %q", record.CancelledBy)
 	}
 
-	cancelled, err := orch.CancelRun(ctx, "ws_1", "run_actor", canceller)
+	cancelled, err := orch.CancelRun(ctx, "run_actor", canceller)
 	if err != nil {
 		t.Fatalf("cancel run: %v", err)
 	}
@@ -64,14 +64,14 @@ func TestRunRecordToleratesActorlessEvents(t *testing.T) {
 	ctx := context.Background()
 	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_pre", time.Now().UTC())})))
 	if _, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
+
 		RunID:          "run_pre_audit",
 		IdempotencyKey: "idem_pre_audit",
 		Workload:       orchRevision(),
 	}); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_pre_audit")
+	record, err := orch.GetRun(ctx, "run_pre_audit")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}

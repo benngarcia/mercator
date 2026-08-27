@@ -19,20 +19,20 @@ import {
   type StoredBookingDecision,
 } from "./contracts";
 
-export type WorkspaceRunPhase =
+export type DeploymentRunPhase =
   | "requested"
   | "provisioning"
   | "running"
   | "cleaning"
   | "closed";
 
-export interface WorkspaceRun {
+export interface DeploymentRun {
   id: string;
   requestedAt: string;
   workload: WorkloadRevision;
   expectedRuntimeSeconds: number | null;
   maxRuntimeSeconds: number;
-  phase: WorkspaceRunPhase;
+  phase: DeploymentRunPhase;
   // The decisions themselves are not here. This projection is the canvas: the
   // machines, the Bookings, and where each Run is. The chain of answers a Run was
   // given is read over REST on the Run's own page, invalidated by the same
@@ -49,7 +49,7 @@ export interface WorkspaceRun {
   outcome?: string;
 }
 
-export interface WorkspaceBooking {
+export interface DeploymentBooking {
   id: string;
   rentalID: string;
   runID: string;
@@ -69,33 +69,32 @@ export interface Rental {
   queuedBookingIDs: string[];
 }
 
-export interface Workspace {
+export interface Deployment {
   id: string;
   ready: boolean;
   throughGlobalPosition: number;
   lastChange: "initial" | "live";
   offersAvailable: boolean;
   offers: OfferSnapshot[];
-  runs: Record<string, WorkspaceRun>;
-  bookings: Record<string, WorkspaceBooking>;
+  runs: Record<string, DeploymentRun>;
+  bookings: Record<string, DeploymentBooking>;
   rentals: Record<string, Rental>;
 }
 
 export interface OfferCatalogReplacement {
-  workspace_id: string;
   revision: string;
   observed_at: string;
   offers: OfferSnapshot[];
   failures: unknown[];
 }
 
-export type WorkspaceMessage =
+export type DeploymentMessage =
   | { type: "domain_event"; event: CloudEvent }
   | { type: "offers_replaced"; catalog: OfferCatalogReplacement }
   | { type: "offers_unavailable" }
   | { type: "ready"; throughGlobalPosition: number };
 
-export function createWorkspace(id: string): Workspace {
+export function createDeployment(id: string): Deployment {
   return {
     id,
     ready: false,
@@ -109,31 +108,31 @@ export function createWorkspace(id: string): Workspace {
   };
 }
 
-export function reduceWorkspace(
-  workspace: Workspace,
-  message: WorkspaceMessage,
-): Workspace {
+export function reduceDeployment(
+  deployment: Deployment,
+  message: DeploymentMessage,
+): Deployment {
   switch (message.type) {
     case "ready":
       return {
-        ...workspace,
+        ...deployment,
         ready: true,
         throughGlobalPosition: message.throughGlobalPosition,
       };
     case "offers_unavailable":
-      return { ...workspace, offersAvailable: false };
+      return { ...deployment, offersAvailable: false };
     case "offers_replaced":
-      return replaceOffers(workspace, message.catalog.offers);
+      return replaceOffers(deployment, message.catalog.offers);
     case "domain_event":
-      return applyDomainEvent(workspace, message.event);
+      return applyDomainEvent(deployment, message.event);
   }
 }
 
 function replaceOffers(
-  workspace: Workspace,
+  deployment: Deployment,
   offers: OfferSnapshot[],
-): Workspace {
-  const rentals = { ...workspace.rentals };
+): Deployment {
+  const rentals = { ...deployment.rentals };
   const standingRentalIDs = new Set<string>();
   for (const offer of offers) {
     // Only reusable capacity is a Rental. A one-shot execution holds nothing
@@ -160,9 +159,9 @@ function replaceOffers(
       delete rentals[rental.id];
     }
   }
-  for (const run of Object.values(workspace.runs)) {
+  for (const run of Object.values(deployment.runs)) {
     if (!run.bookingID || !run.selectedOfferID) continue;
-    const booking = workspace.bookings[run.bookingID];
+    const booking = deployment.bookings[run.bookingID];
     const selected = offers.find((offer) => offer.id === run.selectedOfferID);
     if (!booking || !selected || selected.kind !== "provisionable") continue;
     const existing = rentals[booking.rentalID];
@@ -175,81 +174,80 @@ function replaceOffers(
       queuedBookingIDs: existing?.queuedBookingIDs ?? [],
     };
   }
-  return changed(workspace, {
+  return changed(deployment, {
     offers,
     offersAvailable: true,
     rentals,
   });
 }
 
-function applyDomainEvent(workspace: Workspace, event: CloudEvent): Workspace {
-  if (event.workspaceid !== workspace.id) return workspace;
-  const next = applyRunEvent(workspace, event);
+function applyDomainEvent(deployment: Deployment, event: CloudEvent): Deployment {
+  const next = applyRunEvent(deployment, event);
   return {
     ...next,
     throughGlobalPosition: Math.max(
       next.throughGlobalPosition,
       event.globalposition,
     ),
-    lastChange: workspace.ready ? "live" : "initial",
+    lastChange: deployment.ready ? "live" : "initial",
   };
 }
 
-function applyRunEvent(workspace: Workspace, event: CloudEvent): Workspace {
+function applyRunEvent(deployment: Deployment, event: CloudEvent): Deployment {
   switch (event.type) {
     case "compute.run.requested.v1":
-      return requestRun(workspace, event);
+      return requestRun(deployment, event);
     case "compute.run.booking_decided.v1":
-      return decideBooking(workspace, event);
+      return decideBooking(deployment, event);
     case "compute.run.booking_dispatched.v1":
-      return dispatchBooking(workspace, event);
+      return dispatchBooking(deployment, event);
     case "compute.run.launch_intent_recorded.v1":
-      return recordLaunchIntent(workspace, event);
+      return recordLaunchIntent(deployment, event);
     case "compute.run.launch_accepted.v1":
     case "compute.run.external_state_observed.v1":
-      return observeRun(workspace, event);
+      return observeRun(deployment, event);
     case "compute.run.execution_started.v1":
-      return recordStartMoment(workspace, event);
+      return recordStartMoment(deployment, event);
     case "compute.run.outcome_recorded.v1":
-      return recordOutcome(workspace, event);
+      return recordOutcome(deployment, event);
     case "compute.run.cleanup_requested.v1":
-      return updateRunPhase(workspace, event, "cleaning");
+      return updateRunPhase(deployment, event, "cleaning");
     case "compute.run.closed.v1":
-      return closeRun(workspace, event);
+      return closeRun(deployment, event);
     case "compute.rental.booking_queued.v1":
     case "compute.rental.booking_dispatched.v1":
     case "compute.rental.booking_moved.v1":
-      return applyRentalBookingEvent(workspace, event);
+      return applyRentalBookingEvent(deployment, event);
     case "compute.rental.booking_expired.v1":
     case "compute.rental.booking_cancelled.v1":
-      return removeRentalBooking(workspace, event);
+      return removeRentalBooking(deployment, event);
     default:
-      return workspace;
+      return deployment;
   }
 }
 
-function dispatchBooking(workspace: Workspace, event: CloudEvent): Workspace {
+function dispatchBooking(deployment: Deployment, event: CloudEvent): Deployment {
   const { booking: source } = decodeEventData(BookingDispatchedData, event);
-  const run = requiredRun(workspace, source.run_id, event.type);
-  const booking: WorkspaceBooking = {
+  const run = requiredRun(deployment, source.run_id, event.type);
+  const booking: DeploymentBooking = {
     id: source.id,
     rentalID: source.rental_id,
     runID: source.run_id,
     state: "running",
     scheduleVersion: source.schedule_version,
   };
-  const bookings = { ...workspace.bookings, [booking.id]: booking };
-  return changed(workspace, {
+  const bookings = { ...deployment.bookings, [booking.id]: booking };
+  return changed(deployment, {
     bookings,
-    rentals: insertBooking(workspace.rentals, bookings, booking),
+    rentals: insertBooking(deployment.rentals, bookings, booking),
     runs: {
-      ...workspace.runs,
+      ...deployment.runs,
       [run.id]: { ...run, bookingID: booking.id },
     },
   });
 }
 
-function requestRun(workspace: Workspace, event: CloudEvent): Workspace {
+function requestRun(deployment: Deployment, event: CloudEvent): Deployment {
   const data = decodeEventData(RequestedData, event);
   const runID = data.run_id;
   const workload: WorkloadRevision = data.workload_revision;
@@ -257,8 +255,8 @@ function requestRun(workspace: Workspace, event: CloudEvent): Workspace {
   const max = workload.spec.execution.max_runtime_seconds;
   // A malformed expected runtime in durable history must degrade this one
   // run, never throw: a reducer throw is a non-retryable feed error that
-  // would brick the canvas for every viewer replaying the workspace.
-  const run: WorkspaceRun = {
+  // would brick the canvas for every viewer replaying the deployment.
+  const run: DeploymentRun = {
     id: runID,
     requestedAt: event.time,
     workload,
@@ -267,22 +265,22 @@ function requestRun(workspace: Workspace, event: CloudEvent): Workspace {
     maxRuntimeSeconds: max,
     phase: "requested",
   };
-  return changed(workspace, { runs: { ...workspace.runs, [runID]: run } });
+  return changed(deployment, { runs: { ...deployment.runs, [runID]: run } });
 }
 
-function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
+function decideBooking(deployment: Deployment, event: CloudEvent): Deployment {
   const data = decodeEventData(BookingDecidedData, event);
   const decision: StoredBookingDecision = data.decision;
   const runID = decision.run_id ?? event.correlationid;
   if (!runID) throw new Error(`${event.type} requires decision.run_id`);
-  const run = requiredRun(workspace, runID, event.type);
+  const run = requiredRun(deployment, runID, event.type);
   if (!decision.booking || !decision.selected_offer_snapshot_id) {
     // A decision that placed the Run nowhere moves nothing on the canvas. It is
     // the whole of what happened to the Run and it is read on the Run's page.
-    return workspace;
+    return deployment;
   }
   const sourceBooking = decision.booking;
-  const booking: WorkspaceBooking = {
+  const booking: DeploymentBooking = {
     id: sourceBooking.id,
     rentalID: sourceBooking.rental_id,
     runID,
@@ -292,7 +290,7 @@ function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
     latestStartAt: sourceBooking.latest_start_at,
     scheduleVersion: sourceBooking.schedule_version,
   };
-  const current = detachSupersededBooking(workspace, run, booking.id);
+  const current = detachSupersededBooking(deployment, run, booking.id);
   const selectedOffer = current.offers.find(
     (offer) => offer.id === decision.selected_offer_snapshot_id,
   );
@@ -308,7 +306,7 @@ function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
       : booking.state === "running"
         ? "running"
         : "requested";
-  return changed(workspace, {
+  return changed(deployment, {
     bookings: { ...current.bookings, [booking.id]: booking },
     rentals,
     runs: {
@@ -324,18 +322,18 @@ function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
 }
 
 function detachSupersededBooking(
-  workspace: Workspace,
-  run: WorkspaceRun,
+  deployment: Deployment,
+  run: DeploymentRun,
   nextBookingID: string,
-): Workspace {
-  if (!run.bookingID || run.bookingID === nextBookingID) return workspace;
-  return detachBooking(workspace, run.bookingID);
+): Deployment {
+  if (!run.bookingID || run.bookingID === nextBookingID) return deployment;
+  return detachBooking(deployment, run.bookingID);
 }
 
 function insertBooking(
   rentals: Record<string, Rental>,
-  bookings: Record<string, WorkspaceBooking>,
-  booking: WorkspaceBooking,
+  bookings: Record<string, DeploymentBooking>,
+  booking: DeploymentBooking,
   offer?: OfferSnapshot,
 ): Record<string, Rental> {
   const next = { ...rentals };
@@ -362,13 +360,13 @@ function insertBooking(
 }
 
 function orderedQueuedBookings(
-  bookings: Record<string, WorkspaceBooking>,
+  bookings: Record<string, DeploymentBooking>,
   rentalID: string,
 ): string[] {
   const candidates = Object.values(bookings).filter(
     (booking) => booking.rentalID === rentalID && booking.state === "queued",
   );
-  const byPredecessor = new Map<string, WorkspaceBooking>();
+  const byPredecessor = new Map<string, DeploymentBooking>();
   for (const booking of candidates) {
     byPredecessor.set(booking.afterBookingID ?? "", booking);
   }
@@ -391,21 +389,21 @@ function orderedQueuedBookings(
 }
 
 function recordLaunchIntent(
-  workspace: Workspace,
+  deployment: Deployment,
   event: CloudEvent,
-): Workspace {
+): Deployment {
   const runID = runIDForEvent(event);
-  const run = requiredRun(workspace, runID, event.type);
-  if (!run.bookingID) return workspace;
-  const booking = workspace.bookings[run.bookingID];
-  if (!booking) return workspace;
+  const run = requiredRun(deployment, runID, event.type);
+  if (!run.bookingID) return deployment;
+  const booking = deployment.bookings[run.bookingID];
+  if (!booking) return deployment;
   const data = decodeEventData(LaunchIntentData, event);
-  const rental = workspace.rentals[booking.rentalID];
-  if (!rental) return workspace;
+  const rental = deployment.rentals[booking.rentalID];
+  if (!rental) return deployment;
   const provisioned = data.disposition === "terminate";
-  return changed(workspace, {
+  return changed(deployment, {
     rentals: {
-      ...workspace.rentals,
+      ...deployment.rentals,
       [rental.id]: {
         ...rental,
         source: provisioned ? "provisioned" : "standing",
@@ -413,7 +411,7 @@ function recordLaunchIntent(
       },
     },
     runs: {
-      ...workspace.runs,
+      ...deployment.runs,
       [runID]: { ...run, phase: provisioned ? "provisioning" : run.phase },
     },
   });
@@ -423,48 +421,48 @@ function recordLaunchIntent(
 // process began. It is a separate event from the observation because it is a
 // separate fact: a provider reports running from the moment it accepts a launch,
 // so the phase says only that Mercator asked.
-function recordStartMoment(workspace: Workspace, event: CloudEvent): Workspace {
+function recordStartMoment(deployment: Deployment, event: CloudEvent): Deployment {
   const data = decodeEventData(ExecutionStartedData, event);
   const runID = runIDForEvent(event);
-  const run = requiredRun(workspace, runID, event.type);
-  return changed(workspace, {
+  const run = requiredRun(deployment, runID, event.type);
+  return changed(deployment, {
     runs: {
-      ...workspace.runs,
+      ...deployment.runs,
       [runID]: { ...run, startedAt: data.started_at },
     },
   });
 }
 
-function observeRun(workspace: Workspace, event: CloudEvent): Workspace {
+function observeRun(deployment: Deployment, event: CloudEvent): Deployment {
   const data = decodeEventData(ObservedRunData, event);
   const phase = data.phase;
-  if (phase !== "running") return workspace;
+  if (phase !== "running") return deployment;
   const runID = runIDForEvent(event);
-  const run = requiredRun(workspace, runID, event.type);
+  const run = requiredRun(deployment, runID, event.type);
   const runs = {
-    ...workspace.runs,
+    ...deployment.runs,
     [runID]: { ...run, phase: "running" as const },
   };
-  if (!run.bookingID) return changed(workspace, { runs });
-  const booking = workspace.bookings[run.bookingID];
-  const rental = booking ? workspace.rentals[booking.rentalID] : undefined;
-  if (!rental) return changed(workspace, { runs });
-  return changed(workspace, {
+  if (!run.bookingID) return changed(deployment, { runs });
+  const booking = deployment.bookings[run.bookingID];
+  const rental = booking ? deployment.rentals[booking.rentalID] : undefined;
+  if (!rental) return changed(deployment, { runs });
+  return changed(deployment, {
     runs,
     rentals: {
-      ...workspace.rentals,
+      ...deployment.rentals,
       [rental.id]: { ...rental, phase: "active" },
     },
   });
 }
 
-function recordOutcome(workspace: Workspace, event: CloudEvent): Workspace {
+function recordOutcome(deployment: Deployment, event: CloudEvent): Deployment {
   const runID = runIDForEvent(event);
-  const run = requiredRun(workspace, runID, event.type);
+  const run = requiredRun(deployment, runID, event.type);
   const data = decodeEventData(OutcomeData, event);
-  return changed(workspace, {
+  return changed(deployment, {
     runs: {
-      ...workspace.runs,
+      ...deployment.runs,
       [runID]: {
         ...run,
         phase: "cleaning",
@@ -475,42 +473,42 @@ function recordOutcome(workspace: Workspace, event: CloudEvent): Workspace {
 }
 
 function updateRunPhase(
-  workspace: Workspace,
+  deployment: Deployment,
   event: CloudEvent,
-  phase: WorkspaceRunPhase,
-): Workspace {
+  phase: DeploymentRunPhase,
+): Deployment {
   const runID = runIDForEvent(event);
-  const run = requiredRun(workspace, runID, event.type);
-  return changed(workspace, {
-    runs: { ...workspace.runs, [runID]: { ...run, phase } },
+  const run = requiredRun(deployment, runID, event.type);
+  return changed(deployment, {
+    runs: { ...deployment.runs, [runID]: { ...run, phase } },
   });
 }
 
-function closeRun(workspace: Workspace, event: CloudEvent): Workspace {
+function closeRun(deployment: Deployment, event: CloudEvent): Deployment {
   const runID = runIDForEvent(event);
-  const run = requiredRun(workspace, runID, event.type);
+  const run = requiredRun(deployment, runID, event.type);
   if (!run.bookingID) {
-    return changed(workspace, {
+    return changed(deployment, {
       runs: {
-        ...workspace.runs,
+        ...deployment.runs,
         [runID]: { ...run, phase: "closed" },
       },
     });
   }
-  return detachBooking(workspace, run.bookingID, {
+  return detachBooking(deployment, run.bookingID, {
     ...run,
     phase: "closed",
   });
 }
 
 function applyRentalBookingEvent(
-  workspace: Workspace,
+  deployment: Deployment,
   event: CloudEvent,
-): Workspace {
+): Deployment {
   const data = decodeEventData(RentalBookingData, event);
   const source = data.booking ?? data;
   const runID = data.run_id;
-  const booking: WorkspaceBooking = {
+  const booking: DeploymentBooking = {
     id: requiredValue(source.id, "id", event.type),
     rentalID: requiredValue(source.rental_id, "rental_id", event.type),
     runID,
@@ -524,34 +522,34 @@ function applyRentalBookingEvent(
       event.type,
     ),
   };
-  const bookings = { ...workspace.bookings, [booking.id]: booking };
-  return changed(workspace, {
+  const bookings = { ...deployment.bookings, [booking.id]: booking };
+  return changed(deployment, {
     bookings,
-    rentals: insertBooking(workspace.rentals, bookings, booking),
+    rentals: insertBooking(deployment.rentals, bookings, booking),
   });
 }
 
 function removeRentalBooking(
-  workspace: Workspace,
+  deployment: Deployment,
   event: CloudEvent,
-): Workspace {
+): Deployment {
   const data = decodeEventData(RentalRemovalData, event);
   const bookingID =
     optionalString(data.booking_id) ?? optionalString(data.id) ?? "";
-  return bookingID ? detachBooking(workspace, bookingID) : workspace;
+  return bookingID ? detachBooking(deployment, bookingID) : deployment;
 }
 
 function detachBooking(
-  workspace: Workspace,
+  deployment: Deployment,
   bookingID: string,
-  closedRun?: WorkspaceRun,
-): Workspace {
-  const booking = workspace.bookings[bookingID];
-  if (!booking) return workspace;
-  const bookings = { ...workspace.bookings };
+  closedRun?: DeploymentRun,
+): Deployment {
+  const booking = deployment.bookings[bookingID];
+  if (!booking) return deployment;
+  const bookings = { ...deployment.bookings };
   delete bookings[bookingID];
-  const rental = workspace.rentals[booking.rentalID];
-  const rentals = { ...workspace.rentals };
+  const rental = deployment.rentals[booking.rentalID];
+  const rentals = { ...deployment.rentals };
   if (rental) {
     // Detaching a queued booking must not stomp the phase of a rental whose
     // running booking survives.
@@ -575,20 +573,20 @@ function detachBooking(
       rentals[rental.id] = nextRental;
     }
   }
-  return changed(workspace, {
+  return changed(deployment, {
     bookings,
     rentals,
     runs: closedRun
-      ? { ...workspace.runs, [closedRun.id]: closedRun }
-      : workspace.runs,
+      ? { ...deployment.runs, [closedRun.id]: closedRun }
+      : deployment.runs,
   });
 }
 
-function changed(workspace: Workspace, values: Partial<Workspace>): Workspace {
+function changed(deployment: Deployment, values: Partial<Deployment>): Deployment {
   return {
-    ...workspace,
+    ...deployment,
     ...values,
-    lastChange: workspace.ready ? "live" : "initial",
+    lastChange: deployment.ready ? "live" : "initial",
   };
 }
 
@@ -606,11 +604,11 @@ function decodeEventData<Type>(
 }
 
 function requiredRun(
-  workspace: Workspace,
+  deployment: Deployment,
   runID: string,
   eventType: string,
-): WorkspaceRun {
-  const run = workspace.runs[runID];
+): DeploymentRun {
+  const run = deployment.runs[runID];
   if (!run) throw new Error(`${eventType} references unknown Run ${runID}`);
   return run;
 }

@@ -41,7 +41,7 @@ For security boundaries, use
 Open an issue or design note and wait for maintainer direction before changing:
 
 - run lifecycle semantics, cleanup disposition, idempotency, or replay behavior;
-- workspace authorization, public event visibility, or secret-handling
+- deployment authorization, public event visibility, or secret-handling
   boundaries;
 - supported adapters, provider credential flows, or external sink wiring;
 - release process, package publishing, compatibility policy, or artifact shape;
@@ -61,7 +61,7 @@ scope. Common reasons include:
 - adding secret-vault behavior without an explicit design decision;
 - expanding package publishing before release provenance and clean-install
   checks exist;
-- weakening tests, public-event redaction, cleanup safety, or workspace
+- weakening tests, public-event redaction, cleanup safety, or deployment
   isolation;
 - adding broad abstractions before a concrete operator problem needs them.
 

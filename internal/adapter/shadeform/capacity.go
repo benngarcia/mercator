@@ -302,14 +302,10 @@ func (a *Adapter) ListOwnedCapacity(ctx context.Context, query capability.Owners
 		if !tagged || !live(instance) {
 			continue
 		}
-		workspaceID, _ := tagValue(instance.Tags, tagWorkspace)
-		if query.WorkspaceID != "" && workspaceID != query.WorkspaceID {
-			continue
-		}
 		ownershipToken, _ := tagValue(instance.Tags, tagOwnershipToken)
 		owned = append(owned, capability.OwnedCapacity{
-			NativeRef:      instance.ID,
-			WorkspaceID:    workspaceID,
+			NativeRef: instance.ID,
+
 			RentalID:       rentalID,
 			Generation:     generationTag(instance.Tags),
 			OwnershipToken: ownershipToken,
@@ -387,7 +383,6 @@ func ownershipTags(command capability.ProvisionCommand) []string {
 	return []string{
 		tagRental + "=" + command.RentalID,
 		tagGeneration + "=" + strconv.FormatUint(command.Generation, 10),
-		tagWorkspace + "=" + command.WorkspaceID,
 		tagOwnershipToken + "=" + command.OwnershipToken,
 	}
 }

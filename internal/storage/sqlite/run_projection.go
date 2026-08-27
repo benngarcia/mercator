@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/benngarcia/mercator/internal/domain"
@@ -12,11 +13,9 @@ import (
 )
 
 const createRuns = `CREATE TABLE IF NOT EXISTS runs (
-	workspace_id TEXT NOT NULL,
-	run_id TEXT NOT NULL,
+	run_id TEXT PRIMARY KEY,
 	closed INTEGER NOT NULL,
-	record_json BLOB NOT NULL,
-	PRIMARY KEY(workspace_id, run_id)
+	record_json BLOB NOT NULL
 )`
 
 // createRunProjectionMetadata is where the projection's staleness is recorded.
@@ -30,15 +29,18 @@ const createRunProjectionMetadata = `CREATE TABLE IF NOT EXISTS run_projection_m
 	schema_version INTEGER NOT NULL
 )`
 
-const runProjectionSchemaVersion = 1
+const runProjectionSchemaVersion = 2
 
 func migrateRuns(ctx context.Context, db *sql.DB) error {
+	if err := flattenRuns(ctx, db); err != nil {
+		return err
+	}
 	if _, err := db.ExecContext(ctx, createRuns); err != nil {
 		return fmt.Errorf("migrate Run projection: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_runs_open
-		ON runs(workspace_id, closed, run_id)
+		ON runs(closed, run_id)
 	`); err != nil {
 		return fmt.Errorf("index Run projection: %w", err)
 	}
@@ -55,9 +57,47 @@ func migrateRuns(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func flattenRuns(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := flattenRunsTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func flattenRunsTx(ctx context.Context, tx *sql.Tx) error {
+	partitioned, err := tableHasColumn(ctx, tx, "runs", "workspace_id")
+	if err != nil || !partitioned {
+		return err
+	}
+	var collision string
+	err = tx.QueryRowContext(ctx, `SELECT run_id FROM runs GROUP BY run_id HAVING COUNT(*) > 1 LIMIT 1`).Scan(&collision)
+	if err == nil {
+		return fmt.Errorf("migrate Run projection: duplicate run %q across workspaces", collision)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	for _, statement := range []string{
+		`ALTER TABLE runs RENAME TO runs_workspace_legacy`,
+		createRuns,
+		`INSERT INTO runs (run_id, closed, record_json) SELECT run_id, closed, record_json FROM runs_workspace_legacy`,
+		`DROP TABLE runs_workspace_legacy`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("migrate Run projection: flatten workspaces: %w", err)
+		}
+	}
+	return nil
+}
+
 type RunStore struct {
 	db  *sql.DB
-	log *WorkspaceEventLog
+	log *eventlog.SQLiteEventLog
 }
 
 func (store *RunStore) RequiresRebuild(ctx context.Context) (bool, error) {
@@ -125,14 +165,6 @@ func (store *RunStore) Append(
 	return store.append(ctx, request, next, store.log.AppendAtomic)
 }
 
-func (store *RunStore) AppendIfWorkspaceActive(
-	ctx context.Context,
-	request eventlog.AppendRequest,
-	next domain.RunRecord,
-) (eventlog.AppendResult, error) {
-	return store.append(ctx, request, next, store.log.appendIfWorkspaceActiveAtomic)
-}
-
 type atomicAppender func(
 	context.Context,
 	eventlog.AppendRequest,
@@ -146,9 +178,7 @@ func (store *RunStore) append(
 	appendAtomic atomicAppender,
 ) (eventlog.AppendResult, error) {
 	if request.Stream.Type != "run" ||
-		request.Stream.WorkspaceID == "" ||
 		request.Stream.ID == "" ||
-		next.WorkspaceID != request.Stream.WorkspaceID ||
 		next.ID != request.Stream.ID {
 		return eventlog.AppendResult{}, fmt.Errorf("Run projection identity must match its run stream")
 	}
@@ -162,8 +192,8 @@ func (store *RunStore) append(
 }
 
 func (store *RunStore) putTx(ctx context.Context, tx *sql.Tx, next domain.RunRecord) error {
-	if next.WorkspaceID == "" || next.ID == "" {
-		return fmt.Errorf("Run projection requires Workspace and Run identity")
+	if next.ID == "" {
+		return fmt.Errorf("Run projection requires Run identity")
 	}
 	encoded, err := json.Marshal(next)
 	if err != nil {
@@ -174,12 +204,12 @@ func (store *RunStore) putTx(ctx context.Context, tx *sql.Tx, next domain.RunRec
 
 func (*RunStore) putEncodedTx(ctx context.Context, tx *sql.Tx, next domain.RunRecord, encoded []byte) error {
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO runs (workspace_id, run_id, closed, record_json)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(workspace_id, run_id) DO UPDATE SET
+		INSERT INTO runs (run_id, closed, record_json)
+		VALUES (?, ?, ?)
+		ON CONFLICT(run_id) DO UPDATE SET
 			closed = excluded.closed,
 			record_json = excluded.record_json
-	`, next.WorkspaceID, next.ID, next.Closed, encoded)
+	`, next.ID, next.Closed, encoded)
 	if err != nil {
 		return fmt.Errorf("store Run projection: %w", err)
 	}
@@ -188,7 +218,6 @@ func (*RunStore) putEncodedTx(ctx context.Context, tx *sql.Tx, next domain.RunRe
 
 func (store *RunStore) List(
 	ctx context.Context,
-	workspaceID string,
 	request runprojection.PageRequest,
 ) (runprojection.Page, error) {
 	request, err := request.Validated()
@@ -198,10 +227,10 @@ func (store *RunStore) List(
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT record_json
 		FROM runs
-		WHERE workspace_id = ? AND run_id > ?
+		WHERE run_id > ?
 		ORDER BY run_id
 		LIMIT ?
-	`, workspaceID, request.After, request.Limit+1)
+	`, request.After, request.Limit+1)
 	if err != nil {
 		return runprojection.Page{}, fmt.Errorf("list Run projection: %w", err)
 	}
@@ -230,13 +259,13 @@ func (store *RunStore) List(
 	return page, nil
 }
 
-func (store *RunStore) ListOpenIDs(ctx context.Context, workspaceID string) ([]string, error) {
+func (store *RunStore) ListOpenIDs(ctx context.Context) ([]string, error) {
 	rows, err := store.db.QueryContext(ctx, `
 		SELECT run_id
 		FROM runs
-		WHERE workspace_id = ? AND closed = 0
+		WHERE closed = 0
 		ORDER BY run_id
-	`, workspaceID)
+	`)
 	if err != nil {
 		return nil, fmt.Errorf("list open Run projection: %w", err)
 	}
@@ -255,17 +284,17 @@ func (store *RunStore) ListOpenIDs(ctx context.Context, workspaceID string) ([]s
 	return runIDs, nil
 }
 
-func (store *RunStore) Replace(ctx context.Context, workspaceID string, records []domain.RunRecord) error {
+func (store *RunStore) Replace(ctx context.Context, records []domain.RunRecord) error {
 	tx, err := store.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("replace Run projection: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM runs WHERE workspace_id = ?`, workspaceID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM runs`); err != nil {
 		return fmt.Errorf("clear Run projection: %w", err)
 	}
 	for _, record := range records {
-		if record.WorkspaceID != workspaceID || record.ID == "" {
+		if record.ID == "" {
 			return fmt.Errorf("replacement Run projection identity is invalid")
 		}
 		encoded, err := json.Marshal(record)
@@ -273,9 +302,9 @@ func (store *RunStore) Replace(ctx context.Context, workspaceID string, records 
 			return fmt.Errorf("encode replacement Run projection: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO runs (workspace_id, run_id, closed, record_json)
-			VALUES (?, ?, ?, ?)
-		`, workspaceID, record.ID, record.Closed, encoded); err != nil {
+			INSERT INTO runs (run_id, closed, record_json)
+			VALUES (?, ?, ?)
+		`, record.ID, record.Closed, encoded); err != nil {
 			return fmt.Errorf("replace Run projection row: %w", err)
 		}
 	}

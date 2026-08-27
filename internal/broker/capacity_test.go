@@ -43,7 +43,7 @@ func TestACapacityConnectionPublishesNoCandidateForAMachineNobodyIsOn(t *testing
 	fleet := enrolledOn("i-held", "rnt_1")
 	broker := brokerServing(t, fleet, map[string]capability.Backend{"machines": machines})
 
-	collection, err := broker.CollectOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	collection, err := broker.CollectOffers(t.Context(), adapter.OfferRequest{})
 
 	if err != nil {
 		t.Fatalf("collect offers from a capacity provider: %v", err)
@@ -105,7 +105,7 @@ func TestNoAdapterListingBringsALeaseIntoPlacement(t *testing.T) {
 		},
 	})
 
-	collection, err := broker.CollectOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	collection, err := broker.CollectOffers(t.Context(), adapter.OfferRequest{})
 
 	if err != nil {
 		t.Fatalf("collect offers from a marketplace listing: %v", err)
@@ -144,8 +144,8 @@ func TestASweepOfAWorkspaceHoldingCapacityConvergesTheWorkloadsItLeaked(t *testi
 	machines := &capacityBackend{
 		negotiated: negotiatedCapacity(),
 		held: []capability.OwnedCapacity{{
-			NativeRef:      "i-held",
-			WorkspaceID:    "ws_1",
+			NativeRef: "i-held",
+
 			OwnershipToken: "own_1",
 			State:          capability.CapacityStateActive,
 			CreatedAt:      time.Unix(1_700_000_000, 0).UTC(),
@@ -156,10 +156,10 @@ func TestASweepOfAWorkspaceHoldingCapacityConvergesTheWorkloadsItLeaked(t *testi
 		"oneshot":  ownedAdapter{id: "oneshot"},
 	})
 
-	owned, err := broker.ListOwned(t.Context(), adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := broker.ListOwned(t.Context(), adapter.OwnershipQuery{})
 
 	if err != nil {
-		t.Fatalf("sweep a workspace holding a capacity connection: %v", err)
+		t.Fatalf("sweep a deployment holding a capacity connection: %v", err)
 	}
 	found := make([]string, 0, len(owned))
 	for _, object := range owned {
@@ -187,7 +187,7 @@ func TestAStopIsRefusedAtTheSeamByAProviderThatPromisedNone(t *testing.T) {
 
 	_, err := broker.StopCapacity(t.Context(), capability.CapacityCommand{
 		CapacityRef: capability.CapacityRef{
-			WorkspaceID:  "ws_1",
+
 			ConnectionID: "conn_machines",
 			RentalID:     "rnt_1",
 			NativeRef:    "i-held",
@@ -212,7 +212,7 @@ func TestAStopReachesAProviderThatPromisedOne(t *testing.T) {
 
 	receipt, err := broker.StopCapacity(t.Context(), capability.CapacityCommand{
 		CapacityRef: capability.CapacityRef{
-			WorkspaceID:  "ws_1",
+
 			ConnectionID: "conn_machines",
 			RentalID:     "rnt_1",
 			NativeRef:    "i-held",
@@ -296,7 +296,7 @@ func enrolledOn(machine, rentalID string) enrolledFleet {
 	return enrolledFleet{machine: machine, rentalID: rentalID}
 }
 
-func (fleet enrolledFleet) Offers(context.Context, string) ([]domain.OfferSnapshot, error) {
+func (fleet enrolledFleet) Offers(context.Context) ([]domain.OfferSnapshot, error) {
 	return []domain.OfferSnapshot{{
 		ID:           fleet.machine,
 		RentalID:     fleet.rentalID,
@@ -330,7 +330,7 @@ func (listingBackend) ListOwned(context.Context, adapter.OwnershipQuery) ([]adap
 	return nil, nil
 }
 
-// brokerServing is one workspace's fleet: a connection per backend, all of one
+// brokerServing is one deployment's fleet: a connection per backend, all of one
 // registered adapter type, and the deployment's enrolled nodes or nothing where
 // the case is about a Mercator that holds no machines of its own.
 func brokerServing(t *testing.T, fleet Nodes, backends map[string]capability.Backend) *Broker {

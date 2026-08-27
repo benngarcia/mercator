@@ -101,7 +101,7 @@ func TestTheWorldHandsOneInvitationToTwoMachinesAndSaysSo(t *testing.T) {
 	world := labWorldFor(t, "../scenario/scenarios/conformance/a-machine-keeps-working-past-its-first-session.json")
 	registry := labRegistryFor(world)
 	bootstrap, err := registry.Invite(ctx, node.Invitation{
-		WorkspaceID:           labWorkspace,
+
 		NodeID:                renewingNode,
 		RentalID:              renewingLease,
 		Generation:            1,
@@ -113,7 +113,7 @@ func TestTheWorldHandsOneInvitationToTwoMachinesAndSaysSo(t *testing.T) {
 
 	for _, rentalID := range []string{renewingLease, renewingLease + "-again"} {
 		if _, err := world.ProvisionCapacity(ctx, capability.ProvisionCommand{
-			WorkspaceID:     labWorkspace,
+
 			ConnectionID:    labConnection,
 			OperationKey:    "provision_" + rentalID,
 			RequestHash:     "sha256:one-bootstrap-two-machines",
@@ -152,7 +152,7 @@ func TestThisWorldRefusesAnInvitationASecondMachineAlreadyRedeemed(t *testing.T)
 	world := labWorldFor(t, "../scenario/scenarios/conformance/a-machine-keeps-working-past-its-first-session.json")
 	registry := labRegistryFor(world)
 	bootstrap, err := registry.Invite(ctx, node.Invitation{
-		WorkspaceID:           labWorkspace,
+
 		NodeID:                renewingNode,
 		RentalID:              renewingLease,
 		Generation:            1,
@@ -163,7 +163,7 @@ func TestThisWorldRefusesAnInvitationASecondMachineAlreadyRedeemed(t *testing.T)
 	}
 	for _, rentalID := range []string{renewingLease, renewingLease + "-again"} {
 		if _, err := world.ProvisionCapacity(ctx, capability.ProvisionCommand{
-			WorkspaceID:     labWorkspace,
+
 			ConnectionID:    labConnection,
 			OperationKey:    "provision_" + rentalID,
 			RequestHash:     "sha256:one-bootstrap-two-machines",

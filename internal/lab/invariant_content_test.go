@@ -10,13 +10,12 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
-// The fetch every case here is about. It is one workspace's pull of one private
+// The fetch every case here is about. It is this deployment's pull of one private
 // image, named once because the whole rule turns on whether the credential that
 // arrived on it says the same four things the command does.
 const (
-	pulledContent    = "sha256:4f1c9b2e7d5a3c8f0b6e4d2a9c7f5b3e1d8a6c4f2b0e9d7a5c3f1b8e6d4a2c09"
-	pullingWorkspace = "ws_lab"
-	pullSecret       = "registry-material-nobody-may-keep"
+	pulledContent = "sha256:4f1c9b2e7d5a3c8f0b6e4d2a9c7f5b3e1d8a6c4f2b0e9d7a5c3f1b8e6d4a2c09"
+	pullSecret    = "registry-material-nobody-may-keep"
 )
 
 // TestEveryClauseOfTheContentCredentialRuleCanFail reads
@@ -25,10 +24,8 @@ const (
 // that clause exists to catch.
 //
 // A credential with no expiry is the registry account under another name: an
-// attacker who takes the host next month reads the workspace's private images
-// with it. A credential minted for another workspace's pull is the tenancy
-// boundary crossed by a string, and it is internally consistent, so only reading
-// it against the command it arrived on catches it. A credential handed over after
+// attacker who takes the host next month reads the deployment's private images
+// with it. A credential handed over after
 // it lapsed is material the far side will refuse, which an operator reads as a
 // broken registry rather than as a control plane minting too late. And a
 // credential good for a day is ahead of every moment in any execution and is
@@ -38,11 +35,6 @@ func TestEveryClauseOfTheContentCredentialRuleCanFail(t *testing.T) {
 	cases := map[string]func(*InvariantObservation){
 		"a registry credential with nothing to expire it": func(observation *InvariantObservation) {
 			observation.ContentCredentials = []contentCredential{credentialWithNoExpiry(now)}
-		},
-		"one pull's credential spent on another workspace's pull": func(observation *InvariantObservation) {
-			reused := mintedForThePull(now)
-			reused.WorkspaceID = "ws_other_tenant"
-			observation.ContentCredentials = []contentCredential{reused}
 		},
 		"a credential handed over after it lapsed": func(observation *InvariantObservation) {
 			lapsed := mintedForThePull(now)
@@ -70,7 +62,7 @@ func TestEveryClauseOfTheContentCredentialRuleCanFail(t *testing.T) {
 
 // TestACredentialMintedForOneFetchAndBoundedHolds is the other half, and the half
 // that stops the rule from being a rule against fetching content at all. One
-// operation, one workspace, one digest, and a window measured in minutes.
+// operation, one digest, and a window measured in minutes.
 func TestACredentialMintedForOneFetchAndBoundedHolds(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	observation := handWrittenLedger(now)
@@ -126,7 +118,7 @@ func TestThisWorldRefusesAPrivatePullNobodyMintedFor(t *testing.T) {
 	}
 
 	receipt, err := world.Prepare(context.Background(), adapter.PrepareRequest{
-		WorkspaceID:  labWorkspace,
+
 		OperationKey: "prepare/anonymous",
 		Wanted:       []adapter.PrepareItem{anonymous},
 	})
@@ -156,10 +148,10 @@ func TestThisWorldServesAPrivatePullTheControlPlaneMintedFor(t *testing.T) {
 	}
 	item.RegistryCredential = domain.RegistryPull{
 		ContentCredentialScope: domain.ContentCredentialScope{
-			Operation:   item.Operation(),
-			WorkspaceID: labWorkspace,
-			Content:     item.Content(),
-			ExpiresAt:   world.now.Add(15 * time.Minute),
+			Operation: item.Operation(),
+
+			Content:   item.Content(),
+			ExpiresAt: world.now.Add(15 * time.Minute),
 		},
 		Registry: domain.ReferenceRegistry(privatePullImage),
 		Username: "mercator-lab",
@@ -167,7 +159,7 @@ func TestThisWorldServesAPrivatePullTheControlPlaneMintedFor(t *testing.T) {
 	}
 
 	receipt, err := world.Prepare(context.Background(), adapter.PrepareRequest{
-		WorkspaceID:  labWorkspace,
+
 		OperationKey: "prepare/minted",
 		Wanted:       []adapter.PrepareItem{item},
 	})
@@ -187,7 +179,7 @@ func TestThisWorldServesAPrivatePullTheControlPlaneMintedFor(t *testing.T) {
 // the first clause of the rule exists for, and until this case existed the clause
 // could not be reached from any of them. The world recorded a credential only when
 // its scope was non-zero, so the one defect worth catching, a machine handed the
-// registry account itself with no operation, no workspace, no content and no
+// registry account itself with no operation, no content and no
 // expiry, was filtered out before it was written down: the rule then iterated an
 // empty ledger and passed, and safety.secrets_absent never learned the string
 // either, so the same execution could have written the password into an event and
@@ -211,7 +203,7 @@ func TestAnAccountHandedOverUnderAnotherNameIsRecordedAndCaught(t *testing.T) {
 	}
 
 	if _, err := world.Prepare(context.Background(), adapter.PrepareRequest{
-		WorkspaceID:  labWorkspace,
+
 		OperationKey: "prepare/unbounded",
 		Wanted:       []adapter.PrepareItem{item},
 	}); err != nil {
@@ -233,7 +225,7 @@ func TestAnAccountHandedOverUnderAnotherNameIsRecordedAndCaught(t *testing.T) {
 // TestThisWorldsMachineRefusesToPresentMaterialWithNoBound is the other half of
 // that arrangement, and it is the machine's answer rather than the registry's.
 // A password registry checks the password and has never heard of an operation, a
-// workspace, a digest or an expiry, so the account above is material it would
+// operation, a digest or an expiry, so the account above is material it would
 // serve; what refuses it is Mercator's own code on the node, and the world has to
 // model the two separately or it describes a registry that does not exist.
 func TestThisWorldsMachineRefusesToPresentMaterialWithNoBound(t *testing.T) {
@@ -251,7 +243,7 @@ func TestThisWorldsMachineRefusesToPresentMaterialWithNoBound(t *testing.T) {
 	}
 
 	receipt, err := world.Prepare(context.Background(), adapter.PrepareRequest{
-		WorkspaceID:  labWorkspace,
+
 		OperationKey: "prepare/unbounded",
 		Wanted:       []adapter.PrepareItem{item},
 	})
@@ -266,15 +258,15 @@ func TestThisWorldsMachineRefusesToPresentMaterialWithNoBound(t *testing.T) {
 
 func mintedForThePull(now time.Time) contentCredential {
 	return contentCredential{
-		Kind:        adapter.PrepareImage,
-		Operation:   "prepare:image:builder:" + pulledContent,
-		WorkspaceID: pullingWorkspace,
-		Content:     pulledContent,
+		Kind:      adapter.PrepareImage,
+		Operation: "prepare:image:builder:" + pulledContent,
+
+		Content: pulledContent,
 		Scope: domain.ContentCredentialScope{
-			Operation:   "prepare:image:builder:" + pulledContent,
-			WorkspaceID: pullingWorkspace,
-			Content:     pulledContent,
-			ExpiresAt:   now.Add(15 * time.Minute),
+			Operation: "prepare:image:builder:" + pulledContent,
+
+			Content:   pulledContent,
+			ExpiresAt: now.Add(15 * time.Minute),
 		},
 		Material: pullSecret,
 		At:       now,

@@ -18,14 +18,14 @@ import (
 
 var ErrConnectionNotFound = errors.New("broker: connection not found")
 
-// Connections lists the registered connections for a workspace.
+// Connections lists the registered connections for this deployment.
 // *connection.Service satisfies it directly.
 type Connections interface {
-	List(ctx context.Context, workspaceID string) ([]connection.Record, error)
+	List(ctx context.Context) ([]connection.Record, error)
 }
 
 type Resolver interface {
-	Resolve(ctx context.Context, workspaceID string, c credential.Credential) (string, error)
+	Resolve(ctx context.Context, c credential.Credential) (string, error)
 }
 
 type Broker struct {
@@ -61,11 +61,11 @@ func NewBroker(conns Connections, factory *Factory, resolver Resolver, opts ...O
 	return b
 }
 
-func (b *Broker) List(ctx context.Context, workspaceID string) (map[string]domain.RentalSchedule, error) {
+func (b *Broker) List(ctx context.Context) (map[string]domain.RentalSchedule, error) {
 	if b.schedules == nil {
 		return nil, fmt.Errorf("broker: Rental Schedule store is required")
 	}
-	return b.schedules.List(ctx, workspaceID)
+	return b.schedules.List(ctx)
 }
 
 func (b *Broker) Commit(
@@ -86,10 +86,10 @@ func (b *Broker) Commit(
 func (b *Broker) Manifests() []adapter.Manifest { return b.factory.Manifests() }
 
 // build constructs the Backend for one connection (no caching yet — YAGNI).
-func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Record) (Backend, error) {
+func (b *Broker) build(ctx context.Context, c connection.Record) (Backend, error) {
 	secret := ""
 	if c.Credential.Source != "" {
-		s, err := b.resolver.Resolve(ctx, workspaceID, c.Credential)
+		s, err := b.resolver.Resolve(ctx, c.Credential)
 		if err != nil {
 			return Backend{}, fmt.Errorf("broker: resolve credential for %s: %w", c.ID, err)
 		}
@@ -102,14 +102,14 @@ func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Rec
 // Unlike ListOffers and ListOwned, this intentionally does NOT filter on Authorized.
 // Post-launch operations (Observe/Cancel/Release/Terminate) must still reach a run that was
 // launched on a connection which has since been de-authorized, so cleanup is never stranded.
-func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string) (connection.Record, Backend, error) {
-	recs, err := b.conns.List(ctx, workspaceID)
+func (b *Broker) connByID(ctx context.Context, connectionID string) (connection.Record, Backend, error) {
+	recs, err := b.conns.List(ctx)
 	if err != nil {
 		return connection.Record{}, Backend{}, err
 	}
 	for _, c := range recs {
 		if c.ID == connectionID {
-			backend, err := b.build(ctx, workspaceID, c)
+			backend, err := b.build(ctx, c)
 			return c, backend, err
 		}
 	}
@@ -119,8 +119,8 @@ func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string)
 // executorByID resolves one connection's one-shot execution contract. Runs on
 // reusable capacity never come through here: they are dispatched to the node
 // runtime that owns the machine.
-func (b *Broker) executorByID(ctx context.Context, workspaceID, connectionID string) (capability.EphemeralExecutor, error) {
-	_, backend, err := b.connByID(ctx, workspaceID, connectionID)
+func (b *Broker) executorByID(ctx context.Context, connectionID string) (capability.EphemeralExecutor, error) {
+	_, backend, err := b.connByID(ctx, connectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (b *Broker) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]do
 	return collection.Offers, nil
 }
 
-// CollectOffers is the placement read: every offer this workspace can be placed
+// CollectOffers is the placement read: every offer this deployment can use
 // on, and the census of who was asked for them. It is fail-closed on a connection
 // that could not answer, because placing a Run against part of a fleet while
 // recording the answer as the fleet's is how a machine that was there gets left
@@ -156,12 +156,12 @@ func (b *Broker) CollectOffers(ctx context.Context, req adapter.OfferRequest) (a
 }
 
 func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) (OfferAggregation, error) {
-	recs, err := b.conns.List(ctx, req.WorkspaceID)
+	recs, err := b.conns.List(ctx)
 	if err != nil {
 		return OfferAggregation{}, err
 	}
 	results, excluded := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) (Publication, error) {
-		backend, err := b.build(ctx, req.WorkspaceID, c)
+		backend, err := b.build(ctx, c)
 		if err != nil {
 			return Publication{}, err
 		}
@@ -173,12 +173,12 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 		Queried:  []string{},
 		Excluded: excluded,
 	}
-	// Enrolled nodes are capacity this workspace already holds. They are
+	// Enrolled nodes are capacity this deployment already holds. They are
 	// aggregated beside provider offers so one Booking Decision weighs reusing
 	// a machine against renting another.
 	if b.nodes != nil {
 		aggregation.Queried = append(aggregation.Queried, nodeConnectionID)
-		nodeOffers, nodeErr := b.nodes.Offers(ctx, req.WorkspaceID)
+		nodeOffers, nodeErr := b.nodes.Offers(ctx)
 		if nodeErr != nil {
 			aggregation.Failures = append(aggregation.Failures, ConnectionError{
 				ConnectionID: nodeConnectionID,
@@ -265,7 +265,7 @@ func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter
 		}
 		return receipt, err
 	}
-	executor, err := b.executorByID(ctx, req.WorkspaceID, req.SelectedOfferConnectionID)
+	executor, err := b.executorByID(ctx, req.SelectedOfferConnectionID)
 	if err != nil {
 		b.logLaunchFailure(ctx, req, err)
 		return adapter.LaunchReceipt{}, err
@@ -298,7 +298,6 @@ func (b *Broker) logLaunchFailure(ctx context.Context, req adapter.LaunchRequest
 		truncated = failure.ResponseTruncated
 	}
 	b.logger.ErrorContext(ctx, "provider operation failed",
-		"workspace_id", req.WorkspaceID,
 		"run_id", req.RunID,
 		"attempt_id", req.AttemptID,
 		"connection_id", req.SelectedOfferConnectionID,
@@ -321,7 +320,7 @@ func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapt
 	if req.Lane.Reusable() {
 		return b.observeOnNode(ctx, req, req.NativeRef, req.RunID, req.AttemptID)
 	}
-	executor, err := b.executorByID(ctx, req.WorkspaceID, req.ConnectionID)
+	executor, err := b.executorByID(ctx, req.ConnectionID)
 	if err != nil {
 		return adapter.ExternalObservation{}, err
 	}
@@ -332,7 +331,7 @@ func (b *Broker) Release(ctx context.Context, req adapter.ReleaseRequest) (adapt
 	if req.Lane.Reusable() {
 		return b.releaseOnNode(ctx, req, req.NativeRef, req.RunID)
 	}
-	executor, err := b.executorByID(ctx, req.WorkspaceID, req.ConnectionID)
+	executor, err := b.executorByID(ctx, req.ConnectionID)
 	if err != nil {
 		return adapter.ReleaseReceipt{}, err
 	}
@@ -340,7 +339,7 @@ func (b *Broker) Release(ctx context.Context, req adapter.ReleaseRequest) (adapt
 }
 
 func (b *Broker) Terminate(ctx context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
-	executor, err := b.executorByID(ctx, req.WorkspaceID, req.ConnectionID)
+	executor, err := b.executorByID(ctx, req.ConnectionID)
 	if err != nil {
 		return adapter.TerminateReceipt{}, err
 	}
@@ -348,12 +347,12 @@ func (b *Broker) Terminate(ctx context.Context, req adapter.TerminateRequest) (a
 }
 
 func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
-	recs, err := b.conns.List(ctx, req.WorkspaceID)
+	recs, err := b.conns.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	results, _ := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]adapter.OwnedExternalObject, error) {
-		backend, err := b.build(ctx, req.WorkspaceID, c)
+		backend, err := b.build(ctx, c)
 		if err != nil {
 			return nil, err
 		}
@@ -399,8 +398,8 @@ func sortConnectionErrors(failures ConnectionErrors) {
 // VerifyConnection builds the adapter for one connection (regardless of its
 // current Authorized state — authorize runs before the flag is set) and calls
 // its cheap Verify check. Used by the connection authorize flow.
-func (b *Broker) VerifyConnection(ctx context.Context, workspaceID, connectionID string) error {
-	_, backend, err := b.connByID(ctx, workspaceID, connectionID)
+func (b *Broker) VerifyConnection(ctx context.Context, connectionID string) error {
+	_, backend, err := b.connByID(ctx, connectionID)
 	if err != nil {
 		return err
 	}

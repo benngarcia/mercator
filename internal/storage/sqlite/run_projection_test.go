@@ -5,25 +5,23 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/runprojection"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
-	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 func TestRunProjectionPaginatesByStableRunIdentity(t *testing.T) {
 	ctx, storage, _ := openRunProjectionStorage(t)
 	for _, runID := range []string{"run_c", "run_a", "run_b"} {
-		record := domain.RunRecord{ID: runID, WorkspaceID: "ws_1", Phase: "requested"}
-		if _, err := storage.Runs().AppendIfWorkspaceActive(ctx, runProjectionAppend(runID), record); err != nil {
+		record := domain.RunRecord{ID: runID, Phase: "requested"}
+		if _, err := storage.Runs().Append(ctx, runProjectionAppend(runID), record); err != nil {
 			t.Fatalf("append %s: %v", runID, err)
 		}
 	}
 
-	first, err := storage.Runs().List(ctx, "ws_1", runprojection.PageRequest{Limit: 2})
+	first, err := storage.Runs().List(ctx, runprojection.PageRequest{Limit: 2})
 	if err != nil {
 		t.Fatalf("list first page: %v", err)
 	}
@@ -34,7 +32,7 @@ func TestRunProjectionPaginatesByStableRunIdentity(t *testing.T) {
 		t.Fatalf("next cursor = %q, want run_b", first.NextCursor)
 	}
 
-	second, err := storage.Runs().List(ctx, "ws_1", runprojection.PageRequest{After: first.NextCursor, Limit: 2})
+	second, err := storage.Runs().List(ctx, runprojection.PageRequest{After: first.NextCursor, Limit: 2})
 	if err != nil {
 		t.Fatalf("list second page: %v", err)
 	}
@@ -46,15 +44,15 @@ func TestRunProjectionPaginatesByStableRunIdentity(t *testing.T) {
 func TestRunProjectionListsOnlyOpenRuns(t *testing.T) {
 	ctx, storage, _ := openRunProjectionStorage(t)
 	for _, record := range []domain.RunRecord{
-		{ID: "run_open", WorkspaceID: "ws_1", Phase: "running"},
-		{ID: "run_closed", WorkspaceID: "ws_1", Phase: "closed", Closed: true},
+		{ID: "run_open", Phase: "running"},
+		{ID: "run_closed", Phase: "closed", Closed: true},
 	} {
-		if _, err := storage.Runs().AppendIfWorkspaceActive(ctx, runProjectionAppend(record.ID), record); err != nil {
+		if _, err := storage.Runs().Append(ctx, runProjectionAppend(record.ID), record); err != nil {
 			t.Fatalf("append %s: %v", record.ID, err)
 		}
 	}
 
-	runIDs, err := storage.Runs().ListOpenIDs(ctx, "ws_1")
+	runIDs, err := storage.Runs().ListOpenIDs(ctx)
 	if err != nil {
 		t.Fatalf("list open Runs: %v", err)
 	}
@@ -75,19 +73,19 @@ func TestRunProjectionAndEventsRollBackTogether(t *testing.T) {
 		t.Fatalf("create rejecting trigger: %v", err)
 	}
 
-	_, err := storage.Runs().AppendIfWorkspaceActive(
+	_, err := storage.Runs().Append(
 		ctx,
 		runProjectionAppend("run_rejected"),
-		domain.RunRecord{ID: "run_rejected", WorkspaceID: "ws_1", Phase: "requested"},
+		domain.RunRecord{ID: "run_rejected", Phase: "requested"},
 	)
 	if err == nil {
 		t.Fatal("append succeeded despite rejected projection")
 	}
 
 	events, readErr := storage.EventLog().ReadStream(ctx, eventlog.StreamKey{
-		WorkspaceID: "ws_1",
-		Type:        "run",
-		ID:          "run_rejected",
+
+		Type: "run",
+		ID:   "run_rejected",
 	}, 0, 10)
 	if readErr != nil {
 		t.Fatalf("read rejected Run stream: %v", readErr)
@@ -109,20 +107,12 @@ func openRunProjectionStorage(t *testing.T) (context.Context, *sqlitestore.Stora
 		t.Fatalf("open storage: %v", err)
 	}
 	t.Cleanup(func() { _ = storage.Close() })
-	if _, err := storage.Workspaces().Create(ctx, workspace.Create{
-		ID:          "ws_1",
-		DisplayName: "Projection tests",
-		CreatedAt:   time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC),
-		CreatedBy:   "test:run-projection",
-	}); err != nil {
-		t.Fatalf("create workspace: %v", err)
-	}
 	return ctx, storage, db
 }
 
 func runProjectionAppend(runID string) eventlog.AppendRequest {
 	return eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: "ws_1", Type: "run", ID: runID},
+		Stream:                eventlog.StreamKey{Type: "run", ID: runID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "create:" + runID,
 		RequestHash:           "sha256:" + runID,

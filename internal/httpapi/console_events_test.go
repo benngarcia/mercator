@@ -35,15 +35,15 @@ func TestConsoleEventStreamSnapsThenDeliversActualRunEvents(t *testing.T) {
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
 	handler := New(Deps{
-		Orchestrator: orchestrator.New(workspaceTestLog{EventLog: logStore}, scheduler.New(), provider),
+		Orchestrator: orchestrator.New(logStore, scheduler.New(), provider),
 		Offers:       singleProviderOffers{provider: provider},
-		Workloads:    workload.New(workspaceTestLog{EventLog: logStore}),
+		Workloads:    workload.New(logStore),
 		Events:       logStore,
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/console/events?workspace_id=ws_1", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/console/events", nil)
 	if err != nil {
 		t.Fatalf("new stream request: %v", err)
 	}
@@ -107,8 +107,8 @@ func TestOfferCatalogSharesOneObservationAcrossSubscribers(t *testing.T) {
 	secondContext, cancelSecond := context.WithCancel(context.Background())
 	defer cancelSecond()
 
-	first := catalog.Subscribe(firstContext, "ws_1")
-	second := catalog.Subscribe(secondContext, "ws_1")
+	first := catalog.Subscribe(firstContext)
+	second := catalog.Subscribe(secondContext)
 	firstSnapshot := <-first
 	secondSnapshot := <-second
 
@@ -122,7 +122,7 @@ func TestOfferCatalogSharesOneObservationAcrossSubscribers(t *testing.T) {
 
 func TestOfferCatalogEncodesEmptyOffersAsAnArray(t *testing.T) {
 	catalog := newOfferCatalog(emptyOfferAggregator{}, time.Hour)
-	snapshot := catalog.snapshot(t.Context(), "ws_1")
+	snapshot := catalog.snapshot(t.Context())
 	var wire bytes.Buffer
 
 	err := writeConsoleMessage(&wire, "offers_replaced", "", snapshot)
@@ -212,8 +212,8 @@ func (a *countingOfferAggregator) Calls() int {
 }
 
 // TestConsoleEventStreamCarriesNoStoredEnvironmentValue is the redaction at the
-// audience it exists for. The console subscribes to every public event of a
-// workspace with no restriction on which stream it came from, so a workload
+// audience it exists for. The console subscribes to every public event in the
+// deployment with no restriction on which stream it came from, so a workload
 // revision stored with a token in a container's environment put that token on the
 // wire to every reader. Both doors that write a revision into a public event are
 // held to one rule now, and this is the one that reads what a reader actually
@@ -231,15 +231,15 @@ func TestConsoleEventStreamCarriesNoStoredEnvironmentValue(t *testing.T) {
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
 	handler := New(Deps{
-		Orchestrator: orchestrator.New(workspaceTestLog{EventLog: logStore}, scheduler.New(), provider),
+		Orchestrator: orchestrator.New(logStore, scheduler.New(), provider),
 		Offers:       singleProviderOffers{provider: provider},
-		Workloads:    workload.New(workspaceTestLog{EventLog: logStore}),
+		Workloads:    workload.New(logStore),
 		Events:       logStore,
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/console/events?workspace_id=ws_1", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/console/events", nil)
 	if err != nil {
 		t.Fatalf("new stream request: %v", err)
 	}
@@ -303,10 +303,10 @@ func storeRevisionThroughHTTP(t *testing.T, client *http.Client, baseURL, secret
 		}
 	}
 	post("/v1/workloads", "idem_workload_secret",
-		mustMarshal(t, CreateWorkloadRequest{WorkspaceId: "ws_1", WorkloadId: "wrk_secret", Name: "secret"}))
+		mustMarshal(t, CreateWorkloadRequest{WorkloadId: "wrk_secret", Name: "secret"}))
 	revision := httpRevision()
 	revision.WorkloadID = "wrk_secret"
 	revision.Spec.Containers[0].Env = map[string]domain.EnvBinding{"HF_TOKEN": {Value: &secret}}
-	post("/v1/workloads/wrk_secret/revisions?workspace_id=ws_1", "idem_revision_secret",
+	post("/v1/workloads/wrk_secret/revisions", "idem_revision_secret",
 		mustMarshal(t, CreateRevisionRequest{Revision: revision}))
 }

@@ -33,11 +33,10 @@ func ParsePlatform(value string) (Platform, bool) {
 }
 
 type WorkloadRevision struct {
-	ID          string       `json:"id"`
-	WorkspaceID string       `json:"workspace_id"`
-	WorkloadID  string       `json:"workload_id"`
-	Digest      string       `json:"digest"`
-	Spec        WorkloadSpec `json:"spec"`
+	ID         string       `json:"id"`
+	WorkloadID string       `json:"workload_id"`
+	Digest     string       `json:"digest"`
+	Spec       WorkloadSpec `json:"spec"`
 }
 
 type WorkloadSpec struct {
@@ -53,8 +52,7 @@ type WorkloadSpec struct {
 	// Caches is the mutable state this workload wants mounted across Runs. It is
 	// best-effort by construction: a cache that is not here costs the
 	// application the work of rebuilding what was in it and never keeps the Run
-	// from running. Every name is scoped to the Run's own workspace, which is
-	// what makes two tenants naming one cache two caches.
+	// from running. Every name is scoped to this broker deployment.
 	Caches   []CacheMountRequirement    `json:"caches,omitempty"`
 	Metadata map[string]string          `json:"metadata,omitempty"`
 	Raw      map[string]json.RawMessage `json:"raw,omitempty"`
@@ -246,7 +244,7 @@ type Violation struct {
 	// bound and deadline still govern how long it waits.
 	//
 	// Room is deliberately not one of them. Nothing in this tree collects
-	// garbage, Mercator observes no other tenant's content and commands no
+	// garbage, Mercator observes no unrelated content and commands no
 	// removal of it, so a machine short of room is a machine short of room until
 	// somebody adds a disk. When a runtime reclaims space, what it reclaims will
 	// be a fact this flag can be set from.
@@ -382,8 +380,6 @@ type OfferSnapshot struct {
 	// inputs are durable in the object store or the Run does not go anywhere.
 	Artifacts ArtifactInventory `json:"artifacts"`
 	// Caches is the mutable, application-owned state this host says it holds.
-	// Every entry names the workspace that owns it, because a cache's identity
-	// is workspace-scoped and an offer is read by every workspace's Runs.
 	Caches   CacheInventory   `json:"caches,omitzero"`
 	Capacity CapacityEvidence `json:"capacity"`
 	// Reclaimable is whether the provider of this capacity says it may take the
@@ -1887,7 +1883,6 @@ func (offer OfferSnapshot) CleanupDisposition() (Disposition, error) {
 
 type RunRecord struct {
 	ID                 string       `json:"id"`
-	WorkspaceID        string       `json:"workspace_id"`
 	WorkloadRevisionID string       `json:"workload_revision_id"`
 	Phase              string       `json:"phase"`
 	Outcome            RunOutcome   `json:"outcome,omitempty"`

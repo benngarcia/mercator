@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/benngarcia/mercator/internal/daemon"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 )
 
@@ -32,7 +31,6 @@ func TestABackupTakenWhileServingRestoresIntoAServerAnsweringTheSameRuns(t *test
 	firstRun := live.createRun(t, "backup-drill-1")
 	secondRun := live.createRun(t, "backup-drill-2")
 	live.post(t, "/v1/connections", "backup-drill-connection", map[string]any{
-		"workspace_id":  daemon.DefaultWorkspaceID,
 		"connection_id": "runpod",
 		"adapter_type":  "runpod",
 		"credential":    map[string]any{"source": "mercator"},
@@ -63,7 +61,7 @@ func TestABackupTakenWhileServingRestoresIntoAServerAnsweringTheSameRuns(t *test
 	}
 	// A server that could not open a sealed credential refuses to start, so this
 	// also states that the credential travelled with the events.
-	if connections := restored.get(t, "/v1/connections?workspace_id="+daemon.DefaultWorkspaceID); !strings.Contains(connections, `"runpod"`) {
+	if connections := restored.get(t, "/v1/connections"); !strings.Contains(connections, `"runpod"`) {
 		t.Fatalf("restored connections = %s, want the runpod connection", connections)
 	}
 }
@@ -376,12 +374,10 @@ func TestBackupRefusesADatabaseThatIsNotThere(t *testing.T) {
 func (s *mercatorServer) createRun(t *testing.T, name string) string {
 	t.Helper()
 	answered := s.post(t, "/v1/runs", "create-"+name, map[string]any{
-		"workspace_id": daemon.DefaultWorkspaceID,
 		"workload": map[string]any{
-			"id":           "wlr_" + name,
-			"workspace_id": daemon.DefaultWorkspaceID,
-			"workload_id":  "wl_" + name,
-			"digest":       "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			"id":          "wlr_" + name,
+			"workload_id": "wl_" + name,
+			"digest":      "sha256:1111111111111111111111111111111111111111111111111111111111111111",
 			"spec": map[string]any{
 				"containers": []map[string]any{{
 					"name":     "main",
@@ -423,7 +419,7 @@ func (s *mercatorServer) runIDs(t *testing.T) []string {
 			ID string `json:"id"`
 		} `json:"runs"`
 	}
-	answered := s.get(t, "/v1/runs?workspace_id="+daemon.DefaultWorkspaceID)
+	answered := s.get(t, "/v1/runs")
 	if err := json.Unmarshal([]byte(answered), &listed); err != nil {
 		t.Fatalf("decode the listed Runs: %v", err)
 	}

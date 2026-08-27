@@ -14,7 +14,7 @@ import (
 
 func provisionCommand() capability.ProvisionCommand {
 	return capability.ProvisionCommand{
-		WorkspaceID:     "ws_1",
+
 		ConnectionID:    "conn_1",
 		OperationKey:    "provision_rent_1",
 		RentalID:        "rent_1",
@@ -114,7 +114,6 @@ func TestProvisionCreatesOneMachineCarryingTheBootstrapScript(t *testing.T) {
 	for _, want := range []string{
 		"mercator:rental=rent_1",
 		"mercator:generation=1",
-		"mercator:workspace=ws_1",
 		"mercator:ownership-token=own1",
 	} {
 		if !tags[want] {
@@ -296,7 +295,7 @@ func TestProvisionHonoursShadeCloudFalse(t *testing.T) {
 func TestProvisionIsIdempotentAcrossRetries(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
-	fake.addInstance(rentedInstance("inst_9", "rent_1", "ws_1", "own1", "active", fake.base))
+	fake.addInstance(rentedInstance("inst_9", "rent_1", "own1", "active", fake.base))
 	adapter := newTestAdapter(t, fake, nil)
 
 	receipt, err := adapter.ProvisionCapacity(context.Background(), provisionCommand())
@@ -315,7 +314,7 @@ func TestProvisionIsIdempotentAcrossRetries(t *testing.T) {
 func TestProvisionIgnoresDeletingMachinesInThePreScan(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
-	fake.addInstance(rentedInstance("inst_9", "rent_1", "ws_1", "own1", "deleting", fake.base))
+	fake.addInstance(rentedInstance("inst_9", "rent_1", "own1", "deleting", fake.base))
 	adapter := newTestAdapter(t, fake, nil)
 
 	receipt, err := adapter.ProvisionCapacity(context.Background(), provisionCommand())
@@ -331,7 +330,7 @@ func TestProvisionIgnoresDeletingMachinesInThePreScan(t *testing.T) {
 func TestProvisionRefusesAMachineHeldUnderAnotherOwnershipToken(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
-	fake.addInstance(rentedInstance("inst_9", "rent_1", "ws_1", "someone-else", "active", fake.base))
+	fake.addInstance(rentedInstance("inst_9", "rent_1", "someone-else", "active", fake.base))
 	adapter := newTestAdapter(t, fake, nil)
 
 	_, err := adapter.ProvisionCapacity(context.Background(), provisionCommand())
@@ -350,7 +349,7 @@ func TestProvisionReconcilesAConcurrentDuplicateKeepingTheOldest(t *testing.T) {
 	// A concurrent provisioner's machine appears between our pre-scan and our
 	// create landing. It is older than ours, so it wins.
 	fake.beforeCreateReturns = func(f *fakeShadeform) {
-		f.instances = append(f.instances, rentedInstance("inst_0", "rent_1", "ws_1", "own1", "creating", f.base.Add(-time.Hour)))
+		f.instances = append(f.instances, rentedInstance("inst_0", "rent_1", "own1", "creating", f.base.Add(-time.Hour)))
 	}
 	adapter := newTestAdapter(t, fake, nil)
 
@@ -377,7 +376,7 @@ func TestReconciliationDestroysNoMachineHeldUnderAnotherOwnershipToken(t *testin
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
 	fake.beforeCreateReturns = func(f *fakeShadeform) {
-		f.instances = append(f.instances, rentedInstance("inst_0", "rent_1", "ws_1", "someone-else", "active", f.base.Add(time.Hour)))
+		f.instances = append(f.instances, rentedInstance("inst_0", "rent_1", "someone-else", "active", f.base.Add(time.Hour)))
 	}
 	adapter := newTestAdapter(t, fake, nil)
 
@@ -397,12 +396,12 @@ func TestReconciliationDestroysNoMachineHeldUnderAnotherOwnershipToken(t *testin
 // for as long as nobody went and looked at the console.
 func TestObserveSurfacesASecondMachineHeldUnderAnotherOwnershipToken(t *testing.T) {
 	fake := newFakeShadeform()
-	fake.addInstance(rentedInstance("inst_1", "rent_1", "ws_1", "own1", "active", fake.base))
-	fake.addInstance(rentedInstance("inst_2", "rent_1", "ws_1", "someone-else", "active", fake.base.Add(time.Minute)))
+	fake.addInstance(rentedInstance("inst_1", "rent_1", "own1", "active", fake.base))
+	fake.addInstance(rentedInstance("inst_2", "rent_1", "someone-else", "active", fake.base.Add(time.Minute)))
 	adapter := newTestAdapter(t, fake, nil)
 
 	_, err := adapter.ObserveCapacity(context.Background(), capability.CapacityRef{
-		WorkspaceID: "ws_1", RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1",
+		RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1",
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "ownership token") {
@@ -462,11 +461,11 @@ func TestObserveReportsTheProviderLifecycleAndNothingAboutWork(t *testing.T) {
 	}
 	for status, want := range states {
 		fake := newFakeShadeform()
-		fake.addInstance(rentedInstance("inst_1", "rent_1", "ws_1", "own1", status, fake.base))
+		fake.addInstance(rentedInstance("inst_1", "rent_1", "own1", status, fake.base))
 		adapter := newTestAdapter(t, fake, nil)
 
 		observation, err := adapter.ObserveCapacity(context.Background(), capability.CapacityRef{
-			WorkspaceID: "ws_1", RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1",
+			RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1",
 		})
 
 		if err != nil {
@@ -485,7 +484,7 @@ func TestObserveReportsAMachineThatLeftTheListingAsTerminated(t *testing.T) {
 	adapter := newTestAdapter(t, newFakeShadeform(), nil)
 
 	observation, err := adapter.ObserveCapacity(context.Background(), capability.CapacityRef{
-		WorkspaceID: "ws_1", RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1",
+		RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1",
 	})
 
 	if err != nil {
@@ -498,11 +497,11 @@ func TestObserveReportsAMachineThatLeftTheListingAsTerminated(t *testing.T) {
 
 func TestObserveRefusesAMachineHeldUnderAnotherOwnershipToken(t *testing.T) {
 	fake := newFakeShadeform()
-	fake.addInstance(rentedInstance("inst_1", "rent_1", "ws_1", "someone-else", "active", fake.base))
+	fake.addInstance(rentedInstance("inst_1", "rent_1", "someone-else", "active", fake.base))
 	adapter := newTestAdapter(t, fake, nil)
 
 	_, err := adapter.ObserveCapacity(context.Background(), capability.CapacityRef{
-		WorkspaceID: "ws_1", RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1",
+		RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1",
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "ownership token") {
@@ -514,7 +513,7 @@ func TestProvisionReportsTheMomentTheProviderAllocatedTheMachine(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
 	allocatedAnHourAgo := fake.base.Add(-time.Hour)
-	fake.addInstance(rentedInstance("inst_9", "rent_1", "ws_1", "own1", "active", allocatedAnHourAgo))
+	fake.addInstance(rentedInstance("inst_9", "rent_1", "own1", "active", allocatedAnHourAgo))
 	adapter := newTestAdapter(t, fake, nil)
 
 	receipt, err := adapter.ProvisionCapacity(context.Background(), provisionCommand())
@@ -530,7 +529,7 @@ func TestProvisionReportsTheMomentTheProviderAllocatedTheMachine(t *testing.T) {
 func TestStopAndResumeAreRefusedRatherThanQuietlySucceeding(t *testing.T) {
 	adapter := newTestAdapter(t, newFakeShadeform(), nil)
 	command := capability.CapacityCommand{
-		CapacityRef: capability.CapacityRef{WorkspaceID: "ws_1", RentalID: "rent_1", NativeRef: "inst_1"},
+		CapacityRef: capability.CapacityRef{RentalID: "rent_1", NativeRef: "inst_1"},
 	}
 
 	if _, err := adapter.StopCapacity(context.Background(), command); !errors.Is(err, capability.ErrCapabilityUnsupported) {
@@ -543,16 +542,16 @@ func TestStopAndResumeAreRefusedRatherThanQuietlySucceeding(t *testing.T) {
 
 func TestTerminateDestroysEveryLiveMachineHeldUnderTheLease(t *testing.T) {
 	fake := newFakeShadeform()
-	fake.addInstance(rentedInstance("inst_1", "rent_1", "ws_1", "own1", "active", fake.base))
+	fake.addInstance(rentedInstance("inst_1", "rent_1", "own1", "active", fake.base))
 	// A stray duplicate from a reconciliation that failed halfway: teardown is
 	// the path that converges back to zero.
-	fake.addInstance(rentedInstance("inst_2", "rent_1", "ws_1", "own1", "creating", fake.base.Add(time.Minute)))
+	fake.addInstance(rentedInstance("inst_2", "rent_1", "own1", "creating", fake.base.Add(time.Minute)))
 	// Already deleting: never destroyed twice.
-	fake.addInstance(rentedInstance("inst_3", "rent_1", "ws_1", "own1", "deleting", fake.base))
+	fake.addInstance(rentedInstance("inst_3", "rent_1", "own1", "deleting", fake.base))
 	adapter := newTestAdapter(t, fake, nil)
 
 	receipt, err := adapter.TerminateCapacity(context.Background(), capability.CapacityCommand{
-		CapacityRef: capability.CapacityRef{WorkspaceID: "ws_1", RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1"},
+		CapacityRef: capability.CapacityRef{RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1"},
 	})
 
 	if err != nil {
@@ -570,7 +569,7 @@ func TestTerminatingAMachineAlreadyGoneIsADuplicateRatherThanASecondEnding(t *te
 	adapter := newTestAdapter(t, newFakeShadeform(), nil)
 
 	receipt, err := adapter.TerminateCapacity(context.Background(), capability.CapacityCommand{
-		CapacityRef: capability.CapacityRef{WorkspaceID: "ws_1", RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1"},
+		CapacityRef: capability.CapacityRef{RentalID: "rent_1", NativeRef: "inst_1", OwnershipToken: "own1"},
 	})
 
 	if err != nil {
@@ -581,39 +580,13 @@ func TestTerminatingAMachineAlreadyGoneIsADuplicateRatherThanASecondEnding(t *te
 	}
 }
 
-func TestListOwnedCapacityFiltersTheAccountByLeaseWorkspaceAndDeletion(t *testing.T) {
+// A one-shot execution somebody else's tooling left in this account. It
+// carries no lease, so it is not capacity Mercator holds.
+
+func TestListOwnedCapacityReturnsEveryLeaseThisAccountHolds(t *testing.T) {
 	fake := newFakeShadeform()
-	fake.addInstance(rentedInstance("inst_1", "rent_1", "ws_1", "own1", "active", fake.base))
-	fake.addInstance(rentedInstance("inst_2", "rent_2", "ws_1", "own2", "deleting", fake.base))
-	fake.addInstance(rentedInstance("inst_3", "rent_3", "ws_2", "own3", "active", fake.base))
-	fake.addInstance(instance{ID: "inst_4", Name: "someone-elses-vm", Status: "active", CreatedAt: fake.base})
-	// A one-shot execution somebody else's tooling left in this account. It
-	// carries no lease, so it is not capacity Mercator holds.
-	fake.addInstance(instance{ID: "inst_5", Status: "active", CreatedAt: fake.base, Tags: []string{"mercator:launch-key=lk1"}})
-	adapter := newTestAdapter(t, fake, nil)
-
-	owned, err := adapter.ListOwnedCapacity(context.Background(), capability.OwnershipQuery{WorkspaceID: "ws_1"})
-
-	if err != nil {
-		t.Fatalf("list owned capacity: %v", err)
-	}
-	if len(owned) != 1 {
-		t.Fatalf("owned = %+v, want only the live ws_1 machine", owned)
-	}
-	held := owned[0]
-	if held.NativeRef != "inst_1" || held.RentalID != "rent_1" || held.WorkspaceID != "ws_1" ||
-		held.Generation != 1 || held.OwnershipToken != "own1" || held.State != capability.CapacityStateActive {
-		t.Fatalf("owned[0] = %+v", held)
-	}
-	if !held.CreatedAt.Equal(fake.base) {
-		t.Fatalf("created at = %s, want the provider's own moment", held.CreatedAt)
-	}
-}
-
-func TestListOwnedCapacityWithoutAWorkspaceReturnsEveryLeaseThisAccountHolds(t *testing.T) {
-	fake := newFakeShadeform()
-	fake.addInstance(rentedInstance("inst_1", "rent_1", "ws_1", "own1", "active", fake.base))
-	fake.addInstance(rentedInstance("inst_3", "rent_3", "ws_2", "own3", "error", fake.base))
+	fake.addInstance(rentedInstance("inst_1", "rent_1", "own1", "active", fake.base))
+	fake.addInstance(rentedInstance("inst_3", "rent_3", "own3", "error", fake.base))
 	fake.addInstance(instance{ID: "inst_4", Name: "someone-elses-vm", Status: "active", CreatedAt: fake.base})
 	adapter := newTestAdapter(t, fake, nil)
 
@@ -632,7 +605,7 @@ func TestListCapacityAsksTheCatalogForEverythingItSells(t *testing.T) {
 	fake.types = []instanceType{vmType()}
 	adapter := newTestAdapter(t, fake, nil)
 
-	offers, err := adapter.ListCapacity(context.Background(), capability.CapacityQuery{WorkspaceID: "ws_1"})
+	offers, err := adapter.ListCapacity(context.Background(), capability.CapacityQuery{})
 
 	if err != nil {
 		t.Fatalf("list capacity: %v", err)
