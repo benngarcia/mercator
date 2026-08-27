@@ -5,7 +5,11 @@ import (
 	"database/sql"
 )
 
-func tableHasColumn(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+type schemaQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func tableHasColumn(ctx context.Context, db schemaQueryer, table, column string) (bool, error) {
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return false, err

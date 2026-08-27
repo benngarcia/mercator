@@ -313,7 +313,7 @@ func TestAMigratedRunReadsBackWithTheClassItsHistoryNowStates(t *testing.T) {
 
 // TestOpenLeavesTheRunProjectionAloneWithNoHistoryToMigrate keeps the staleness
 // specific to a log that was rewritten. A database Mercator has nothing to
-// migrate must not ask for a rebuild of every Workspace it holds on every
+// migrate must not ask for a rebuild of the deployment on every
 // startup, which is what invalidating the projection unconditionally would do.
 func TestOpenLeavesTheRunProjectionAloneWithNoHistoryToMigrate(t *testing.T) {
 	ctx := context.Background()

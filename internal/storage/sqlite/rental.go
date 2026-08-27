@@ -37,15 +37,22 @@ func migrateRentals(ctx context.Context, db *sql.DB) error {
 }
 
 func flattenRentals(ctx context.Context, db *sql.DB) error {
-	partitioned, err := tableHasColumn(ctx, db, "rentals", "workspace_id")
-	if err != nil || !partitioned {
-		return err
-	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := flattenRentalsTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func flattenRentalsTx(ctx context.Context, tx *sql.Tx) error {
+	partitioned, err := tableHasColumn(ctx, tx, "rentals", "workspace_id")
+	if err != nil || !partitioned {
+		return err
+	}
 	var collision string
 	err = tx.QueryRowContext(ctx, `SELECT rental_id FROM rentals GROUP BY rental_id HAVING COUNT(*) > 1 LIMIT 1`).Scan(&collision)
 	if err == nil {
@@ -63,7 +70,7 @@ func flattenRentals(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate Rentals: flatten workspaces: %w", err)
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // RentalStore is the durable record of the capacity Mercator holds. A control

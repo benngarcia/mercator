@@ -126,7 +126,7 @@ type Orchestrator struct {
 	// file, so a deployment's admissions are all decided here or not at all. A
 	// second control plane over one log would need the log to arbitrate, which is a
 	// different design rather than a wider mutex.
-	admissionLocks   keyedMutex
+	admissionLock    sync.Mutex
 	prewarmer        Prewarmer
 	prewarmPolicy    PrewarmPolicy
 	prewarmed        prewarmMemory

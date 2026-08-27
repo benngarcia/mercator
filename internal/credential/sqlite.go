@@ -9,6 +9,11 @@ import (
 
 type SQLiteStore struct{ db *sql.DB }
 
+const createConnectionSecrets = `CREATE TABLE IF NOT EXISTS connection_secret (
+	connection_id TEXT PRIMARY KEY,
+	blob          BLOB NOT NULL
+)`
+
 type executor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
@@ -17,10 +22,7 @@ func NewSQLiteStore(ctx context.Context, db *sql.DB) (*SQLiteStore, error) {
 	if err := flattenConnectionSecrets(ctx, db); err != nil {
 		return nil, err
 	}
-	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS connection_secret (
-		connection_id TEXT PRIMARY KEY,
-		blob          BLOB NOT NULL
-	)`)
+	_, err := db.ExecContext(ctx, createConnectionSecrets)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +207,22 @@ func (s *SQLiteStore) MigrateSealKey(ctx context.Context, masterKey []byte) (int
 }
 
 func flattenConnectionSecrets(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(connection_secret)`)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := FlattenWorkspacePartitions(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// FlattenWorkspacePartitions removes the legacy credential partition inside
+// the caller's transaction. It is exported only for the SQLite storage owner,
+// which combines every partition removal into one atomic startup migration.
+func FlattenWorkspacePartitions(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(connection_secret)`)
 	if err != nil {
 		return err
 	}
@@ -227,11 +244,6 @@ func flattenConnectionSecrets(ctx context.Context, db *sql.DB) error {
 		return nil
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
 	var collision string
 	err = tx.QueryRowContext(ctx, `SELECT connection_id FROM connection_secret GROUP BY connection_id HAVING COUNT(*) > 1 LIMIT 1`).Scan(&collision)
 	if err == nil {
@@ -242,7 +254,7 @@ func flattenConnectionSecrets(ctx context.Context, db *sql.DB) error {
 	}
 	for _, statement := range []string{
 		`ALTER TABLE connection_secret RENAME TO connection_secret_workspace_legacy`,
-		`CREATE TABLE connection_secret (connection_id TEXT PRIMARY KEY, blob BLOB NOT NULL)`,
+		createConnectionSecrets,
 		`INSERT INTO connection_secret (connection_id, blob) SELECT connection_id, blob FROM connection_secret_workspace_legacy`,
 		`DROP TABLE connection_secret_workspace_legacy`,
 	} {
@@ -250,5 +262,5 @@ func flattenConnectionSecrets(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("credential: flatten workspace partitions: %w", err)
 		}
 	}
-	return tx.Commit()
+	return nil
 }

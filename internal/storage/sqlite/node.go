@@ -87,15 +87,22 @@ func migrateNodes(ctx context.Context, db *sql.DB) error {
 }
 
 func flattenNodes(ctx context.Context, db *sql.DB) error {
-	partitioned, err := tableHasColumn(ctx, db, "nodes", "workspace_id")
-	if err != nil || !partitioned {
-		return err
-	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := flattenNodesTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func flattenNodesTx(ctx context.Context, tx *sql.Tx) error {
+	partitioned, err := tableHasColumn(ctx, tx, "nodes", "workspace_id")
+	if err != nil || !partitioned {
+		return err
+	}
 	checks := []struct{ table, identity string }{
 		{"nodes", "node_id"},
 		{"node_operations", "node_id || '/' || operation_id"},
@@ -132,7 +139,7 @@ func flattenNodes(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate nodes: flatten workspaces: %w", err)
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // NodeStore is the durable node registry. A registry that forgets across a

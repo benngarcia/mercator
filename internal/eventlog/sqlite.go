@@ -30,6 +30,33 @@ type subscription struct {
 	wake   chan struct{}
 }
 
+const createEvents = `CREATE TABLE IF NOT EXISTS events (
+	global_position INTEGER PRIMARY KEY AUTOINCREMENT,
+	event_id TEXT NOT NULL UNIQUE,
+	stream_type TEXT NOT NULL,
+	stream_id TEXT NOT NULL,
+	stream_version INTEGER NOT NULL,
+	event_type TEXT NOT NULL,
+	schema_version INTEGER NOT NULL,
+	occurred_at TEXT NOT NULL,
+	actor_json BLOB,
+	correlation_id TEXT,
+	causation_id TEXT,
+	command_key TEXT NOT NULL,
+	request_hash TEXT NOT NULL,
+	visibility TEXT NOT NULL,
+	data_json BLOB,
+	private_data BLOB,
+	UNIQUE(stream_type, stream_id, stream_version)
+)`
+
+const createCommandAppends = `CREATE TABLE IF NOT EXISTS command_appends (
+	command_key TEXT PRIMARY KEY,
+	request_hash TEXT NOT NULL,
+	first_position INTEGER NOT NULL,
+	last_position INTEGER NOT NULL
+)`
+
 func OpenSQLite(ctx context.Context, dsn string) (*SQLiteEventLog, error) {
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -70,31 +97,8 @@ func (l *SQLiteEventLog) init(ctx context.Context) error {
 		return err
 	}
 	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS events (
-			global_position INTEGER PRIMARY KEY AUTOINCREMENT,
-			event_id TEXT NOT NULL UNIQUE,
-			stream_type TEXT NOT NULL,
-			stream_id TEXT NOT NULL,
-			stream_version INTEGER NOT NULL,
-			event_type TEXT NOT NULL,
-			schema_version INTEGER NOT NULL,
-			occurred_at TEXT NOT NULL,
-			actor_json BLOB,
-			correlation_id TEXT,
-			causation_id TEXT,
-			command_key TEXT NOT NULL,
-			request_hash TEXT NOT NULL,
-			visibility TEXT NOT NULL,
-			data_json BLOB,
-			private_data BLOB,
-			UNIQUE(stream_type, stream_id, stream_version)
-		)`,
-		`CREATE TABLE IF NOT EXISTS command_appends (
-			command_key TEXT PRIMARY KEY,
-			request_hash TEXT NOT NULL,
-			first_position INTEGER NOT NULL,
-			last_position INTEGER NOT NULL
-		)`,
+		createEvents,
+		createCommandAppends,
 		`CREATE TABLE IF NOT EXISTS subscription_offsets (
 			subscription_id TEXT PRIMARY KEY,
 			global_position INTEGER NOT NULL
@@ -112,27 +116,36 @@ func (l *SQLiteEventLog) init(ctx context.Context) error {
 }
 
 func flattenWorkspacePartitions(ctx context.Context, db *sql.DB) error {
-	eventsPartitioned, err := tableHasColumn(ctx, db, "events", "workspace_id")
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	commandsPartitioned, err := tableHasColumn(ctx, db, "command_appends", "workspace_id")
+	defer func() { _ = tx.Rollback() }()
+	if err := FlattenWorkspacePartitions(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// FlattenWorkspacePartitions removes the legacy event-log partition inside the
+// caller's transaction. Storage startup composes this with every other legacy
+// partition so a collision anywhere rolls the whole deployment back.
+func FlattenWorkspacePartitions(ctx context.Context, tx *sql.Tx) error {
+	eventsPartitioned, err := tableHasColumn(ctx, tx, "events", "workspace_id")
 	if err != nil {
 		return err
 	}
-	commandsExist, err := tableExists(ctx, db, "command_appends")
+	commandsPartitioned, err := tableHasColumn(ctx, tx, "command_appends", "workspace_id")
+	if err != nil {
+		return err
+	}
+	commandsExist, err := tableExists(ctx, tx, "command_appends")
 	if err != nil {
 		return err
 	}
 	if !eventsPartitioned && !commandsPartitioned {
 		return nil
 	}
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	if eventsPartitioned {
 		if err := refuseFlattenedStreamCollisions(ctx, tx); err != nil {
@@ -158,7 +171,7 @@ func flattenWorkspacePartitions(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func refuseFlattenedStreamCollisions(ctx context.Context, tx *sql.Tx) error {
@@ -218,25 +231,7 @@ func refuseFlattenedCommandCollisions(ctx context.Context, tx *sql.Tx, eventsPar
 func migratePartitionedEvents(ctx context.Context, tx *sql.Tx) error {
 	for _, statement := range []string{
 		`ALTER TABLE events RENAME TO events_workspace_legacy`,
-		`CREATE TABLE events (
-			global_position INTEGER PRIMARY KEY AUTOINCREMENT,
-			event_id TEXT NOT NULL UNIQUE,
-			stream_type TEXT NOT NULL,
-			stream_id TEXT NOT NULL,
-			stream_version INTEGER NOT NULL,
-			event_type TEXT NOT NULL,
-			schema_version INTEGER NOT NULL,
-			occurred_at TEXT NOT NULL,
-			actor_json BLOB,
-			correlation_id TEXT,
-			causation_id TEXT,
-			command_key TEXT NOT NULL,
-			request_hash TEXT NOT NULL,
-			visibility TEXT NOT NULL,
-			data_json BLOB,
-			private_data BLOB,
-			UNIQUE(stream_type, stream_id, stream_version)
-		)`,
+		createEvents,
 		`INSERT INTO events (
 			global_position, event_id, stream_type, stream_id, stream_version,
 			event_type, schema_version, occurred_at, actor_json, correlation_id,
@@ -260,12 +255,7 @@ func migratePartitionedEvents(ctx context.Context, tx *sql.Tx) error {
 func migratePartitionedCommands(ctx context.Context, tx *sql.Tx) error {
 	for _, statement := range []string{
 		`ALTER TABLE command_appends RENAME TO command_appends_workspace_legacy`,
-		`CREATE TABLE command_appends (
-			command_key TEXT PRIMARY KEY,
-			request_hash TEXT NOT NULL,
-			first_position INTEGER NOT NULL,
-			last_position INTEGER NOT NULL
-		)`,
+		createCommandAppends,
 		`INSERT INTO command_appends (command_key, request_hash, first_position, last_position)
 		SELECT command_key, request_hash, first_position, last_position
 		FROM command_appends_workspace_legacy
@@ -298,7 +288,12 @@ func pruneCommandsForRemovedStreams(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
+type schemaQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func tableExists(ctx context.Context, db schemaQueryer, table string) (bool, error) {
 	var exists bool
 	err := db.QueryRowContext(ctx, `SELECT EXISTS (
 		SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?
@@ -306,7 +301,7 @@ func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
 	return exists, err
 }
 
-func tableHasColumn(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+func tableHasColumn(ctx context.Context, db schemaQueryer, table, column string) (bool, error) {
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return false, err

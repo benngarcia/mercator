@@ -21,14 +21,13 @@ curl -X POST "$MERCATOR/v1/runs" \
   -H 'Idempotency-Key: busybox-report-1' \
   -H 'Content-Type: application/json' \
   -d '{
-    "workspace_id": "ws_1",
+    "run_id": "run_busybox_report_1",
     "workload": {
-      "workspace_id": "ws_1",
       "spec": {
         "containers": [{
           "image": "busybox@sha256:<real-index-digest>",
           "args": ["sh","-c",
-            "set -e; URL=\"$MERCATOR_REPORT_URL/v1/runs/$MERCATOR_RUN_ID/report?workspace_id=$MERCATOR_WORKSPACE_ID\"; AUTH=\"Authorization: Bearer $MERCATOR_RUN_TOKEN\"; wget -q -O- --header \"$AUTH\" --header \"Content-Type: application/json\" --post-data \"{\\\"type\\\":\\\"progress\\\",\\\"data\\\":{\\\"pct\\\":50}}\" \"$URL\"; sleep 5; wget -q -O- --header \"$AUTH\" --header \"Content-Type: application/json\" --post-data \"{\\\"type\\\":\\\"exit\\\",\\\"exit_code\\\":0}\" \"$URL\""
+            "set -e; URL=\"$MERCATOR_REPORT_URL/v1/runs/$MERCATOR_RUN_ID/report\"; AUTH=\"Authorization: Bearer $MERCATOR_RUN_TOKEN\"; wget -q -O- --header \"$AUTH\" --header \"Content-Type: application/json\" --post-data \"{\\\"type\\\":\\\"progress\\\",\\\"data\\\":{\\\"pct\\\":50}}\" \"$URL\"; sleep 5; wget -q -O- --header \"$AUTH\" --header \"Content-Type: application/json\" --post-data \"{\\\"type\\\":\\\"exit\\\",\\\"exit_code\\\":0}\" \"$URL\""
           ]
         }],
         "resources": { "accelerators": [ { "vendor": "NVIDIA", "count": 1 } ] }

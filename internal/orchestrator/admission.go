@@ -61,8 +61,8 @@ import (
 // had members. Ordering is always this Run's lock and then the deployment's, which
 // is the order AdvanceRun already holds them in.
 func (o *Orchestrator) stepAdmit(ctx context.Context, runID string, version uint64, state runState) (bool, error) {
-	unlock := o.admissionLocks.Lock("deployment")
-	defer unlock()
+	o.admissionLock.Lock()
+	defer o.admissionLock.Unlock()
 
 	queue, err := o.admissionQueue(ctx)
 	if err != nil {

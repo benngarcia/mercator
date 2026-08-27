@@ -59,6 +59,39 @@ func TestCreateRunReturnsUnifiedEnvelope(t *testing.T) {
 	}
 }
 
+func TestRemovedWorkspaceSelectorsFailInsteadOfWideningTheRequest(t *testing.T) {
+	handler := newHTTPTestServer(t)
+
+	query := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=retired", nil)
+	queryRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(queryRecorder, query)
+	if queryRecorder.Code != http.StatusBadRequest || !bytes.Contains(queryRecorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+		t.Fatalf("legacy query selector response = %d %s", queryRecorder.Code, queryRecorder.Body.String())
+	}
+
+	payload := map[string]any{
+		"run_id":       "run_must_not_exist",
+		"workspace_id": "retired",
+		"workload":     httpRevision(),
+	}
+	body := mustMarshal(t, payload)
+	command := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	command.Header.Set("Content-Type", "application/json")
+	command.Header.Set("Idempotency-Key", "removed-workspace-selector")
+	commandRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(commandRecorder, command)
+	if commandRecorder.Code != http.StatusBadRequest || !bytes.Contains(commandRecorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+		t.Fatalf("legacy body selector response = %d %s", commandRecorder.Code, commandRecorder.Body.String())
+	}
+
+	read := httptest.NewRequest(http.MethodGet, "/v1/runs/run_must_not_exist", nil)
+	readRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(readRecorder, read)
+	if readRecorder.Code != http.StatusNotFound {
+		t.Fatalf("rejected command still created a Run: %d %s", readRecorder.Code, readRecorder.Body.String())
+	}
+}
+
 // Item 1 (HTTP): exit_code present on the create envelope and on GET.
 func TestCreateAndGetRunExposeExitCode(t *testing.T) {
 	handler := newHTTPTestServer(t)

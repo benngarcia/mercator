@@ -27,15 +27,22 @@ func migrateRentalSchedules(ctx context.Context, db *sql.DB) error {
 }
 
 func flattenRentalSchedules(ctx context.Context, db *sql.DB) error {
-	partitioned, err := tableHasColumn(ctx, db, "rental_schedules", "workspace_id")
-	if err != nil || !partitioned {
-		return err
-	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := flattenRentalSchedulesTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func flattenRentalSchedulesTx(ctx context.Context, tx *sql.Tx) error {
+	partitioned, err := tableHasColumn(ctx, tx, "rental_schedules", "workspace_id")
+	if err != nil || !partitioned {
+		return err
+	}
 	var collision string
 	err = tx.QueryRowContext(ctx, `SELECT rental_id FROM rental_schedules GROUP BY rental_id HAVING COUNT(*) > 1 LIMIT 1`).Scan(&collision)
 	if err == nil {
@@ -53,7 +60,7 @@ func flattenRentalSchedules(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate Rental Schedules: flatten workspaces: %w", err)
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 type RentalScheduleStore struct {

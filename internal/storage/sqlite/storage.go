@@ -35,6 +35,10 @@ func Open(ctx context.Context, dsn string) (*Storage, error) {
 
 // New takes ownership of db.
 func New(ctx context.Context, db *sql.DB) (*Storage, error) {
+	if err := flattenWorkspaceSchema(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	sqliteLog, err := eventlog.NewSQLite(ctx, db)
 	if err != nil {
 		return nil, err
@@ -84,10 +88,6 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 	storage.nodes = &NodeStore{db: db}
 	storage.preparation = &PreparationClock{db: db}
 	if err := storage.purgeDeletedConnectionCredentials(ctx); err != nil {
-		_ = log.Close()
-		return nil, err
-	}
-	if err := dropLegacyWorkspaceCatalog(ctx, db); err != nil {
 		_ = log.Close()
 		return nil, err
 	}
@@ -186,16 +186,4 @@ func (r *ConnectionRepository) DeleteCredential(ctx context.Context, request eve
 		}
 		return nil
 	})
-}
-
-func dropLegacyWorkspaceCatalog(ctx context.Context, db *sql.DB) error {
-	for _, statement := range []string{
-		`DROP TABLE IF EXISTS workspace_members`,
-		`DROP TABLE IF EXISTS workspaces`,
-	} {
-		if _, err := db.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("drop legacy workspace catalog: %w", err)
-		}
-	}
-	return nil
 }
