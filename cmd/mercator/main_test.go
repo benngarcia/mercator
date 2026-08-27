@@ -556,6 +556,27 @@ func TestALoopbackDeploymentReportingToItselfNeedsNoAdministrativeAddress(t *tes
 	}
 }
 
+func TestOnlyAnUnexposedDeploymentBootstrapsLocalDocker(t *testing.T) {
+	tests := []struct {
+		name      string
+		addr      string
+		announced string
+		want      bool
+	}{
+		{name: "loopback", addr: "127.0.0.1:8080", want: true},
+		{name: "wildcard bind", addr: "0.0.0.0:8080", want: false},
+		{name: "proxied loopback", addr: "127.0.0.1:8080", announced: "mercator.example.com", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := bootstrapLocalDocker(test.addr, test.announced); got != test.want {
+				t.Fatalf("bootstrap local Docker = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestABindAdministrativeListenerRefusesTheWildcard(t *testing.T) {
 	// Arrange, Act
 	_, err := bindListeners("127.0.0.1:0", "0.0.0.0:0")

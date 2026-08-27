@@ -36,7 +36,7 @@ export function reduceDeploymentFeed(
 ): DeploymentFeedSnapshot {
   switch (signal.type) {
     case "connecting":
-      return { ...current, status: "connecting" };
+      return { ...initialDeploymentFeedSnapshot(), status: "connecting" };
     case "message":
       return applyMessage(current, signal.message);
   }
@@ -47,8 +47,8 @@ function applyMessage(
   message: DeploymentMessage,
 ): DeploymentFeedSnapshot {
   // Positions already incorporated must be skipped, not just recent ids: a
-  // reconnect without a cursor replays the whole history onto a retained
-  // snapshot, and the id window only remembers the last EVENT_LIMIT events.
+  // feed may repeat a frame before it reconnects, and the id window only
+  // remembers the last EVENT_LIMIT events.
   if (
     message.type === "domain_event" &&
     (message.event.globalposition <=
