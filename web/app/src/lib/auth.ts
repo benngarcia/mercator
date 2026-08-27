@@ -1,5 +1,5 @@
 // Browser-side navigation for the server's /auth login surface. /auth is
-// cookie-authenticated with no bearer token or workspace_id.
+// cookie-authenticated with no bearer token.
 
 // signInUrl routes into the server's OIDC login flow, preserving the current
 // page as the post-login destination.

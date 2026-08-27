@@ -1,6 +1,6 @@
 import { CircleSlash } from "lucide-react";
 
-import type { StoredBookingDecision } from "@/lib/workspace/contracts";
+import type { StoredBookingDecision } from "@/lib/deployment/contracts";
 import { cn } from "@/lib/utils";
 import { phaseLabel, shortDigest } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";

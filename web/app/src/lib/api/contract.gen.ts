@@ -203,43 +203,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the nodes enrolled in a workspace */
+        /** List the nodes enrolled in a deployment */
         get: operations["listNodes"];
         put?: never;
         /** Reserve a node identity and mint its enrollment material */
         post: operations["inviteNode"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listWorkspaces"];
-        put?: never;
-        post: operations["createWorkspace"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace_id}/archive": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["archiveWorkspace"];
         delete?: never;
         options?: never;
         head?: never;
@@ -302,7 +270,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Registered provider adapters' onboarding manifests: display metadata, config fields, credential expectations, and ordered setup steps. Static per process; no workspace scoping. */
+        /** @description Registered provider adapters' onboarding manifests: display metadata, config fields, credential expectations, and ordered setup steps. Static per process; no deployment scoping. */
         get: operations["listAdapters"];
         put?: never;
         post?: never;
@@ -463,7 +431,6 @@ export interface components {
     schemas: {
         /** @description Create a run. The only required input is an image (top-level shorthand) or a full workload spec. run_id is optional and server-generated (uuidv7) when omitted; an Idempotency-Key header is required for retry-safe replay. */
         CreateRunRequest: {
-            workspace_id?: string;
             /** @description Optional. When omitted the server generates a uuidv7-based run id and returns it. */
             run_id?: string;
             workload_id?: string;
@@ -544,7 +511,6 @@ export interface components {
         };
         Run: {
             id: string;
-            workspace_id: string;
             workload_revision_id: string;
             /**
              * @description Where this Run is in its lifecycle. "queued" is a Run admission is holding, which is a state rather than a gap: before it, a Run nothing could place read as "requested" for ever and was indistinguishable from one Mercator had not reached yet. A queued Run says why in admission.
@@ -585,7 +551,6 @@ export interface components {
             cancelled_by?: string;
         };
         CreateWorkloadRequest: {
-            workspace_id: string;
             workload_id: string;
             name: string;
         };
@@ -632,7 +597,6 @@ export interface components {
         };
         PlacementPreviewRequest: {
             run_id?: string;
-            workspace_id?: string;
             workload: components["schemas"]["WorkloadRevision"];
         };
         PlacementPreviewResponse: {
@@ -681,8 +645,6 @@ export interface components {
             connections: components["schemas"]["ConnectionRecord"][];
         };
         CreateConnectionRequest: {
-            /** @description Optional. Defaults to the request's authorized workspace. */
-            workspace_id?: string;
             connection_id: string;
             adapter_type: string;
             config?: {
@@ -841,7 +803,7 @@ export interface components {
             /** @description Whether this Run would rather run on a machine nobody has quoted a price for than not run at all. It admits such a candidate and never prefers one: an unpriced candidate ranks behind every candidate somebody priced, and it cannot clear max_expected_cost_usd, because a bound on dollars is not cleared by a candidate that has none. */
             allow_unknown_pricing?: boolean;
         };
-        /** @description The family of Runs this one belongs to and the most of that family Mercator may have holding capacity at once. It is a bound on the work rather than a request for a machine: a member whose family is already that wide is queued GROUP_AT_PARALLELISM even where the fleet has capacity standing idle, and the wait ends when a member of the same family finishes. Every member states the width, because a group is a label the work carries rather than an object an operator creates: there is nothing to register before submitting, and a name without a width is refused with RUN_GROUP_INCOMPLETE. The name is scoped to the Run's own workspace, so two tenants naming one sweep are running two. */
+        /** @description The family of Runs this one belongs to and the most of that family Mercator may have holding capacity at once. It is a bound on the work rather than a request for a machine: a member whose family is already that wide is queued GROUP_AT_PARALLELISM even where the fleet has capacity standing idle, and the wait ends when a member of the same family finishes. Every member states the width, because a group is a label the work carries rather than an object an operator creates: there is nothing to register before submitting, and a name without a width is refused with RUN_GROUP_INCOMPLETE. The name is deployment-global. */
         RunGroup: {
             id?: string;
             /** @description How many members of this family may hold capacity at once. Zero is the absence of a family rather than a family of nothing. */
@@ -877,9 +839,9 @@ export interface components {
              */
             verified_at?: string;
         };
-        /** @description One mutable, application-owned cache a workload wants mounted across Runs. Its identity is the name, scoped to the workspace the Run belongs to: two tenants that both declare compiler-cache declare two caches, and neither is ever handed the other's bytes. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running. */
+        /** @description One mutable, application-owned cache a workload wants mounted across Runs. Its identity is its deployment-global name and compatibility key. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running. */
         CacheMountRequirement: {
-            /** @description This cache's identity within its workspace. It also names durable storage on whatever host holds the cache, so it must be a lowercase label. */
+            /** @description This cache's identity within its deployment. It also names durable storage on whatever host holds the cache, so it must be a lowercase label. */
             name: string;
             /** @description The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own. It is recorded beside the storage it names on whatever host holds the cache, so it must be a printable label. */
             compatibility_key?: string;
@@ -891,8 +853,6 @@ export interface components {
         };
         /** @description One mutable cache on one host, as the holder reports it. It carries no digest and no verification state, because there is nothing to check it against: the contents are whatever the application last wrote. It carries no size either, because nothing on a real node measures one without walking every volume on the machine. */
         CacheMount: {
-            /** @description The workspace that owns this cache. It is part of the identity rather than a label on it. */
-            workspace_id: string;
             name: string;
             /** @description The generation of content under this name, as the application stated it when the cache was written. */
             compatibility_key?: string;
@@ -914,7 +874,7 @@ export interface components {
         CacheEvidence: {
             name: string;
             /**
-             * @description Hot is this workspace's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all.
+             * @description Hot is this deployment's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all.
              * @enum {string}
              */
             locality: "hot" | "cold" | "unknown";
@@ -973,7 +933,7 @@ export interface components {
             placement: components["schemas"]["PlacementPolicy"];
             execution: components["schemas"]["ExecutionPolicy"];
             artifacts: components["schemas"]["ArtifactRequirements"];
-            /** @description The mutable, application-owned state this workload wants mounted across Runs. Every name is scoped to the Run's own workspace, which is what makes two tenants naming one cache two caches. */
+            /** @description The mutable, application-owned state this workload wants mounted across Runs. Every cache name is deployment-global. */
             caches?: components["schemas"]["CacheMountRequirement"][];
             metadata?: {
                 [key: string]: string;
@@ -984,7 +944,6 @@ export interface components {
         };
         WorkloadRevision: {
             id: string;
-            workspace_id: string;
             workload_id: string;
             digest: string;
             spec: components["schemas"]["WorkloadSpec"];
@@ -1306,7 +1265,7 @@ export interface components {
             image_locality?: "hot" | "partial" | "cold" | "unknown";
             /** @description What this candidate was found holding of the immutable content the Run reads, one entry per declared input. It stands beside image_locality rather than folded into it: an image is what the runtime fetches to start a container, an Artifact is what the workload reads once it is running, and one host is routinely warm for one and cold for the other. */
             artifact_evidence?: components["schemas"]["ArtifactEvidence"][];
-            /** @description What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name. */
+            /** @description What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it distinguishes a machine that has never done this work from one holding the named cache. */
             cache_evidence?: components["schemas"]["CacheEvidence"][];
             disk?: components["schemas"]["DiskDemand"];
             /** @description The risk history this candidate's publisher stated: how often this machine refuses to start, and how often it drops the work it is running. It is recorded, never priced, and never doubted. What a refusal is worth is a probability times a predicted start, nothing here predicts either yet, and a flat penalty invented for it would be an exchange rate this model made up. It is recorded so the account of what was known when the placement was taken is complete. The confidence beside it is deliberately absent from confidences: doubt about an answer the score never reads charges a publisher for having measured its machine, and it made a machine measured and never seen to fail lose to an identical machine nobody had measured. */
@@ -1459,7 +1418,6 @@ export interface components {
             subject: string;
             /** Format: date-time */
             time: string;
-            workspaceid: string;
             /** Format: int64 */
             streamversion: number;
             /** Format: int64 */
@@ -1473,23 +1431,7 @@ export interface components {
             source: "env" | "mercator";
             ref: string;
         };
-        CreateWorkspaceRequest: {
-            display_name: string;
-        };
-        Workspace: {
-            id: string;
-            display_name: string;
-            /** Format: date-time */
-            created_at: string;
-            created_by: string;
-            /** Format: date-time */
-            archived_at?: string;
-        };
-        WorkspaceResponse: {
-            workspace: components["schemas"]["Workspace"];
-        };
         InviteNodeRequest: {
-            workspace_id: string;
             /** @description Node identity to reserve. Generated when omitted. */
             node_id?: string;
             /** @description The Rental this node belongs to. Generated when omitted. */
@@ -1551,12 +1493,8 @@ export interface components {
         NodeListResponse: {
             nodes: components["schemas"]["NodeSummary"][];
         };
-        WorkspaceListResponse: {
-            workspaces: components["schemas"]["Workspace"][];
-        };
         ConnectionRecord: {
             id: string;
-            workspace_id: string;
             adapter_type: string;
             authorization_schema?: {
                 [key: string]: string;
@@ -1652,9 +1590,7 @@ export interface operations {
     };
     streamConsoleEvents: {
         parameters: {
-            query: {
-                workspace_id: string;
-            };
+            query?: never;
             header?: {
                 "Last-Event-ID"?: string;
             };
@@ -1663,7 +1599,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Replay-complete public Workspace event feed followed by live events */
+            /** @description Replay-complete public Deployment event feed followed by live events */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1722,7 +1658,6 @@ export interface operations {
     listRuns: {
         parameters: {
             query?: {
-                workspace_id?: string;
                 /** @description Opaque cursor returned by the previous page. */
                 cursor?: string;
                 limit?: number;
@@ -1782,9 +1717,7 @@ export interface operations {
     };
     createRun: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header: {
                 "Idempotency-Key": string;
             };
@@ -1873,9 +1806,7 @@ export interface operations {
     };
     getRun: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -1933,9 +1864,7 @@ export interface operations {
     };
     waitRun: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -2011,9 +1940,7 @@ export interface operations {
     };
     refreshRun: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -2071,9 +1998,7 @@ export interface operations {
     };
     cancelRun: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -2131,9 +2056,7 @@ export interface operations {
     };
     listRunEvents: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -2191,9 +2114,7 @@ export interface operations {
     };
     getRunDecision: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -2251,9 +2172,7 @@ export interface operations {
     };
     previewPlacement: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -2322,9 +2241,7 @@ export interface operations {
     };
     listNodes: {
         parameters: {
-            query: {
-                workspace_id: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -2429,169 +2346,9 @@ export interface operations {
             };
         };
     };
-    listWorkspaces: {
-        parameters: {
-            query?: {
-                include_archived?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Saved workspace list */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkspaceListResponse"];
-                };
-            };
-            /** @description Authentication failed */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Workspace catalog failed */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    createWorkspace: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateWorkspaceRequest"];
-            };
-        };
-        responses: {
-            /** @description Workspace created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkspaceResponse"];
-                };
-            };
-            /** @description Invalid request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Authentication failed */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Workspace ID conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Workspace catalog failed */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    archiveWorkspace: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Workspace archived */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkspaceResponse"];
-                };
-            };
-            /** @description Invalid request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Authentication failed */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Workspace not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Workspace catalog failed */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
     listConnections: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -2647,9 +2404,7 @@ export interface operations {
     };
     createConnection: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header: {
                 "Idempotency-Key": string;
             };
@@ -2738,9 +2493,7 @@ export interface operations {
     };
     deleteConnection: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 connection_id: string;
@@ -2818,9 +2571,7 @@ export interface operations {
     };
     authorizeConnection: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 connection_id: string;
@@ -2925,9 +2676,7 @@ export interface operations {
     };
     reportRun: {
         parameters: {
-            query: {
-                workspace_id: string;
-            };
+            query?: never;
             header?: {
                 /** @description Per-run bearer token issued in the launch reporting environment. */
                 Authorization?: string;
@@ -3021,9 +2770,7 @@ export interface operations {
     };
     listOffers: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -3152,9 +2899,7 @@ export interface operations {
     };
     listWorkloadRevisions: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 workload_id: string;
@@ -3221,9 +2966,7 @@ export interface operations {
     };
     createWorkloadRevision: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header: {
                 "Idempotency-Key": string;
             };
@@ -3296,9 +3039,7 @@ export interface operations {
     };
     getWorkloadRevision: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 workload_id: string;

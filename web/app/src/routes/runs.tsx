@@ -1,4 +1,4 @@
-// /runs — the runs list. The Workspace event feed refreshes useRuns, renders
+// /runs — the runs list. The Deployment event feed refreshes useRuns, renders
 // RunsTable, and navigates to the detail route on row click. Query errors degrade to
 // <ErrorState> (401 -> "set a token" guidance via ErrorState's handling).
 
@@ -68,7 +68,7 @@ function RunsPage() {
     <div className="flex flex-col gap-4 p-4">
       <PageHeader
         title="Runs"
-        description="Compute runs in the active workspace."
+        description="Compute runs in the active deployment."
         actions={
           <Button size="sm" onClick={(event) => openCreate(event.currentTarget)}>
             <Plus className="size-4" />

@@ -33,10 +33,6 @@ let failure;
 
 try {
   await drive({ kind: "step" });
-  await context.addInitScript(() => {
-    localStorage.setItem("mercator.workspace", "ws_lab");
-    localStorage.setItem("mercator.recentWorkspaces", '["ws_lab"]');
-  });
   page = await context.newPage();
   page.setDefaultTimeout(15_000);
   const browserFailures = [];
@@ -52,7 +48,7 @@ try {
     }
   });
 
-  await page.goto(`${baseURL}/canvas?workspace_id=ws_lab`, {
+  await page.goto(`${baseURL}/canvas`, {
     waitUntil: "domcontentloaded",
   });
   // The first wait is the one that reports what the console did rather than what
@@ -62,14 +58,14 @@ try {
   // way is already collected, so it is attached here instead of being discovered
   // by a person reading a trace.
   try {
-    await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
-    await page.getByLabel("Workspace events live").waitFor();
+    await page.getByRole("heading", { name: "Deployment", exact: true }).waitFor();
+    await page.getByLabel("Deployment events live").waitFor();
   } catch (error) {
     const reported = browserFailures.length
       ? browserFailures.map((line) => `  - ${line}`).join("\n")
       : "  - the page reported nothing: no console error, no uncaught exception, no failed request";
     throw new Error(
-      `the console never drew the workspace canvas.\nWhat the page reported:\n${reported}\n\n${error.message}`,
+      `the console never drew the deployment canvas.\nWhat the page reported:\n${reported}\n\n${error.message}`,
     );
   }
   await assertCheckpoint("producer-placement-visible");
@@ -118,7 +114,7 @@ try {
   await closedConsumer.waitFor();
   await assertCheckpoint("terminal-lifecycle-visible");
 
-  const runs = await normalJSON("/v1/runs?workspace_id=ws_lab");
+  const runs = await normalJSON("/v1/runs");
   assert.deepEqual(
     runs.runs.map((run) => [run.id, run.outcome]).sort(),
     [
@@ -127,8 +123,8 @@ try {
     ],
   );
   const semanticTree = await page.locator("body").ariaSnapshot();
-  assert.match(semanticTree, /heading "Workspace"/);
-  assert.match(semanticTree, /region "Workspace events"/);
+  assert.match(semanticTree, /heading "Deployment"/);
+  assert.match(semanticTree, /region "Deployment events"/);
   assert.equal(await page.locator("button:not(:disabled)").count() > 0, true);
   assert.deepEqual(browserFailures, []);
 } catch (error) {

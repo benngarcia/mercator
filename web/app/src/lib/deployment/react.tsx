@@ -9,42 +9,39 @@ import { resourceKey } from "@/lib/api/atoms";
 import { runtime } from "@/lib/runtime";
 
 import {
-  WorkspaceEvents,
-  WorkspaceFeedError,
-  type WorkspaceSignal,
+  DeploymentEvents,
+  DeploymentFeedError,
+  type DeploymentSignal,
 } from "./feed";
-import type { WorkspaceMessage } from "./reducer";
+import type { DeploymentMessage } from "./reducer";
 import {
-  initialWorkspaceFeedSnapshot,
-  reduceWorkspaceFeed,
-  type WorkspaceFeedSnapshot,
+  initialDeploymentFeedSnapshot,
+  reduceDeploymentFeed,
+  type DeploymentFeedSnapshot,
 } from "./snapshot";
 import { CanvasTransition } from "./transition";
 
-export type { WorkspaceFeedSnapshot } from "./snapshot";
+export type { DeploymentFeedSnapshot } from "./snapshot";
 
-export type WorkspaceFeed = WorkspaceFeedSnapshot;
+export type DeploymentFeed = DeploymentFeedSnapshot;
 
-const snapshotAtom = Atom.family((workspaceId: string) =>
-  Atom.make(initialWorkspaceFeedSnapshot(workspaceId)).pipe(
-    Atom.setIdleTTL("30 seconds"),
-  ),
+const snapshotAtom = Atom.make(initialDeploymentFeedSnapshot()).pipe(
+  Atom.setIdleTTL("30 seconds"),
 );
 
-class WorkspaceControllerKey extends Data.Class<{
-  readonly workspaceId: string;
+class DeploymentControllerKey extends Data.Class<{
   readonly token: string | null;
 }> {}
 
 function shouldAnimate(
-  current: WorkspaceFeedSnapshot,
-  signal: WorkspaceSignal,
+  current: DeploymentFeedSnapshot,
+  signal: DeploymentSignal,
 ): boolean {
-  if (!current.workspace.ready) return false;
+  if (!current.deployment.ready) return false;
   return signal.type === "message" && signal.message.type !== "ready";
 }
 
-function runIdForEvent(message: WorkspaceMessage): string | null {
+function runIdForEvent(message: DeploymentMessage): string | null {
   if (message.type !== "domain_event") return null;
   const event = message.event;
   if (event.correlationid) return event.correlationid;
@@ -53,61 +50,60 @@ function runIdForEvent(message: WorkspaceMessage): string | null {
     : null;
 }
 
-const invalidateMessage = Effect.fn("Workspace.invalidateMessage")(function* (
-  workspaceId: string,
-  message: WorkspaceMessage,
+const invalidateMessage = Effect.fn("Deployment.invalidateMessage")(function* (
+  message: DeploymentMessage,
 ) {
   const reactivity = yield* Reactivity.Reactivity;
   if (message.type === "offers_replaced") {
-    yield* reactivity.invalidate([resourceKey.offers(workspaceId)]);
+    yield* reactivity.invalidate([resourceKey.offers]);
     return;
   }
   if (message.type === "ready") {
     yield* reactivity.invalidate([
-      resourceKey.runs(workspaceId),
-      resourceKey.connections(workspaceId),
+      resourceKey.runs,
+      resourceKey.connections,
     ]);
     return;
   }
   if (message.type !== "domain_event") return;
   if (message.event.type.startsWith("compute.connection.")) {
-    yield* reactivity.invalidate([resourceKey.connections(workspaceId)]);
+    yield* reactivity.invalidate([resourceKey.connections]);
     return;
   }
   if (!message.event.type.startsWith("compute.run.")) return;
   const runId = runIdForEvent(message);
   if (runId === null) return;
   const keys = [
-    resourceKey.runs(workspaceId),
-    resourceKey.run(workspaceId, runId),
-    resourceKey.runEvents(workspaceId, runId),
+    resourceKey.runs,
+    resourceKey.run(runId),
+    resourceKey.runEvents(runId),
   ];
   if (message.event.type === "compute.run.booking_decided.v1") {
-    keys.push(resourceKey.runDecision(workspaceId, runId));
+    keys.push(resourceKey.runDecision(runId));
   }
   yield* reactivity.invalidate(keys);
 });
 
 const controllerAtom = Atom.family(
-  ({ workspaceId }: WorkspaceControllerKey) =>
+  (_: DeploymentControllerKey) =>
     runtime.atom((get) =>
       Stream.unwrap(
         Effect.gen(function* () {
-          const events = yield* WorkspaceEvents;
+          const events = yield* DeploymentEvents;
           const transition = yield* CanvasTransition;
-          const state = snapshotAtom(workspaceId);
+          const state = snapshotAtom;
 
-          const commitSignal = Effect.fn("Workspace.commitSignal")(function* (
-            signal: WorkspaceSignal,
+          const commitSignal = Effect.fn("Deployment.commitSignal")(function* (
+            signal: DeploymentSignal,
           ) {
             const current = get.registry.get(state);
             const next = yield* Effect.try({
-              try: () => reduceWorkspaceFeed(current, signal),
+              try: () => reduceDeploymentFeed(current, signal),
               catch: (cause) =>
-                new WorkspaceFeedError({
+                new DeploymentFeedError({
                   status: 0,
                   message:
-                    "A Workspace event violated the canvas projection contract.",
+                    "A Deployment event violated the canvas projection contract.",
                   retryable: false,
                   cause,
                 }),
@@ -116,12 +112,12 @@ const controllerAtom = Atom.family(
               get.registry.set(state, next),
             );
             if (signal.type === "message") {
-              yield* invalidateMessage(workspaceId, signal.message);
+              yield* invalidateMessage(signal.message);
             }
             return next;
           });
 
-          const fail = (error: WorkspaceFeedError) =>
+          const fail = (error: DeploymentFeedError) =>
             Stream.fromEffect(
               transition
                 .commit(false, () => {
@@ -138,31 +134,19 @@ const controllerAtom = Atom.family(
             );
 
           return events
-            .stream(workspaceId)
+            .stream()
             .pipe(
               Stream.mapEffect(commitSignal),
-              Stream.catchTag("WorkspaceFeedError", fail),
+              Stream.catchTag("DeploymentFeedError", fail),
             );
         }),
       ),
     ),
 );
 
-const inactiveSnapshotAtom = Atom.make<WorkspaceFeedSnapshot | null>(null);
-const inactiveControllerAtom = Atom.make(null);
-
-export function useWorkspaceFeed(): WorkspaceFeed | null {
-  const { token, workspace } = useSession();
-  const controller =
-    workspace === null
-      ? inactiveControllerAtom
-      : controllerAtom(
-          new WorkspaceControllerKey({ workspaceId: workspace, token }),
-        );
-  const snapshot =
-    workspace === null ? inactiveSnapshotAtom : snapshotAtom(workspace);
+export function useDeploymentFeed(): DeploymentFeed {
+  const { token } = useSession();
+  const controller = controllerAtom(new DeploymentControllerKey({ token }));
   useAtomMount(controller);
-  const value = useAtomValue(snapshot);
-  if (value === null) return null;
-  return value;
+  return useAtomValue(snapshotAtom);
 }

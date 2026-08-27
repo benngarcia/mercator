@@ -1,4 +1,4 @@
-// The locality page. The Workspace projection says which Runs exist and where
+// The locality page. The deployment projection says which Runs exist and where
 // each landed; the locality payload lives on the Booking Decision, which the
 // reducer deliberately does not keep ("a copy kept here was a second store of the
 // same facts that nothing rendered"). So this page joins the two: the feed for
@@ -16,25 +16,24 @@ import { useMemo } from "react";
 
 import { LocalityStage } from "@/components/locality";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useSession } from "@/hooks/useSession";
-import { useWorkspaceDecisions } from "@/lib/api/queries";
+import { useDeploymentDecisions } from "@/lib/api/queries";
 import { localityOf, type RunLocality } from "@/lib/locality";
-import { useWorkspaceFeed, type Workspace, type WorkspaceRun } from "@/lib/workspace";
+import { useDeploymentFeed, type Deployment, type DeploymentRun } from "@/lib/deployment";
 
 import { rootRoute } from "./root";
 
 // imageNameOf is the short name of what this Run runs. A decision does not carry
 // the image reference, so it comes off the workload the projection already holds.
-function imageNameOf(run: WorkspaceRun): string {
+function imageNameOf(run: DeploymentRun): string {
   const reference = run.workload.spec.containers[0]?.image ?? "";
   const withoutDigest = reference.split("@")[0] ?? reference;
   const short = withoutDigest.split("/").pop();
   return short && short.length > 0 ? short : "image";
 }
 
-function machineLabels(workspace: Workspace): Record<string, string> {
+function machineLabels(deployment: Deployment): Record<string, string> {
   const labels: Record<string, string> = {};
-  for (const rental of Object.values(workspace.rentals)) {
+  for (const rental of Object.values(deployment.rentals)) {
     labels[rental.id] = rental.id;
   }
   return labels;
@@ -44,11 +43,11 @@ function LocalityBoard({
   runs,
   labels,
 }: {
-  runs: readonly WorkspaceRun[];
+  runs: readonly DeploymentRun[];
   labels: Record<string, string>;
 }) {
   const runIds = useMemo(() => runs.map((run) => run.id), [runs]);
-  const chains = useWorkspaceDecisions(runIds);
+  const chains = useDeploymentDecisions(runIds);
 
   const records = useMemo(() => {
     const byID = new Map(runs.map((run) => [run.id, run]));
@@ -65,25 +64,17 @@ function LocalityBoard({
 }
 
 function LocalityPage() {
-  const { workspace } = useSession();
-  const feed = useWorkspaceFeed();
+  const feed = useDeploymentFeed();
 
-  if (!workspace) {
-    return (
-      <div className="flex min-h-full items-center justify-center p-8 text-sm text-muted-foreground">
-        Select a Workspace
-      </div>
-    );
-  }
-  if (!feed || !feed.workspace.ready) {
+  if (!feed.deployment.ready) {
     return <LocalitySkeleton />;
   }
 
-  const placed = Object.values(feed.workspace.runs).filter(
+  const placed = Object.values(feed.deployment.runs).filter(
     (run) => run.selectedOfferID !== undefined,
   );
 
-  return <LocalityBoard runs={placed} labels={machineLabels(feed.workspace)} />;
+  return <LocalityBoard runs={placed} labels={machineLabels(feed.deployment)} />;
 }
 
 function LocalitySkeleton() {

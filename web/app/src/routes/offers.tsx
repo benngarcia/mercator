@@ -1,4 +1,4 @@
-// /offers — the offer snapshots available to the workspace (polled every 10s).
+// /offers — the offer snapshots available to the deployment (polled every 10s).
 // Selecting a row opens OfferDetailSheet with the full capability profile,
 // network facts, pricing and reliability.
 
@@ -20,7 +20,7 @@ function OffersPage() {
     <div className="flex flex-col gap-4 p-4">
       <PageHeader
         title="Offers"
-        description="Standing and provisionable compute offers visible to this workspace."
+        description="Standing and provisionable compute offers visible to this deployment."
       />
       {isError ? (
         <ErrorState error={error} onRetry={() => void refetch()} />
@@ -34,7 +34,7 @@ function OffersPage() {
             <EmptyState
               icon={Tags}
               title="No offers"
-              description="No compute offers are currently visible to this workspace."
+              description="No compute offers are currently visible to this deployment."
             />
           }
         />

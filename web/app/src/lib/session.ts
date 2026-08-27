@@ -5,18 +5,15 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 const TOKEN_KEY = "mercator.token";
-const WORKSPACE_KEY = "mercator.workspace";
 
 export interface SessionState {
   readonly token: string | null;
-  readonly workspace: string | null;
 }
 
 export interface SessionService {
   readonly current: Effect.Effect<SessionState>;
   readonly changes: Stream.Stream<SessionState>;
   readonly setToken: (token: string | null) => Effect.Effect<void>;
-  readonly setWorkspace: (workspace: string | null) => Effect.Effect<void>;
 }
 
 export class Session extends Context.Service<Session, SessionService>()(
@@ -40,11 +37,7 @@ function readStoredValue(key: string): string | null {
 }
 
 export function readBrowserSession(): SessionState {
-  const workspace = readStoredValue(WORKSPACE_KEY)?.trim() || null;
-  return {
-    token: readStoredValue(TOKEN_KEY),
-    workspace,
-  };
+  return { token: readStoredValue(TOKEN_KEY) };
 }
 
 function persist(key: string, value: string | null): void {
@@ -65,9 +58,7 @@ function persist(key: string, value: string | null): void {
 }
 
 function isSessionStorageEvent(event: StorageEvent): boolean {
-  return (
-    event.key === null || event.key === TOKEN_KEY || event.key === WORKSPACE_KEY
-  );
+  return event.key === null || event.key === TOKEN_KEY;
 }
 
 export const layer = Layer.effect(
@@ -99,19 +90,10 @@ export const layer = Layer.effect(
       yield* update({ ...current, token });
     });
 
-    const setWorkspace = Effect.fn("Session.setWorkspace")(function* (
-      workspace: string | null,
-    ) {
-      persist(WORKSPACE_KEY, workspace);
-      const current = yield* SubscriptionRef.get(state);
-      yield* update({ ...current, workspace: workspace?.trim() || null });
-    });
-
     return Session.of({
       current: SubscriptionRef.get(state),
       changes: SubscriptionRef.changes(state),
       setToken,
-      setWorkspace,
     });
   }),
 );
@@ -126,11 +108,6 @@ export const testLayer = (initial: SessionState) =>
         changes: SubscriptionRef.changes(state),
         setToken: (token) =>
           SubscriptionRef.update(state, (current) => ({ ...current, token })),
-        setWorkspace: (workspace) =>
-          SubscriptionRef.update(state, (current) => ({
-            ...current,
-            workspace,
-          })),
       });
     }),
   );

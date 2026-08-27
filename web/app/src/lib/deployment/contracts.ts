@@ -92,7 +92,6 @@ const StatedRate = Schema.Struct({
 });
 const WorkloadRevision = Schema.Struct({
   id: Schema.String,
-  workspace_id: Schema.String,
   workload_id: Schema.String,
   digest: Schema.String,
   spec: Schema.Struct({
@@ -317,7 +316,7 @@ export const BookingDecision = Schema.Struct({
       native_ref: Schema.optionalKey(Schema.String),
       // Optional: events written before dispositions existed are still in
       // durable history, and a required key here bricks the canvas for any
-      // workspace replaying them. Absent renders as unrecorded.
+      // deployment replaying them. Absent renders as unrecorded.
       disposition: Schema.optionalKey(CandidateDisposition),
       feasible: Schema.Boolean,
       rejections: Schema.optionalKey(mutableArray(Violation)),
@@ -345,7 +344,6 @@ export const CloudEvent = Schema.Struct({
   type: Schema.String,
   subject: Schema.String,
   time: Schema.String,
-  workspaceid: Schema.String,
   streamversion: Schema.Number,
   globalposition: Schema.Number,
   correlationid: Schema.optionalKey(Schema.String),
@@ -354,7 +352,6 @@ export const CloudEvent = Schema.Struct({
 });
 
 export const OfferCatalogReplacement = Schema.Struct({
-  workspace_id: Schema.String,
   revision: Schema.String,
   observed_at: Schema.String,
   offers: mutableArray(OfferSnapshot),

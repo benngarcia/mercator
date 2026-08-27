@@ -12,16 +12,12 @@ import type {
   Run,
 } from "./types";
 
-interface WorkspaceArg {
-  readonly workspaceId?: string;
-}
-
-interface RunPageArg extends WorkspaceArg {
+interface RunPageArg {
   readonly cursor?: string;
   readonly limit?: number;
 }
 
-interface MutationArg extends WorkspaceArg {
+interface MutationArg {
   readonly idempotencyKey?: string;
 }
 
@@ -45,48 +41,6 @@ export const logout = Effect.fn("Api.logout")(function* () {
   yield* api.logout();
 });
 
-export const listWorkspaces = Effect.fn("Api.listWorkspaces")(function* (
-  includeArchived: boolean,
-) {
-  const api = yield* Api;
-  const headers = yield* api.headers;
-  return yield* api.request("Api.listWorkspaces", (signal) =>
-    api.client.GET("/v1/workspaces", {
-      headers,
-      params: { query: { include_archived: includeArchived } },
-      signal,
-    }),
-  );
-});
-
-export const createWorkspace = Effect.fn("Api.createWorkspace")(function* (
-  displayName: string,
-) {
-  const api = yield* Api;
-  const headers = yield* api.headers;
-  return yield* api.request("Api.createWorkspace", (signal) =>
-    api.client.POST("/v1/workspaces", {
-      body: { display_name: displayName },
-      headers,
-      signal,
-    }),
-  );
-});
-
-export const archiveWorkspace = Effect.fn("Api.archiveWorkspace")(function* (
-  workspaceId: string,
-) {
-  const api = yield* Api;
-  const headers = yield* api.headers;
-  return yield* api.request("Api.archiveWorkspace", (signal) =>
-    api.client.POST("/v1/workspaces/{workspace_id}/archive", {
-      headers,
-      params: { path: { workspace_id: workspaceId } },
-      signal,
-    }),
-  );
-});
-
 export const listRuns = Effect.fn("Api.listRuns")(function* (
   arg: RunPageArg = {},
 ) {
@@ -97,7 +51,6 @@ export const listRuns = Effect.fn("Api.listRuns")(function* (
       headers,
       params: {
         query: {
-          workspace_id: arg.workspaceId,
           cursor: arg.cursor,
           limit: arg.limit,
         },
@@ -110,13 +63,11 @@ export const listRuns = Effect.fn("Api.listRuns")(function* (
 // listAllRuns walks every page of /v1/runs. Run ids are UUIDv7 and the
 // projection lists them ascending, so reading only the first page would hide
 // the most recently created Runs, which are the ones an operator is watching.
-export const listAllRuns = Effect.fn("Api.listAllRuns")(function* (
-  arg: WorkspaceArg = {},
-) {
+export const listAllRuns = Effect.fn("Api.listAllRuns")(function* () {
   const runs: Run[] = [];
   let cursor: string | undefined;
   do {
-    const page = yield* listRuns({ workspaceId: arg.workspaceId, cursor });
+    const page = yield* listRuns({ cursor });
     runs.push(...page.runs);
     cursor = page.next_cursor;
   } while (cursor !== undefined && cursor !== "");
@@ -125,7 +76,6 @@ export const listAllRuns = Effect.fn("Api.listAllRuns")(function* (
 
 export const getRun = Effect.fn("Api.getRun")(function* (
   runId: string,
-  arg: WorkspaceArg = {},
 ) {
   const api = yield* Api;
   const headers = yield* api.headers;
@@ -134,7 +84,6 @@ export const getRun = Effect.fn("Api.getRun")(function* (
       headers,
       params: {
         path: { run_id: runId },
-        query: { workspace_id: arg.workspaceId },
       },
       signal,
     }),
@@ -143,7 +92,6 @@ export const getRun = Effect.fn("Api.getRun")(function* (
 
 export const getRunEvents = Effect.fn("Api.getRunEvents")(function* (
   runId: string,
-  arg: WorkspaceArg = {},
 ) {
   const api = yield* Api;
   const headers = yield* api.headers;
@@ -152,7 +100,6 @@ export const getRunEvents = Effect.fn("Api.getRunEvents")(function* (
       headers,
       params: {
         path: { run_id: runId },
-        query: { workspace_id: arg.workspaceId },
       },
       signal,
     }),
@@ -161,7 +108,6 @@ export const getRunEvents = Effect.fn("Api.getRunEvents")(function* (
 
 export const getRunDecision = Effect.fn("Api.getRunDecision")(function* (
   runId: string,
-  arg: WorkspaceArg = {},
 ) {
   const api = yield* Api;
   const headers = yield* api.headers;
@@ -170,7 +116,6 @@ export const getRunDecision = Effect.fn("Api.getRunDecision")(function* (
       headers,
       params: {
         path: { run_id: runId },
-        query: { workspace_id: arg.workspaceId },
       },
       signal,
     }),
@@ -189,7 +134,6 @@ export const createRun = Effect.fn("Api.createRun")(function* (
       body,
       headers,
       params: {
-        query: { workspace_id: arg.workspaceId },
         header: { "Idempotency-Key": idempotencyKey },
       },
       signal,
@@ -199,7 +143,6 @@ export const createRun = Effect.fn("Api.createRun")(function* (
 
 export const cancelRun = Effect.fn("Api.cancelRun")(function* (
   runId: string,
-  arg: WorkspaceArg = {},
 ) {
   const api = yield* Api;
   const headers = yield* api.headers;
@@ -208,7 +151,6 @@ export const cancelRun = Effect.fn("Api.cancelRun")(function* (
       headers,
       params: {
         path: { run_id: runId },
-        query: { workspace_id: arg.workspaceId },
       },
       signal,
     }),
@@ -217,7 +159,6 @@ export const cancelRun = Effect.fn("Api.cancelRun")(function* (
 
 export const refreshRun = Effect.fn("Api.refreshRun")(function* (
   runId: string,
-  arg: WorkspaceArg = {},
 ) {
   const api = yield* Api;
   const headers = yield* api.headers;
@@ -226,7 +167,6 @@ export const refreshRun = Effect.fn("Api.refreshRun")(function* (
       headers,
       params: {
         path: { run_id: runId },
-        query: { workspace_id: arg.workspaceId },
       },
       signal,
     }),
@@ -235,7 +175,6 @@ export const refreshRun = Effect.fn("Api.refreshRun")(function* (
 
 export const previewPlacement = Effect.fn("Api.previewPlacement")(function* (
   body: PlacementPreviewRequest,
-  arg: WorkspaceArg = {},
 ) {
   const api = yield* Api;
   const headers = yield* api.headers;
@@ -243,37 +182,24 @@ export const previewPlacement = Effect.fn("Api.previewPlacement")(function* (
     api.client.POST("/v1/placements:preview", {
       body,
       headers,
-      params: { query: { workspace_id: arg.workspaceId } },
       signal,
     }),
   );
 });
 
-export const listOffers = Effect.fn("Api.listOffers")(function* (
-  arg: WorkspaceArg = {},
-) {
+export const listOffers = Effect.fn("Api.listOffers")(function* () {
   const api = yield* Api;
   const headers = yield* api.headers;
   return yield* api.request("Api.listOffers", (signal) =>
-    api.client.GET("/v1/offers", {
-      headers,
-      params: { query: { workspace_id: arg.workspaceId } },
-      signal,
-    }),
+    api.client.GET("/v1/offers", { headers, signal }),
   );
 });
 
-export const listConnections = Effect.fn("Api.listConnections")(function* (
-  arg: WorkspaceArg = {},
-) {
+export const listConnections = Effect.fn("Api.listConnections")(function* () {
   const api = yield* Api;
   const headers = yield* api.headers;
   return yield* api.request("Api.listConnections", (signal) =>
-    api.client.GET("/v1/connections", {
-      headers,
-      params: { query: { workspace_id: arg.workspaceId } },
-      signal,
-    }),
+    api.client.GET("/v1/connections", { headers, signal }),
   );
 });
 
@@ -289,7 +215,6 @@ export const createConnection = Effect.fn("Api.createConnection")(function* (
       body,
       headers,
       params: {
-        query: { workspace_id: arg.workspaceId },
         header: { "Idempotency-Key": idempotencyKey },
       },
       signal,
@@ -298,7 +223,7 @@ export const createConnection = Effect.fn("Api.createConnection")(function* (
 });
 
 export const authorizeConnection = Effect.fn("Api.authorizeConnection")(
-  function* (connectionId: string, arg: WorkspaceArg = {}) {
+  function* (connectionId: string) {
     const api = yield* Api;
     const headers = yield* api.headers;
     return yield* api.request("Api.authorizeConnection", (signal) =>
@@ -306,7 +231,6 @@ export const authorizeConnection = Effect.fn("Api.authorizeConnection")(
         headers,
         params: {
           path: { connection_id: connectionId },
-          query: { workspace_id: arg.workspaceId },
         },
         signal,
       }),
@@ -316,7 +240,6 @@ export const authorizeConnection = Effect.fn("Api.authorizeConnection")(
 
 export const deleteConnection = Effect.fn("Api.deleteConnection")(function* (
   connectionId: string,
-  arg: WorkspaceArg = {},
 ) {
   const api = yield* Api;
   const headers = yield* api.headers;
@@ -325,7 +248,6 @@ export const deleteConnection = Effect.fn("Api.deleteConnection")(function* (
       headers,
       params: {
         path: { connection_id: connectionId },
-        query: { workspace_id: arg.workspaceId },
       },
       signal,
     }),
@@ -341,7 +263,7 @@ export const listAdapters = Effect.fn("Api.listAdapters")(function* () {
 });
 
 export const listWorkloadRevisions = Effect.fn("Api.listWorkloadRevisions")(
-  function* (workloadId: string, arg: WorkspaceArg = {}) {
+  function* (workloadId: string) {
     const api = yield* Api;
     const headers = yield* api.headers;
     return yield* api.request("Api.listWorkloadRevisions", (signal) =>
@@ -349,7 +271,6 @@ export const listWorkloadRevisions = Effect.fn("Api.listWorkloadRevisions")(
         headers,
         params: {
           path: { workload_id: workloadId },
-          query: { workspace_id: arg.workspaceId },
         },
         signal,
       }),
@@ -358,7 +279,7 @@ export const listWorkloadRevisions = Effect.fn("Api.listWorkloadRevisions")(
 );
 
 export const getWorkloadRevision = Effect.fn("Api.getWorkloadRevision")(
-  function* (workloadId: string, revisionId: string, arg: WorkspaceArg = {}) {
+  function* (workloadId: string, revisionId: string) {
     const api = yield* Api;
     const headers = yield* api.headers;
     return yield* api.request("Api.getWorkloadRevision", (signal) =>
@@ -369,7 +290,6 @@ export const getWorkloadRevision = Effect.fn("Api.getWorkloadRevision")(
             workload_id: workloadId,
             revision_id: revisionId,
           },
-          query: { workspace_id: arg.workspaceId },
         },
         signal,
       }),
@@ -408,7 +328,6 @@ export const createRevision = Effect.fn("Api.createRevision")(function* (
       headers,
       params: {
         path: { workload_id: workloadId },
-        query: { workspace_id: arg.workspaceId },
         header: { "Idempotency-Key": idempotencyKey },
       },
       signal,

@@ -70,7 +70,7 @@ export function LocalityStage({
       <div className="min-h-0 flex-1 overflow-auto p-5">
         {records.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No Run in this Workspace has been placed yet, so nothing has been found
+            No Run in this Deployment has been placed yet, so nothing has been found
             anywhere.
           </p>
         ) : (

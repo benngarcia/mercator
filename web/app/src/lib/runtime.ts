@@ -4,18 +4,18 @@ import * as BrowserHttpClient from "@effect/platform-browser/BrowserHttpClient";
 
 import * as Api from "./api/client";
 import * as Session from "./session";
-import * as WorkspaceEvents from "./workspace/feed";
-import * as CanvasTransition from "./workspace/transition";
+import * as DeploymentEvents from "./deployment/feed";
+import * as CanvasTransition from "./deployment/transition";
 
 const apiLayer = Api.layer.pipe(Layer.provide(Session.layer));
-const workspaceEventsLayer = WorkspaceEvents.layer.pipe(
+const deploymentEventsLayer = DeploymentEvents.layer.pipe(
   Layer.provide(Layer.merge(Session.layer, BrowserHttpClient.layerFetch)),
 );
 
 export const liveLayer = Layer.mergeAll(
   Session.layer,
   apiLayer,
-  workspaceEventsLayer,
+  deploymentEventsLayer,
   CanvasTransition.layer,
 );
 

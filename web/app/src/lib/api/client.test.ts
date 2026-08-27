@@ -14,7 +14,7 @@ afterEach(() => {
 
 const testApiLayer = apiLayer.pipe(Layer.provide(sessionLayer));
 
-effect("uses the explicit Workspace from the OpenAPI query", () =>
+effect("lists deployment Runs", () =>
   Effect.gen(function* () {
     const requests: Request[] = [];
     globalThis.fetch = Object.assign(
@@ -27,15 +27,13 @@ effect("uses the explicit Workspace from the OpenAPI query", () =>
       { preconnect: originalFetch.preconnect },
     );
 
-    yield* endpoints.listRuns({ workspaceId: "ws_explicit" });
+    yield* endpoints.listRuns();
 
     const request = requests[0];
     if (request === undefined) {
       throw new Error("Expected the API to issue a request");
     }
-    expect(new URL(request.url).searchParams.get("workspace_id")).toBe(
-      "ws_explicit",
-    );
+    expect(new URL(request.url).searchParams.has("workspace_id")).toBe(false);
     // The projection owns its page size; the console does not restate it.
     expect(new URL(request.url).searchParams.get("limit")).toBeNull();
   }).pipe(Effect.provide(testApiLayer)),
@@ -61,33 +59,10 @@ effect("reads every page of Runs so the newest are not hidden", () =>
       { preconnect: originalFetch.preconnect },
     );
 
-    const runs = yield* endpoints.listAllRuns({ workspaceId: "ws_paged" });
+    const runs = yield* endpoints.listAllRuns();
 
     expect(cursors).toEqual([null, "run_oldest"]);
     expect(runs.map((run) => run.id)).toEqual(["run_oldest", "run_newest"]);
-  }).pipe(Effect.provide(testApiLayer)),
-);
-
-effect("omits Workspace scope from the Workspace catalog", () =>
-  Effect.gen(function* () {
-    const requests: Request[] = [];
-    globalThis.fetch = Object.assign(
-      async (input: RequestInfo | URL, init?: RequestInit) => {
-        requests.push(
-          input instanceof Request ? input : new Request(input, init),
-        );
-        return Response.json({ workspaces: [] });
-      },
-      { preconnect: originalFetch.preconnect },
-    );
-
-    yield* endpoints.listWorkspaces(false);
-
-    const request = requests[0];
-    if (request === undefined) {
-      throw new Error("Expected the API to issue a request");
-    }
-    expect(new URL(request.url).searchParams.has("workspace_id")).toBe(false);
   }).pipe(Effect.provide(testApiLayer)),
 );
 
