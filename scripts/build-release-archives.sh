@@ -65,9 +65,8 @@ for target in ${TARGETS}; do
   rm -rf "${work_dir}" "${archive}"
   mkdir -p "${work_dir}"
 
-  GOOS="${os}" GOARCH="${arch}" go build -trimpath \
-    -ldflags="-s -w -X github.com/benngarcia/mercator/internal/httpapi.buildRevisionOverride=${REVISION}" \
-    -o "${work_dir}/mercator" ./cmd/mercator
+  GOOS="${os}" GOARCH="${arch}" MERCATOR_BUILD_REVISION="${REVISION}" MERCATOR_BUILD_LDFLAGS="-s -w" \
+    scripts/build-mercator.sh "${work_dir}/mercator"
   # The node agent ships beside the control plane because it is half of the
   # product rather than an add-on. A machine an operator enrolls by hand runs it
   # from the environment, and a machine a provider rents fetches the same binary

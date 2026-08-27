@@ -35,9 +35,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=console /src/web/static ./web/static
-RUN test -n "$MERCATOR_BUILD_REVISION" && CGO_ENABLED=0 go build -trimpath \
-    -ldflags="-X github.com/benngarcia/mercator/internal/httpapi.buildRevisionOverride=$MERCATOR_BUILD_REVISION" \
-    -o /out/mercator ./cmd/mercator
+RUN MERCATOR_BUILD_REVISION="$MERCATOR_BUILD_REVISION" scripts/build-mercator.sh /out/mercator
 
 FROM docker:29-cli
 COPY --from=build /out/mercator /usr/local/bin/mercator

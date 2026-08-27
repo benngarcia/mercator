@@ -146,6 +146,51 @@ func TestRolloutBridgeAcceptsTheLegacyPlacementPreviewBody(t *testing.T) {
 	}
 }
 
+func TestRolloutBridgeRejectsConflictingLegacyBodyScopes(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	for _, path := range []string{"/v1/runs", "/v1/placements:preview"} {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(mustMarshal(t, map[string]any{
+			"workspace_id": "released",
+			"run_id":       "run_conflicting_scope",
+			"workload": map[string]any{
+				"id": "wrev_conflicting_scope", "workspace_id": "experiments", "workload_id": "wrk_conflicting_scope", "digest": "sha256:conflict", "spec": httpRevision().Spec,
+			},
+		})))
+		req.Header.Set("Idempotency-Key", "conflicting-scope")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest || !bytes.Contains(rec.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+			t.Fatalf("conflicting scopes on %s = %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestLegacyWorkspaceRouteTableStatesEveryRetiredSelectorPosition(t *testing.T) {
+	want := map[string]bool{
+		"GET /v1/console/events": true, "GET /v1/runs": true, "POST /v1/runs": true,
+		"GET /v1/runs/{run_id}": true, "GET /v1/runs/{run_id}/wait": true,
+		"POST /v1/runs/{run_id}/refresh": true, "POST /v1/runs/{run_id}/cancel": true,
+		"GET /v1/runs/{run_id}/events": true, "GET /v1/runs/{run_id}/decision": true,
+		"POST /v1/runs/{run_id}/report": true, "POST /v1/placements:preview": true,
+		"GET /v1/connections": true, "POST /v1/connections": true,
+		"DELETE /v1/connections/{connection_id}":         true,
+		"POST /v1/connections/{connection_id}/authorize": true, "GET /v1/offers": true,
+		"POST /v1/workloads": false, "GET /v1/workloads/{workload_id}/revisions": true,
+		"POST /v1/workloads/{workload_id}/revisions":              true,
+		"GET /v1/workloads/{workload_id}/revisions/{revision_id}": true,
+	}
+	if len(legacyWorkspaceRoutes) != len(want) {
+		t.Fatalf("legacy route count = %d, want %d", len(legacyWorkspaceRoutes), len(want))
+	}
+	for _, route := range legacyWorkspaceRoutes {
+		key := route.method + " " + route.pattern
+		query, found := want[key]
+		if !found || query != route.query {
+			t.Fatalf("unexpected legacy route %#v", route)
+		}
+	}
+}
+
 func TestRolloutBridgeSingularDecisionIsTheLatestRecordedDecision(t *testing.T) {
 	decisions := []domain.BookingDecision{{ID: "dec_original"}, {ID: "dec_replacement"}}
 	response := bookingDecisionResponse(decisions)
