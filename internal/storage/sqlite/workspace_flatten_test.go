@@ -22,7 +22,7 @@ func TestWorkspaceSchemaFlatteningPreservesDeploymentHistory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
-	for _, table := range []string{"events", "command_appends", "connection_secret", "runs"} {
+	for _, table := range legacyWorkspacePartitionedTables {
 		partitioned, err := tableHasColumn(ctx, db, table, "workspace_id")
 		if err != nil {
 			t.Fatalf("inspect %s: %v", table, err)
@@ -56,6 +56,7 @@ func TestWorkspaceSchemaFlatteningPreservesDeploymentHistory(t *testing.T) {
 			t.Fatalf("read retained credential %s: secret=%q err=%v", connectionID, secret, err)
 		}
 	}
+	assertLegacyCapacityRows(t, ctx, db)
 }
 
 func TestWorkspaceSchemaCollisionLeavesTheCompleteDatabaseUntouched(t *testing.T) {
@@ -73,7 +74,7 @@ func TestWorkspaceSchemaCollisionLeavesTheCompleteDatabaseUntouched(t *testing.T
 				t.Fatalf("collision error = %v", err)
 			}
 
-			for _, table := range []string{"events", "command_appends", "connection_secret", "runs"} {
+			for _, table := range legacyWorkspacePartitionedTables {
 				partitioned, inspectErr := tableHasColumn(ctx, db, table, "workspace_id")
 				if inspectErr != nil {
 					t.Fatalf("inspect rolled-back %s: %v", table, inspectErr)
@@ -85,12 +86,16 @@ func TestWorkspaceSchemaCollisionLeavesTheCompleteDatabaseUntouched(t *testing.T
 			if !databaseTableExists(t, db, "workspaces") || !databaseTableExists(t, db, "workspace_members") {
 				t.Fatal("workspace catalog changed despite refused migration")
 			}
-			if databaseTableExists(t, db, "events_workspace_legacy") {
-				t.Fatal("transaction rollback left an intermediate event table")
+			for _, table := range legacyWorkspacePartitionedTables {
+				if databaseTableExists(t, db, table+"_workspace_legacy") {
+					t.Fatalf("transaction rollback left intermediate table %s", table)
+				}
 			}
-			var events int
-			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&events); err != nil || events != 2 {
-				t.Fatalf("legacy events changed: count=%d err=%v", events, err)
+			for _, table := range legacyWorkspacePartitionedTables {
+				var rows int
+				if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&rows); err != nil || rows != 2 {
+					t.Fatalf("legacy %s changed: count=%d err=%v", table, rows, err)
+				}
 			}
 		})
 	}
@@ -99,6 +104,11 @@ func TestWorkspaceSchemaCollisionLeavesTheCompleteDatabaseUntouched(t *testing.T
 type legacyCollisions struct {
 	connection bool
 	run        bool
+}
+
+var legacyWorkspacePartitionedTables = []string{
+	"events", "command_appends", "connection_secret", "runs", "rental_schedules",
+	"nodes", "node_operations", "node_events", "node_workloads", "rentals",
 }
 
 func legacyWorkspaceDatabase(t *testing.T, collision legacyCollisions) *sql.DB {
@@ -149,6 +159,67 @@ func legacyWorkspaceDatabase(t *testing.T, collision legacyCollisions) *sql.DB {
 			record_json BLOB NOT NULL,
 			PRIMARY KEY(workspace_id, run_id)
 		);
+		CREATE TABLE rental_schedules (
+			workspace_id TEXT NOT NULL,
+			rental_id TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			schedule_json BLOB NOT NULL,
+			PRIMARY KEY(workspace_id, rental_id)
+		);
+		CREATE TABLE nodes (
+			workspace_id TEXT NOT NULL,
+			node_id TEXT NOT NULL,
+			rental_id TEXT NOT NULL,
+			generation INTEGER NOT NULL,
+			state TEXT NOT NULL,
+			fencing_token INTEGER NOT NULL,
+			enrollment_token_id TEXT NOT NULL,
+			enrollment_expires TEXT NOT NULL,
+			enrolled_at TEXT NOT NULL,
+			lease_expires TEXT NOT NULL,
+			last_heartbeat_at TEXT NOT NULL,
+			agent_version TEXT NOT NULL,
+			facts_json BLOB NOT NULL,
+			shadow_price_usd_per_hour REAL NOT NULL DEFAULT 0,
+			purchase_json BLOB NOT NULL DEFAULT '{}',
+			PRIMARY KEY(workspace_id, node_id)
+		);
+		CREATE TABLE node_operations (
+			workspace_id TEXT NOT NULL,
+			node_id TEXT NOT NULL,
+			operation_id TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			fencing_token INTEGER NOT NULL,
+			state TEXT NOT NULL,
+			issued_at TEXT NOT NULL,
+			settled_at TEXT NOT NULL,
+			failure TEXT NOT NULL,
+			payload BLOB NOT NULL,
+			sequence INTEGER NOT NULL,
+			PRIMARY KEY(workspace_id, node_id, operation_id)
+		);
+		CREATE TABLE node_events (
+			workspace_id TEXT NOT NULL,
+			node_id TEXT NOT NULL,
+			event_id TEXT NOT NULL,
+			PRIMARY KEY(workspace_id, node_id, event_id)
+		);
+		CREATE TABLE node_workloads (
+			workspace_id TEXT NOT NULL,
+			node_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			attempt_id TEXT NOT NULL,
+			observed_at TEXT NOT NULL,
+			observation_json BLOB NOT NULL,
+			PRIMARY KEY(workspace_id, node_id, run_id, attempt_id)
+		);
+		CREATE TABLE rentals (
+			workspace_id TEXT NOT NULL,
+			rental_id TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			rental_json BLOB NOT NULL,
+			PRIMARY KEY(workspace_id, rental_id)
+		);
 		CREATE TABLE workspaces (workspace_id TEXT PRIMARY KEY);
 		CREATE TABLE workspace_members (workspace_id TEXT NOT NULL, subject TEXT NOT NULL);
 	`); err != nil {
@@ -166,6 +237,8 @@ func legacyWorkspaceDatabase(t *testing.T, collision legacyCollisions) *sql.DB {
 	}
 	for index, workspaceID := range workspaces {
 		streamID := []string{"run_released", "run_experiment"}[index]
+		rentalID := []string{"rental_released", "rental_experiment"}[index]
+		nodeID := []string{"node_released", "node_experiment"}[index]
 		commandKey := "create:" + streamID
 		result, err := db.Exec(`INSERT INTO events (
 			workspace_id, event_id, stream_type, stream_id, stream_version,
@@ -194,6 +267,32 @@ func legacyWorkspaceDatabase(t *testing.T, collision legacyCollisions) *sql.DB {
 		if _, err := db.Exec(`INSERT INTO runs VALUES (?, ?, 0, ?)`, workspaceID, runIDs[index], record); err != nil {
 			t.Fatalf("seed legacy Run projection: %v", err)
 		}
+		schedule, err := json.Marshal(domain.RentalSchedule{RentalID: rentalID, Version: 1, Bookings: []domain.ScheduledBooking{}})
+		if err != nil {
+			t.Fatalf("encode legacy Rental Schedule: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO rental_schedules VALUES (?, ?, 1, ?)`, workspaceID, rentalID, schedule); err != nil {
+			t.Fatalf("seed legacy Rental Schedule: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO nodes VALUES (?, ?, ?, 1, 'ready', 1, '', ?, ?, ?, ?, 'fixture', '{}', 1.5, '{}')`, workspaceID, nodeID, rentalID, "2026-08-27T00:00:00Z", "2026-08-26T00:00:00Z", "2026-08-27T00:00:00Z", "2026-08-26T00:00:00Z"); err != nil {
+			t.Fatalf("seed legacy Node: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO node_operations VALUES (?, ?, ?, 'launch', 1, 'settled', ?, ?, '', '{}', 1)`, workspaceID, nodeID, "op_"+nodeID, "2026-08-26T00:00:00Z", "2026-08-26T00:00:01Z"); err != nil {
+			t.Fatalf("seed legacy Node operation: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO node_events VALUES (?, ?, ?)`, workspaceID, nodeID, "node_event_"+nodeID); err != nil {
+			t.Fatalf("seed legacy Node event: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO node_workloads VALUES (?, ?, ?, ?, ?, '{}')`, workspaceID, nodeID, runIDs[index], "attempt_"+nodeID, "2026-08-26T00:00:00Z"); err != nil {
+			t.Fatalf("seed legacy Node workload: %v", err)
+		}
+		rental, err := json.Marshal(domain.Rental{ID: rentalID, ConnectionID: connectionIDs[index], OwnershipToken: "owner_" + rentalID, Version: 1, Generations: []domain.RentalGeneration{}})
+		if err != nil {
+			t.Fatalf("encode legacy Rental: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO rentals VALUES (?, ?, 1, ?)`, workspaceID, rentalID, rental); err != nil {
+			t.Fatalf("seed legacy Rental: %v", err)
+		}
 		if _, err := db.Exec(`INSERT INTO workspaces VALUES (?)`, workspaceID); err != nil {
 			t.Fatalf("seed workspace catalog: %v", err)
 		}
@@ -202,6 +301,16 @@ func legacyWorkspaceDatabase(t *testing.T, collision legacyCollisions) *sql.DB {
 		}
 	}
 	return db
+}
+
+func assertLegacyCapacityRows(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	for _, table := range []string{"rental_schedules", "nodes", "node_operations", "node_events", "node_workloads", "rentals"} {
+		var rows int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&rows); err != nil || rows != 2 {
+			t.Fatalf("retained %s rows = %d, err=%v", table, rows, err)
+		}
+	}
 }
 
 func databaseTableExists(t *testing.T, db *sql.DB, table string) bool {

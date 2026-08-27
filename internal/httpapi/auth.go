@@ -109,7 +109,7 @@ func rejectWorkspaceSelector(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 	}
-	if r.Body == nil || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+	if r.Body == nil {
 		return false
 	}
 	body, err := io.ReadAll(r.Body)
@@ -126,7 +126,7 @@ func rejectWorkspaceSelector(w http.ResponseWriter, r *http.Request) bool {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return false
 	}
-	var value any
+	var value map[string]json.RawMessage
 	if json.Unmarshal(body, &value) == nil && containsWorkspaceSelector(value) {
 		writeError(w, http.StatusBadRequest, "REMOVED_WORKSPACE_SELECTOR", "Mercator no longer accepts a workspace selector; address the deployment directly.")
 		return true
@@ -134,19 +134,10 @@ func rejectWorkspaceSelector(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-func containsWorkspaceSelector(value any) bool {
-	switch value := value.(type) {
-	case map[string]any:
-		for key, nested := range value {
-			if isWorkspaceSelector(key) || containsWorkspaceSelector(nested) {
-				return true
-			}
-		}
-	case []any:
-		for _, nested := range value {
-			if containsWorkspaceSelector(nested) {
-				return true
-			}
+func containsWorkspaceSelector(value map[string]json.RawMessage) bool {
+	for key := range value {
+		if isWorkspaceSelector(key) {
+			return true
 		}
 	}
 	return false

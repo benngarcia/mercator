@@ -35,7 +35,7 @@ Out of scope for the current implementation:
 | Asset | Why It Matters | Current Owner |
 | --- | --- | --- |
 | Operator bearer token | Authorizes API calls and console actions. | Operator configuration |
-| Workspace IDs | Scope run, offer, connection, and event reads. | Mercator API/authz |
+| Deployment address | Selects the one broker execution scope a client can reach. | Operator/network configuration |
 | SQLite event log | Durable source of truth for commands, intents, events, and cursor state. | Mercator process |
 | Workload env values | May contain sensitive literals if callers misuse env. | Caller/workload owner |
 | Adapter credentials | Can create, observe, and delete provider resources. | Operator configuration / credential store |
@@ -48,7 +48,7 @@ Out of scope for the current implementation:
 | Boundary | Trusted Side | Less-Trusted Side | Notes |
 | --- | --- | --- | --- |
 | HTTP API | Mercator process | Any client with network access | Bearer token required for `/v1/*`; health/OpenAPI/UI shell are public on the bind address. |
-| Workspace partition | Stored workspace ID | Caller-supplied workspace IDs | Reads and writes must remain scoped to the explicit partition. |
+| Deployment boundary | One Mercator process and database | Other Mercator deployments | Hard isolation requires separate deployments and credentials. |
 | Public events | Redacted/public event data | Private command payloads and workload env values | Public API and sinks must not expose private events. |
 | Adapter calls | Mercator adapter contract | Provider APIs and local Docker daemon | Adapters are trusted code but provider responses are external facts. |
 | Reporting endpoint | One run's reporter token | Workload process | Report token must not authorize operator API access or other runs. |
@@ -57,7 +57,7 @@ Out of scope for the current implementation:
 ## Threat Actors
 
 - External network caller without a valid bearer token.
-- Authenticated caller attempting cross-workspace access.
+- Authenticated caller attempting to reach another deployment.
 - Buggy or malicious workload process with access to injected reporting env.
 - Operator or integration accidentally passing secrets as literal env values.
 - Provider/API returning stale or dishonest offer/capacity facts.
@@ -74,29 +74,30 @@ operator token.
 Mitigations:
 
 - `/v1/*` routes use bearer-token auth.
-- Explicit workspace ids scope every stored record and query.
-- Security tests cover invalid tokens and missing workspace ids.
+- The endpoint and its deployment credential select the entire broker scope.
+- Security tests cover invalid and missing credentials.
 
 Remaining work:
 
 - No per-user auth or token rotation workflow.
 - No built-in TLS; remote deployments require a trusted reverse proxy.
 
-### Cross-Workspace Data Access
+### Cross-Deployment Data Access
 
-Risk: an authenticated caller reads or acts on another workspace's runs,
-connections, offers, or events.
+Risk: a credential or network route for one broker deployment reaches another
+deployment's runs, connections, offers, or events.
 
 Mitigations:
 
-- API reads require or derive explicit `workspace_id`.
-- The CLI carries workspace defaults centrally.
-- Query keys in the console are workspace-scoped.
+- Each deployment has one API endpoint, database, and credential boundary.
+- The CLI addresses the selected deployment directly.
+- The console renders the deployment it authenticated to and has no selector.
 
 Remaining work:
 
-- Authenticated principals are trusted instance administrators. Mercator does
-  not provide roles, user/group membership, or tenant isolation between them.
+- Authenticated principals are trusted deployment administrators. Mercator does
+  not provide in-process roles, membership, or tenant isolation. Application
+  tenancy belongs to the caller; hard isolation requires separate deployments.
 
 ### Secret Or Env Leakage In Public Events
 

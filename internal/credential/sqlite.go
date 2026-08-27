@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/benngarcia/mercator/internal/sqliteutil"
 )
 
 type SQLiteStore struct{ db *sql.DB }
@@ -222,22 +224,8 @@ func flattenConnectionSecrets(ctx context.Context, db *sql.DB) error {
 // the caller's transaction. It is exported only for the SQLite storage owner,
 // which combines every partition removal into one atomic startup migration.
 func FlattenWorkspacePartitions(ctx context.Context, tx *sql.Tx) error {
-	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(connection_secret)`)
+	partitioned, err := sqliteutil.HasColumn(ctx, tx, "connection_secret", "workspace_id")
 	if err != nil {
-		return err
-	}
-	partitioned := false
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var name, columnType string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		partitioned = partitioned || name == "workspace_id"
-	}
-	if err := rows.Close(); err != nil {
 		return err
 	}
 	if !partitioned {

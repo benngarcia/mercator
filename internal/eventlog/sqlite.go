@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/sqliteutil"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -302,23 +303,7 @@ func tableExists(ctx context.Context, db schemaQueryer, table string) (bool, err
 }
 
 func tableHasColumn(ctx context.Context, db schemaQueryer, table, column string) (bool, error) {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var name, columnType string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return false, err
-		}
-		if name == column {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
+	return sqliteutil.HasColumn(ctx, db, table, column)
 }
 
 func (l *SQLiteEventLog) Append(ctx context.Context, req AppendRequest) (AppendResult, error) {

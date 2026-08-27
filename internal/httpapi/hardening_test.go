@@ -90,6 +90,31 @@ func TestRemovedWorkspaceSelectorsFailInsteadOfWideningTheRequest(t *testing.T) 
 	if readRecorder.Code != http.StatusNotFound {
 		t.Fatalf("rejected command still created a Run: %d %s", readRecorder.Code, readRecorder.Body.String())
 	}
+
+	commandWithoutContentType := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	commandWithoutContentType.Header.Set("Idempotency-Key", "removed-workspace-selector-no-content-type")
+	commandWithoutContentTypeRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(commandWithoutContentTypeRecorder, commandWithoutContentType)
+	if commandWithoutContentTypeRecorder.Code != http.StatusBadRequest || !bytes.Contains(commandWithoutContentTypeRecorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+		t.Fatalf("legacy body selector without content type = %d %s", commandWithoutContentTypeRecorder.Code, commandWithoutContentTypeRecorder.Body.String())
+	}
+}
+
+func TestApplicationWorkspaceMetadataRemainsOpaque(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	revision := httpRevision()
+	revision.Spec.Metadata = map[string]string{"workspace_id": "application-tenant"}
+	envValue := "application-tenant"
+	revision.Spec.Containers[0].Env = map[string]domain.EnvBinding{"WORKSPACE_ID": {Value: &envValue}}
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_application_metadata", Workload: revision})
+	command := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	command.Header.Set("Content-Type", "application/json")
+	command.Header.Set("Idempotency-Key", "application-workspace-metadata")
+	commandRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(commandRecorder, command)
+	if commandRecorder.Code != http.StatusAccepted {
+		t.Fatalf("application-owned workspace metadata was interpreted by Mercator: %d %s", commandRecorder.Code, commandRecorder.Body.String())
+	}
 }
 
 // Item 1 (HTTP): exit_code present on the create envelope and on GET.
