@@ -39,9 +39,19 @@ Rentals, Nodes, and Rental Schedules before changing data. Legacy Workspace
 streams and their command records are discarded; all other history is retained.
 The Workspace catalog and membership tables are then dropped.
 
-There is no default Workspace, compatibility query parameter, or fallback
-lookup. Old clients fail against the new contract and must be upgraded with the
-deployment.
+The permanent contract has no default Workspace, compatibility query parameter,
+or fallback lookup. The live migration uses one explicit expansion/contraction
+exception: v0.6.1 accepts and removes the exact retired HTTP selector positions,
+returns the latest placement decision under both the old singular key and the
+new append-only chain, and verifies report tokens minted for in-flight legacy
+Runs. None of those values reach domain or storage behavior.
+
+`/health/ready` declares the storage epoch, API epoch, supported client epochs,
+build revision, and active compatibility features. The bridge records bounded
+usage telemetry. It is deleted only after every live application role and every
+rollback-eligible application release requires `single-scope-client-v2`; deploy
+policy must never downgrade a `single-scope-v1` database into a workspace-era
+broker.
 
 ## Consequences
 

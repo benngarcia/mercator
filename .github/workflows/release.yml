@@ -87,6 +87,7 @@ jobs:
         run: go test ./...
       - name: Build archives
         env:
+          MERCATOR_BUILD_REVISION: ${{ needs.version.outputs.candidate_sha }}
           VERSION: ${{ needs.version.outputs.version }}
         run: scripts/build-release-archives.sh "$VERSION" dist
       - name: Publish GitHub release
@@ -158,5 +159,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            MERCATOR_BUILD_REVISION=${{ needs.version.outputs.candidate_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

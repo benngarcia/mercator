@@ -1,12 +1,9 @@
 package httpapi
 
 import (
-	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -93,73 +90,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	}
-	if strings.HasPrefix(r.URL.Path, "/v1/") && rejectWorkspaceSelector(w, r) {
+	if strings.HasPrefix(r.URL.Path, "/v1/") && s.bridgeLegacyWorkspaceRequest(w, r) {
 		return
 	}
 	s.mux.ServeHTTP(w, r)
-}
-
-// rejectWorkspaceSelector makes the removed contract fail loudly during a
-// mixed-version rollout. Silently ignoring an old selector would reinterpret a
-// formerly partitioned command as deployment-global.
-func rejectWorkspaceSelector(w http.ResponseWriter, r *http.Request) bool {
-	for key := range r.URL.Query() {
-		if isWorkspaceSelector(key) {
-			writeError(w, http.StatusBadRequest, "REMOVED_WORKSPACE_SELECTOR", "Mercator no longer accepts a workspace selector; address the deployment directly.")
-			return true
-		}
-	}
-	if r.Body == nil {
-		return false
-	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "Request body exceeds the 1 MiB limit.")
-		} else {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "Request body could not be read.")
-		}
-		return true
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	if len(bytes.TrimSpace(body)) == 0 {
-		return false
-	}
-	var value map[string]json.RawMessage
-	if json.Unmarshal(body, &value) == nil && containsWorkspaceSelector(value) {
-		writeError(w, http.StatusBadRequest, "REMOVED_WORKSPACE_SELECTOR", "Mercator no longer accepts a workspace selector; address the deployment directly.")
-		return true
-	}
-	return false
-}
-
-func containsWorkspaceSelector(value map[string]json.RawMessage) bool {
-	for key := range value {
-		if isWorkspaceSelector(key) {
-			return true
-		}
-	}
-	for key, encoded := range value {
-		if !strings.EqualFold(key, "workload") && !strings.EqualFold(key, "revision") {
-			continue
-		}
-		var nested map[string]json.RawMessage
-		if json.Unmarshal(encoded, &nested) != nil {
-			continue
-		}
-		for key := range nested {
-			if isWorkspaceSelector(key) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func isWorkspaceSelector(key string) bool {
-	key = strings.ToLower(strings.ReplaceAll(key, "-", "_"))
-	return key == "workspace" || key == "workspace_id" || key == "workspaceid"
 }
 
 type flushingResponseWriter struct {

@@ -63,7 +63,14 @@ func (s *Server) HealthLive(context.Context, HealthLiveRequestObject) (HealthLiv
 }
 
 func (s *Server) HealthReady(context.Context, HealthReadyRequestObject) (HealthReadyResponseObject, error) {
-	return HealthReady200JSONResponse{Status: "ready"}, nil
+	return HealthReady200JSONResponse{
+		Status:                "ready",
+		BuildRevision:         buildRevision(),
+		StorageEpoch:          storageEpoch,
+		ApiEpoch:              apiEpoch,
+		SupportedClientEpochs: supportedClientEpochs,
+		CompatibilityFeatures: compatibilityFeatures,
+	}, nil
 }
 
 func (s *Server) GetOpenAPI(context.Context, GetOpenAPIRequestObject) (GetOpenAPIResponseObject, error) {

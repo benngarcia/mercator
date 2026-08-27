@@ -49,6 +49,23 @@ func TestTokenRoundTripAndScoping(t *testing.T) {
 	}
 }
 
+func TestLegacyWorkspaceTokenRoundTripAndScoping(t *testing.T) {
+	s := NewSigner([]byte("0123456789abcdef0123456789abcdef"))
+	tok := s.LegacyToken("ws_released", "run_a")
+	if tok == "" {
+		t.Fatal("empty legacy token")
+	}
+	if !s.VerifyLegacy("ws_released", "run_a", tok) {
+		t.Fatal("legacy token should verify for its original workspace and run")
+	}
+	if s.VerifyLegacy("ws_experiments", "run_a", tok) || s.VerifyLegacy("ws_released", "run_b", tok) {
+		t.Fatal("legacy token escaped its original workspace/run pair")
+	}
+	if s.Verify("run_a", tok) {
+		t.Fatal("legacy token must not verify as a single-scope token")
+	}
+}
+
 func TestDisabledSignerVerifiesNothing(t *testing.T) {
 	s := NewSigner(nil)
 	if s.Enabled() {

@@ -47,3 +47,25 @@ func (s *Signer) Verify(runID, token string) bool {
 	want := s.Token(runID)
 	return subtle.ConstantTimeCompare([]byte(want), []byte(token)) == 1
 }
+
+// LegacyToken reproduces the workspace-bound token emitted before the
+// single-scope storage migration. It exists only for the v0.6 rollout bridge,
+// so workloads already in flight when the broker upgrades can finish reporting.
+func (s *Signer) LegacyToken(workspaceID, runID string) string {
+	if !s.Enabled() {
+		return ""
+	}
+	mac := hmac.New(sha256.New, s.key)
+	mac.Write([]byte(workspaceID))
+	mac.Write([]byte{0})
+	mac.Write([]byte(runID))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Signer) VerifyLegacy(workspaceID, runID, token string) bool {
+	if !s.Enabled() || token == "" {
+		return false
+	}
+	want := s.LegacyToken(workspaceID, runID)
+	return subtle.ConstantTimeCompare([]byte(want), []byte(token)) == 1
+}

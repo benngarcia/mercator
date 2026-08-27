@@ -508,6 +508,22 @@ func TestReportIngestEndpointWrongToken(t *testing.T) {
 	}
 }
 
+func TestRolloutBridgeAcceptsAnInflightWorkspaceScopedReportToken(t *testing.T) {
+	key32 := []byte("0123456789abcdef0123456789abcdef")
+	signer := reporting.NewSigner(key32)
+	handler := newReportingTestServer(t, key32)
+	runID := createReportingRun(t, handler, "run_report_legacy_workspace_token")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_released",
+		bytes.NewReader([]byte(`{"type":"progress","data":{"step":1}}`)))
+	req.Header.Set("Authorization", "Bearer "+signer.LegacyToken("ws_released", runID))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("legacy in-flight report: expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestReportIngestEndpointDisabledWithoutSigner verifies that a server without
 // WithReportSigner returns 501 REPORTING_DISABLED.
 func TestReportIngestEndpointDisabledWithoutSigner(t *testing.T) {

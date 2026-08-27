@@ -3,6 +3,7 @@ package daemon_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -53,8 +54,18 @@ func TestRuntimeServesProductionHandlerOnCallerListener(t *testing.T) {
 	}
 
 	// Assert: production readiness was served and Serve stopped normally.
-	if response.StatusCode != http.StatusOK || string(body) != "{\"status\":\"ready\"}\n" {
-		t.Fatalf("readiness response = %d %q, want 200 ready", response.StatusCode, body)
+	var readiness struct {
+		Status                string   `json:"status"`
+		StorageEpoch          string   `json:"storage_epoch"`
+		APIEpoch              string   `json:"api_epoch"`
+		SupportedClientEpochs []string `json:"supported_client_epochs"`
+		CompatibilityFeatures []string `json:"compatibility_features"`
+	}
+	if err := json.Unmarshal(body, &readiness); err != nil {
+		t.Fatalf("decode readiness: %v", err)
+	}
+	if response.StatusCode != http.StatusOK || readiness.Status != "ready" || readiness.StorageEpoch != "single-scope-v1" || readiness.APIEpoch != "single-scope-v2" {
+		t.Fatalf("readiness response = %d %q, want single-scope readiness metadata", response.StatusCode, body)
 	}
 	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		t.Fatalf("serve returned: %v", err)
