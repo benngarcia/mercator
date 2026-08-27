@@ -2,7 +2,7 @@
 
 `mercator verify` launches a real probe through the same authenticated HTTP,
 placement, provider, reporting, and cleanup path used by the server. It creates
-an isolated temporary SQLite database and one temporary workspace and
+an isolated temporary SQLite database and
 connection. A passing verdict means all of these conditions held:
 
 1. the provider authorized the supplied credential;
@@ -10,7 +10,7 @@ connection. A passing verdict means all of these conditions held:
 3. the provider launched the digest-pinned probe image;
 4. the selected scenario reached its expected terminal outcome;
 5. the Run closed with confirmed cleanup; and
-6. the provider listed zero objects owned by the trial workspace.
+6. the provider listed zero objects owned by the trial deployment.
 
 The command returns JSON evidence on stdout. `passed` exits 0. `failed` or
 `blocked` exits 1. An invalid trial document exits 2.

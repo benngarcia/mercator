@@ -46,11 +46,8 @@ in order). The derived `reportKey` is what backs `reporting.Signer`.
 Each run receives a unique token minted by the server:
 
 ```
-runToken = base64url-raw(HMAC-SHA256(reportKey, workspace_id || 0x00 || run_id))
+runToken = base64url-raw(HMAC-SHA256(reportKey, run_id))
 ```
-
-The workspace is in the token, so the `workspace_id` a reporter sends must be
-the one the token was minted for.
 
 The token is injected into the container at launch as `MERCATOR_RUN_TOKEN`.
 Three additional vars are also injected:
@@ -58,19 +55,18 @@ Three additional vars are also injected:
 | Container Var | Value |
 |---|---|
 | `MERCATOR_RUN_ID` | The run's UUID (e.g. `run_019ef...`) |
-| `MERCATOR_WORKSPACE_ID` | The run's workspace ID; required as the `workspace_id` query parameter on `/report` |
 | `MERCATOR_REPORT_URL` | The base URL (`<MERCATOR_PUBLIC_URL>`); clients append `/v1/runs/<run_id>/report` |
 | `MERCATOR_RUN_TOKEN` | The per-run HMAC token |
 
 Note that `MERCATOR_REPORT_URL` is the **base URL only**. The orchestrator does
 not inject the full `/report` path. Workloads build the full endpoint by appending
-`/v1/runs/<MERCATOR_RUN_ID>/report?workspace_id=<MERCATOR_WORKSPACE_ID>`.
+`/v1/runs/<MERCATOR_RUN_ID>/report`.
 
 ---
 
 ## The `/report` Endpoint
 
-**`POST /v1/runs/{run_id}/report?workspace_id=<ws>`**
+**`POST /v1/runs/{run_id}/report`**
 
 - **Auth**: `Authorization: Bearer <MERCATOR_RUN_TOKEN>`, the run-scoped
   token, NOT the operator token. The operator token is explicitly rejected.
@@ -80,7 +76,6 @@ not inject the full `/report` path. Workloads build the full endpoint by appendi
 - **Success**: `202 Accepted`, body `{"recorded": true}`. This confirms the fact
   is durable. Cleanup runs after the response through normal reconciliation.
 - **Errors**:
-  - `400 WORKSPACE_REQUIRED`: `workspace_id` query param missing.
   - `400 INVALID_REPORT`: an `exit` report omitted `exit_code`, or a
     nonterminal report included one.
   - `401 INVALID_RUN_TOKEN`: token wrong, missing, or for a different run.
@@ -149,8 +144,8 @@ execution.
 
 ## Token Security Notes
 
-- The run token binds the workspace as well as the `run_id`, so a leaked token
-  cannot be replayed against another workspace's view of the same run.
+- The run token binds exactly one deployment-global `run_id`, so it cannot be
+  replayed against another Run.
 - The token has no expiry and no re-issue path. It is as long-lived as the run
   it was minted for, which is what makes a master-key rotation under an
   in-flight run destructive rather than a brief interruption.

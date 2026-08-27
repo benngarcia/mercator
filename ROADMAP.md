@@ -13,15 +13,15 @@ in [docs/production/known-limitations.md](docs/production/known-limitations.md).
 - Placement with recorded booking decisions: the winning offer, every rejected
   candidate, and reason codes, queryable per run.
 - One-command push-to-run: `mercator run create <image> -- <cmd>` resolves the
-  digest and platform from the image and defaults workspace, connection, and
-  run ids by uniqueness.
+  digest and platform from the image and defaults connection and run IDs by
+  uniqueness.
 - Docker host adapter for real local launches; RunPod, Shadeform, and Vast.ai
   adapters behind the same run contract, each with a runbook and a bounded
   conformance trial that produces a sanitized evidence bundle.
 - Rentals with persisted schedules: placement can queue a booking behind the
   run a rental is executing, weighing queued expected runtime against the
   cost and latency of provisioning fresh capacity.
-- The Workspace canvas as the console home: each rental with its running and
+- The deployment canvas as the console home: each rental with its running and
   queued bookings, streamed live over SSE.
 - A placement scenario corpus (`internal/scenario`) that states the decisions
   placement must make. Scenarios marked `target` describe behavior that is not

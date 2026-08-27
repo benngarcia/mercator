@@ -5,12 +5,12 @@ other does not restore:
 
 | State | Where it lives | Why a restore needs it |
 | --- | --- | --- |
-| The SQLite event log and everything derived from it | The files named by `MERCATOR_SQLITE_DSN` | Events, command idempotency records, sink cursors, workspaces, connections, and the sealed bytes of every stored connection credential |
+| The SQLite event log and everything derived from it | The files named by `MERCATOR_SQLITE_DSN` | Events, command idempotency records, sink cursors, connections, and the sealed bytes of every stored connection credential |
 | `MERCATOR_SECRET_KEY` | Wherever you keep secrets, never in the database | Stored credentials are sealed under a subkey derived from it. A restored database opens only under the key its rows were sealed with, and a server that cannot open one row refuses to start |
 
 Back the key up when you generate it, beside the API token and separately from
 the database. A database restored without its key still holds every event and
-every workspace, and every stored provider credential in it is unreadable
+the whole deployment, and every stored provider credential in it is unreadable
 ciphertext.
 
 ## Identify The Database
@@ -127,8 +127,8 @@ Then read both halves back, the events and a sealed credential:
 export MERCATOR_API_URL=http://127.0.0.1:8080
 export MERCATOR_API_TOKEN='restore-eval-token'
 
-mercator run list --workspace-id ws_eval | jq .
-mercator connection list --workspace-id ws_eval | jq '.connections[].id'
+mercator run list | jq .
+mercator connection list | jq '.connections[].id'
 ```
 
 A listening server has already opened every sealed row in the restored copy,

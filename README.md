@@ -92,7 +92,7 @@ picked, every candidate it rejected, and the reason codes; on a single host the
 one offer wins uncontested, and the record fills in as you add offers.
 
 Open the console at [`http://127.0.0.1:8080`](http://127.0.0.1:8080) for the
-live Workspace canvas. For the broker-in-a-container setup and the full
+live deployment canvas. For the broker-in-a-container setup and the full
 walkthrough with expected output, see
 [install and configuration](docs/production/install-configuration.md) and
 [Docker adapter operation](docs/production/docker-adapter-operation.md).
@@ -107,7 +107,7 @@ walkthrough with expected output, see
 | Deterministic scenarios and replay | [Mercator Lab](docs/reference/mercator-lab.md) |
 | HTTP and OpenAPI routes | [OpenAPI overview](docs/reference/openapi.md) |
 | Workload and run lifecycle | [workload and run lifecycle](docs/production/workload-run-lifecycle.md) |
-| Authentication and workspaces | [authentication and workspaces](docs/production/authentication-workspaces.md) |
+| Authentication | [authentication](docs/production/authentication.md) |
 | Security boundaries | [security model](docs/production/security-model.md) |
 | What does not work yet | [known limitations](docs/production/known-limitations.md) |
 

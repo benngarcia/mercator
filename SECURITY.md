@@ -1,6 +1,6 @@
 # Security Policy
 
-Mercator handles workload metadata, workspace-scoped API access, adapter
+Mercator handles workload metadata, deployment-scoped API access, adapter
 credentials, per-run reporting tokens, and cleanup decisions. Please report
 security issues privately.
 
@@ -25,7 +25,7 @@ ask for a private disclosure channel.
 
 ## In Scope
 
-- API authentication or workspace isolation bypasses.
+- API authentication or administrative-listener bypasses.
 - Public event or API responses leaking workload env values, credentials, or
   per-run reporting tokens.
 - Adapter behavior that can launch duplicate workloads under one idempotency
@@ -33,7 +33,7 @@ ask for a private disclosure channel.
 - Cleanup bugs that leave owned compute running unexpectedly or terminate the
   wrong resource.
 - Secret-store, credential-resolution, or report-token signing weaknesses.
-- Cross-workspace access through the console, CLI, or HTTP API.
+- Cross-deployment credential or data access through the console, CLI, or HTTP API.
 
 ## Out Of Scope
 

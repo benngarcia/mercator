@@ -19,13 +19,13 @@ outcome.
      -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
      -H 'Idempotency-Key: conn-runpod-1' \
      -H 'Content-Type: application/json' \
-     -d '{"workspace_id":"ws_1","connection_id":"conn_runpod_main",
+     -d '{"connection_id":"conn_runpod_main",
           "adapter_type":"runpod",
           "credential":{"source":"env","ref":"RUNPOD_API_KEY"}}'
    ```
 3. Authorize it (runs a cheap `GET /pods` to validate the key):
    ```sh
-   curl -X POST "$MERCATOR/v1/connections/conn_runpod_main/authorize?workspace_id=ws_1" \
+   curl -X POST "$MERCATOR/v1/connections/conn_runpod_main/authorize" \
      -H "Authorization: Bearer $MERCATOR_API_TOKEN"
    ```
 

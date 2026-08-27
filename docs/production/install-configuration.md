@@ -91,10 +91,10 @@ startup failure rather than a deployment that quietly announces nothing: the
 same string is handed to every workload as `MERCATOR_REPORT_URL` and is what the
 OIDC redirect URI is built from.
 
-Workspace creation and archiving, node invitation, and sink delivery and replay
+Node invitation and sink delivery and replay
 answer on `MERCATOR_ADMIN_ADDR` and are not routed on `MERCATOR_ADDR` at all.
 Forward the proxy to `MERCATOR_ADDR` only. See
-[authentication-workspaces.md](authentication-workspaces.md#administrative-surfaces).
+[authentication.md](authentication.md#administrative-listener).
 
 `serve` registers the Docker adapter type but starts with no connections.
 Create and authorize each local or remote Docker endpoint through the
@@ -123,7 +123,7 @@ server path.
 | `MERCATOR_SECRET_KEY_PREVIOUS` | none | Read by `mercator rekey` only. Holds the key being retired, for the duration of one rotation. |
 | `MERCATOR_PUBLIC_URL` | none | The base URL this deployment answers on from outside. Nodes dial it and workloads report to it, and it is what says a loopback bind is reachable through a proxy. Must be an absolute `http://` or `https://` URL naming a host; anything else stops startup, naming the variable. |
 | `MERCATOR_API_URL` | `http://127.0.0.1:8080` | CLI base URL. Falls back to the current context, then the local `serve` address. |
-| `MERCATOR_OIDC_ISSUER` | none | OIDC issuer URL for human console login. Setting any `MERCATOR_OIDC_*` variable requires the full set; see [authentication-workspaces.md](authentication-workspaces.md). |
+| `MERCATOR_OIDC_ISSUER` | none | OIDC issuer URL for human console login. Setting any `MERCATOR_OIDC_*` variable requires the full set; see [authentication.md](authentication.md). |
 | `MERCATOR_OIDC_CLIENT_ID` | none | OIDC client ID. |
 | `MERCATOR_OIDC_CLIENT_SECRET` | none | OIDC client secret. |
 | `MERCATOR_OIDC_ALLOWED_DOMAIN` | none | Comma-separated email domains admitted at login (and/or `MERCATOR_OIDC_ALLOWED_EMAILS`). |

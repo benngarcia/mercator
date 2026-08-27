@@ -34,7 +34,6 @@ map overrides matching workload env keys and adds new keys for that run only:
 
 ```json
 {
-  "workspace_id": "ws_eval",
   "run_id": "run_eval_1",
   "workload_id": "wrk_eval",
   "workload_revision_id": "wrev_1",

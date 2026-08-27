@@ -1,8 +1,9 @@
 # Mercator
 
 Mercator is a compute broker and fleet manager: it places Runs on the warmest
-capacity a workspace controls, rents more when none fits, and records every
-decision and lifecycle.
+capacity a deployment controls, rents more when none fits, and records every
+decision and lifecycle. One deployment is one execution scope; product tenancy
+belongs to the application that dispatches work.
 
 ## Language
 
@@ -36,7 +37,7 @@ cannot advertise reuse it cannot perform.
 _Avoid_: Type (alone), mode, reusability flag
 
 **Rental**:
-The capacity lease: machine capacity a workspace holds from a Connection, with
+The capacity lease: machine capacity a deployment holds from a Connection, with
 its own billing interval and lifecycle generation. Only capacity in the
 reusable lane becomes a Rental.
 _Avoid_: Worker, host (alone), machine (alone)
@@ -49,7 +50,7 @@ a Node is capacity nothing can run on.
 _Avoid_: Agent (for the concept), daemon, instance
 
 **Fleet**:
-The set of Rentals a workspace currently owns, across all its Connections.
+The set of Rentals a deployment currently owns, across all its Connections.
 Derived from Rental state, never configured directly; fleet management means
 driving Rental lifecycles (provision, reuse, retire).
 _Avoid_: Cluster, pool, worker pool
@@ -82,8 +83,8 @@ _Avoid_: Scheduling (for the choosing), the Scheduler
 **Artifact**:
 Immutable, versioned content one Run publishes and other Runs read. The
 version ID is its identity and never changes what it names; the catalog entry
-carries the content digest, the object-store location, the size, the producing
-Run, and the workspace it is scoped to. A Run that declares an Artifact input is
+carries the content digest, the object-store location, the size, and the
+producing Run. A Run that declares an Artifact input is
 accepted at once and held unplaced until that version is durable, so it waits
 for a publication and never for a machine.
 _Avoid_: Dataset, output, blob, file
@@ -104,9 +105,8 @@ _Avoid_: Cache (for Artifacts), local dataset, mirror
 
 **Cache Mount**:
 A workload-declared named mount whose content persists on a Rental across
-Runs. Its identity is the workspace-scoped cache name; two Runs share data
-exactly when they declare the same name in the same workspace, and two
-workspaces that declare one name have two caches that never meet. It is mutable
+Runs. Its identity is the deployment-global cache name; two Runs share data
+exactly when they declare the same name and compatibility key. It is mutable
 and application-owned: Mercator manages its presence on a Rental and knows
 nothing about its contents, so it can never carry immutable identity the way an
 Artifact does. Beside the name, a Run states a compatibility key naming which

@@ -16,7 +16,7 @@ Current assets:
   [Playwright](https://playwright.dev) script that seeds a run and records the
   console, so the demo is reproducible.
 - `mercator-runs.png` - run list with status, exit code, cleanup disposition,
-  and workspace context.
+  and deployment context.
 - `mercator-run-decision.png` - run detail placement decision and lifecycle
   state.
 - `mercator-connections.png` - connection list and authorization status.
@@ -29,12 +29,12 @@ no RunPod, registry credentials, or private workloads.
 
 1. Start Mercator with the Docker adapter following the
    [Docker quickstart](../production/docker-adapter-operation.md): set
-   `MERCATOR_API_TOKEN` and a launch-safe workspace such as `ws_1`. Let the
+   `MERCATOR_API_TOKEN`. Let the
    Docker probe report the host architecture.
 2. Run `bun run record:demo`. The recorder creates a digest-pinned BusyBox
    workload (`echo hi`) on the Docker host's native platform and waits for it
    to close.
-3. Open the embedded console for that workspace.
+3. Open the embedded console.
 4. Capture these screens: run list, selected run detail, placement decision,
    public events, and connections/offers if they materially improve the docs.
 5. Keep raw captures under ignored `output/` until reviewed.
@@ -45,8 +45,7 @@ no RunPod, registry credentials, or private workloads.
 
 ## Demo Transcript
 
-The committed recording is a walk through the embedded console for workspace
-`ws_1`:
+The committed recording is a walk through the embedded console:
 
 1. The runs list shows two `Succeeded` runs with their status, cleanup
    disposition (`release · confirmed`), and exit code.
@@ -72,7 +71,6 @@ bun install
 bunx playwright install chromium
 MERCATOR_API_URL=http://127.0.0.1:8080 \
   MERCATOR_API_TOKEN="$MERCATOR_API_TOKEN" \
-  MERCATOR_WORKSPACE_ID="$MERCATOR_WORKSPACE_ID" \
   bun run record:demo
 cd ../..
 ```
@@ -86,6 +84,6 @@ ffmpeg -y -i docs/assets/output/mercator-demo.webm \
 mv docs/assets/output/mercator-demo.{webm,gif} docs/assets/
 ```
 
-The script seeds the session (token + workspace) into `localStorage` exactly as
+The script seeds the session token into `localStorage` exactly as
 the console does — nothing sensitive is captured, and the seeded run is a
 short-lived `busybox echo` with no private image, host path, or credential.

@@ -69,37 +69,9 @@ limits.
 
 ## Security
 
-- A workspace is now a tenancy boundary a human is refused across, and there is
-  no way to grant a membership over HTTP. A subject becomes a member of a
-  workspace by creating it and in no other way, because a grant endpoint is a
-  new operation in the API contract and this branch does not regenerate the
-  contract ([#219](https://github.com/benngarcia/mercator/issues/219)). Adding a
-  second person to a workspace is a SQL insert into `workspace_members` until
-  that lands; the statement is in
-  [authentication-workspaces.md](authentication-workspaces.md#current-limitations).
-- Upgrading an existing database backfills one admin per workspace from
-  `workspaces.created_by`, which is the only authority fact the old schema
-  recorded. A workspace created by the bearer token, by the bootstrap seed, or
-  by the event-history backfill therefore has a machine principal as its only
-  admin: no human is a member, and every human is refused there until an
-  operator inserts a row. `mercator serve --dev` is the exception: its one human
-  is the deployment's own operator, unscoped by membership, because that mode has
-  exactly one human by construction and hands them the instance bearer token
-  anyway.
-- `GET /v1/nodes` and `POST /v1/nodes` refuse a non-member with `400` carrying
-  the code `WORKSPACE_FORBIDDEN`, because neither declares `403` in the API
-  contract and this branch does not regenerate it. The refusal is the same one
-  every other workspace-scoped route makes; only the status differs
-  ([#222](https://github.com/benngarcia/mercator/issues/222)).
-- Memberships carry a role, `admin` or `member`, and no operation checks which
-  one a subject holds. Archiving a workspace is the operation that should be
-  admin-only, and its declared response set has no `403`, so saying "you are a
-  member but not an admin" needs a contract change
-  ([#219](https://github.com/benngarcia/mercator/issues/219)).
-- The console creates and archives workspaces through routes that now answer
-  only on the administrative listener, so those two console actions answer `404`
-  on a deployment that has one. The console is not part of this branch and was
-  not changed ([#220](https://github.com/benngarcia/mercator/issues/220)).
+- Mercator is not a product-tenancy boundary. Every authenticated operator can
+  reach the deployment's Runs, Connections, fleet, and event history. Hard
+  isolation requires a separate deployment with separate credentials and state.
 - Administrative and public traffic are told apart by the accepting listener's
   local address, so `MERCATOR_ADMIN_ADDR` must name one interface. A deployment
   that wants the administrative surface on a routable address gets the same
@@ -159,7 +131,7 @@ limits.
 - A registry credential minted for one pull is the operator's standing account
   verbatim ([#238](https://github.com/benngarcia/mercator/issues/238)).
   `credential.Mint.RegistryPull` wraps the account from the operator's
-  `config.json` in a scope naming one operation, one workspace, one digest and an
+  `config.json` in a scope naming one operation, one digest and an
   expiry no longer than an hour, and that scope is enforced by Mercator's own
   agent on the machine. A password registry sees none of it: it sees a username
   and a password valid for everything that account can read, for as long as the
@@ -221,7 +193,7 @@ limits.
   them on an idle machine. Out of reach for a Run today only because a capacity
   connection publishes no placement candidate; it is reachable right now through
   the capacity seam, and `mercator verify --mode capacity` is the one path that
-  reliably gives a machine back, because the trial sweeps its own workspace.
+  reliably gives a machine back, because the trial sweeps its own deployment.
 - The capacity conformance suite cannot see a second machine hidden behind a
   lease that already holds one
   ([#239](https://github.com/benngarcia/mercator/issues/239)). When a lease
@@ -374,8 +346,8 @@ limits.
   full machine from an unmeasurable one through `disk_report` and
   `disk_free_bytes` on `GET /v1/nodes`, and cannot see capacity or a utilisation
   ratio.
-- Cache Mounts are isolated per workspace and per generation, and nothing prices
-  them. A warm cache is recorded on a candidate and never scored, so two
+- Cache Mounts are deployment-global and separated by compatibility generation,
+  and nothing prices them. A warm cache is recorded on a candidate and never scored, so two
   otherwise equal machines are chosen between on cost and start latency even
   when one holds the cache the Run declared.
 - A Run whose image is a tag is refused at intake with `IMAGE_NOT_PINNED`. Every
@@ -416,10 +388,10 @@ limits.
 - Embedded UI is compact and read-oriented.
 - Deeper connection, offer, and sink management workflows are not built into the
   UI.
-- The Workspace canvas draws at most two days ahead, 289 columns. A Booking whose
+- The deployment canvas draws at most two days ahead, 289 columns. A Booking whose
   projected start is further out than that is listed in its machine's queue and
   has no block on the timeline. The bound exists because the axis is built from
-  the difference between a projected start and the moment the workspace last said
+  the difference between a projected start and the moment the deployment last said
   something: asked for a start years away it built 723,040 elements and held the
   browser's main thread for seventy seconds, so an unbounded axis is a hazard
   whatever produced the timestamp.
@@ -514,24 +486,9 @@ Three of them are narrower than they were, and one is wrong as written:
   browser case that skips unless `MERCATOR_BROWSER_TEST` asks for it. Work kept
   off CI for a long stretch should assume the same two classes are hiding in it.
 
-- Added 2026-07-29, at the close of the security and durability half of phase 6.
-  None of the boundaries that half closed is held by the Scenario Blueprint
-  corpus or by a Lab invariant. Steps 1, 2, 4 and 5 of the development rule were
-  not performed for any of them, because `internal/scenario` and every file in
-  `internal/lab` except `server.go` were phase 5's live working set while this
-  work was built in parallel. The replacement proof is a real boundary rather
-  than a mock in every case: a TLS client completing a handshake against the
-  process's own listener, an HTTP request from a non-member being refused, a
-  backup restored into a second control plane and read back, and a process
-  killed mid-write with its survivors asserted. Two of these rules do belong in
-  the corpus and are blocked on the phase 5 merge, namely a Run refused because
-  its subject is not a member of the workspace, and the Lab endpoint being
-  unreachable off the host. The durability half needs more than the merge: the
-  Lab control plane opens storage at `:memory:`, so it has no vocabulary for a
-  second database file, a backup path, or a process ended part way through
+- The Lab control plane opens storage at `:memory:`, so it has no vocabulary for
+  a second database file, a backup path, or a process ended part way through
   copying one ([#229](https://github.com/benngarcia/mercator/issues/229)).
-  Until that lands, a refactor that moves the tenancy check out of middleware
-  leaves the whole corpus green.
 
 ## GA Documentation Gaps
 
