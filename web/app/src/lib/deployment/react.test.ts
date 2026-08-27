@@ -56,6 +56,24 @@ test("skips replayed events already incorporated, even outside the id window", (
   expect(fresh.deployment.throughGlobalPosition).toBe(11);
 });
 
+test("a new connection rebuilds the canvas from its own deployment history", () => {
+  const priorDeployment = reduceDeploymentFeed(
+    initialDeploymentFeedSnapshot(),
+    {
+      type: "message",
+      message: eventMessage(cloudEvent(12)),
+    },
+  );
+
+  const connecting = reduceDeploymentFeed(priorDeployment, {
+    type: "connecting",
+  });
+
+  expect(connecting.status).toBe("connecting");
+  expect(connecting.deployment.throughGlobalPosition).toBe(0);
+  expect(connecting.events).toEqual([]);
+});
+
 function eventMessage(event: CloudEvent) {
   return { type: "domain_event" as const, event };
 }

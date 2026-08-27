@@ -3,7 +3,6 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -53,22 +52,12 @@ const reconnectSchedule = Schedule.spaced("1 second").pipe(
   ),
 );
 
-function feedRequest(
-  token: string | null,
-  lastEventId: string,
-) {
+function feedRequest(token: string | null) {
   let request = HttpClientRequest.get("/v1/console/events").pipe(
     HttpClientRequest.accept("text/event-stream"),
   );
   if (token !== null) {
     request = HttpClientRequest.bearerToken(request, token);
-  }
-  if (lastEventId !== "") {
-    request = HttpClientRequest.setHeader(
-      request,
-      "Last-Event-ID",
-      lastEventId,
-    );
   }
   return request;
 }
@@ -152,16 +141,10 @@ function disconnected() {
   });
 }
 
-function liveConnection(
-  token: string | null,
-  lastEventId: Ref.Ref<string>,
-) {
+function liveConnection(token: string | null) {
   return Stream.unwrap(
     Effect.gen(function* () {
-      const currentLastEventId = yield* Ref.get(lastEventId);
-      const response = yield* HttpClient.execute(
-        feedRequest(token, currentLastEventId),
-      ).pipe(
+      const response = yield* HttpClient.execute(feedRequest(token)).pipe(
         Effect.mapError(
           (cause) =>
             new DeploymentFeedError({
@@ -197,14 +180,7 @@ function liveConnection(
                 cause,
               }),
         ),
-        Stream.mapEffect((frame) =>
-          Effect.gen(function* () {
-            if (frame.id !== undefined && frame.id !== "") {
-              yield* Ref.set(lastEventId, frame.id);
-            }
-            return yield* decodeFrame(frame);
-          }),
-        ),
+        Stream.mapEffect(decodeFrame),
         Stream.flatMap((message) =>
           Option.match(message, {
             onNone: () => Stream.empty,
@@ -230,8 +206,7 @@ export const layer = Layer.effect(
       Stream.unwrap(
         Effect.gen(function* () {
           const state = yield* session.current;
-          const lastEventId = yield* Ref.make("");
-          return liveConnection(state.token, lastEventId).pipe(
+          return liveConnection(state.token).pipe(
             Stream.retry(reconnectSchedule),
             Stream.provideService(HttpClient.HttpClient, client),
           );
