@@ -48,11 +48,37 @@
                 "schema": {
                   "type": "object",
                   "required": [
-                    "status"
+                    "status",
+                    "build_revision",
+                    "storage_epoch",
+                    "api_epoch",
+                    "supported_client_epochs",
+                    "compatibility_features"
                   ],
                   "properties": {
                     "status": {
                       "type": "string"
+                    },
+                    "build_revision": {
+                      "type": "string"
+                    },
+                    "storage_epoch": {
+                      "type": "string"
+                    },
+                    "api_epoch": {
+                      "type": "string"
+                    },
+                    "supported_client_epochs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "compatibility_features": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     }
                   }
                 }
@@ -2635,6 +2661,15 @@
           "decisions"
         ],
         "properties": {
+          "decision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BookingDecision"
+              }
+            ],
+            "deprecated": true,
+            "description": "Temporary v0.6 rollout bridge: the latest entry in decisions for workspace-client-v1 callers."
+          },
           "decisions": {
             "type": "array",
             "items": {

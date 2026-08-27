@@ -552,6 +552,9 @@ type BookingDecision = domain.BookingDecision
 
 // BookingDecisionResponse Every decision recorded about one Run, oldest first. A decision is appended and never rewritten, so the newest entry is the answer that stands, it names the entry it supersedes and why, and the ones before it are the answers a reader needs to see the Run's history.
 type BookingDecisionResponse struct {
+	// Decision Temporary v0.6 rollout bridge: the latest entry in decisions for workspace-client-v1 callers.
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+	Decision  BookingDecision   `json:"decision,omitempty"`
 	Decisions []BookingDecision `json:"decisions"`
 }
 
@@ -2684,7 +2687,12 @@ type HealthReadyResponseObject interface {
 }
 
 type HealthReady200JSONResponse struct {
-	Status string `json:"status"`
+	ApiEpoch              string   `json:"api_epoch"`
+	BuildRevision         string   `json:"build_revision"`
+	CompatibilityFeatures []string `json:"compatibility_features"`
+	Status                string   `json:"status"`
+	StorageEpoch          string   `json:"storage_epoch"`
+	SupportedClientEpochs []string `json:"supported_client_epochs"`
 }
 
 func (response HealthReady200JSONResponse) VisitHealthReadyResponse(w http.ResponseWriter) error {

@@ -604,6 +604,11 @@ export interface components {
         };
         /** @description Every decision recorded about one Run, oldest first. A decision is appended and never rewritten, so the newest entry is the answer that stands, it names the entry it supersedes and why, and the ones before it are the answers a reader needs to see the Run's history. */
         BookingDecisionResponse: {
+            /**
+             * @deprecated
+             * @description Temporary v0.6 rollout bridge: the latest entry in decisions for workspace-client-v1 callers.
+             */
+            decision?: components["schemas"]["BookingDecision"];
             decisions: components["schemas"]["BookingDecision"][];
         };
         AdapterListResponse: {
@@ -1561,6 +1566,11 @@ export interface operations {
                 content: {
                     "application/json": {
                         status: string;
+                        build_revision: string;
+                        storage_epoch: string;
+                        api_epoch: string;
+                        supported_client_epochs: string[];
+                        compatibility_features: string[];
                     };
                 };
             };

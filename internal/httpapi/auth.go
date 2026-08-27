@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -93,23 +95,38 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	}
-	if strings.HasPrefix(r.URL.Path, "/v1/") && rejectWorkspaceSelector(w, r) {
+	if strings.HasPrefix(r.URL.Path, "/v1/") && s.bridgeWorkspaceSelector(w, r) {
 		return
 	}
 	s.mux.ServeHTTP(w, r)
 }
 
-// rejectWorkspaceSelector makes the removed contract fail loudly during a
-// mixed-version rollout. Silently ignoring an old selector would reinterpret a
-// formerly partitioned command as deployment-global.
-func rejectWorkspaceSelector(w http.ResponseWriter, r *http.Request) bool {
+var legacyWorkspaceBridgeRequests atomic.Uint64
+
+// bridgeWorkspaceSelector is the time-bounded v0.6 transport bridge. It
+// removes only positions the previous HTTP contract defined, leaving
+// application metadata and environment opaque. The single-scope domain and
+// storage never see the retired selector.
+func (s *Server) bridgeWorkspaceSelector(w http.ResponseWriter, r *http.Request) bool {
+	used := false
+	query := r.URL.Query()
 	for key := range r.URL.Query() {
-		if isWorkspaceSelector(key) {
+		if !isWorkspaceSelector(key) {
+			continue
+		}
+		if key != "workspace_id" || !legacyWorkspaceQueryPath(r.Method, r.URL.Path) {
 			writeError(w, http.StatusBadRequest, "REMOVED_WORKSPACE_SELECTOR", "Mercator no longer accepts a workspace selector; address the deployment directly.")
 			return true
 		}
+		used = true
+		if isRunReportPath(r) {
+			s.bridgeLegacyReportToken(r, query.Get(key))
+		}
+		query.Del(key)
 	}
+	r.URL.RawQuery = query.Encode()
 	if r.Body == nil {
+		s.recordLegacyWorkspaceBridge(w, r, used)
 		return false
 	}
 	body, err := io.ReadAll(r.Body)
@@ -124,37 +141,127 @@ func rejectWorkspaceSelector(w http.ResponseWriter, r *http.Request) bool {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	if len(bytes.TrimSpace(body)) == 0 {
+		s.recordLegacyWorkspaceBridge(w, r, used)
 		return false
 	}
 	var value map[string]json.RawMessage
-	if json.Unmarshal(body, &value) == nil && containsWorkspaceSelector(value) {
-		writeError(w, http.StatusBadRequest, "REMOVED_WORKSPACE_SELECTOR", "Mercator no longer accepts a workspace selector; address the deployment directly.")
-		return true
+	if json.Unmarshal(body, &value) == nil {
+		bridged, allowed := stripLegacyWorkspaceSelectors(r.Method, r.URL.Path, value)
+		if !allowed {
+			writeError(w, http.StatusBadRequest, "REMOVED_WORKSPACE_SELECTOR", "Mercator no longer accepts a workspace selector; address the deployment directly.")
+			return true
+		}
+		if bridged {
+			used = true
+			body, _ = json.Marshal(value)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
 	}
+	s.recordLegacyWorkspaceBridge(w, r, used)
 	return false
 }
 
-func containsWorkspaceSelector(value map[string]json.RawMessage) bool {
+func stripLegacyWorkspaceSelectors(method, path string, value map[string]json.RawMessage) (bool, bool) {
+	used := false
 	for key := range value {
-		if isWorkspaceSelector(key) {
-			return true
+		if !isWorkspaceSelector(key) {
+			continue
 		}
+		if key != "workspace_id" || !legacyWorkspaceBodyPath(method, path, "top") {
+			return false, false
+		}
+		delete(value, key)
+		used = true
 	}
 	for key, encoded := range value {
-		if !strings.EqualFold(key, "workload") && !strings.EqualFold(key, "revision") {
+		if key != "workload" && key != "revision" {
 			continue
 		}
 		var nested map[string]json.RawMessage
 		if json.Unmarshal(encoded, &nested) != nil {
 			continue
 		}
-		for key := range nested {
-			if isWorkspaceSelector(key) {
-				return true
+		changed := false
+		for nestedKey := range nested {
+			if !isWorkspaceSelector(nestedKey) {
+				continue
 			}
+			if nestedKey != "workspace_id" || !legacyWorkspaceBodyPath(method, path, key) {
+				return false, false
+			}
+			delete(nested, nestedKey)
+			changed = true
+			used = true
+		}
+		if changed {
+			value[key], _ = json.Marshal(nested)
 		}
 	}
+	return used, true
+}
+
+func legacyWorkspaceQueryPath(method, path string) bool {
+	if method == http.MethodGet && (path == "/v1/console/events" || path == "/v1/offers" || path == "/v1/connections" || path == "/v1/runs") {
+		return true
+	}
+	if method == http.MethodPost && (path == "/v1/runs" || path == "/v1/connections" || path == "/v1/placements:preview") {
+		return true
+	}
+	parts := strings.Split(strings.TrimPrefix(path, "/v1/"), "/")
+	if len(parts) == 2 && parts[0] == "runs" {
+		return method == http.MethodGet
+	}
+	if len(parts) == 3 && parts[0] == "runs" {
+		return (method == http.MethodGet && (parts[2] == "wait" || parts[2] == "events" || parts[2] == "decision")) ||
+			(method == http.MethodPost && (parts[2] == "refresh" || parts[2] == "cancel" || parts[2] == "report"))
+	}
+	if len(parts) == 2 && parts[0] == "connections" {
+		return method == http.MethodDelete
+	}
+	if len(parts) == 3 && parts[0] == "connections" && parts[2] == "authorize" {
+		return method == http.MethodPost
+	}
+	if len(parts) == 3 && parts[0] == "workloads" && parts[2] == "revisions" {
+		return method == http.MethodGet || method == http.MethodPost
+	}
+	return len(parts) == 4 && parts[0] == "workloads" && parts[2] == "revisions" && method == http.MethodGet
+}
+
+func legacyWorkspaceBodyPath(method, path, position string) bool {
+	if method != http.MethodPost {
+		return false
+	}
+	switch position {
+	case "top":
+		return path == "/v1/runs" || path == "/v1/connections" || path == "/v1/workloads" || path == "/v1/placements:preview"
+	case "workload":
+		return path == "/v1/runs" || path == "/v1/placements:preview"
+	case "revision":
+		return strings.HasPrefix(path, "/v1/workloads/") && strings.HasSuffix(path, "/revisions")
+	}
 	return false
+}
+
+func (s *Server) bridgeLegacyReportToken(r *http.Request, workspaceID string) {
+	if s.reportSigner == nil || workspaceID == "" {
+		return
+	}
+	runID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/runs/"), "/report")
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if s.reportSigner.VerifyLegacy(workspaceID, runID, token) {
+		r.Header.Set("Authorization", "Bearer "+s.reportSigner.Token(runID))
+	}
+}
+
+func (s *Server) recordLegacyWorkspaceBridge(w http.ResponseWriter, r *http.Request, used bool) {
+	if !used {
+		return
+	}
+	w.Header().Set("Deprecation", "true")
+	count := legacyWorkspaceBridgeRequests.Add(1)
+	if count&(count-1) == 0 {
+		log.Printf("httpapi: legacy workspace selector bridge used count=%d method=%s path=%s", count, r.Method, r.URL.Path)
+	}
 }
 
 func isWorkspaceSelector(key string) bool {

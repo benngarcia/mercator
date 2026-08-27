@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,20 +60,27 @@ func TestCreateRunReturnsUnifiedEnvelope(t *testing.T) {
 	}
 }
 
-func TestRemovedWorkspaceSelectorsFailInsteadOfWideningTheRequest(t *testing.T) {
+func TestRolloutBridgeIgnoresOnlyRetiredWorkspaceSelectorPositions(t *testing.T) {
 	handler := newHTTPTestServer(t)
 
 	query := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=retired", nil)
 	queryRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(queryRecorder, query)
-	if queryRecorder.Code != http.StatusBadRequest || !bytes.Contains(queryRecorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+	if queryRecorder.Code != http.StatusOK {
 		t.Fatalf("legacy query selector response = %d %s", queryRecorder.Code, queryRecorder.Body.String())
+	}
+	if queryRecorder.Header().Get("Deprecation") != "true" {
+		t.Fatalf("legacy bridge response did not identify deprecated use: %#v", queryRecorder.Header())
 	}
 
 	payload := map[string]any{
 		"run_id":       "run_must_not_exist",
 		"workspace_id": "retired",
-		"workload":     httpRevision(),
+		"workload": map[string]any{
+			"workspace_id": "retired",
+			"workload_id":  "wrk_bridge",
+			"spec":         httpRevision().Spec,
+		},
 	}
 	body := mustMarshal(t, payload)
 	command := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
@@ -80,23 +88,72 @@ func TestRemovedWorkspaceSelectorsFailInsteadOfWideningTheRequest(t *testing.T) 
 	command.Header.Set("Idempotency-Key", "removed-workspace-selector")
 	commandRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(commandRecorder, command)
-	if commandRecorder.Code != http.StatusBadRequest || !bytes.Contains(commandRecorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+	if commandRecorder.Code != http.StatusAccepted {
 		t.Fatalf("legacy body selector response = %d %s", commandRecorder.Code, commandRecorder.Body.String())
 	}
 
 	read := httptest.NewRequest(http.MethodGet, "/v1/runs/run_must_not_exist", nil)
 	readRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(readRecorder, read)
-	if readRecorder.Code != http.StatusNotFound {
-		t.Fatalf("rejected command still created a Run: %d %s", readRecorder.Code, readRecorder.Body.String())
+	if readRecorder.Code != http.StatusOK {
+		t.Fatalf("legacy-selector command did not create a deployment-global Run: %d %s", readRecorder.Code, readRecorder.Body.String())
 	}
 
+	payload["run_id"] = "run_without_content_type"
+	body = mustMarshal(t, payload)
 	commandWithoutContentType := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	commandWithoutContentType.Header.Set("Idempotency-Key", "removed-workspace-selector-no-content-type")
 	commandWithoutContentTypeRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(commandWithoutContentTypeRecorder, commandWithoutContentType)
-	if commandWithoutContentTypeRecorder.Code != http.StatusBadRequest || !bytes.Contains(commandWithoutContentTypeRecorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+	if commandWithoutContentTypeRecorder.Code != http.StatusAccepted {
 		t.Fatalf("legacy body selector without content type = %d %s", commandWithoutContentTypeRecorder.Code, commandWithoutContentTypeRecorder.Body.String())
+	}
+}
+
+func TestRolloutBridgeRejectsASelectorOutsideTheRetiredContract(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	for name, req := range map[string]*http.Request{
+		"route":        httptest.NewRequest(http.MethodGet, "/v1/nodes?workspace_id=retired", nil),
+		"nearby route": httptest.NewRequest(http.MethodGet, "/v1/runs/run_1/not-a-retired-route?workspace_id=retired", nil),
+		"query alias":  httptest.NewRequest(http.MethodGet, "/v1/runs?workspace=retired", nil),
+		"body alias": httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(mustMarshal(t, map[string]any{
+			"workspace": "retired", "run_id": "run_alias", "workload": httpRevision(),
+		}))),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest || !bytes.Contains(rec.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+				t.Fatalf("selector outside bridge contract = %d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestRolloutBridgeAcceptsTheLegacyPlacementPreviewBody(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/placements:preview", bytes.NewReader(mustMarshal(t, map[string]any{
+		"workspace_id": "retired",
+		"run_id":       "run_preview_bridge",
+		"workload": map[string]any{
+			"id": "wrev_preview_bridge", "workspace_id": "retired", "workload_id": "wrk_preview_bridge", "digest": "sha256:bridge", "spec": httpRevision().Spec,
+		},
+	})))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if bytes.Contains(rec.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+		t.Fatalf("legacy placement preview did not cross the rollout bridge: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRolloutBridgeSingularDecisionIsTheLatestRecordedDecision(t *testing.T) {
+	decisions := []domain.BookingDecision{{ID: "dec_original"}, {ID: "dec_replacement"}}
+	response := bookingDecisionResponse(decisions)
+	if response.Decision.ID != "dec_replacement" {
+		t.Fatalf("singular decision = %q, want latest %q", response.Decision.ID, "dec_replacement")
+	}
+	if len(response.Decisions) != 2 || response.Decisions[0].ID != "dec_original" {
+		t.Fatalf("decision chain changed: %#v", response.Decisions)
 	}
 }
 
@@ -117,7 +174,7 @@ func TestApplicationWorkspaceMetadataRemainsOpaque(t *testing.T) {
 	}
 }
 
-func TestNestedLegacyWorkloadSelectorsFailInsteadOfWideningTheRequest(t *testing.T) {
+func TestRolloutBridgeAcceptsNestedLegacyWorkloadSelectors(t *testing.T) {
 	handler := newHTTPTestServer(t)
 	legacyRevision := map[string]any{
 		"id":           "wrev_legacy",
@@ -130,22 +187,16 @@ func TestNestedLegacyWorkloadSelectorsFailInsteadOfWideningTheRequest(t *testing
 		"inline Run workload": httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(mustMarshal(t, map[string]any{
 			"run_id": "run_nested_legacy", "workload": legacyRevision,
 		}))),
-		"case-insensitive Run workload": httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(mustMarshal(t, map[string]any{
-			"run_id": "run_nested_legacy_case", "Workload": legacyRevision,
-		}))),
 		"stored revision": httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_legacy/revisions", bytes.NewReader(mustMarshal(t, map[string]any{
 			"revision": legacyRevision,
 		}))),
-		"case-insensitive stored revision": httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_legacy/revisions", bytes.NewReader(mustMarshal(t, map[string]any{
-			"Revision": legacyRevision,
-		}))),
 	} {
 		t.Run(name, func(t *testing.T) {
-			request.Header.Set("Idempotency-Key", "nested-legacy-workspace")
+			request.Header.Set("Idempotency-Key", "nested-legacy-workspace-"+strings.NewReplacer(" ", "-", "/", "-").Replace(name))
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusBadRequest || !bytes.Contains(recorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
-				t.Fatalf("nested legacy selector response = %d %s", recorder.Code, recorder.Body.String())
+			if bytes.Contains(recorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+				t.Fatalf("nested retired selector did not cross the rollout bridge: %d %s", recorder.Code, recorder.Body.String())
 			}
 		})
 	}

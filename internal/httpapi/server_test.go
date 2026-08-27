@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,41 @@ func TestCreateRunRequiresIdempotencyKey(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReadyDeclaresTheSingleScopeRolloutContract(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ready response = %d %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["storage_epoch"] != "single-scope-v1" || response["api_epoch"] != "single-scope-v2" {
+		t.Fatalf("ready epochs = %#v", response)
+	}
+	clients, _ := response["supported_client_epochs"].([]any)
+	features, _ := response["compatibility_features"].([]any)
+	if !slices.Contains(clients, any("workspace-client-v1")) || !slices.Contains(clients, any("single-scope-client-v2")) {
+		t.Fatalf("supported clients = %#v", clients)
+	}
+	if !slices.Contains(features, any("legacy_workspace_selectors")) || !slices.Contains(features, any("singular_decision")) {
+		t.Fatalf("compatibility features = %#v", features)
+	}
+}
+
+func TestReadyUsesTheRevisionStampedIntoReleaseBuilds(t *testing.T) {
+	previous := buildRevisionOverride
+	buildRevisionOverride = "candidate-sha"
+	t.Cleanup(func() { buildRevisionOverride = previous })
+
+	if got := buildRevision(); got != "candidate-sha" {
+		t.Fatalf("build revision = %q, want release candidate identity", got)
 	}
 }
 

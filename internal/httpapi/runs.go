@@ -188,5 +188,9 @@ func (s *Server) GetRunDecision(ctx context.Context, request GetRunDecisionReque
 	if err != nil {
 		return GetRunDecision404JSONResponse(apiError("DECISION_NOT_FOUND", err.Error())), nil
 	}
-	return GetRunDecision200JSONResponse{Decisions: decisions}, nil
+	return GetRunDecision200JSONResponse(bookingDecisionResponse(decisions)), nil
+}
+
+func bookingDecisionResponse(decisions []domain.BookingDecision) BookingDecisionResponse {
+	return BookingDecisionResponse{Decision: decisions[len(decisions)-1], Decisions: decisions}
 }

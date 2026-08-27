@@ -12,8 +12,11 @@ curl -fsS "$MERCATOR_API_URL/openapi.json" | jq '.paths | keys'
 open "$MERCATOR_API_URL/"
 ```
 
-Health and OpenAPI currently report process/API availability, not deep adapter
-or downstream sink health.
+Readiness also declares `build_revision`, `storage_epoch`, `api_epoch`,
+`supported_client_epochs`, and `compatibility_features`. Deploy tooling uses
+those facts to refuse a broker downgrade or an application/broker pairing the
+live storage cannot support. Health still does not claim deep adapter or
+downstream sink health.
 
 ## Run Audit
 

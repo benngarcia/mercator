@@ -88,9 +88,12 @@ func TestPublicObjectSchemasAreConcrete(t *testing.T) {
 	assertConcreteObjectSchemas(t, "openapi", document)
 }
 
-func TestContractHasNoWorkspaceSurface(t *testing.T) {
-	if strings.Contains(strings.ToLower(string(openAPIJSON)), "workspace") {
-		t.Fatal("OpenAPI contract still exposes the removed workspace abstraction")
+func TestContractWorkspaceSurfaceIsOnlyTheRolloutBridgeDescription(t *testing.T) {
+	contract := strings.ToLower(string(openAPIJSON))
+	bridgeDescription := "temporary v0.6 rollout bridge: the latest entry in decisions for workspace-client-v1 callers."
+	contract = strings.ReplaceAll(contract, bridgeDescription, "")
+	if strings.Contains(contract, "workspace") {
+		t.Fatal("OpenAPI contract exposes a workspace surface beyond the temporary rollout bridge")
 	}
 }
 
