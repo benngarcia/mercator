@@ -100,12 +100,8 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("configure TLS: %v", err)
 		return 1
 	}
-	// A non-loopback listener with no certificate would put bearer tokens and
-	// run data on the wire in the clear. That used to be a warning followed by
-	// serving anyway; it is now a refusal, because a warning in a startup log is
-	// not a security control.
-	if !isLoopback(addr) && !tlsFiles.Configured() {
-		stdlog.Printf("configure TLS: MERCATOR_ADDR %s is not loopback and no TLS material is configured; set %s and %s, or bind a loopback address", addr, tlsmaterial.CertFileVar, tlsmaterial.KeyFileVar)
+	if err := validateTLSExposure(addr, tlsFiles.Configured(), env[tlsTerminationVar], env[publicURLVar]); err != nil {
+		stdlog.Printf("configure TLS: %v", err)
 		return 1
 	}
 	// Inviting a machine and forcing a sink to deliver are
@@ -224,6 +220,28 @@ const adminAddrVar = "MERCATOR_ADMIN_ADDR"
 // Nodes dial it and workloads report to it, and an operator behind a proxy or a
 // tunnel sets it while binding loopback.
 const publicURLVar = "MERCATOR_PUBLIC_URL"
+const tlsTerminationVar = "MERCATOR_TLS_TERMINATION"
+
+func validateTLSExposure(addr string, configured bool, termination, publicURL string) error {
+	termination = strings.TrimSpace(termination)
+	switch termination {
+	case "":
+	case "proxy":
+		if configured {
+			return fmt.Errorf("%s=proxy cannot be combined with process TLS material", tlsTerminationVar)
+		}
+		parsed, err := url.Parse(strings.TrimSpace(publicURL))
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+			return fmt.Errorf("%s=proxy requires %s to be an absolute https:// URL", tlsTerminationVar, publicURLVar)
+		}
+	default:
+		return fmt.Errorf("%s must be proxy or unset, got %q", tlsTerminationVar, termination)
+	}
+	if !isLoopback(addr) && !configured && termination != "proxy" {
+		return fmt.Errorf("MERCATOR_ADDR %s is not loopback and no TLS material is configured; set %s and %s, declare %s=proxy, or bind a loopback address", addr, tlsmaterial.CertFileVar, tlsmaterial.KeyFileVar, tlsTerminationVar)
+	}
+	return nil
+}
 
 // publicExposure names the reason this deployment answers to something other
 // than this machine, and is empty when it does not. Two facts say so, and only

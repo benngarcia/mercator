@@ -85,6 +85,20 @@ export MERCATOR_PUBLIC_URL=https://mercator.example.com
 export MERCATOR_ADMIN_ADDR=127.0.0.1:8081
 ```
 
+Inside a private container network, the TLS proxy reaches the service on the
+container's non-loopback interface. Declare that topology explicitly and do
+not publish the plaintext service port on the host:
+
+```sh
+export MERCATOR_ADDR=0.0.0.0:8080
+export MERCATOR_TLS_TERMINATION=proxy
+export MERCATOR_PUBLIC_URL=https://mercator.example.com
+export MERCATOR_ADMIN_ADDR=127.0.0.1:8081
+```
+
+`proxy` requires an absolute `https://` public URL and cannot be combined with
+process TLS material. Any other value refuses startup.
+
 Write the scheme. `MERCATOR_PUBLIC_URL=mercator.example.com` and the one-slash
 `https:/mercator.example.com` name no host, and a value naming no host is a
 startup failure rather than a deployment that quietly announces nothing: the
@@ -117,6 +131,7 @@ server path.
 | `MERCATOR_ADMIN_ADDR` | none | Listen address for the administrative operations. Required whenever this deployment is reachable beyond this host, which is either a non-loopback `MERCATOR_ADDR` or a `MERCATOR_PUBLIC_URL` naming anything but this machine. Must name one interface rather than the wildcard. |
 | `MERCATOR_TLS_CERT_FILE` | none | PEM certificate chain this process serves. Set it with `MERCATOR_TLS_KEY_FILE` or with neither. A file that cannot be read or parsed stops startup, naming the file. |
 | `MERCATOR_TLS_KEY_FILE` | none | PEM private key for that chain. |
+| `MERCATOR_TLS_TERMINATION` | none | Set to `proxy` only when a TLS proxy reaches Mercator through a private container network. Requires an HTTPS `MERCATOR_PUBLIC_URL`; do not publish the plaintext service port. |
 | `MERCATOR_SQLITE_DSN` | `$XDG_DATA_HOME/mercator/mercator.db`, else `~/.local/share/mercator/mercator.db` | SQLite event-log DSN. The directory is created at startup. The container image sets this to `file:/data/mercator.db`. |
 | `MERCATOR_API_TOKEN` | generated at startup | Bearer token for `/v1/*`. Set explicitly for operations. |
 | `MERCATOR_SECRET_KEY` | none, and **required** | Master key for stored connection credentials, workload report tokens, and node identity (32+ decoded bytes, hex or base64). An absent or malformed value stops startup. |

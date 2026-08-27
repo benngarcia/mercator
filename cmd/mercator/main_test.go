@@ -430,6 +430,27 @@ func TestServeRefusesAProxiedLoopbackDeploymentWithNoAdministrativeAddress(t *te
 	}
 }
 
+func TestAContainerListenerMayTrustItsDeclaredTLSProxy(t *testing.T) {
+	err := validateTLSExposure("0.0.0.0:8080", false, "proxy", "https://mercator.example.com")
+	if err != nil {
+		t.Fatalf("proxy-terminated container listener refused: %v", err)
+	}
+}
+
+func TestProxyTerminationRequiresAnHTTPSPublicURL(t *testing.T) {
+	for _, publicURL := range []string{"", "http://mercator.example.com"} {
+		if err := validateTLSExposure("0.0.0.0:8080", false, "proxy", publicURL); err == nil {
+			t.Fatalf("proxy termination accepted public URL %q", publicURL)
+		}
+	}
+}
+
+func TestTLSExposureRejectsUnknownTerminationModes(t *testing.T) {
+	if err := validateTLSExposure("0.0.0.0:8080", false, "edge", "https://mercator.example.com"); err == nil {
+		t.Fatal("unknown TLS termination mode was accepted")
+	}
+}
+
 // captureStandardLog collects what startup refuses with. `serve` reports
 // configuration failures through the standard logger, which is where an
 // operator reads them from.
