@@ -291,7 +291,7 @@ function liveConnection(
 }
 
 function activeScenario() {
-  if (process.env.NODE_ENV === "production" || typeof window === "undefined") {
+  if (typeof window === "undefined") {
     return null;
   }
   const search = new URLSearchParams(window.location.search);
