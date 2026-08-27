@@ -28,7 +28,7 @@ func (client trialClient) ready(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		var response map[string]string
+		var response map[string]any
 		if err := client.do(ctx, http.MethodGet, "/health/ready", "", nil, &response); err == nil {
 			return nil
 		}
