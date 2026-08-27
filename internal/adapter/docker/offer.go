@@ -62,9 +62,9 @@ func endpointLabel(host, dockerContext string) string {
 // those timestamps: after the one-hour expiry window every placement failed
 // with OFFER_EXPIRED until the process restarted. A non-empty archOverride
 // wins over the probed architecture (useful for forcing emulated platforms).
-func NewOffering(client *CLIClient, id EndpointIdentity, archOverride string) capability.EphemeralExecutor {
+func NewOffering(client *CLIClient, id EndpointIdentity, archOverride, deploymentID string) capability.EphemeralExecutor {
 	return offeringAdapter{
-		EphemeralExecutor: New(client),
+		EphemeralExecutor: New(client, deploymentID),
 		client:            client,
 		id:                id,
 		arch:              archOverride,

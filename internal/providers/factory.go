@@ -49,5 +49,5 @@ func newDocker(config map[string]string, secret string) (capability.Backend, err
 	client.Context = config["context"]
 	client.Registry = registry
 	identity := dockeradapter.DeriveIdentity(config["host"], config["context"])
-	return dockeradapter.NewOffering(client, identity, config["arch"]), nil
+	return dockeradapter.NewOffering(client, identity, config["arch"], config["deployment_id"]), nil
 }

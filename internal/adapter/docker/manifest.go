@@ -57,6 +57,13 @@ func Manifest() adapter.Manifest {
 				Placeholder: "arm64",
 				Help:        "Optional OCI architecture for this endpoint when Docker deliberately runs emulated workloads. Empty uses Docker's reported architecture.",
 			},
+			{
+				Name:        "deployment_id",
+				Label:       "Broker deployment identity",
+				Type:        "string",
+				Placeholder: "local-test-a1b2c3d4",
+				Help:        "Optional deployment identity stamped on every workload container for exact crash cleanup.",
+			},
 		},
 		SetupSteps: []adapter.SetupStep{
 			{

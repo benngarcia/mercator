@@ -245,7 +245,7 @@ func TestOfferingAdapterServesFreshOffersPerCall(t *testing.T) {
 	// The offer must be rebuilt on every ListOffers call: a snapshot frozen at
 	// adapter construction expires one hour in and permanently fails placement.
 	client := NewCLIClient("false") // probe fails instantly; capacity falls back
-	ad := NewOffering(client, DeriveIdentity("", ""), "")
+	ad := NewOffering(client, DeriveIdentity("", ""), "", "")
 
 	first, err := ad.ListOffers(t.Context(), adapter.OfferRequest{})
 	if err != nil || len(first) != 1 {
@@ -400,7 +400,7 @@ func TestGPUSpecSchedulesOnGPUDockerOfferAndRejectsCPUOnlyOffer(t *testing.T) {
 // offers, so a placement assertion sees production-shaped input.
 func stampedLane(t *testing.T, offers []domain.OfferSnapshot) []domain.OfferSnapshot {
 	t.Helper()
-	declaration, err := capability.Declare("docker", New(NewCLIClient("")))
+	declaration, err := capability.Declare("docker", New(NewCLIClient(""), ""))
 	if err != nil {
 		t.Fatalf("declare docker capabilities: %v", err)
 	}
