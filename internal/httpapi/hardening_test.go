@@ -130,8 +130,14 @@ func TestNestedLegacyWorkloadSelectorsFailInsteadOfWideningTheRequest(t *testing
 		"inline Run workload": httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(mustMarshal(t, map[string]any{
 			"run_id": "run_nested_legacy", "workload": legacyRevision,
 		}))),
+		"case-insensitive Run workload": httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(mustMarshal(t, map[string]any{
+			"run_id": "run_nested_legacy_case", "Workload": legacyRevision,
+		}))),
 		"stored revision": httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_legacy/revisions", bytes.NewReader(mustMarshal(t, map[string]any{
 			"revision": legacyRevision,
+		}))),
+		"case-insensitive stored revision": httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_legacy/revisions", bytes.NewReader(mustMarshal(t, map[string]any{
+			"Revision": legacyRevision,
 		}))),
 	} {
 		t.Run(name, func(t *testing.T) {
