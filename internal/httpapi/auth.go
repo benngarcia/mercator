@@ -140,6 +140,16 @@ func containsWorkspaceSelector(value map[string]json.RawMessage) bool {
 			return true
 		}
 	}
+	for _, retiredContainer := range []string{"workload", "revision"} {
+		var nested map[string]json.RawMessage
+		if json.Unmarshal(value[retiredContainer], &nested) == nil {
+			for key := range nested {
+				if isWorkspaceSelector(key) {
+					return true
+				}
+			}
+		}
+	}
 	return false
 }
 

@@ -117,6 +117,34 @@ func TestApplicationWorkspaceMetadataRemainsOpaque(t *testing.T) {
 	}
 }
 
+func TestNestedLegacyWorkloadSelectorsFailInsteadOfWideningTheRequest(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	legacyRevision := map[string]any{
+		"id":           "wrev_legacy",
+		"workspace_id": "retired",
+		"workload_id":  "wrk_legacy",
+		"digest":       "sha256:legacy",
+		"spec":         httpRevision().Spec,
+	}
+	for name, request := range map[string]*http.Request{
+		"inline Run workload": httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(mustMarshal(t, map[string]any{
+			"run_id": "run_nested_legacy", "workload": legacyRevision,
+		}))),
+		"stored revision": httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_legacy/revisions", bytes.NewReader(mustMarshal(t, map[string]any{
+			"revision": legacyRevision,
+		}))),
+	} {
+		t.Run(name, func(t *testing.T) {
+			request.Header.Set("Idempotency-Key", "nested-legacy-workspace")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest || !bytes.Contains(recorder.Body.Bytes(), []byte("REMOVED_WORKSPACE_SELECTOR")) {
+				t.Fatalf("nested legacy selector response = %d %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
 // Item 1 (HTTP): exit_code present on the create envelope and on GET.
 func TestCreateAndGetRunExposeExitCode(t *testing.T) {
 	handler := newHTTPTestServer(t)
