@@ -160,10 +160,9 @@ func TestCanonicalHashIsStableAndOrderIndependent(t *testing.T) {
 
 func validRevision() WorkloadRevision {
 	return WorkloadRevision{
-		ID:          "wrev_1",
-		WorkspaceID: "ws_1",
-		WorkloadID:  "wrk_1",
-		Digest:      "sha256:revision",
+		ID:         "wrev_1",
+		WorkloadID: "wrk_1",
+		Digest:     "sha256:revision",
 		Spec: WorkloadSpec{
 			Containers: []ContainerSpec{{
 				Name:     "main",

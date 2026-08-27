@@ -14,7 +14,6 @@ func TestFakeAdapterLaunchIsIdempotentAndDetectsConflicts(t *testing.T) {
 	req := adapter.LaunchRequest{
 		OperationKey:   "launch_run_1_att_1",
 		RequestHash:    "sha256:launch",
-		WorkspaceID:    "ws_1",
 		RunID:          "run_1",
 		AttemptID:      "att_1",
 		OwnershipToken: "own_1",
@@ -60,7 +59,6 @@ func TestFakeAdapterObserveReleaseAndListOwned(t *testing.T) {
 	req := adapter.LaunchRequest{
 		OperationKey:   "launch_run_1_att_1",
 		RequestHash:    "sha256:launch",
-		WorkspaceID:    "ws_1",
 		RunID:          "run_1",
 		AttemptID:      "att_1",
 		OwnershipToken: "own_1",
@@ -73,7 +71,7 @@ func TestFakeAdapterObserveReleaseAndListOwned(t *testing.T) {
 		t.Fatalf("launch: %v", err)
 	}
 
-	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -103,7 +101,7 @@ func TestFakeAdapterObserveReleaseAndListOwned(t *testing.T) {
 	if !releaseAgain.Duplicate {
 		t.Fatalf("expected duplicate release receipt, got %+v", releaseAgain)
 	}
-	owned, err = ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err = ad.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned after release: %v", err)
 	}

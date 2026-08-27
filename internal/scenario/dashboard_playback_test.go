@@ -7,7 +7,7 @@ import (
 
 func TestDashboardPlaybackStepsAndRewindsEverySubscriber(t *testing.T) {
 	playback := NewDashboardPlayback()
-	first, err := playback.Open(t.Context(), "ws_scenario", DashboardScenarioName, true)
+	first, err := playback.Open(t.Context(), DashboardScenarioName, true)
 	if err != nil {
 		t.Fatalf("open first subscriber: %v", err)
 	}
@@ -15,7 +15,7 @@ func TestDashboardPlaybackStepsAndRewindsEverySubscriber(t *testing.T) {
 	if initial.Type != EmissionReset || initial.Reset == nil || initial.Reset.Playback.Cursor != 0 {
 		t.Fatalf("initial emission = %+v", initial)
 	}
-	if err := playback.Command("ws_scenario", DashboardCommand{Type: CommandPause}); err != nil {
+	if err := playback.Command(DashboardCommand{Type: CommandPause}); err != nil {
 		t.Fatalf("pause scenario: %v", err)
 	}
 	paused := <-first
@@ -23,7 +23,7 @@ func TestDashboardPlaybackStepsAndRewindsEverySubscriber(t *testing.T) {
 		t.Fatalf("paused emission = %+v", paused)
 	}
 
-	second, err := playback.Open(t.Context(), "ws_scenario", DashboardScenarioName, false)
+	second, err := playback.Open(t.Context(), DashboardScenarioName, false)
 	if err != nil {
 		t.Fatalf("open second subscriber: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestDashboardPlaybackStepsAndRewindsEverySubscriber(t *testing.T) {
 	if secondInitial.Reset == nil || secondInitial.Reset.Playback.Status != PlaybackPaused {
 		t.Fatalf("second subscriber did not snap to current state: %+v", secondInitial)
 	}
-	if err := playback.Command("ws_scenario", DashboardCommand{Type: CommandNext}); err != nil {
+	if err := playback.Command(DashboardCommand{Type: CommandNext}); err != nil {
 		t.Fatalf("step scenario: %v", err)
 	}
 	for index, subscriber := range []<-chan DashboardEmission{first, second} {
@@ -40,7 +40,7 @@ func TestDashboardPlaybackStepsAndRewindsEverySubscriber(t *testing.T) {
 			t.Fatalf("subscriber %d step emission = %+v", index+1, emission)
 		}
 	}
-	if err := playback.Command("ws_scenario", DashboardCommand{Type: CommandPrevious}); err != nil {
+	if err := playback.Command(DashboardCommand{Type: CommandPrevious}); err != nil {
 		t.Fatalf("rewind scenario: %v", err)
 	}
 	for index, subscriber := range []<-chan DashboardEmission{first, second} {
@@ -54,7 +54,7 @@ func TestDashboardPlaybackStepsAndRewindsEverySubscriber(t *testing.T) {
 func TestDashboardPlaybackOpensAndRestartsPausedAtTheBeginning(t *testing.T) {
 	// Arrange
 	playback := NewDashboardPlayback()
-	emissions, err := playback.Open(t.Context(), "ws_scenario", DashboardScenarioName, false)
+	emissions, err := playback.Open(t.Context(), DashboardScenarioName, false)
 	if err != nil {
 		t.Fatalf("open paused scenario: %v", err)
 	}
@@ -62,13 +62,13 @@ func TestDashboardPlaybackOpensAndRestartsPausedAtTheBeginning(t *testing.T) {
 	if initial.Reset == nil || initial.Reset.Playback.Status != PlaybackPaused || initial.Reset.Playback.Cursor != 0 {
 		t.Fatalf("initial paused emission = %+v", initial)
 	}
-	if err := playback.Command("ws_scenario", DashboardCommand{Type: CommandNext}); err != nil {
+	if err := playback.Command(DashboardCommand{Type: CommandNext}); err != nil {
 		t.Fatalf("step scenario: %v", err)
 	}
 	<-emissions
 
 	// Act
-	if err := playback.Command("ws_scenario", DashboardCommand{Type: CommandRestart}); err != nil {
+	if err := playback.Command(DashboardCommand{Type: CommandRestart}); err != nil {
 		t.Fatalf("restart scenario: %v", err)
 	}
 	restarted := <-emissions
@@ -90,11 +90,11 @@ func TestDashboardPlaybackDropsAStalledSubscriber(t *testing.T) {
 	subscriber := make(chan DashboardEmission, 1)
 	subscriber <- DashboardEmission{Type: EmissionPlayback}
 	session.subscribers[subscriber] = struct{}{}
-	playback.sessions["ws_stalled"] = session
+	playback.session = session
 
 	completed := make(chan error, 1)
 	go func() {
-		completed <- playback.Command("ws_stalled", DashboardCommand{Type: CommandPause})
+		completed <- playback.Command(DashboardCommand{Type: CommandPause})
 	}()
 
 	select {
@@ -105,7 +105,7 @@ func TestDashboardPlaybackDropsAStalledSubscriber(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("stalled subscriber blocked playback command")
 	}
-	if _, exists := playback.sessions["ws_stalled"]; exists {
+	if playback.session != nil {
 		t.Fatal("session with no live subscribers was retained")
 	}
 	<-subscriber
@@ -114,15 +114,15 @@ func TestDashboardPlaybackDropsAStalledSubscriber(t *testing.T) {
 	}
 }
 
-func TestDashboardPlaybackReplacesWorkspaceSessionWhenScenarioChanges(t *testing.T) {
+func TestDashboardPlaybackReplacesSessionWhenScenarioChanges(t *testing.T) {
 	playback := NewDashboardPlayback()
-	first, err := playback.Open(t.Context(), "ws_scenario", DashboardScenarioWarmPoolBurst, false)
+	first, err := playback.Open(t.Context(), DashboardScenarioWarmPoolBurst, false)
 	if err != nil {
 		t.Fatalf("open warm pool scenario: %v", err)
 	}
 	<-first
 
-	second, err := playback.Open(t.Context(), "ws_scenario", DashboardScenarioDeadlineCost, false)
+	second, err := playback.Open(t.Context(), DashboardScenarioDeadlineCost, false)
 	if err != nil {
 		t.Fatalf("open deadline scenario: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestDashboardPlaybackReplacesWorkspaceSessionWhenScenarioChanges(t *testing
 	}
 	foundDeadlineRun := false
 	for cursor := 1; cursor <= reset.Reset.Playback.CueCount; cursor++ {
-		if err := playback.Command("ws_scenario", DashboardCommand{Type: CommandNext}); err != nil {
+		if err := playback.Command(DashboardCommand{Type: CommandNext}); err != nil {
 			t.Fatalf("step deadline scenario: %v", err)
 		}
 		step := <-second

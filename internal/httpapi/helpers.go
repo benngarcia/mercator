@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io/fs"
 	"log"
 	"net/http"
@@ -20,7 +19,6 @@ import (
 	sinkspkg "github.com/benngarcia/mercator/internal/sinks"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workload"
-	"github.com/benngarcia/mercator/internal/workspace"
 	"github.com/benngarcia/mercator/web"
 )
 
@@ -64,29 +62,6 @@ func internalAPIError(status int, code string, err error) ErrorResponse {
 	return apiError(code, "Internal error; see server logs for detail.")
 }
 
-type workspaceError struct {
-	Forbidden bool
-	Response  ErrorResponse
-}
-
-// resolveWorkspace resolves the explicit workspace ID from the request body or
-// query. Workspace IDs partition durable event history; server configuration
-// never supplies or authorizes one on the caller's behalf.
-func (s *Server) resolveWorkspace(_ context.Context, bodyWorkspaceID, queryWorkspaceID string) (string, *workspaceError) {
-	workspaceID := bodyWorkspaceID
-	if workspaceID == "" {
-		workspaceID = queryWorkspaceID
-	}
-	if workspaceID == "" {
-		return "", &workspaceError{Response: apiError("WORKSPACE_ID_REQUIRED", "workspace_id is required.")}
-	}
-	return workspaceID, nil
-}
-
-func (s *Server) requiredWorkspace(ctx context.Context, queryWorkspaceID string) (string, *workspaceError) {
-	return s.resolveWorkspace(ctx, "", queryWorkspaceID)
-}
-
 // resolveImageFn adapts the server's OCI resolver into the orchestrator's
 // ResolveImage hook. It returns nil when no resolver is configured, in which
 // case images are stored/launched as submitted.
@@ -109,14 +84,13 @@ func (s *Server) resolveImageFn() orchestrator.ResolveImageFunc {
 	}
 }
 
-func runLinks(workspaceID, runID string) map[string]string {
-	query := "?workspace_id=" + workspaceID
+func runLinks(runID string) map[string]string {
 	base := "/v1/runs/" + runID
 	return map[string]string{
-		"self":     base + query,
-		"events":   base + "/events" + query,
-		"decision": base + "/decision" + query,
-		"refresh":  base + "/refresh" + query,
+		"self":     base,
+		"events":   base + "/events",
+		"decision": base + "/decision",
+		"refresh":  base + "/refresh",
 	}
 }
 
@@ -140,17 +114,6 @@ func errorMessage(err error) string {
 	return err.Error()
 }
 
-func workspaceAPIError(err error) (ErrorResponse, bool) {
-	switch {
-	case errors.Is(err, workspace.ErrNotFound):
-		return apiError("WORKSPACE_NOT_FOUND", "Workspace not found."), true
-	case errors.Is(err, workspace.ErrArchived):
-		return apiError("WORKSPACE_ARCHIVED", "Workspace is archived."), true
-	default:
-		return ErrorResponse{}, false
-	}
-}
-
 // HandlerForSQLite builds a fully-wired handler over a SQLite event log with
 // the fake adapter serving the given offers. Used for evaluation and tests.
 func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot, options ...Option) (http.Handler, func() error, error) {
@@ -159,7 +122,6 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 		return nil, nil, err
 	}
 	log := storage.EventLog()
-	workspaces := storage.Workspaces()
 	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
 	sched := scheduler.New()
 	// Synthetic-digest resolution lets the minimal create path
@@ -179,7 +141,6 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 		Sinks:        sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}),
 		Connections:  connection.New(log),
 		Resolver:     resolver,
-		Workspaces:   workspaces,
 		Events:       log,
 	}, options...)
 	return handler, storage.Close, nil

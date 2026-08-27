@@ -1,9 +1,8 @@
 import { createRoute } from "@tanstack/react-router";
 
-import { WorkspaceCanvas } from "@/components/canvas";
+import { DeploymentCanvas } from "@/components/canvas";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useSession } from "@/hooks/useSession";
-import { useWorkspaceFeed } from "@/lib/workspace";
+import { useDeploymentFeed } from "@/lib/deployment";
 
 import { rootRoute } from "./root";
 
@@ -20,21 +19,13 @@ function validateSearch(search: Record<string, unknown>): CanvasSearch {
 }
 
 function CanvasPage() {
-  const { workspace } = useSession();
-  const feed = useWorkspaceFeed();
-  if (!workspace) {
-    return (
-      <div className="flex min-h-full items-center justify-center p-8 text-sm text-muted-foreground">
-        Select a Workspace
-      </div>
-    );
-  }
-  if (!feed || !feed.workspace.ready) {
+  const feed = useDeploymentFeed();
+  if (!feed.deployment.ready) {
     return <CanvasSkeleton />;
   }
   return (
-    <WorkspaceCanvas
-      workspace={feed.workspace}
+    <DeploymentCanvas
+      deployment={feed.deployment}
       events={feed.events}
       playback={feed.playback}
       fidelity={feed.fidelity}

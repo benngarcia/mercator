@@ -20,10 +20,3 @@ export const setTokenAtom = runtime.fn<string | null>()(
     yield* session.setToken(token);
   }),
 );
-
-export const setWorkspaceAtom = runtime.fn<string | null>()(
-  Effect.fn("SessionAtom.setWorkspace")(function* (workspace) {
-    const session = yield* Session;
-    yield* session.setWorkspace(workspace);
-  }),
-);

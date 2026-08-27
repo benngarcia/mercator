@@ -44,7 +44,7 @@ func TestAdapterLaunchObserveReleaseAndListOwned(t *testing.T) {
 	if observation.Phase != adapter.ExternalPhaseRunning {
 		t.Fatalf("unexpected observation: %+v", observation)
 	}
-	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: req.WorkspaceID})
+	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	if observation.Phase != adapter.ExternalPhaseRunning {
 		t.Fatalf("expected running live container after launch, got %+v", observation)
 	}
-	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: req.WorkspaceID})
+	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestAdapterLaunchRejectsForeignContainerWithSameName(t *testing.T) {
 	client.objects[req.LaunchKey] = Container{
 		ID:     "docker-foreign",
 		Name:   req.LaunchKey,
-		Labels: map[string]string{"mercator.workspace_id": "ws_other"},
+		Labels: map[string]string{"mercator.launch_key": "foreign"},
 		State:  "running",
 	}
 
@@ -295,7 +295,6 @@ func launchRequest() adapter.LaunchRequest {
 	return adapter.LaunchRequest{
 		OperationKey:              "launch_1",
 		RequestHash:               "sha256:launch",
-		WorkspaceID:               "ws_1",
 		RunID:                     "run_1",
 		AttemptID:                 "att_1",
 		WorkloadID:                "wrk_1",
@@ -377,7 +376,8 @@ func (f *fakeClient) ListContainers(_ context.Context, labels map[string]string)
 	for _, container := range f.objects {
 		match := true
 		for key, value := range labels {
-			if container.Labels[key] != value {
+			actual, present := container.Labels[key]
+			if !present || (value != "" && actual != value) {
 				match = false
 				break
 			}

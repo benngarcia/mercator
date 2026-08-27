@@ -347,10 +347,9 @@ func (state runState) validate() error {
 	return nil
 }
 
-func runRecordFromState(workspaceID, runID string, state runState) domain.RunRecord {
+func runRecordFromState(runID string, state runState) domain.RunRecord {
 	record := domain.RunRecord{
 		ID:                 runID,
-		WorkspaceID:        workspaceID,
 		WorkloadRevisionID: state.requested.Workload.ID,
 		Phase:              "requested",
 		Cleanup:            domain.CleanupNotRequired,

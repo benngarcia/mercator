@@ -2,13 +2,112 @@ package eventlog
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 )
+
+func TestSQLiteEventLogFlattensLegacyWorkspacePartitions(t *testing.T) {
+	t.Parallel()
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE events (
+			global_position INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id TEXT NOT NULL UNIQUE,
+			workspace_id TEXT NOT NULL,
+			stream_type TEXT NOT NULL,
+			stream_id TEXT NOT NULL,
+			stream_version INTEGER NOT NULL,
+			event_type TEXT NOT NULL,
+			schema_version INTEGER NOT NULL,
+			occurred_at TEXT NOT NULL,
+			actor_json BLOB,
+			correlation_id TEXT,
+			causation_id TEXT,
+			command_key TEXT NOT NULL,
+			request_hash TEXT NOT NULL,
+			visibility TEXT NOT NULL,
+			data_json BLOB,
+			private_data BLOB,
+			UNIQUE(workspace_id, stream_type, stream_id, stream_version)
+		)`,
+		`CREATE TABLE command_appends (
+			workspace_id TEXT NOT NULL,
+			command_key TEXT NOT NULL,
+			request_hash TEXT NOT NULL,
+			first_position INTEGER NOT NULL,
+			last_position INTEGER NOT NULL,
+			PRIMARY KEY(workspace_id, command_key)
+		)`,
+		`INSERT INTO events (
+			event_id, workspace_id, stream_type, stream_id, stream_version,
+			event_type, schema_version, occurred_at, actor_json, correlation_id, causation_id,
+			command_key, request_hash, visibility, data_json
+		) VALUES
+			('evt_workspace', 'ws_1', 'workspace', 'ws_1', 1, 'workspace.created.v1', 1, '2026-01-01T00:00:00Z', '{}', '', '', 'cmd_workspace', 'sha256:workspace', 'public', '{}'),
+			('evt_run_1', 'ws_1', 'run', 'run_1', 1, 'compute.run.requested.v1', 1, '2026-01-01T00:00:01Z', '{}', '', '', 'cmd_run_1', 'sha256:run-1', 'public', '{}'),
+			('evt_run_2', 'ws_2', 'run', 'run_2', 1, 'compute.run.requested.v1', 1, '2026-01-01T00:00:02Z', '{}', '', '', 'cmd_run_2', 'sha256:run-2', 'public', '{}')`,
+		`INSERT INTO command_appends VALUES
+			('ws_1', 'cmd_workspace', 'sha256:workspace', 1, 1),
+			('ws_1', 'cmd_run_1', 'sha256:run-1', 2, 2),
+			('ws_2', 'cmd_run_2', 'sha256:run-2', 3, 3)`,
+	} {
+		if _, err := db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatalf("prepare legacy database: %v", err)
+		}
+	}
+
+	log, err := NewSQLite(t.Context(), db)
+	if err != nil {
+		t.Fatalf("open legacy event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+
+	var workspaceColumns int
+	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'workspace_id'`).Scan(&workspaceColumns); err != nil {
+		t.Fatalf("inspect migrated events: %v", err)
+	}
+	if workspaceColumns != 0 {
+		t.Fatalf("workspace columns = %d, want none", workspaceColumns)
+	}
+	events, err := log.ReadAll(t.Context(), 0, 10, EventFilter{})
+	if err != nil {
+		t.Fatalf("read migrated events: %v", err)
+	}
+	if len(events) != 2 || events[0].ID != "evt_run_1" || events[1].ID != "evt_run_2" {
+		t.Fatalf("migrated events = %#v, want both deployment events and no workspace event", events)
+	}
+}
+
+func TestSQLiteEventLogUsesDeploymentGlobalStreamIdentity(t *testing.T) {
+	t.Parallel()
+	log := openTestLog(t)
+
+	result, err := log.Append(t.Context(), AppendRequest{
+		Stream:                StreamKey{Type: "run", ID: "run_global"},
+		ExpectedStreamVersion: 0,
+		CommandKey:            "cmd-global",
+		RequestHash:           "sha256:global",
+		Events: []NewEvent{{
+			ID:            "evt_global",
+			Type:          "compute.run.requested.v1",
+			SchemaVersion: 1,
+			Data:          json.RawMessage(`{"run_id":"run_global"}`),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("append deployment-global stream: %v", err)
+	}
+	if result.Events[0].CloudEvent().Source != "compute-control-plane" {
+		t.Fatalf("cloud event source = %q, want deployment identity", result.Events[0].CloudEvent().Source)
+	}
+}
 
 func TestSQLiteEventLogAppendReadAndSubscribe(t *testing.T) {
 	t.Parallel()
@@ -27,7 +126,7 @@ func TestSQLiteEventLogAppendReadAndSubscribe(t *testing.T) {
 	}
 
 	result, err := log.Append(ctx, AppendRequest{
-		Stream:                StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"},
+		Stream:                StreamKey{Type: "run", ID: "run_1"},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "cmd-create-run",
 		RequestHash:           "sha256:request",
@@ -60,7 +159,7 @@ func TestSQLiteEventLogAppendReadAndSubscribe(t *testing.T) {
 		t.Fatalf("unexpected append result: %+v", result)
 	}
 
-	stream, err := log.ReadStream(ctx, StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"}, 0, 10)
+	stream, err := log.ReadStream(ctx, StreamKey{Type: "run", ID: "run_1"}, 0, 10)
 	if err != nil {
 		t.Fatalf("read stream: %v", err)
 	}
@@ -70,7 +169,7 @@ func TestSQLiteEventLogAppendReadAndSubscribe(t *testing.T) {
 	if stream[0].StreamVersion != 1 || stream[1].StreamVersion != 2 {
 		t.Fatalf("unexpected stream versions: %+v", stream)
 	}
-	if stream[0].CloudEvent().Source != "compute-control-plane/workspaces/ws_1" {
+	if stream[0].CloudEvent().Source != "compute-control-plane" {
 		t.Fatalf("unexpected cloudevent source: %+v", stream[0].CloudEvent())
 	}
 
@@ -97,7 +196,7 @@ func TestSQLiteEventLogFiltersPublicEventsAndReportsTheirHead(t *testing.T) {
 	ctx := context.Background()
 	log := openTestLog(t)
 	_, err := log.Append(ctx, AppendRequest{
-		Stream:                StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"},
+		Stream:                StreamKey{Type: "run", ID: "run_1"},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "cmd-create-run",
 		RequestHash:           "sha256:request",
@@ -109,7 +208,7 @@ func TestSQLiteEventLogFiltersPublicEventsAndReportsTheirHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	filter := EventFilter{WorkspaceID: "ws_1", Visibility: VisibilityPublic}
+	filter := EventFilter{Visibility: VisibilityPublic}
 	events, err := log.ReadAll(ctx, 0, 10, filter)
 	if err != nil {
 		t.Fatalf("read public events: %v", err)
@@ -131,7 +230,7 @@ func TestSQLiteEventLogIdempotencyAndConcurrency(t *testing.T) {
 	ctx := context.Background()
 	log := openTestLog(t)
 	req := AppendRequest{
-		Stream:                StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"},
+		Stream:                StreamKey{Type: "run", ID: "run_1"},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "cmd-create-run",
 		RequestHash:           "sha256:same",
@@ -179,50 +278,6 @@ func TestSQLiteEventLogIdempotencyAndConcurrency(t *testing.T) {
 	}
 }
 
-func TestSQLiteEventLogListsDistinctWorkspaceIDsFromEventIndex(t *testing.T) {
-	ctx := context.Background()
-	log := openTestLog(t)
-	appendWorkspaceRun := func(workspaceID, runID string) {
-		t.Helper()
-		_, err := log.Append(ctx, AppendRequest{
-			Stream:                StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID},
-			ExpectedStreamVersion: 0,
-			CommandKey:            "create:" + runID,
-			RequestHash:           "sha256:" + runID,
-			Events: []NewEvent{{
-				ID:            "evt_" + runID,
-				Type:          "compute.run.requested.v1",
-				SchemaVersion: 1,
-				OccurredAt:    time.Now().UTC(),
-			}},
-		})
-		if err != nil {
-			t.Fatalf("append %s: %v", runID, err)
-		}
-	}
-	appendWorkspaceRun("staging-experiments", "run_experiment")
-	appendWorkspaceRun("staging", "run_one")
-	appendWorkspaceRun("staging", "run_two")
-	_, err := log.Append(ctx, AppendRequest{
-		Stream:                StreamKey{WorkspaceID: "ignored", Type: "connection", ID: "conn_1"},
-		ExpectedStreamVersion: 0,
-		CommandKey:            "create:conn_1",
-		RequestHash:           "sha256:conn_1",
-		Events:                []NewEvent{{ID: "evt_conn_1", Type: "compute.connection.created.v1", SchemaVersion: 1, OccurredAt: time.Now().UTC()}},
-	})
-	if err != nil {
-		t.Fatalf("append connection: %v", err)
-	}
-
-	workspaceIDs, err := log.ListWorkspaceIDs(ctx, EventFilter{StreamTypes: []string{"run"}, EventTypes: []string{"compute.run.requested.v1"}})
-	if err != nil {
-		t.Fatalf("list workspace IDs: %v", err)
-	}
-	if got, want := strings.Join(workspaceIDs, ","), "staging,staging-experiments"; got != want {
-		t.Fatalf("workspace IDs = %q, want %q", got, want)
-	}
-}
-
 func TestCompleteHistoryReadsPastOnePage(t *testing.T) {
 	ctx := context.Background()
 	log := openTestLog(t)
@@ -232,7 +287,7 @@ func TestCompleteHistoryReadsPastOnePage(t *testing.T) {
 	}
 	appendTestEvents(t, log, "run_history", "cmd-history", eventIDs)
 
-	stream, err := ReadFullStream(ctx, log, StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_history"})
+	stream, err := ReadFullStream(ctx, log, StreamKey{Type: "run", ID: "run_history"})
 	if err != nil {
 		t.Fatalf("read full stream: %v", err)
 	}
@@ -241,7 +296,7 @@ func TestCompleteHistoryReadsPastOnePage(t *testing.T) {
 	}
 
 	var global []StoredEvent
-	for event, err := range ScanAll(ctx, log, EventFilter{WorkspaceID: "ws_1", StreamTypes: []string{"run"}}) {
+	for event, err := range ScanAll(ctx, log, EventFilter{StreamTypes: []string{"run"}}) {
 		if err != nil {
 			t.Fatalf("scan all: %v", err)
 		}
@@ -330,7 +385,7 @@ func appendTestEvents(t *testing.T, log *SQLiteEventLog, runID, commandKey strin
 		})
 	}
 	if _, err := log.Append(context.Background(), AppendRequest{
-		Stream:                StreamKey{WorkspaceID: "ws_1", Type: "run", ID: runID},
+		Stream:                StreamKey{Type: "run", ID: runID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            commandKey,
 		RequestHash:           "sha256:" + commandKey,

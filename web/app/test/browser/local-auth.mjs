@@ -12,7 +12,6 @@ const context = await browser.newContext({
 });
 await context.addInitScript(() => {
   localStorage.setItem("mercator.token", "stale-token");
-  localStorage.removeItem("mercator.workspace");
 });
 
 const page = await context.newPage();
@@ -28,7 +27,6 @@ page.on("pageerror", (error) => consoleProblems.push(error.message));
 try {
   // Arrange
   const url = new URL("/canvas", baseURL);
-  url.searchParams.set("workspace_id", "ws_scenario");
   url.searchParams.set("scenario", "warm-pool-burst");
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
   await page.getByText("developer@localhost", { exact: true }).waitFor();
@@ -54,10 +52,6 @@ try {
   assert.equal(
     await page.evaluate(() => localStorage.getItem("mercator.token")),
     null,
-  );
-  assert.equal(
-    await page.evaluate(() => localStorage.getItem("mercator.workspace")),
-    "ws_scenario",
   );
   assert.deepEqual(consoleProblems, []);
 

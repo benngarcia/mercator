@@ -5,17 +5,6 @@ import * as Stream from "effect/Stream";
 
 import { Session, testLayer } from "./session";
 
-effect("stores the selected Workspace in the Session service", () =>
-  Effect.gen(function* () {
-    const session = yield* Session;
-
-    yield* session.setWorkspace("ws_42");
-    const current = yield* session.current;
-
-    expect(current.workspace).toBe("ws_42");
-  }).pipe(Effect.provide(testLayer({ token: null, workspace: null }))),
-);
-
 effect("publishes Session changes", () =>
   Effect.gen(function* () {
     const session = yield* Session;
@@ -29,8 +18,8 @@ effect("publishes Session changes", () =>
     const changes = yield* Fiber.join(changesFiber);
 
     expect(Array.from(changes)).toEqual([
-      { token: null, workspace: null },
-      { token: "secret", workspace: null },
+      { token: null },
+      { token: "secret" },
     ]);
-  }).pipe(Effect.provide(testLayer({ token: null, workspace: null }))),
+  }).pipe(Effect.provide(testLayer({ token: null }))),
 );

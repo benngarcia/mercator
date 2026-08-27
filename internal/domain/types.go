@@ -31,11 +31,10 @@ func ParsePlatform(value string) (Platform, bool) {
 }
 
 type WorkloadRevision struct {
-	ID          string       `json:"id"`
-	WorkspaceID string       `json:"workspace_id"`
-	WorkloadID  string       `json:"workload_id"`
-	Digest      string       `json:"digest"`
-	Spec        WorkloadSpec `json:"spec"`
+	ID         string       `json:"id"`
+	WorkloadID string       `json:"workload_id"`
+	Digest     string       `json:"digest"`
+	Spec       WorkloadSpec `json:"spec"`
 }
 
 type WorkloadSpec struct {
@@ -478,7 +477,6 @@ func DispositionForOfferKind(kind OfferKind) (Disposition, error) {
 
 type RunRecord struct {
 	ID                 string       `json:"id"`
-	WorkspaceID        string       `json:"workspace_id"`
 	WorkloadRevisionID string       `json:"workload_revision_id"`
 	Phase              string       `json:"phase"`
 	Outcome            RunOutcome   `json:"outcome,omitempty"`

@@ -122,7 +122,7 @@ export function RunsTable({
           <EmptyState
             icon={Rocket}
             title="No runs yet"
-            description="Created runs in this workspace will appear here."
+            description="Created runs in this deployment will appear here."
           />
         )
       }

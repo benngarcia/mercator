@@ -3,13 +3,13 @@ import { expect, test } from "vitest";
 import replacementBookingEvents from "./testdata/replacement-booking-events.json";
 import requestedEvent from "./testdata/requested-event.json";
 import {
-  createWorkspace,
-  reduceWorkspace,
-  type WorkspaceMessage,
+  createDeployment,
+  reduceDeployment,
+  type DeploymentMessage,
 } from "./reducer";
 
 test("degrades a run whose expected runtime exceeds the enforced maximum", () => {
-  const requested = structuredClone(requestedEvent) as WorkspaceMessage;
+  const requested = structuredClone(requestedEvent) as DeploymentMessage;
   if (requested.type !== "domain_event") {
     throw new Error("fixture needs a requested event");
   }
@@ -24,9 +24,12 @@ test("degrades a run whose expected runtime exceeds the enforced maximum", () =>
   };
   data.workload_revision.spec.placement.expected_runtime_seconds = 121;
 
-  const workspace = reduceWorkspace(createWorkspace("ws_scenario"), requested);
+  const deployment = reduceDeployment(
+    createDeployment(),
+    requested,
+  );
 
-  const run = workspace.runs[data.run_id];
+  const run = deployment.runs[data.run_id];
   expect(run?.phase).toBe("requested");
   expect(run?.expectedRuntimeSeconds).toBeNull();
   expect(run?.maxRuntimeSeconds).toBe(120);
@@ -48,7 +51,7 @@ test("keeps a rental active when a queued booking detaches while another runs", 
     state: "queued",
     afterBookingID: "booking-active",
   });
-  const closed: WorkspaceMessage = {
+  const closed: DeploymentMessage = {
     type: "domain_event",
     event: {
       specversion: "1.0",
@@ -57,35 +60,34 @@ test("keeps a rental active when a queued booking detaches while another runs", 
       type: "compute.run.closed.v1",
       subject: "runs/run-queued",
       time: "2030-01-01T00:00:05Z",
-      workspaceid: "ws_scenario",
       streamversion: 3,
       globalposition: 5,
       correlationid: "run-queued",
       data: { closed: true },
     },
-  } as unknown as WorkspaceMessage;
+  } as unknown as DeploymentMessage;
 
-  const workspace = [
+  const deployment = [
     requestedMessage("run-active", "evt_requested_active", 1),
     running,
     requestedMessage("run-queued", "evt_requested_queued", 3),
     queued,
     closed,
-  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+  ].reduce(reduceDeployment, createDeployment());
 
-  const rental = workspace.rentals["rental-warm"];
+  const rental = deployment.rentals["rental-warm"];
   expect(rental?.phase).toBe("active");
   expect(rental?.runningBookingID).toBe("booking-active");
   expect(rental?.queuedBookingIDs).toEqual([]);
-  expect(workspace.runs["run-queued"]?.phase).toBe("closed");
+  expect(deployment.runs["run-queued"]?.phase).toBe("closed");
 });
 
 function requestedMessage(
   runID: string,
   eventID: string,
   globalPosition: number,
-): WorkspaceMessage {
-  const requested = structuredClone(requestedEvent) as WorkspaceMessage;
+): DeploymentMessage {
+  const requested = structuredClone(requestedEvent) as DeploymentMessage;
   if (requested.type !== "domain_event") {
     throw new Error("fixture needs a requested event");
   }
@@ -104,7 +106,7 @@ function bookingDecidedMessage(input: {
   bookingID: string;
   state: "running" | "queued";
   afterBookingID?: string;
-}): WorkspaceMessage {
+}): DeploymentMessage {
   return {
     type: "domain_event",
     event: {
@@ -114,7 +116,6 @@ function bookingDecidedMessage(input: {
       type: "compute.run.booking_decided.v1",
       subject: `runs/${input.runID}`,
       time: "2030-01-01T00:00:01Z",
-      workspaceid: "ws_scenario",
       streamversion: 2,
       globalposition: input.globalPosition,
       correlationid: input.runID,
@@ -143,7 +144,7 @@ function bookingDecidedMessage(input: {
         },
       },
     },
-  } as unknown as WorkspaceMessage;
+  } as unknown as DeploymentMessage;
 }
 
 test("replaces a failed provider booking for the same Run", () => {
@@ -157,8 +158,8 @@ test("replaces a failed provider booking for the same Run", () => {
       kind: "provisionable",
     },
   ];
-  const messages = replacementBookingEvents as unknown as WorkspaceMessage[];
-  const requested = structuredClone(requestedEvent) as WorkspaceMessage;
+  const messages = replacementBookingEvents as unknown as DeploymentMessage[];
+  const requested = structuredClone(requestedEvent) as DeploymentMessage;
   if (requested.type !== "domain_event") {
     throw new Error("fixture needs a requested event");
   }
@@ -167,25 +168,22 @@ test("replaces a failed provider booking for the same Run", () => {
   (requested.event.data as { run_id: string }).run_id = "run-1";
 
   const result = messages.reduce(
-    reduceWorkspace,
-    reduceWorkspace(
-      reduceWorkspace(createWorkspace("ws_scenario"), requested),
+    reduceDeployment,
+    reduceDeployment(
+      reduceDeployment(createDeployment(), requested),
       {
         type: "offers_replaced",
         catalog: {
-          workspace_id: "ws_scenario",
           revision: "replacement-fixture",
           observed_at: "2026-07-22T12:00:00Z",
           offers,
           failures: [],
         },
-      } as unknown as WorkspaceMessage,
+      } as unknown as DeploymentMessage,
     ),
   );
 
-  expect(result.runs["run-1"]?.bookingID).toBe(
-    "booking-replacement-provider",
-  );
+  expect(result.runs["run-1"]?.bookingID).toBe("booking-replacement-provider");
   expect(Object.keys(result.bookings)).toEqual([
     "booking-replacement-provider",
   ]);
@@ -199,7 +197,7 @@ test("applies a stored decision whose candidates predate dispositions", () => {
   // Durable history holds booking decisions written before candidates carried
   // a disposition. Replaying one must degrade to "unrecorded", not throw --
   // a reducer throw is a non-retryable feed error that bricks the canvas.
-  const requested = structuredClone(requestedEvent) as WorkspaceMessage;
+  const requested = structuredClone(requestedEvent) as DeploymentMessage;
   if (requested.type !== "domain_event") {
     throw new Error("fixture needs a requested event");
   }
@@ -239,12 +237,12 @@ test("applies a stored decision whose candidates predate dispositions", () => {
     },
   ];
 
-  const workspace = [requested, decided].reduce(
-    reduceWorkspace,
-    createWorkspace("ws_scenario"),
+  const deployment = [requested, decided].reduce(
+    reduceDeployment,
+    createDeployment(),
   );
 
-  const run = workspace.runs["run-legacy"];
+  const run = deployment.runs["run-legacy"];
   expect(run?.decision?.candidates[0]?.offer_snapshot_id).toBe("offer-legacy");
   expect(run?.decision?.candidates[0]?.disposition).toBeUndefined();
 });

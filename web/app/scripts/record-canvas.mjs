@@ -15,7 +15,6 @@ const repoRoot = path.resolve(
 const outputDirectory = process.env.OUT
   ? path.resolve(process.env.OUT)
   : path.join(repoRoot, "output/canvas");
-const workspaceID = "ws_scenario";
 fs.mkdirSync(outputDirectory, { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
@@ -29,19 +28,8 @@ const context = await browser.newContext({
 });
 
 try {
-  await context.addInitScript((workspace) => {
-    localStorage.setItem("mercator.workspace", workspace);
-  }, workspaceID);
   const page = await context.newPage();
-  await page.route("**/v1/workspaces*", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: '{"workspaces":[]}',
-    }),
-  );
   const url = new URL("/canvas", baseURL);
-  url.searchParams.set("workspace_id", workspaceID);
   url.searchParams.set(
     "scenario",
     "full-schedule-forces-fresh-capacity",

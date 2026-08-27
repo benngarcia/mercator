@@ -18,7 +18,6 @@ const (
 // Evidence is the complete sanitized record returned by one Conformance Trial.
 type Evidence struct {
 	TrialID        string            `json:"trial_id"`
-	WorkspaceID    string            `json:"workspace_id"`
 	ConnectionID   string            `json:"connection_id"`
 	AdapterType    string            `json:"adapter_type"`
 	Mode           Mode              `json:"mode"`

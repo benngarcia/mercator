@@ -22,18 +22,18 @@ func TestStandingOfferRecordsReleaseDispositionAndInvokesRelease(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
 
-	assertRecordedDisposition(t, ctx, orch, "ws_1", "run_1", domain.DispositionRelease)
+	assertRecordedDisposition(t, ctx, orch, "run_1", domain.DispositionRelease)
 	if ad.ReleaseCount() != 1 {
 		t.Fatalf("expected release path invoked once, got %d", ad.ReleaseCount())
 	}
 	if ad.TerminateCount() != 0 {
 		t.Fatalf("expected terminate path never invoked, got %d", ad.TerminateCount())
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -56,18 +56,18 @@ func TestProvisionableOfferRecordsTerminateDispositionAndInvokesTerminate(t *tes
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
 
-	assertRecordedDisposition(t, ctx, orch, "ws_1", "run_1", domain.DispositionTerminate)
+	assertRecordedDisposition(t, ctx, orch, "run_1", domain.DispositionTerminate)
 	if ad.TerminateCount() != 1 {
 		t.Fatalf("expected terminate path invoked once, got %d", ad.TerminateCount())
 	}
 	if ad.ReleaseCount() != 0 {
 		t.Fatalf("expected release path never invoked, got %d", ad.ReleaseCount())
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -96,15 +96,15 @@ func TestCleanupDispatchesOnRecordedDispositionNotLiveOffers(t *testing.T) {
 
 	// First advance: decide on the provisionable offer (records terminate) and
 	// launch (stays running).
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("first advance: %v", err)
 	}
-	assertRecordedDisposition(t, ctx, orch, "ws_1", "run_1", domain.DispositionTerminate)
+	assertRecordedDisposition(t, ctx, orch, "run_1", domain.DispositionTerminate)
 
 	// Offers vanish entirely. Cancel drives the run terminal and through cleanup
 	// without ever re-listing offers.
 	ad.offers = nil
-	if _, err := orch.CancelRun(ctx, "ws_1", "run_1", nil); err != nil {
+	if _, err := orch.CancelRun(ctx, "run_1", nil); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func TestCleanupDispatchesOnRecordedDispositionNotLiveOffers(t *testing.T) {
 	if base.ReleaseCount() != 0 {
 		t.Fatalf("cleanup must not fall back to release, release count=%d", base.ReleaseCount())
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -133,10 +133,9 @@ func TestMissingRecordedDispositionFailsBeforeProviderCleanup(t *testing.T) {
 		LaunchKey:      "launch_att_legacy",
 		OwnershipToken: "own_att_legacy",
 		RunID:          "run_legacy",
-		WorkspaceID:    "ws_1",
 	}
 
-	if err := orch.releaseAndClose(ctx, "ws_1", "run_missing_disposition", 0, intent); err == nil {
+	if err := orch.releaseAndClose(ctx, "run_missing_disposition", 0, intent); err == nil {
 		t.Fatal("releaseAndClose accepted a missing recorded disposition")
 	}
 	if ad.ReleaseCount() != 0 || ad.TerminateCount() != 0 {
@@ -144,9 +143,9 @@ func TestMissingRecordedDispositionFailsBeforeProviderCleanup(t *testing.T) {
 	}
 }
 
-func assertRecordedDisposition(t *testing.T, ctx context.Context, orch *Orchestrator, workspaceID, runID string, want domain.Disposition) {
+func assertRecordedDisposition(t *testing.T, ctx context.Context, orch *Orchestrator, runID string, want domain.Disposition) {
 	t.Helper()
-	events, err := orch.GetRunEvents(ctx, workspaceID, runID)
+	events, err := orch.GetRunEvents(ctx, runID)
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}

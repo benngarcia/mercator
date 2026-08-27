@@ -147,7 +147,11 @@ func (c *CLIClient) RemoveContainer(ctx context.Context, name string) error {
 func (c *CLIClient) ListContainers(ctx context.Context, labels map[string]string) ([]Container, error) {
 	args := []string{"ps", "-a", "--format", "{{.Names}}"}
 	for key, value := range labels {
-		args = append(args, "--filter", "label="+key+"="+value)
+		filter := "label=" + key
+		if value != "" {
+			filter += "=" + value
+		}
+		args = append(args, "--filter", filter)
 	}
 	output, err := c.run(ctx, args...)
 	if err != nil {

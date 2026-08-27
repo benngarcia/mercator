@@ -2,9 +2,9 @@ import { Radio } from "lucide-react";
 
 import { EventTimeline } from "@/components/runs/EventTimeline";
 import type { CloudEvent } from "@/lib/api/types";
-import type { ScenarioFidelity } from "@/lib/workspace/playback";
+import type { ScenarioFidelity } from "@/lib/deployment/playback";
 
-export function WorkspaceEventFeed({
+export function DeploymentEventFeed({
   events,
   fidelity,
 }: {
@@ -15,7 +15,7 @@ export function WorkspaceEventFeed({
   return (
     <aside
       role="region"
-      aria-label="Workspace events"
+      aria-label="Deployment events"
       className="flex min-h-0 w-[27rem] shrink-0 flex-col border-l bg-card/30"
     >
       <div className="flex h-14 shrink-0 items-center justify-between border-b px-4">
@@ -29,7 +29,7 @@ export function WorkspaceEventFeed({
       </div>
       {fidelity ? <ScenarioEvidence fidelity={fidelity} /> : null}
       <span className="sr-only" aria-live="polite">
-        {latest ? `Latest event ${latest.type}` : "No Workspace events"}
+        {latest ? `Latest event ${latest.type}` : "No Deployment events"}
       </span>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <EventTimeline events={events} dense highlightLatest />

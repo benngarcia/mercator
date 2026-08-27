@@ -34,8 +34,7 @@ func buildConnectionRequest(ctx context.Context, s *session, stdin io.Reader, ar
 	baseURL := s.baseURL
 	fs := flag.NewFlagSet("connection "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workspaceID := fs.String("workspace-id", "", "workspace id (defaults to the broker's only workspace)")
-	connectionID := fs.String("connection-id", "", "connection id (defaults to the adapter type on create, otherwise the workspace's only connection)")
+	connectionID := fs.String("connection-id", "", "connection id (defaults to the adapter type on create, otherwise the deployment's only connection)")
 	adapterType := fs.String("adapter-type", "", "adapter type (docker, runpod)")
 	credentialSource := fs.String("credential-source", "", "credential source (env, mercator)")
 	credentialRef := fs.String("credential-ref", "", "credential reference (e.g. env var name)")
@@ -67,21 +66,14 @@ func buildConnectionRequest(ctx context.Context, s *session, stdin io.Reader, ar
 			return nil, fmt.Errorf("--secret-stdin read an empty secret")
 		}
 	}
-	if *workspaceID == "" {
-		resolved, err := s.workspace(ctx)
-		if err != nil {
-			return nil, err
-		}
-		*workspaceID = resolved
-	}
-	// Naming a connection is only meaningful once a workspace holds more than
+	// Naming a connection is only meaningful once a deployment holds more than
 	// one. The first `docker` connection may as well be called "docker".
 	if *connectionID == "" {
 		switch command {
 		case "create":
 			*connectionID = *adapterType
 		case "authorize", "delete":
-			resolved, err := s.soleConnection(ctx, *workspaceID)
+			resolved, err := s.soleConnection(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -90,16 +82,12 @@ func buildConnectionRequest(ctx context.Context, s *session, stdin io.Reader, ar
 	}
 	switch command {
 	case "list":
-		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, "/v1/connections", query("workspace_id", *workspaceID)), nil)
+		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, "/v1/connections", nil), nil)
 	case "create":
 		if *adapterType == "" {
 			return nil, fmt.Errorf("create requires --adapter-type")
 		}
-		payload := map[string]any{
-			"workspace_id":  *workspaceID,
-			"connection_id": *connectionID,
-			"adapter_type":  *adapterType,
-		}
+		payload := map[string]any{"connection_id": *connectionID, "adapter_type": *adapterType}
 		if len(config) > 0 {
 			payload["config"] = map[string]string(config)
 		}
@@ -126,10 +114,10 @@ func buildConnectionRequest(ctx context.Context, s *session, stdin io.Reader, ar
 		return req, nil
 	case "authorize":
 		path := "/v1/connections/" + url.PathEscape(*connectionID) + "/authorize"
-		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
+		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, path, nil), nil)
 	case "delete":
 		path := "/v1/connections/" + url.PathEscape(*connectionID)
-		return http.NewRequestWithContext(ctx, http.MethodDelete, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
+		return http.NewRequestWithContext(ctx, http.MethodDelete, mustURL(baseURL, path, nil), nil)
 	default:
 		return nil, fmt.Errorf("unknown connection command %q", command)
 	}
@@ -147,7 +135,6 @@ func buildWorkloadRequest(ctx context.Context, s *session, args []string) (*http
 	command := args[0]
 	fs := flag.NewFlagSet("workload "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workspaceID := fs.String("workspace-id", "", "workspace id (defaults to the broker's only workspace)")
 	workloadID := fs.String("workload-id", "", "workload id")
 	name := fs.String("name", "", "workload display name")
 	idempotencyKey := fs.String("idempotency-key", "", "idempotency key (derived from the workload id when omitted)")
@@ -158,22 +145,14 @@ func buildWorkloadRequest(ctx context.Context, s *session, args []string) (*http
 	if len(positional) > 0 {
 		return nil, fmt.Errorf("unexpected argument %q", positional[0])
 	}
-	if *workspaceID == "" {
-		resolved, err := s.workspace(ctx)
-		if err != nil {
-			return nil, err
-		}
-		*workspaceID = resolved
-	}
 	switch command {
 	case "create":
 		if *workloadID == "" {
 			return nil, fmt.Errorf("create requires --workload-id")
 		}
 		body, err := json.Marshal(map[string]string{
-			"workspace_id": *workspaceID,
-			"workload_id":  *workloadID,
-			"name":         *name,
+			"workload_id": *workloadID,
+			"name":        *name,
 		})
 		if err != nil {
 			return nil, err
@@ -199,7 +178,6 @@ func buildRevisionRequest(ctx context.Context, s *session, args []string) (*http
 	baseURL := s.baseURL
 	fs := flag.NewFlagSet("workload revision "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workspaceID := fs.String("workspace-id", "", "workspace id (defaults to the broker's only workspace)")
 	workloadID := fs.String("workload-id", "", "workload id")
 	revisionID := fs.String("revision-id", "", "revision id (get)")
 	revisionJSON := fs.String("revision-json", "", "workload revision JSON (create)")
@@ -213,13 +191,6 @@ func buildRevisionRequest(ctx context.Context, s *session, args []string) (*http
 	}
 	if *workloadID == "" {
 		return nil, fmt.Errorf("%s requires --workload-id", command)
-	}
-	if *workspaceID == "" {
-		resolved, err := s.workspace(ctx)
-		if err != nil {
-			return nil, err
-		}
-		*workspaceID = resolved
 	}
 	base := "/v1/workloads/" + url.PathEscape(*workloadID) + "/revisions"
 	switch command {
@@ -235,7 +206,7 @@ func buildRevisionRequest(ctx context.Context, s *session, args []string) (*http
 		if err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, base, query("workspace_id", *workspaceID)), bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, base, nil), bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -247,12 +218,12 @@ func buildRevisionRequest(ctx context.Context, s *session, args []string) (*http
 		req.Header.Set("Idempotency-Key", key)
 		return req, nil
 	case "list":
-		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, base, query("workspace_id", *workspaceID)), nil)
+		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, base, nil), nil)
 	case "get":
 		if *revisionID == "" {
 			return nil, fmt.Errorf("get requires --revision-id")
 		}
-		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, base+"/"+url.PathEscape(*revisionID), query("workspace_id", *workspaceID)), nil)
+		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, base+"/"+url.PathEscape(*revisionID), nil), nil)
 	default:
 		return nil, fmt.Errorf("unknown workload revision command %q", command)
 	}

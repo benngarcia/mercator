@@ -84,8 +84,8 @@ type DashboardCommand struct {
 }
 
 type DashboardPlayback struct {
-	mu       sync.Mutex
-	sessions map[string]*dashboardPlaybackSession
+	mu      sync.Mutex
+	session *dashboardPlaybackSession
 }
 
 type dashboardPlaybackSession struct {
@@ -98,29 +98,29 @@ type dashboardPlaybackSession struct {
 }
 
 func NewDashboardPlayback() *DashboardPlayback {
-	return &DashboardPlayback{sessions: map[string]*dashboardPlaybackSession{}}
+	return &DashboardPlayback{}
 }
 
-func (p *DashboardPlayback) Open(ctx context.Context, workspaceID, scenarioName string, autoplay bool) (<-chan DashboardEmission, error) {
+func (p *DashboardPlayback) Open(ctx context.Context, scenarioName string, autoplay bool) (<-chan DashboardEmission, error) {
 	if !validDashboardScenario(scenarioName) {
 		return nil, fmt.Errorf("%w %q", ErrUnknownDashboardScenario, scenarioName)
 	}
 	p.mu.Lock()
-	session := p.sessions[workspaceID]
+	session := p.session
 	if session != nil && session.scenarioName != scenarioName {
-		p.replaceSession(workspaceID, session)
+		p.replaceSession(session)
 		session = nil
 	}
 	if session == nil {
-		transcript, err := BuildDashboardScenarioTranscript(ctx, workspaceID, scenarioName)
+		transcript, err := BuildDashboardScenarioTranscript(ctx, scenarioName)
 		if err != nil {
 			p.mu.Unlock()
 			return nil, err
 		}
 		session = newDashboardPlaybackSession(transcript, autoplay)
 		session.scenarioName = scenarioName
-		p.sessions[workspaceID] = session
-		go p.run(workspaceID, session)
+		p.session = session
+		go p.run(session)
 	}
 	subscriber := make(chan DashboardEmission, 1024)
 	session.subscribers[subscriber] = struct{}{}
@@ -129,13 +129,13 @@ func (p *DashboardPlayback) Open(ctx context.Context, workspaceID, scenarioName 
 
 	go func() {
 		<-ctx.Done()
-		p.unsubscribe(workspaceID, session, subscriber)
+		p.unsubscribe(session, subscriber)
 	}()
 	return subscriber, nil
 }
 
-func (p *DashboardPlayback) replaceSession(workspaceID string, session *dashboardPlaybackSession) {
-	delete(p.sessions, workspaceID)
+func (p *DashboardPlayback) replaceSession(session *dashboardPlaybackSession) {
+	p.session = nil
 	close(session.stop)
 	for subscriber := range session.subscribers {
 		delete(session.subscribers, subscriber)
@@ -161,29 +161,29 @@ func newDashboardPlaybackSession(transcript DashboardTranscript, autoplay bool) 
 	}
 }
 
-func (p *DashboardPlayback) Command(workspaceID string, command DashboardCommand) error {
+func (p *DashboardPlayback) Command(command DashboardCommand) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	session := p.sessions[workspaceID]
+	session := p.session
 	if session == nil {
-		return fmt.Errorf("%w for Workspace %q", ErrDashboardPlaybackNotFound, workspaceID)
+		return ErrDashboardPlaybackNotFound
 	}
 	err := session.command(command)
-	p.retireEmptySession(workspaceID, session)
+	p.retireEmptySession(session)
 	return err
 }
 
-func (p *DashboardPlayback) run(workspaceID string, session *dashboardPlaybackSession) {
+func (p *DashboardPlayback) run(session *dashboardPlaybackSession) {
 	ticker := time.NewTicker(dashboardTick)
 	defer ticker.Stop()
 	for {
 		select {
 		case now := <-ticker.C:
 			p.mu.Lock()
-			if p.sessions[workspaceID] == session {
+			if p.session == session {
 				session.tick(now)
 				if len(session.subscribers) == 0 {
-					p.retireEmptySession(workspaceID, session)
+					p.retireEmptySession(session)
 					p.mu.Unlock()
 					return
 				}
@@ -195,10 +195,10 @@ func (p *DashboardPlayback) run(workspaceID string, session *dashboardPlaybackSe
 	}
 }
 
-func (p *DashboardPlayback) unsubscribe(workspaceID string, session *dashboardPlaybackSession, subscriber chan DashboardEmission) {
+func (p *DashboardPlayback) unsubscribe(session *dashboardPlaybackSession, subscriber chan DashboardEmission) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.sessions[workspaceID] != session {
+	if p.session != session {
 		return
 	}
 	if _, subscribed := session.subscribers[subscriber]; !subscribed {
@@ -206,14 +206,14 @@ func (p *DashboardPlayback) unsubscribe(workspaceID string, session *dashboardPl
 	}
 	delete(session.subscribers, subscriber)
 	close(subscriber)
-	p.retireEmptySession(workspaceID, session)
+	p.retireEmptySession(session)
 }
 
-func (p *DashboardPlayback) retireEmptySession(workspaceID string, session *dashboardPlaybackSession) {
-	if p.sessions[workspaceID] != session || len(session.subscribers) != 0 {
+func (p *DashboardPlayback) retireEmptySession(session *dashboardPlaybackSession) {
+	if p.session != session || len(session.subscribers) != 0 {
 		return
 	}
-	delete(p.sessions, workspaceID)
+	p.session = nil
 	close(session.stop)
 }
 

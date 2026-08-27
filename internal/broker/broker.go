@@ -17,14 +17,14 @@ import (
 
 var ErrConnectionNotFound = errors.New("broker: connection not found")
 
-// Connections lists the registered connections for a workspace.
+// Connections lists the registered connections.
 // *connection.Service satisfies it directly.
 type Connections interface {
-	List(ctx context.Context, workspaceID string) ([]connection.Record, error)
+	List(ctx context.Context) ([]connection.Record, error)
 }
 
 type Resolver interface {
-	Resolve(ctx context.Context, workspaceID string, c credential.Credential) (string, error)
+	Resolve(ctx context.Context, c credential.Credential) (string, error)
 }
 
 type Broker struct {
@@ -59,11 +59,11 @@ func NewBroker(conns Connections, factory *Factory, resolver Resolver, opts ...O
 	return b
 }
 
-func (b *Broker) List(ctx context.Context, workspaceID string) (map[string]domain.RentalSchedule, error) {
+func (b *Broker) List(ctx context.Context) (map[string]domain.RentalSchedule, error) {
 	if b.schedules == nil {
 		return nil, fmt.Errorf("broker: Rental Schedule store is required")
 	}
-	return b.schedules.List(ctx, workspaceID)
+	return b.schedules.List(ctx)
 }
 
 func (b *Broker) Commit(ctx context.Context, event eventlog.AppendRequest, expectedVersion uint64, next domain.RentalSchedule) (eventlog.AppendResult, error) {
@@ -78,10 +78,10 @@ func (b *Broker) Commit(ctx context.Context, event eventlog.AppendRequest, expec
 func (b *Broker) Manifests() []adapter.Manifest { return b.factory.Manifests() }
 
 // build constructs the adapter for one connection (no caching yet — YAGNI).
-func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Record) (adapter.Provider, error) {
+func (b *Broker) build(ctx context.Context, c connection.Record) (adapter.Provider, error) {
 	secret := ""
 	if c.Credential.Source != "" {
-		s, err := b.resolver.Resolve(ctx, workspaceID, c.Credential)
+		s, err := b.resolver.Resolve(ctx, c.Credential)
 		if err != nil {
 			return nil, fmt.Errorf("broker: resolve credential for %s: %w", c.ID, err)
 		}
@@ -94,14 +94,14 @@ func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Rec
 // Unlike ListOffers and ListOwned, this intentionally does NOT filter on Authorized.
 // Post-launch operations (Observe/Cancel/Release/Terminate) must still reach a run that was
 // launched on a connection which has since been de-authorized, so cleanup is never stranded.
-func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string) (connection.Record, adapter.Provider, error) {
-	recs, err := b.conns.List(ctx, workspaceID)
+func (b *Broker) connByID(ctx context.Context, connectionID string) (connection.Record, adapter.Provider, error) {
+	recs, err := b.conns.List(ctx)
 	if err != nil {
 		return connection.Record{}, nil, err
 	}
 	for _, c := range recs {
 		if c.ID == connectionID {
-			ad, err := b.build(ctx, workspaceID, c)
+			ad, err := b.build(ctx, c)
 			return c, ad, err
 		}
 	}
@@ -120,12 +120,12 @@ func (b *Broker) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]do
 }
 
 func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) (OfferAggregation, error) {
-	recs, err := b.conns.List(ctx, req.WorkspaceID)
+	recs, err := b.conns.List(ctx)
 	if err != nil {
 		return OfferAggregation{}, err
 	}
 	results := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]domain.OfferSnapshot, error) {
-		provider, err := b.build(ctx, req.WorkspaceID, c)
+		provider, err := b.build(ctx, c)
 		if err != nil {
 			return nil, err
 		}
@@ -176,7 +176,7 @@ func offerSnapshotID(connectionID, adapterOfferID string) (string, error) {
 }
 
 func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
-	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.SelectedOfferConnectionID)
+	_, ad, err := b.connByID(ctx, req.SelectedOfferConnectionID)
 	if err != nil {
 		b.logLaunchFailure(ctx, req, err)
 		return adapter.LaunchReceipt{}, err
@@ -209,7 +209,6 @@ func (b *Broker) logLaunchFailure(ctx context.Context, req adapter.LaunchRequest
 		truncated = failure.ResponseTruncated
 	}
 	b.logger.ErrorContext(ctx, "provider operation failed",
-		"workspace_id", req.WorkspaceID,
 		"run_id", req.RunID,
 		"attempt_id", req.AttemptID,
 		"connection_id", req.SelectedOfferConnectionID,
@@ -229,7 +228,7 @@ func (b *Broker) logLaunchFailure(ctx context.Context, req adapter.LaunchRequest
 }
 
 func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
-	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
+	_, ad, err := b.connByID(ctx, req.ConnectionID)
 	if err != nil {
 		return adapter.ExternalObservation{}, err
 	}
@@ -237,7 +236,7 @@ func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapt
 }
 
 func (b *Broker) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
-	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
+	_, ad, err := b.connByID(ctx, req.ConnectionID)
 	if err != nil {
 		return adapter.ReleaseReceipt{}, err
 	}
@@ -245,7 +244,7 @@ func (b *Broker) Release(ctx context.Context, req adapter.ReleaseRequest) (adapt
 }
 
 func (b *Broker) Terminate(ctx context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
-	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
+	_, ad, err := b.connByID(ctx, req.ConnectionID)
 	if err != nil {
 		return adapter.TerminateReceipt{}, err
 	}
@@ -253,12 +252,12 @@ func (b *Broker) Terminate(ctx context.Context, req adapter.TerminateRequest) (a
 }
 
 func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
-	recs, err := b.conns.List(ctx, req.WorkspaceID)
+	recs, err := b.conns.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	results := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]adapter.OwnedExternalObject, error) {
-		provider, err := b.build(ctx, req.WorkspaceID, c)
+		provider, err := b.build(ctx, c)
 		if err != nil {
 			return nil, err
 		}
@@ -304,8 +303,8 @@ func sortConnectionErrors(failures ConnectionErrors) {
 // VerifyConnection builds the adapter for one connection (regardless of its
 // current Authorized state — authorize runs before the flag is set) and calls
 // its cheap Verify check. Used by the connection authorize flow.
-func (b *Broker) VerifyConnection(ctx context.Context, workspaceID, connectionID string) error {
-	_, ad, err := b.connByID(ctx, workspaceID, connectionID)
+func (b *Broker) VerifyConnection(ctx context.Context, connectionID string) error {
+	_, ad, err := b.connByID(ctx, connectionID)
 	if err != nil {
 		return err
 	}

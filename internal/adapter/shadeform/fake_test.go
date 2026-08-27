@@ -194,7 +194,7 @@ func newTestAdapter(t *testing.T, fake *fakeShadeform, config map[string]string)
 	return a
 }
 
-func ownedInstance(id, launchKey, workspace, token, status string, createdAt time.Time) instance {
+func ownedInstance(id, launchKey, token, status string, createdAt time.Time) instance {
 	return instance{
 		ID:        id,
 		Cloud:     "hyperstack",
@@ -204,7 +204,6 @@ func ownedInstance(id, launchKey, workspace, token, status string, createdAt tim
 		CreatedAt: createdAt,
 		Tags: []string{
 			tagLaunchKey + "=" + launchKey,
-			tagWorkspace + "=" + workspace,
 			tagRun + "=run_1",
 			tagAttempt + "=att_1",
 			tagOwnershipToken + "=" + token,

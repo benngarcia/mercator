@@ -23,14 +23,13 @@ var (
 )
 
 type StreamKey struct {
-	WorkspaceID string
-	Type        string
-	ID          string
+	Type string
+	ID   string
 }
 
 func (s StreamKey) validate() error {
-	if s.WorkspaceID == "" || s.Type == "" || s.ID == "" {
-		return fmt.Errorf("eventlog: stream workspace_id, type, and id are required")
+	if s.Type == "" || s.ID == "" {
+		return fmt.Errorf("eventlog: stream type and id are required")
 	}
 	return nil
 }
@@ -67,7 +66,6 @@ type AppendResult struct {
 type StoredEvent struct {
 	GlobalPosition GlobalPosition
 	ID             string
-	WorkspaceID    string
 	StreamType     string
 	StreamID       string
 	StreamVersion  uint64
@@ -85,18 +83,17 @@ type StoredEvent struct {
 }
 
 func (e StoredEvent) Stream() StreamKey {
-	return StreamKey{WorkspaceID: e.WorkspaceID, Type: e.StreamType, ID: e.StreamID}
+	return StreamKey{Type: e.StreamType, ID: e.StreamID}
 }
 
 func (e StoredEvent) CloudEvent() CloudEvent {
 	return CloudEvent{
 		SpecVersion:    "1.0",
 		ID:             e.ID,
-		Source:         "compute-control-plane/workspaces/" + e.WorkspaceID,
+		Source:         "compute-control-plane",
 		Type:           e.Type,
 		Subject:        e.StreamType + "s/" + e.StreamID,
 		Time:           e.OccurredAt.UTC().Format(time.RFC3339Nano),
-		WorkspaceID:    e.WorkspaceID,
 		StreamVersion:  e.StreamVersion,
 		GlobalPosition: e.GlobalPosition,
 		CorrelationID:  e.CorrelationID,
@@ -112,7 +109,6 @@ type CloudEvent struct {
 	Type           string          `json:"type"`
 	Subject        string          `json:"subject"`
 	Time           string          `json:"time"`
-	WorkspaceID    string          `json:"workspaceid"`
 	StreamVersion  uint64          `json:"streamversion"`
 	GlobalPosition GlobalPosition  `json:"globalposition"`
 	CorrelationID  string          `json:"correlationid,omitempty"`
@@ -121,7 +117,6 @@ type CloudEvent struct {
 }
 
 type EventFilter struct {
-	WorkspaceID string
 	StreamTypes []string
 	EventTypes  []string
 	Visibility  Visibility
@@ -142,15 +137,7 @@ type EventLog interface {
 	Append(ctx context.Context, req AppendRequest) (AppendResult, error)
 	ReadStream(ctx context.Context, stream StreamKey, afterVersion uint64, limit int) ([]StoredEvent, error)
 	ReadAll(ctx context.Context, after GlobalPosition, limit int, filter EventFilter) ([]StoredEvent, error)
-	ListWorkspaceIDs(ctx context.Context, filter EventFilter) ([]string, error)
 	Offset(ctx context.Context, subscriptionID string) (GlobalPosition, bool, error)
 	Subscribe(ctx context.Context, req SubscriptionRequest) (<-chan Delivery, error)
 	Ack(ctx context.Context, subscriptionID string, position GlobalPosition) error
-}
-
-// WorkspaceEventLog applies the active-workspace policy to new facts while
-// allowing exact command replays to resolve before the policy check.
-type WorkspaceEventLog interface {
-	EventLog
-	AppendIfWorkspaceActive(ctx context.Context, req AppendRequest) (AppendResult, error)
 }

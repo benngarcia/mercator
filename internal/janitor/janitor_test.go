@@ -19,7 +19,6 @@ func TestJanitorReleasesOwnedResources(t *testing.T) {
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
 		OperationKey:       "launch_orphan",
 		RequestHash:        "sha256:orphan",
-		WorkspaceID:        "ws_1",
 		RunID:              "run_orphan",
 		AttemptID:          "att_orphan",
 		OwnershipToken:     "own_orphan",
@@ -34,14 +33,14 @@ func TestJanitorReleasesOwnedResources(t *testing.T) {
 
 	log := openJanitorTestLog(t)
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 	if result.Found != 1 || result.Released != 1 {
 		t.Fatalf("unexpected sweep result: %+v", result)
 	}
-	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -57,7 +56,6 @@ func TestJanitorSkipsActiveRunResources(t *testing.T) {
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
 		OperationKey:       "launch_active",
 		RequestHash:        "sha256:active",
-		WorkspaceID:        "ws_1",
 		RunID:              "run_active",
 		AttemptID:          "att_active",
 		OwnershipToken:     "own_active",
@@ -70,16 +68,16 @@ func TestJanitorSkipsActiveRunResources(t *testing.T) {
 		t.Fatalf("seed active object: %v", err)
 	}
 	log := openJanitorTestLog(t)
-	appendRunEvent(t, log, "ws_1", "run_active", "compute.run.requested.v1")
+	appendRunEvent(t, log, "run_active", "compute.run.requested.v1")
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 	if result.Found != 1 || result.Released != 0 {
 		t.Fatalf("active resource should be found but not released: %+v", result)
 	}
-	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -90,7 +88,7 @@ func TestJanitorSkipsActiveRunResources(t *testing.T) {
 
 func TestJanitorRequiresEventLog(t *testing.T) {
 	t.Parallel()
-	_, err := New(fake.New()).Sweep(context.Background(), "ws_1")
+	_, err := New(fake.New()).Sweep(context.Background())
 	if err == nil {
 		t.Fatalf("expected missing event log error")
 	}
@@ -106,17 +104,17 @@ func openJanitorTestLog(t *testing.T) *eventlog.SQLiteEventLog {
 	return log
 }
 
-func appendRunEvent(t *testing.T, log eventlog.EventLog, workspaceID, runID, eventType string) {
+func appendRunEvent(t *testing.T, log eventlog.EventLog, runID, eventType string) {
 	t.Helper()
 	_, err := log.Append(context.Background(), eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID},
+		Stream:                eventlog.StreamKey{Type: "run", ID: runID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "seed:" + eventType,
 		RequestHash:           "sha256:seed",
 		CorrelationID:         runID,
 		CausationID:           "seed",
 		Events: []eventlog.NewEvent{{
-			ID:            "evt_" + workspaceID + "_" + runID + "_seed",
+			ID:            "evt_" + runID + "_seed",
 			Type:          eventType,
 			SchemaVersion: 1,
 			OccurredAt:    time.Now().UTC(),
@@ -136,7 +134,6 @@ func TestJanitorReclaimsViaRecordedTerminateDisposition(t *testing.T) {
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
 		OperationKey:       "launch_term",
 		RequestHash:        "sha256:term",
-		WorkspaceID:        "ws_1",
 		RunID:              "run_term",
 		AttemptID:          "att_term",
 		OwnershipToken:     "own_term",
@@ -150,9 +147,9 @@ func TestJanitorReclaimsViaRecordedTerminateDisposition(t *testing.T) {
 		t.Fatalf("seed terminate orphan: %v", err)
 	}
 	log := openJanitorTestLog(t)
-	appendLaunchIntent(t, log, "ws_1", "run_term", domain.DispositionTerminate)
+	appendLaunchIntent(t, log, "run_term", domain.DispositionTerminate)
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -174,7 +171,6 @@ func TestJanitorRejectsCleanupWithoutRecordedDisposition(t *testing.T) {
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
 		OperationKey:       "launch_missing_disposition",
 		RequestHash:        "sha256:missing_disposition",
-		WorkspaceID:        "ws_1",
 		RunID:              "run_missing_disposition",
 		AttemptID:          "att_missing_disposition",
 		OwnershipToken:     "own_missing_disposition",
@@ -187,9 +183,9 @@ func TestJanitorRejectsCleanupWithoutRecordedDisposition(t *testing.T) {
 		t.Fatalf("seed owned resource: %v", err)
 	}
 	log := openJanitorTestLog(t)
-	appendLaunchIntent(t, log, "ws_1", "run_missing_disposition", "")
+	appendLaunchIntent(t, log, "run_missing_disposition", "")
 
-	if _, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1"); err == nil {
+	if _, err := New(ad, WithEventLog(log)).Sweep(ctx); err == nil {
 		t.Fatal("janitor accepted cleanup without a recorded disposition")
 	}
 	if ad.ReleaseCount() != 0 || ad.TerminateCount() != 0 {
@@ -197,7 +193,7 @@ func TestJanitorRejectsCleanupWithoutRecordedDisposition(t *testing.T) {
 	}
 }
 
-func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID string, disposition domain.Disposition) {
+func appendLaunchIntent(t *testing.T, log eventlog.EventLog, runID string, disposition domain.Disposition) {
 	t.Helper()
 	intent := adapter.LaunchRequest{
 		AttemptID:   "att_" + runID,
@@ -209,7 +205,7 @@ func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID 
 		t.Fatalf("marshal intent: %v", err)
 	}
 	_, err = log.Append(context.Background(), eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID},
+		Stream:                eventlog.StreamKey{Type: "run", ID: runID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "seed:intent:" + runID,
 		RequestHash:           "sha256:seed_intent",
@@ -217,7 +213,7 @@ func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID 
 		CausationID:           "seed",
 		Events: []eventlog.NewEvent{
 			{
-				ID:            "evt_" + workspaceID + "_" + runID + "_intent",
+				ID:            "evt_" + runID + "_intent",
 				Type:          "compute.run.launch_intent_recorded.v1",
 				SchemaVersion: 1,
 				OccurredAt:    time.Now().UTC(),
@@ -226,7 +222,7 @@ func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID 
 				PrivateData:   private,
 			},
 			{
-				ID:            "evt_" + workspaceID + "_" + runID + "_cleanup",
+				ID:            "evt_" + runID + "_cleanup",
 				Type:          "compute.run.cleanup_requested.v1",
 				SchemaVersion: 1,
 				OccurredAt:    time.Now().UTC(),

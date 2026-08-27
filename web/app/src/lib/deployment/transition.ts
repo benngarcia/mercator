@@ -48,20 +48,18 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const animation = yield* Semaphore.make(1);
 
-    const commit = Effect.fn("CanvasTransition.commit")((
-      animate: boolean,
-      update: () => void,
-    ) =>
-      animation.withPermit(
-        Effect.gen(function* () {
-          if (!animate || !supportsViewTransitions()) {
-            yield* Effect.sync(update);
-            return;
-          }
-          const transition = startCanvasTransition(update);
-          if (transition !== null) yield* awaitTransition(transition);
-        }),
-      ),
+    const commit = Effect.fn("CanvasTransition.commit")(
+      (animate: boolean, update: () => void) =>
+        animation.withPermit(
+          Effect.gen(function* () {
+            if (!animate || !supportsViewTransitions()) {
+              yield* Effect.sync(update);
+              return;
+            }
+            const transition = startCanvasTransition(update);
+            if (transition !== null) yield* awaitTransition(transition);
+          }),
+        ),
     );
 
     return CanvasTransition.of({ commit });

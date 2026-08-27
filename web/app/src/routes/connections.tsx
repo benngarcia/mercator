@@ -103,7 +103,7 @@ function ConnectionsPage() {
     <div className="flex flex-col gap-6 p-4">
       <PageHeader
         title="Connections"
-        description="Connect compute providers to this workspace. Each card walks through creating an account, getting an API token, and verifying it."
+        description="Connect compute providers to this deployment. Each card walks through creating an account, getting an API token, and verifying it."
       />
 
       {adapters.isError ? (

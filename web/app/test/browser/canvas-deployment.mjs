@@ -5,7 +5,6 @@ import { chromium } from "playwright";
 const baseURL = (
   process.env.MERCATOR_BROWSER_BASE_URL ?? "http://127.0.0.1:3000"
 ).replace(/\/$/, "");
-const workspaceID = `ws_browser_${process.pid}`;
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
   viewport: { width: 1440, height: 960 },
@@ -13,9 +12,6 @@ const context = await browser.newContext({
 });
 
 try {
-  await context.addInitScript((workspace) => {
-    localStorage.setItem("mercator.workspace", workspace);
-  }, workspaceID);
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
   const consoleProblems = [];
@@ -25,22 +21,13 @@ try {
     }
   });
   page.on("pageerror", (error) => consoleProblems.push(error.message));
-  await page.route("**/v1/workspaces*", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: '{"workspaces":[]}',
-    }),
-  );
-
   const url = new URL("/canvas", baseURL);
-  url.searchParams.set("workspace_id", workspaceID);
   url.searchParams.set("scenario", "warm-pool-burst");
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
 
-  await page.getByLabel("Workspace events live").waitFor();
+  await page.getByLabel("Deployment events live").waitFor();
   await page.getByText("rental-warm", { exact: true }).waitFor();
-  const eventFeed = page.getByRole("region", { name: "Workspace events" });
+  const eventFeed = page.getByRole("region", { name: "Deployment events" });
   const progress = page.getByRole("progressbar", { name: "Scenario progress" });
   await page.getByLabel("Placement scenario").waitFor();
   assert.equal(await page.getByLabel("Placement scenario").inputValue(), "warm-pool-burst");
@@ -96,7 +83,7 @@ try {
   await page.getByLabel("Placement scenario").selectOption("deadline-versus-cost");
   await page.waitForURL(/scenario=deadline-versus-cost/);
   await waitForScenario(page, "deadline-versus-cost");
-  await page.getByLabel("Workspace events live").waitFor();
+  await page.getByLabel("Deployment events live").waitFor();
   await waitForCursor(page, 0);
   await page.getByRole("button", { name: "Play scenario" }).waitFor();
   await stepTo(page, progress, Number(await progress.getAttribute("aria-valuemax")));
@@ -111,7 +98,7 @@ try {
   await page.getByLabel("Placement scenario").selectOption("failure-rebalance");
   await page.waitForURL(/scenario=failure-rebalance/);
   await waitForScenario(page, "failure-rebalance");
-  await page.getByLabel("Workspace events live").waitFor();
+  await page.getByLabel("Deployment events live").waitFor();
   await waitForCursor(page, 0);
   await page.getByRole("button", { name: "Play scenario" }).waitFor();
   await stepTo(page, progress, Number(await progress.getAttribute("aria-valuemax")));

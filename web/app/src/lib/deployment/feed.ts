@@ -3,7 +3,6 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -26,62 +25,47 @@ import {
   type ScenarioFidelity,
   type ScenarioPlaybackSnapshot,
 } from "./playback";
-import type { WorkspaceMessage } from "./reducer";
+import type { DeploymentMessage } from "./reducer";
 
-export type WorkspaceFeedStatus =
-  | "idle"
-  | "connecting"
-  | "live"
-  | "degraded"
-  | "error";
+export type DeploymentFeedStatus =
+  "idle" | "connecting" | "live" | "degraded" | "error";
 
-export class WorkspaceFeedError extends Data.TaggedError("WorkspaceFeedError")<{
+export class DeploymentFeedError extends Data.TaggedError(
+  "DeploymentFeedError",
+)<{
   readonly status: number;
   readonly message: string;
   readonly retryable: boolean;
   readonly cause?: unknown;
 }> {}
 
-export type WorkspaceSignal =
-  | { readonly type: "connecting" }
-  | ScenarioPlaybackEmission;
+export type DeploymentSignal =
+  { readonly type: "connecting" } | ScenarioPlaybackEmission;
 
-export interface WorkspaceEventsService {
-  readonly stream: (
-    workspaceId: string,
-  ) => Stream.Stream<WorkspaceSignal, WorkspaceFeedError>;
+export interface DeploymentEventsService {
+  readonly stream: () => Stream.Stream<DeploymentSignal, DeploymentFeedError>;
 }
 
-export class WorkspaceEvents extends Context.Service<
-  WorkspaceEvents,
-  WorkspaceEventsService
->()("@mercator/WorkspaceEvents") {}
+export class DeploymentEvents extends Context.Service<
+  DeploymentEvents,
+  DeploymentEventsService
+>()("@mercator/DeploymentEvents") {}
 
 const reconnectSchedule = Schedule.spaced("1 second").pipe(
   Schedule.while(
-    ({ input }) => input instanceof WorkspaceFeedError && input.retryable,
+    ({ input }) => input instanceof DeploymentFeedError && input.retryable,
   ),
 );
 
 function feedRequest(
-  workspaceId: string,
   token: string | null,
-  lastEventId: string,
   scenario: ReturnType<typeof activeScenario>,
 ) {
   let request = HttpClientRequest.get("/v1/console/events").pipe(
     HttpClientRequest.accept("text/event-stream"),
-    HttpClientRequest.setUrlParam("workspace_id", workspaceId),
   );
   if (token !== null) {
     request = HttpClientRequest.bearerToken(request, token);
-  }
-  if (lastEventId !== "") {
-    request = HttpClientRequest.setHeader(
-      request,
-      "Last-Event-ID",
-      lastEventId,
-    );
   }
   if (scenario !== null) {
     request = HttpClientRequest.setUrlParam(request, "scenario", scenario.name);
@@ -95,7 +79,7 @@ function feedRequest(
 }
 
 function decodeFailure(message: string, cause: unknown) {
-  return new WorkspaceFeedError({
+  return new DeploymentFeedError({
     status: 0,
     message,
     retryable: false,
@@ -106,7 +90,10 @@ function decodeFailure(message: string, cause: unknown) {
 function decodeJson<S extends Schema.Constraint>(schema: S, data: string) {
   return Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(data).pipe(
     Effect.mapError((cause) =>
-      decodeFailure("The Workspace event feed sent an invalid payload.", cause),
+      decodeFailure(
+        "The Deployment event feed sent an invalid payload.",
+        cause,
+      ),
     ),
   );
 }
@@ -134,9 +121,9 @@ function scenarioFidelity(
   };
 }
 
-function workspaceMessage(
+function deploymentMessage(
   message: Schema.Schema.Type<typeof DashboardMessage>,
-): WorkspaceMessage {
+): DeploymentMessage {
   switch (message.type) {
     case "domain_event":
       return { type: "domain_event", event: message.event };
@@ -154,12 +141,12 @@ function workspaceMessage(
 
 function decodeFrame(
   frame: Sse.Event,
-): Effect.Effect<Option.Option<WorkspaceSignal>, WorkspaceFeedError> {
+): Effect.Effect<Option.Option<DeploymentSignal>, DeploymentFeedError> {
   switch (frame.event ?? "message") {
     case "domain_event":
       return decodeJson(CloudEvent, frame.data).pipe(
         Effect.map((event) =>
-          Option.some<WorkspaceSignal>({
+          Option.some<DeploymentSignal>({
             type: "message",
             message: { type: "domain_event", event },
           }),
@@ -168,7 +155,7 @@ function decodeFrame(
     case "offers_replaced":
       return decodeJson(OfferCatalogReplacement, frame.data).pipe(
         Effect.map((catalog) =>
-          Option.some<WorkspaceSignal>({
+          Option.some<DeploymentSignal>({
             type: "message",
             message: { type: "offers_replaced", catalog },
           }),
@@ -176,7 +163,7 @@ function decodeFrame(
       );
     case "offers_unavailable":
       return Effect.succeed(
-        Option.some<WorkspaceSignal>({
+        Option.some<DeploymentSignal>({
           type: "message",
           message: { type: "offers_unavailable" },
         }),
@@ -184,7 +171,7 @@ function decodeFrame(
     case "ready":
       return decodeJson(Ready, frame.data).pipe(
         Effect.map((ready) =>
-          Option.some<WorkspaceSignal>({
+          Option.some<DeploymentSignal>({
             type: "message",
             message: {
               type: "ready",
@@ -196,9 +183,9 @@ function decodeFrame(
     case "reset":
       return decodeJson(DashboardReset, frame.data).pipe(
         Effect.map((reset) =>
-          Option.some<WorkspaceSignal>({
+          Option.some<DeploymentSignal>({
             type: "reset",
-            messages: reset.messages.map(workspaceMessage),
+            messages: reset.messages.map(deploymentMessage),
             playback: playbackSnapshot(reset.playback),
             fidelity: scenarioFidelity(reset.fidelity),
           }),
@@ -207,16 +194,16 @@ function decodeFrame(
     case "message":
       return decodeJson(DashboardMessage, frame.data).pipe(
         Effect.map((message) =>
-          Option.some<WorkspaceSignal>({
+          Option.some<DeploymentSignal>({
             type: "message",
-            message: workspaceMessage(message),
+            message: deploymentMessage(message),
           }),
         ),
       );
     case "playback":
       return decodeJson(DashboardPlayback, frame.data).pipe(
         Effect.map((playback) =>
-          Option.some<WorkspaceSignal>({
+          Option.some<DeploymentSignal>({
             type: "playback",
             playback: playbackSnapshot(playback),
           }),
@@ -228,38 +215,35 @@ function decodeFrame(
 }
 
 function responseError(status: number) {
-  return new WorkspaceFeedError({
+  return new DeploymentFeedError({
     status,
-    message: `Workspace event feed failed with HTTP ${status}.`,
+    message: `Deployment event feed failed with HTTP ${status}.`,
     retryable: ![400, 401, 403, 501].includes(status),
   });
 }
 
 function disconnected() {
-  return new WorkspaceFeedError({
+  return new DeploymentFeedError({
     status: 0,
-    message: "Workspace event feed disconnected.",
+    message: "Deployment event feed disconnected.",
     retryable: true,
   });
 }
 
 function liveConnection(
-  workspaceId: string,
   token: string | null,
-  lastEventId: Ref.Ref<string>,
   scenario: ReturnType<typeof activeScenario>,
 ) {
   return Stream.unwrap(
     Effect.gen(function* () {
-      const currentLastEventId = yield* Ref.get(lastEventId);
       const response = yield* HttpClient.execute(
-        feedRequest(workspaceId, token, currentLastEventId, scenario),
+        feedRequest(token, scenario),
       ).pipe(
         Effect.mapError(
           (cause) =>
-            new WorkspaceFeedError({
+            new DeploymentFeedError({
               status: 0,
-              message: "Workspace event feed could not connect.",
+              message: "Deployment event feed could not connect.",
               retryable: true,
               cause,
             }),
@@ -271,9 +255,9 @@ function liveConnection(
       const messages = response.stream.pipe(
         Stream.mapError(
           (cause) =>
-            new WorkspaceFeedError({
+            new DeploymentFeedError({
               status: 0,
-              message: "Workspace event feed failed while reading.",
+              message: "Deployment event feed failed while reading.",
               retryable: true,
               cause,
             }),
@@ -281,23 +265,16 @@ function liveConnection(
         Stream.decodeText,
         Stream.pipeThroughChannel(Sse.decode()),
         Stream.mapError((cause) =>
-          cause instanceof WorkspaceFeedError
+          cause instanceof DeploymentFeedError
             ? cause
-            : new WorkspaceFeedError({
+            : new DeploymentFeedError({
                 status: 0,
-                message: "Workspace event feed contained invalid SSE framing.",
+                message: "Deployment event feed contained invalid SSE framing.",
                 retryable: true,
                 cause,
               }),
         ),
-        Stream.mapEffect((frame) =>
-          Effect.gen(function* () {
-            if (frame.id !== undefined && frame.id !== "") {
-              yield* Ref.set(lastEventId, frame.id);
-            }
-            return yield* decodeFrame(frame);
-          }),
-        ),
+        Stream.mapEffect(decodeFrame),
         Stream.flatMap((message) =>
           Option.match(message, {
             onNone: () => Stream.empty,
@@ -305,7 +282,7 @@ function liveConnection(
           }),
         ),
       );
-      return Stream.succeed<WorkspaceSignal>({ type: "connecting" }).pipe(
+      return Stream.succeed<DeploymentSignal>({ type: "connecting" }).pipe(
         Stream.concat(messages),
         Stream.concat(Stream.fail(disconnected())),
       );
@@ -326,29 +303,23 @@ function activeScenario() {
 }
 
 export const layer = Layer.effect(
-  WorkspaceEvents,
+  DeploymentEvents,
   Effect.gen(function* () {
     const session = yield* Session;
     const client = yield* HttpClient.HttpClient;
 
-    const stream = (workspaceId: string) =>
+    const stream = () =>
       Stream.unwrap(
         Effect.gen(function* () {
           const scenario = activeScenario();
           const state = yield* session.current;
-          const lastEventId = yield* Ref.make("");
-          return liveConnection(
-            workspaceId,
-            state.token,
-            lastEventId,
-            scenario,
-          ).pipe(
+          return liveConnection(state.token, scenario).pipe(
             Stream.retry(reconnectSchedule),
             Stream.provideService(HttpClient.HttpClient, client),
           );
         }),
       );
 
-    return WorkspaceEvents.of({ stream });
+    return DeploymentEvents.of({ stream });
   }),
 );

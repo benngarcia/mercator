@@ -76,7 +76,7 @@ func TestCreateAndGetRunExposeExitCode(t *testing.T) {
 		t.Fatalf("create envelope missing exit_code=0, got %+v", created.Run)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_exitcode?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_exitcode", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	var got RunResponse
@@ -103,7 +103,7 @@ func TestPublicEventPayloadsAreSnakeCase(t *testing.T) {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_casing/events?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_casing/events", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -184,7 +184,7 @@ func TestWaitRunDrivesOpenRunToTerminal(t *testing.T) {
 		t.Fatalf("precondition: run should be open after first advance, got %+v", created.Run)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_wait_open/wait?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_wait_open/wait", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -202,34 +202,6 @@ func TestWaitRunDrivesOpenRunToTerminal(t *testing.T) {
 	}
 	if waited.Run.ExitCode == nil || *waited.Run.ExitCode != 0 {
 		t.Fatalf("expected exit_code 0 after wait, got %+v", waited.Run.ExitCode)
-	}
-}
-
-// Item 6: workspace-scoped requests always name their durable partition;
-// authentication never supplies a default workspace.
-func TestAuthenticatedRequestsRequireExplicitWorkspaceID(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("test-token"))
-
-	// Create without any workspace_id (not in query, body, or nested workload).
-	rev := httpRevision()
-	rev.WorkspaceID = ""
-	body := mustMarshal(t, CreateRunRequest{RunId: "run_default_ws", Workload: rev})
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "idem_default_ws")
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("create without workspace expected 400, got %d body=%s", rec.Code, rec.Body.String())
-	}
-
-	// GET without workspace_id should resolve to the same single workspace.
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_default_ws", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("get without workspace expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -251,9 +223,9 @@ func newHTTPTestServerWithOpenObservations(t *testing.T, openObserves int) http.
 		fake.WithOpenObservations(openObserves),
 	)
 	sched := scheduler.New()
-	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
+	orch := orchestrator.New(log, sched, ad)
 	resolver := ociresolver.NewStaticResolver(nil)
-	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: resolver})
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver})
 }
 
 func TestOversizedRequestBodyIsRejected(t *testing.T) {

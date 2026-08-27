@@ -18,7 +18,6 @@ func TestIntakeImageShorthandCreatesAndAdvances(t *testing.T) {
 	orch := newIntakeOrch(t, adapter.ExternalPhaseSucceeded)
 
 	result, err := orch.Intake(context.Background(), IntakeRequest{
-		WorkspaceID:    "ws_1",
 		IdempotencyKey: "idem_intake_shorthand",
 		Image:          "busybox:latest",
 		Args:           []string{"echo", "hi"},
@@ -35,7 +34,7 @@ func TestIntakeImageShorthandCreatesAndAdvances(t *testing.T) {
 	if result.Run.Outcome != domain.RunOutcomeSucceeded {
 		t.Fatalf("outcome = %q, want succeeded", result.Run.Outcome)
 	}
-	events, err := orch.GetRunEvents(context.Background(), "ws_1", result.Run.ID)
+	events, err := orch.GetRunEvents(context.Background(), result.Run.ID)
 	if err != nil {
 		t.Fatalf("GetRunEvents: %v", err)
 	}
@@ -51,7 +50,6 @@ func TestIntakeImageShorthandCreatesAndAdvances(t *testing.T) {
 func TestIntakeReplayReturnsOriginalRun(t *testing.T) {
 	orch := newIntakeOrch(t, adapter.ExternalPhaseSucceeded)
 	req := IntakeRequest{
-		WorkspaceID:    "ws_1",
 		IdempotencyKey: "idem_intake_replay",
 		Image:          "busybox:latest",
 		ResolveImage: func(_ context.Context, image, _ string) (string, string, error) {
@@ -78,7 +76,6 @@ func TestIntakeReturnsTerminalRunAfterDefinitiveLaunchFailure(t *testing.T) {
 	provider := newIntakeLaunchErrorAdapter(errors.New("provider rejected launch"))
 	orch := newIntakeOrchWithAdapter(t, provider)
 	req := IntakeRequest{
-		WorkspaceID:    "ws_1",
 		IdempotencyKey: "idem_intake_launch_failed",
 		Workload:       orchRevision(),
 	}
@@ -109,7 +106,6 @@ func TestIntakeReturnsOpenRunAfterIndeterminateLaunch(t *testing.T) {
 	orch := newIntakeOrchWithAdapter(t, provider)
 
 	accepted, err := orch.Intake(context.Background(), IntakeRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_intake_indeterminate",
 		IdempotencyKey: "idem_intake_indeterminate",
 		Workload:       orchRevision(),
@@ -121,7 +117,7 @@ func TestIntakeReturnsOpenRunAfterIndeterminateLaunch(t *testing.T) {
 	if accepted.Run.ID != "run_intake_indeterminate" || accepted.Run.Closed || accepted.Run.Phase != "running" {
 		t.Fatalf("expected accepted open run, got %+v", accepted)
 	}
-	events, err := orch.GetRunEvents(context.Background(), "ws_1", accepted.Run.ID)
+	events, err := orch.GetRunEvents(context.Background(), accepted.Run.ID)
 	if err != nil {
 		t.Fatalf("GetRunEvents: %v", err)
 	}
@@ -134,10 +130,9 @@ func TestIntakeRejectsInvalidRunBeforeAcceptance(t *testing.T) {
 	orch := newIntakeOrch(t, adapter.ExternalPhaseSucceeded)
 
 	accepted, err := orch.Intake(context.Background(), IntakeRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_intake_invalid",
 		IdempotencyKey: "idem_intake_invalid",
-		Workload:       domain.WorkloadRevision{WorkspaceID: "ws_1"},
+		Workload:       domain.WorkloadRevision{},
 	})
 
 	if err == nil {
@@ -146,7 +141,7 @@ func TestIntakeRejectsInvalidRunBeforeAcceptance(t *testing.T) {
 	if accepted.Run.ID != "" {
 		t.Fatalf("pre-acceptance failure returned a run: %+v", accepted)
 	}
-	if _, getErr := orch.GetRun(context.Background(), "ws_1", "run_intake_invalid"); getErr == nil {
+	if _, getErr := orch.GetRun(context.Background(), "run_intake_invalid"); getErr == nil {
 		t.Fatal("invalid run was durably accepted")
 	}
 }
@@ -155,7 +150,6 @@ func TestIntakeFullWorkloadTakesPrecedenceOverShorthand(t *testing.T) {
 	orch := newIntakeOrch(t, adapter.ExternalPhaseSucceeded)
 	rev := orchRevision()
 	result, err := orch.Intake(context.Background(), IntakeRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_intake_precedence",
 		IdempotencyKey: "idem_intake_precedence",
 		Workload:       rev,
@@ -164,7 +158,7 @@ func TestIntakeFullWorkloadTakesPrecedenceOverShorthand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Intake: %v", err)
 	}
-	events, err := orch.GetRunEvents(context.Background(), "ws_1", result.Run.ID)
+	events, err := orch.GetRunEvents(context.Background(), result.Run.ID)
 	if err != nil {
 		t.Fatalf("GetRunEvents: %v", err)
 	}
@@ -187,16 +181,15 @@ func TestPreviewPlacementSharesOfferQueryPathWithDecide(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = log.Close() })
 	ad := fake.New(fake.WithListOffersError(errors.New("provider unavailable")))
-	orch := New(workspaceTestLog{EventLog: log}, scheduler.New(), ad)
+	orch := New(log, scheduler.New(), ad)
 
-	_, err = orch.PreviewPlacement(context.Background(), "ws_1", "run_preview", orchRevision())
+	_, err = orch.PreviewPlacement(context.Background(), "run_preview", orchRevision())
 	if !errors.Is(err, ErrOfferQuery) {
 		t.Fatalf("PreviewPlacement error = %v, want ErrOfferQuery", err)
 	}
 
 	// Live decide uses the same evaluatePlacement path.
 	accepted, err := orch.Intake(context.Background(), IntakeRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_decide_offers",
 		IdempotencyKey: "idem_decide_offers",
 		Workload:       orchRevision(),
@@ -229,7 +222,7 @@ func newIntakeOrchWithAdapter(t *testing.T, provider Adapter) *Orchestrator {
 			t.Fatalf("close event log: %v", err)
 		}
 	})
-	return New(workspaceTestLog{EventLog: log}, scheduler.New(), provider)
+	return New(log, scheduler.New(), provider)
 }
 
 type intakeLaunchErrorAdapter struct {

@@ -34,11 +34,10 @@ type DashboardFidelity struct {
 }
 
 type DashboardOfferCatalog struct {
-	WorkspaceID string                 `json:"workspace_id"`
-	Revision    string                 `json:"revision"`
-	ObservedAt  time.Time              `json:"observed_at"`
-	Offers      []domain.OfferSnapshot `json:"offers"`
-	Failures    []any                  `json:"failures"`
+	Revision   string                 `json:"revision"`
+	ObservedAt time.Time              `json:"observed_at"`
+	Offers     []domain.OfferSnapshot `json:"offers"`
+	Failures   []any                  `json:"failures"`
 }
 
 type DashboardMessage struct {
@@ -72,14 +71,11 @@ func (t DashboardTranscript) OfferCatalog() *DashboardOfferCatalog {
 	return nil
 }
 
-func BuildDashboardTranscript(ctx context.Context, workspaceID string) (DashboardTranscript, error) {
-	return BuildDashboardScenarioTranscript(ctx, workspaceID, DashboardScenarioName)
+func BuildDashboardTranscript(ctx context.Context) (DashboardTranscript, error) {
+	return BuildDashboardScenarioTranscript(ctx, DashboardScenarioName)
 }
 
-func BuildDashboardScenarioTranscript(ctx context.Context, workspaceID, scenarioName string) (DashboardTranscript, error) {
-	if workspaceID == "" {
-		return DashboardTranscript{}, fmt.Errorf("dashboard scenario requires a Workspace")
-	}
+func BuildDashboardScenarioTranscript(ctx context.Context, scenarioName string) (DashboardTranscript, error) {
 	offers, observedAt, err := loadDashboardOffers()
 	if err != nil {
 		return DashboardTranscript{}, err
@@ -88,11 +84,11 @@ func BuildDashboardScenarioTranscript(ctx context.Context, workspaceID, scenario
 	if err != nil {
 		return DashboardTranscript{}, err
 	}
-	realEvents, err := runDashboardSimulation(ctx, workspaceID, scenarioName, observedAt, offers)
+	realEvents, err := runDashboardSimulation(ctx, scenarioName, observedAt, offers)
 	if err != nil {
 		return DashboardTranscript{}, err
 	}
-	baseline := dashboardBaseline(workspaceID, observedAt, offers)
+	baseline := dashboardBaseline(observedAt, offers)
 	steps := make([]DashboardStep, 0, len(realEvents))
 	for _, event := range realEvents {
 		steps = append(steps, dashboardStep(event, ProvenanceOrchestrator, len(steps)))
@@ -283,7 +279,7 @@ func (p *dashboardProvider) Launch(ctx context.Context, request adapter.LaunchRe
 	return p.Adapter.Launch(ctx, request)
 }
 
-func runDashboardSimulation(ctx context.Context, workspaceID, scenarioName string, now time.Time, offers []domain.OfferSnapshot) ([]eventlog.CloudEvent, error) {
+func runDashboardSimulation(ctx context.Context, scenarioName string, now time.Time, offers []domain.OfferSnapshot) ([]eventlog.CloudEvent, error) {
 	log, err := eventlog.OpenSQLite(ctx, "file:dashboard-scenario-"+uuid.NewString()+"?mode=memory&cache=shared")
 	if err != nil {
 		return nil, fmt.Errorf("open dashboard scenario event log: %w", err)
@@ -306,11 +302,11 @@ func runDashboardSimulation(ctx context.Context, workspaceID, scenarioName strin
 			},
 		},
 	}
-	orch := orchestrator.New(alwaysActiveWorkspaceLog{log}, scheduler.New(), provider, orchestrator.WithClock(clock.Now))
-	if err := executeDashboardScenario(ctx, workspaceID, scenarioName, orch, clock); err != nil {
+	orch := orchestrator.New(log, scheduler.New(), provider, orchestrator.WithClock(clock.Now))
+	if err := executeDashboardScenario(ctx, scenarioName, orch, clock); err != nil {
 		return nil, err
 	}
-	stored, err := log.ReadAll(ctx, 0, 1000, eventlog.EventFilter{WorkspaceID: workspaceID, Visibility: eventlog.VisibilityPublic})
+	stored, err := log.ReadAll(ctx, 0, 1000, eventlog.EventFilter{Visibility: eventlog.VisibilityPublic})
 	if err != nil {
 		return nil, fmt.Errorf("read dashboard scenario events: %w", err)
 	}
@@ -321,37 +317,37 @@ func runDashboardSimulation(ctx context.Context, workspaceID, scenarioName strin
 	return events, nil
 }
 
-func executeDashboardScenario(ctx context.Context, workspaceID, scenarioName string, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
+func executeDashboardScenario(ctx context.Context, scenarioName string, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
 	switch scenarioName {
 	case DashboardScenarioWarmPoolBurst:
-		return executeWarmPoolBurst(ctx, workspaceID, orch, clock)
+		return executeWarmPoolBurst(ctx, orch, clock)
 	case DashboardScenarioDeadlineCost:
-		return executeDeadlineCost(ctx, workspaceID, orch, clock)
+		return executeDeadlineCost(ctx, orch, clock)
 	case DashboardScenarioFailureRebalance:
-		return executeFailureRebalance(ctx, workspaceID, orch, clock)
+		return executeFailureRebalance(ctx, orch, clock)
 	default:
 		return fmt.Errorf("%w %q", ErrUnknownDashboardScenario, scenarioName)
 	}
 }
 
-func executeWarmPoolBurst(ctx context.Context, workspaceID string, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
+func executeWarmPoolBurst(ctx context.Context, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
 	runIDs := []string{"run-burst-01", "run-burst-02", "run-burst-03", "run-burst-04"}
 	for _, runID := range runIDs {
-		workload := dashboardWorkload(workspaceID, runID, "RTX A6000", 40)
+		workload := dashboardWorkload(runID, "RTX A6000", 40)
 		workload.Spec.Placement.ExpectedRuntimeSeconds = 8 * 60
 		workload.Spec.Execution.MaxRuntimeSeconds = 12 * 60
-		if err := startDashboardRun(ctx, workspaceID, runID, workload, orch); err != nil {
+		if err := startDashboardRun(ctx, runID, workload, orch); err != nil {
 			return err
 		}
 		clock.Advance(time.Second)
 	}
 	for index, runID := range runIDs {
-		if err := finishDashboardRun(ctx, workspaceID, runID, orch); err != nil {
+		if err := finishDashboardRun(ctx, runID, orch); err != nil {
 			return err
 		}
 		clock.Advance(2 * time.Second)
 		if index+1 < len(runIDs) {
-			if err := advanceDashboardRun(ctx, workspaceID, runIDs[index+1], orch, "dispatch"); err != nil {
+			if err := advanceDashboardRun(ctx, runIDs[index+1], orch, "dispatch"); err != nil {
 				return err
 			}
 		}
@@ -359,96 +355,95 @@ func executeWarmPoolBurst(ctx context.Context, workspaceID string, orch *orchest
 	return nil
 }
 
-func executeDeadlineCost(ctx context.Context, workspaceID string, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
-	long := dashboardWorkload(workspaceID, "run-batch-long", "RTX A6000", 40)
+func executeDeadlineCost(ctx context.Context, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
+	long := dashboardWorkload("run-batch-long", "RTX A6000", 40)
 	long.Spec.Placement.ExpectedRuntimeSeconds = 20 * 60
 	long.Spec.Execution.MaxRuntimeSeconds = 30 * 60
-	if err := startDashboardRun(ctx, workspaceID, "run-batch-long", long, orch); err != nil {
+	if err := startDashboardRun(ctx, "run-batch-long", long, orch); err != nil {
 		return err
 	}
 	clock.Advance(time.Second)
-	urgent := dashboardWorkload(workspaceID, "run-deadline-urgent", "RTX A6000", 40)
+	urgent := dashboardWorkload("run-deadline-urgent", "RTX A6000", 40)
 	urgent.Spec.Placement.Objective = domain.ObjectiveBalanced
 	urgent.Spec.Placement.MaxP90StartSeconds = 60
 	urgent.Spec.Placement.ExpectedRuntimeSeconds = 4 * 60
 	urgent.Spec.Execution.MaxRuntimeSeconds = 6 * 60
-	if err := startDashboardRun(ctx, workspaceID, "run-deadline-urgent", urgent, orch); err != nil {
+	if err := startDashboardRun(ctx, "run-deadline-urgent", urgent, orch); err != nil {
 		return err
 	}
 	clock.Advance(time.Second)
-	cheap := dashboardWorkload(workspaceID, "run-cost-flexible", "RTX A6000", 40)
+	cheap := dashboardWorkload("run-cost-flexible", "RTX A6000", 40)
 	cheap.Spec.Placement.ExpectedRuntimeSeconds = 6 * 60
 	cheap.Spec.Execution.MaxRuntimeSeconds = 10 * 60
-	if err := startDashboardRun(ctx, workspaceID, "run-cost-flexible", cheap, orch); err != nil {
+	if err := startDashboardRun(ctx, "run-cost-flexible", cheap, orch); err != nil {
 		return err
 	}
-	if err := finishDashboardRun(ctx, workspaceID, "run-deadline-urgent", orch); err != nil {
+	if err := finishDashboardRun(ctx, "run-deadline-urgent", orch); err != nil {
 		return err
 	}
-	if err := finishDashboardRun(ctx, workspaceID, "run-batch-long", orch); err != nil {
+	if err := finishDashboardRun(ctx, "run-batch-long", orch); err != nil {
 		return err
 	}
-	if err := advanceDashboardRun(ctx, workspaceID, "run-cost-flexible", orch, "dispatch"); err != nil {
+	if err := advanceDashboardRun(ctx, "run-cost-flexible", orch, "dispatch"); err != nil {
 		return err
 	}
-	return finishDashboardRun(ctx, workspaceID, "run-cost-flexible", orch)
+	return finishDashboardRun(ctx, "run-cost-flexible", orch)
 }
 
-func executeFailureRebalance(ctx context.Context, workspaceID string, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
-	failed := dashboardWorkload(workspaceID, "run-provider-replacement", "RTX 4090", 16)
+func executeFailureRebalance(ctx context.Context, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
+	failed := dashboardWorkload("run-provider-replacement", "RTX 4090", 16)
 	failed.Spec.Placement.ExpectedRuntimeSeconds = 10 * 60
 	failed.Spec.Execution.MaxRuntimeSeconds = 15 * 60
-	if err := startDashboardRun(ctx, workspaceID, "run-provider-replacement", failed, orch); err != nil {
+	if err := startDashboardRun(ctx, "run-provider-replacement", failed, orch); err != nil {
 		return err
 	}
 	clock.Advance(time.Second)
 	for _, runID := range []string{"run-rebalance-warm", "run-rebalance-queued"} {
-		workload := dashboardWorkload(workspaceID, runID, "RTX A6000", 40)
+		workload := dashboardWorkload(runID, "RTX A6000", 40)
 		workload.Spec.Placement.ExpectedRuntimeSeconds = 7 * 60
 		workload.Spec.Execution.MaxRuntimeSeconds = 10 * 60
-		if err := startDashboardRun(ctx, workspaceID, runID, workload, orch); err != nil {
+		if err := startDashboardRun(ctx, runID, workload, orch); err != nil {
 			return err
 		}
 		clock.Advance(time.Second)
 	}
-	if err := finishDashboardRun(ctx, workspaceID, "run-provider-replacement", orch); err != nil {
+	if err := finishDashboardRun(ctx, "run-provider-replacement", orch); err != nil {
 		return err
 	}
-	if err := finishDashboardRun(ctx, workspaceID, "run-rebalance-warm", orch); err != nil {
+	if err := finishDashboardRun(ctx, "run-rebalance-warm", orch); err != nil {
 		return err
 	}
-	if err := advanceDashboardRun(ctx, workspaceID, "run-rebalance-queued", orch, "dispatch"); err != nil {
+	if err := advanceDashboardRun(ctx, "run-rebalance-queued", orch, "dispatch"); err != nil {
 		return err
 	}
-	return finishDashboardRun(ctx, workspaceID, "run-rebalance-queued", orch)
+	return finishDashboardRun(ctx, "run-rebalance-queued", orch)
 }
 
-func startDashboardRun(ctx context.Context, workspaceID, runID string, workload domain.WorkloadRevision, orch *orchestrator.Orchestrator) error {
+func startDashboardRun(ctx context.Context, runID string, workload domain.WorkloadRevision, orch *orchestrator.Orchestrator) error {
 	if _, err := orch.CreateRun(ctx, orchestrator.CreateRunRequest{
-		WorkspaceID: workspaceID, RunID: runID, IdempotencyKey: "scenario:" + runID, Workload: workload,
+		RunID: runID, IdempotencyKey: "scenario:" + runID, Workload: workload,
 	}); err != nil {
 		return fmt.Errorf("create dashboard Run %s: %w", runID, err)
 	}
-	return advanceDashboardRun(ctx, workspaceID, runID, orch, "start")
+	return advanceDashboardRun(ctx, runID, orch, "start")
 }
 
-func finishDashboardRun(ctx context.Context, workspaceID, runID string, orch *orchestrator.Orchestrator) error {
-	return advanceDashboardRun(ctx, workspaceID, runID, orch, "finish")
+func finishDashboardRun(ctx context.Context, runID string, orch *orchestrator.Orchestrator) error {
+	return advanceDashboardRun(ctx, runID, orch, "finish")
 }
 
-func advanceDashboardRun(ctx context.Context, workspaceID, runID string, orch *orchestrator.Orchestrator, transition string) error {
-	if err := orch.AdvanceRun(ctx, workspaceID, runID); err != nil {
+func advanceDashboardRun(ctx context.Context, runID string, orch *orchestrator.Orchestrator, transition string) error {
+	if err := orch.AdvanceRun(ctx, runID); err != nil {
 		return fmt.Errorf("%s dashboard Run %s: %w", transition, runID, err)
 	}
 	return nil
 }
 
-func dashboardWorkload(workspaceID, runID, model string, gpuMemoryGiB int64) domain.WorkloadRevision {
+func dashboardWorkload(runID, model string, gpuMemoryGiB int64) domain.WorkloadRevision {
 	return domain.WorkloadRevision{
-		ID:          "wrev_" + runID,
-		WorkspaceID: workspaceID,
-		WorkloadID:  "wrk_" + runID,
-		Digest:      "sha256:" + runID,
+		ID:         "wrev_" + runID,
+		WorkloadID: "wrk_" + runID,
+		Digest:     "sha256:" + runID,
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{
 				Name:     "main",
@@ -472,15 +467,14 @@ func dashboardWorkload(workspaceID, runID, model string, gpuMemoryGiB int64) dom
 	}
 }
 
-func dashboardBaseline(workspaceID string, now time.Time, offers []domain.OfferSnapshot) []DashboardMessage {
+func dashboardBaseline(now time.Time, offers []domain.OfferSnapshot) []DashboardMessage {
 	return []DashboardMessage{{
 		Type: "offers_replaced",
 		Catalog: &DashboardOfferCatalog{
-			WorkspaceID: workspaceID,
-			Revision:    "scenario-recorded-offers-v1",
-			ObservedAt:  now,
-			Offers:      offers,
-			Failures:    []any{},
+			Revision:   "scenario-recorded-offers-v1",
+			ObservedAt: now,
+			Offers:     offers,
+			Failures:   []any{},
 		},
 	}, {Type: "ready", ThroughGlobalPosition: 0}}
 }

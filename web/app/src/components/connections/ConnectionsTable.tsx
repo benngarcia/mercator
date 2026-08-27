@@ -202,7 +202,7 @@ export function ConnectionsTable({
           <EmptyState
             icon={Plug}
             title="No connections"
-            description="No adapter connections are registered for this workspace yet."
+            description="No adapter connections are registered for this deployment yet."
           />
         }
       />

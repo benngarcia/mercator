@@ -16,10 +16,9 @@ import (
 const UserAgent = "mercator-conformance-probe/1"
 
 type configuration struct {
-	reportURL   string
-	runID       string
-	workspaceID string
-	runToken    string
+	reportURL string
+	runID     string
+	runToken  string
 }
 
 type report struct {
@@ -64,17 +63,15 @@ func Run(ctx context.Context, args []string, env map[string]string, _ io.Writer,
 
 func configurationFromEnvironment(env map[string]string) (configuration, error) {
 	config := configuration{
-		reportURL:   env["MERCATOR_REPORT_URL"],
-		runID:       env["MERCATOR_RUN_ID"],
-		workspaceID: env["MERCATOR_WORKSPACE_ID"],
-		runToken:    env["MERCATOR_RUN_TOKEN"],
+		reportURL: env["MERCATOR_REPORT_URL"],
+		runID:     env["MERCATOR_RUN_ID"],
+		runToken:  env["MERCATOR_RUN_TOKEN"],
 	}
 	missing := make([]string, 0, 4)
 	for name, value := range map[string]string{
-		"MERCATOR_REPORT_URL":   config.reportURL,
-		"MERCATOR_RUN_ID":       config.runID,
-		"MERCATOR_WORKSPACE_ID": config.workspaceID,
-		"MERCATOR_RUN_TOKEN":    config.runToken,
+		"MERCATOR_REPORT_URL": config.reportURL,
+		"MERCATOR_RUN_ID":     config.runID,
+		"MERCATOR_RUN_TOKEN":  config.runToken,
 	} {
 		if strings.TrimSpace(value) == "" {
 			missing = append(missing, name)
@@ -95,7 +92,7 @@ type reporter struct {
 
 func newReporter(config configuration) reporter {
 	base := strings.TrimRight(config.reportURL, "/")
-	endpoint := base + "/v1/runs/" + url.PathEscape(config.runID) + "/report?workspace_id=" + url.QueryEscape(config.workspaceID)
+	endpoint := base + "/v1/runs/" + url.PathEscape(config.runID) + "/report"
 	return reporter{endpoint: endpoint, token: config.runToken, client: http.DefaultClient}
 }
 

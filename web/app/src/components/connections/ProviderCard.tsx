@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { ProviderLogo } from "./ProviderLogo";
 
 // The card's quiet one-line status. Derived, in priority order, from the
-// workspace's connections of this adapter type: any authorized connection
+// deployment's connections of this adapter type: any authorized connection
 // means the provider works (verified); otherwise a connection whose last
 // verify attempt failed this session outranks plain configured.
 export type ProviderStatus = "none" | "configured" | "verified" | "verify_failed";

@@ -18,19 +18,10 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
-type workspaceTestLog struct {
-	eventlog.EventLog
-}
-
-func (l workspaceTestLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
-	return l.Append(ctx, request)
-}
-
 func TestCreateRunIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
 	req := CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_1",
 		CommandKey:     "cmd_create",
 		IdempotencyKey: "idem_create",
@@ -48,7 +39,7 @@ func TestCreateRunIsIdempotent(t *testing.T) {
 	if first.RunID != second.RunID || !second.Duplicate {
 		t.Fatalf("expected duplicate create result, first=%+v second=%+v", first, second)
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	events, err := orch.GetRunEvents(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
@@ -59,22 +50,22 @@ func TestCreateRunIsIdempotent(t *testing.T) {
 
 func TestListRunsDoesNotReadEveryStream(t *testing.T) {
 	ctx := context.Background()
-	log := &streamReadCountingLog{WorkspaceEventLog: openOrchestratorLog(t)}
+	log := &streamReadCountingLog{EventLog: openOrchestratorLog(t)}
 	orch := New(log, scheduler.New(), fake.New(
 		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	))
 	for _, runID := range []string{"run_1", "run_2"} {
-		if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
+		if _, err := orch.CreateRun(ctx, CreateRunRequest{RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
 			t.Fatalf("create %s: %v", runID, err)
 		}
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance run_1: %v", err)
 	}
 	log.streamReads = 0
 
-	records, err := orch.ListRuns(ctx, "ws_1")
+	records, err := orch.ListRuns(ctx)
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
@@ -101,7 +92,6 @@ func TestCreateRunPublicEventRedactsEnvironmentBindings(t *testing.T) {
 	}
 
 	if _, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_redaction",
 		CommandKey:     "cmd_create_redaction",
 		IdempotencyKey: "idem_create_redaction",
@@ -109,7 +99,7 @@ func TestCreateRunPublicEventRedactsEnvironmentBindings(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_redaction")
+	events, err := orch.GetRunEvents(ctx, "run_redaction")
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
@@ -125,21 +115,6 @@ func TestCreateRunPublicEventRedactsEnvironmentBindings(t *testing.T) {
 	}
 }
 
-func TestCreateRunRejectsWorkspaceMismatch(t *testing.T) {
-	ctx := context.Background()
-	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
-	_, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_other",
-		RunID:          "run_workspace_mismatch",
-		CommandKey:     "cmd_create_workspace_mismatch",
-		IdempotencyKey: "idem_create_workspace_mismatch",
-		Workload:       orchRevision(),
-	})
-	if err == nil || !strings.Contains(err.Error(), "WORKSPACE_MISMATCH") {
-		t.Fatalf("expected WORKSPACE_MISMATCH, got %v", err)
-	}
-}
-
 func TestAdvanceRunPersistsLaunchIntentBeforeCallingAdapter(t *testing.T) {
 	ctx := context.Background()
 	log := openOrchestratorLog(t)
@@ -147,7 +122,7 @@ func TestAdvanceRunPersistsLaunchIntentBeforeCallingAdapter(t *testing.T) {
 	orch := New(log, scheduler.New(), spy)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
 	if !spy.sawLaunchIntentBeforeLaunch {
@@ -175,7 +150,6 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 	ad := &captureLaunchAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}))}
 	orch := newTestOrchestrator(t, ad)
 	if _, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_contract",
 		CommandKey:     "cmd_create_contract",
 		IdempotencyKey: "idem_create_contract",
@@ -184,7 +158,7 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 		t.Fatalf("create run: %v", err)
 	}
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_contract"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_contract"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
 	req := ad.launchRequest
@@ -230,7 +204,6 @@ func TestAdvanceRunInjectsReportingEnvWhenConfigured(t *testing.T) {
 	orch := New(log, scheduler.New(), ad, WithReporting(publicURL, signer))
 
 	if _, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_reporting",
 		CommandKey:     "cmd_reporting",
 		IdempotencyKey: "idem_reporting",
@@ -238,7 +211,7 @@ func TestAdvanceRunInjectsReportingEnvWhenConfigured(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_reporting"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_reporting"); err != nil {
 		t.Fatalf("advance run: %v", err)
 	}
 
@@ -254,15 +227,10 @@ func TestAdvanceRunInjectsReportingEnvWhenConfigured(t *testing.T) {
 		t.Fatalf("MERCATOR_REPORT_URL wrong: %+v", reportURLBinding)
 	}
 	// MERCATOR_RUN_TOKEN
-	wantToken := signer.Token("ws_1", "run_reporting")
+	wantToken := signer.Token("run_reporting")
 	reportTokenBinding := findLaunchEnv(t, req.Environment, "MERCATOR_RUN_TOKEN")
 	if reportTokenBinding.Value == nil || *reportTokenBinding.Value != wantToken {
 		t.Fatalf("MERCATOR_RUN_TOKEN wrong: got %+v, want %q", reportTokenBinding, wantToken)
-	}
-	// MERCATOR_WORKSPACE_ID
-	workspaceIDBinding := findLaunchEnv(t, req.Environment, "MERCATOR_WORKSPACE_ID")
-	if workspaceIDBinding.Value == nil || *workspaceIDBinding.Value != "ws_1" {
-		t.Fatalf("MERCATOR_WORKSPACE_ID wrong: %+v", workspaceIDBinding)
 	}
 }
 
@@ -274,7 +242,6 @@ func TestAdvanceRunDoesNotInjectReportingEnvWhenNotConfigured(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 
 	if _, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_no_reporting",
 		CommandKey:     "cmd_no_reporting",
 		IdempotencyKey: "idem_no_reporting",
@@ -282,12 +249,12 @@ func TestAdvanceRunDoesNotInjectReportingEnvWhenNotConfigured(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_no_reporting"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_no_reporting"); err != nil {
 		t.Fatalf("advance run: %v", err)
 	}
 
 	req := ad.launchRequest
-	for _, name := range []string{"MERCATOR_RUN_ID", "MERCATOR_REPORT_URL", "MERCATOR_RUN_TOKEN", "MERCATOR_WORKSPACE_ID"} {
+	for _, name := range []string{"MERCATOR_RUN_ID", "MERCATOR_REPORT_URL", "MERCATOR_RUN_TOKEN"} {
 		for _, binding := range req.Environment {
 			if binding.Name == name {
 				t.Fatalf("unexpected reporting env var %q in environment when reporting is not configured", name)
@@ -303,27 +270,27 @@ func TestCancelRunAfterLaunchRecordsCancelledOutcomeAndCleansUp(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	rev := orchRevision()
 
-	if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: "run_cancel", IdempotencyKey: "idem_cancel_create", Workload: rev}); err != nil {
+	if _, err := orch.CreateRun(ctx, CreateRunRequest{RunID: "run_cancel", IdempotencyKey: "idem_cancel_create", Workload: rev}); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_cancel"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_cancel"); err != nil {
 		t.Fatalf("advance run: %v", err)
 	}
-	record, err := orch.CancelRun(ctx, "ws_1", "run_cancel", nil)
+	record, err := orch.CancelRun(ctx, "run_cancel", nil)
 	if err != nil {
 		t.Fatalf("cancel run: %v", err)
 	}
 	if !record.Closed || record.Outcome != domain.RunOutcomeCancelled || record.Cleanup != domain.CleanupConfirmed {
 		t.Fatalf("unexpected cancelled record: %+v", record)
 	}
-	again, err := orch.CancelRun(ctx, "ws_1", "run_cancel", nil)
+	again, err := orch.CancelRun(ctx, "run_cancel", nil)
 	if err != nil {
 		t.Fatalf("idempotent cancel: %v", err)
 	}
 	if again.Outcome != domain.RunOutcomeCancelled {
 		t.Fatalf("cancel replay changed outcome: %+v", again)
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_cancel")
+	events, err := orch.GetRunEvents(ctx, "run_cancel")
 	if err != nil {
 		t.Fatalf("events: %v", err)
 	}
@@ -338,7 +305,7 @@ func TestCancelRunAfterLaunchRecordsCancelledOutcomeAndCleansUp(t *testing.T) {
 	if ad.TerminateCount() != 1 || ad.ReleaseCount() != 0 {
 		t.Fatalf("cleanup counts: terminate=%d release=%d, want one termination", ad.TerminateCount(), ad.ReleaseCount())
 	}
-	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -353,13 +320,13 @@ func TestAdvanceRunCommandKeysAreScopedPerRun(t *testing.T) {
 	ad := fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
 	orch := newTestOrchestrator(t, ad)
 	for _, runID := range []string{"run_scope_a", "run_scope_b"} {
-		if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
+		if _, err := orch.CreateRun(ctx, CreateRunRequest{RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
 			t.Fatalf("create %s: %v", runID, err)
 		}
-		if err := orch.AdvanceRun(ctx, "ws_1", runID); err != nil {
+		if err := orch.AdvanceRun(ctx, runID); err != nil {
 			t.Fatalf("advance %s: %v", runID, err)
 		}
-		record, err := orch.GetRun(ctx, "ws_1", runID)
+		record, err := orch.GetRun(ctx, runID)
 		if err != nil {
 			t.Fatalf("get %s: %v", runID, err)
 		}
@@ -369,51 +336,18 @@ func TestAdvanceRunCommandKeysAreScopedPerRun(t *testing.T) {
 	}
 }
 
-func TestRunEventIDsAreScopedAcrossWorkspaces(t *testing.T) {
-	ctx := context.Background()
-	offerA := orchOffer("offer_workspace_a", time.Now().UTC())
-	offerB := orchOffer("offer_workspace_b", time.Now().UTC())
-	offerB.ID = "offer_workspace_b"
-	offerB.ConnectionID = "conn_2"
-	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{offerA, offerB}), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded)))
-	for _, workspaceID := range []string{"ws_1", "ws_2"} {
-		rev := orchRevision()
-		rev.WorkspaceID = workspaceID
-		if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: workspaceID, RunID: "run_same", IdempotencyKey: "idem_" + workspaceID, Workload: rev}); err != nil {
-			t.Fatalf("create %s: %v", workspaceID, err)
-		}
-		events, err := orch.GetRunEvents(ctx, workspaceID, "run_same")
-		if err != nil {
-			t.Fatalf("events %s: %v", workspaceID, err)
-		}
-		if len(events) != 1 || events[0].WorkspaceID != workspaceID {
-			t.Fatalf("unexpected events for %s: %+v", workspaceID, events)
-		}
-		if err := orch.AdvanceRun(ctx, workspaceID, "run_same"); err != nil {
-			t.Fatalf("advance %s: %v", workspaceID, err)
-		}
-		record, err := orch.GetRun(ctx, workspaceID, "run_same")
-		if err != nil {
-			t.Fatalf("get %s: %v", workspaceID, err)
-		}
-		if !record.Closed || record.Cleanup != domain.CleanupConfirmed {
-			t.Fatalf("unexpected record for %s: %+v", workspaceID, record)
-		}
-	}
-}
-
 func TestCancelRunResumesAfterCancelAcceptedEvents(t *testing.T) {
 	ctx := context.Background()
 	ad := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("offer_cancel_resume", time.Now().UTC())}), fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))
 	orch := newTestOrchestrator(t, ad)
 	runID := "run_cancel_resume"
-	if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
+	if _, err := orch.CreateRun(ctx, CreateRunRequest{RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", runID); err != nil {
+	if err := orch.AdvanceRun(ctx, runID); err != nil {
 		t.Fatalf("advance run: %v", err)
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", runID)
+	events, err := orch.GetRunEvents(ctx, runID)
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
@@ -421,14 +355,14 @@ func TestCancelRunResumesAfterCancelAcceptedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reduce run: %v", err)
 	}
-	if err := orch.appendEvents(ctx, "ws_1", runID, uint64(len(events)), "cancel:accepted", []eventlog.NewEvent{
+	if err := orch.appendEvents(ctx, runID, uint64(len(events)), "cancel:accepted", []eventlog.NewEvent{
 		mustEvent(runID, "cancel_requested", EventCancelRequested, cancelRequestedData{LaunchKey: state.launchIntent.LaunchKey}, time.Now()),
 		mustEvent(runID, "cancel_accepted", EventCancelAccepted, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, time.Now()),
 	}); err != nil {
 		t.Fatalf("seed cancel events: %v", err)
 	}
 
-	record, err := orch.CancelRun(ctx, "ws_1", runID, nil)
+	record, err := orch.CancelRun(ctx, runID, nil)
 	if err != nil {
 		t.Fatalf("resume cancel: %v", err)
 	}
@@ -448,10 +382,10 @@ func TestAdvanceRunDoesNotRelaunchAfterNonterminalObservation(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("first advance: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("second advance should observe recorded launch intent, not relaunch: %v", err)
 	}
 	if ad.launchCalls != 1 {
@@ -468,11 +402,11 @@ func TestAdvanceRunRecoversRecordedLaunchIntentWhenOffersChange(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("first advance: %v", err)
 	}
 	ad.offers = nil
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance should recover from recorded launch intent after offers disappear: %v", err)
 	}
 	if ad.launchCalls != 1 {
@@ -491,19 +425,19 @@ func TestAdvanceRunRetriesCleanupWithoutRelaunch(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err == nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err == nil {
 		t.Fatal("first advance should report release failure after recording cleanup request")
 	}
 	if ad.launchCalls != 1 || ad.releaseCalls != 1 {
 		t.Fatalf("unexpected first side effects: launches=%d releases=%d", ad.launchCalls, ad.releaseCalls)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("second advance should resume cleanup: %v", err)
 	}
 	if ad.launchCalls != 1 || ad.releaseCalls != 2 {
 		t.Fatalf("cleanup retry should not relaunch: launches=%d releases=%d", ad.launchCalls, ad.releaseCalls)
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	events, err := orch.GetRunEvents(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
@@ -520,17 +454,17 @@ func TestAdvanceRunReconcilesIndeterminateLaunchBeforeRetry(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+	if err := orch.AdvanceRun(ctx, "run_1"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		t.Fatalf("expected indeterminate launch error, got %v", err)
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	events, err := orch.GetRunEvents(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
 	if countEvents(events, EventLaunchFailed) != 0 {
 		t.Fatalf("indeterminate launch must not be recorded as simple failure: %s", eventTypes(events))
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("second advance should reconcile existing launch before retry: %v", err)
 	}
 	if ad.launchCalls != 1 {
@@ -549,13 +483,13 @@ func TestAdvanceRunClosesMissingIndeterminateLaunchAsFailed(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+	if err := orch.AdvanceRun(ctx, "run_1"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		t.Fatalf("expected indeterminate launch error, got %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("second advance should close missing launch: %v", err)
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -572,13 +506,13 @@ func TestAdvanceRunUsesListOwnedForIndeterminateLaunchRecovery(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+	if err := orch.AdvanceRun(ctx, "run_1"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		t.Fatalf("expected indeterminate launch error, got %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("second advance should reconcile owned launch: %v", err)
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -595,10 +529,10 @@ func TestAdvanceRunRecordsLaunchConflict(t *testing.T) {
 	orch := newTestOrchestrator(t, conflictAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}))})
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err == nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err == nil {
 		t.Fatal("expected advance to report launch conflict")
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	events, err := orch.GetRunEvents(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
@@ -615,10 +549,10 @@ func TestAdvanceRunClosesSuccessfulFakeRun(t *testing.T) {
 	))
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	events, err := orch.GetRunEvents(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
@@ -649,7 +583,7 @@ type spyAdapter struct {
 }
 
 func (s *spyAdapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
-	events, err := s.log.ReadStream(ctx, eventlog.StreamKey{WorkspaceID: req.WorkspaceID, Type: "run", ID: req.RunID}, 0, 100)
+	events, err := s.log.ReadStream(ctx, eventlog.StreamKey{Type: "run", ID: req.RunID}, 0, 100)
 	if err == nil && countEvents(events, EventLaunchIntentRecorded) == 1 {
 		s.sawLaunchIntentBeforeLaunch = true
 	}
@@ -729,7 +663,7 @@ func (i *indeterminateLaunchAdapter) Observe(_ context.Context, req adapter.Obse
 
 func (i *indeterminateLaunchAdapter) ListOwned(context.Context, adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
 	i.listOwnedCalls++
-	return []adapter.OwnedExternalObject{{ExternalID: "ambiguous", WorkspaceID: "ws_1", RunID: "run_1", AttemptID: "att_1", OwnershipToken: "own_1", LaunchKey: i.launchKey, Phase: adapter.ExternalPhaseRunning}}, nil
+	return []adapter.OwnedExternalObject{{ExternalID: "ambiguous", RunID: "run_1", AttemptID: "att_1", OwnershipToken: "own_1", LaunchKey: i.launchKey, Phase: adapter.ExternalPhaseRunning}}, nil
 }
 
 type missingIndeterminateLaunchAdapter struct {
@@ -765,7 +699,6 @@ func (o *ownedIndeterminateLaunchAdapter) ListOwned(context.Context, adapter.Own
 	o.listOwnedCalls++
 	return []adapter.OwnedExternalObject{{
 		ExternalID:     "owned-" + o.launchReq.AttemptID,
-		WorkspaceID:    o.launchReq.WorkspaceID,
 		RunID:          o.launchReq.RunID,
 		AttemptID:      o.launchReq.AttemptID,
 		OwnershipToken: o.launchReq.OwnershipToken,
@@ -798,16 +731,16 @@ func newTestOrchestrator(t *testing.T, ad Adapter) *Orchestrator {
 }
 
 type streamReadCountingLog struct {
-	eventlog.WorkspaceEventLog
+	eventlog.EventLog
 	streamReads int
 }
 
 func (l *streamReadCountingLog) ReadStream(ctx context.Context, stream eventlog.StreamKey, afterVersion uint64, limit int) ([]eventlog.StoredEvent, error) {
 	l.streamReads++
-	return l.WorkspaceEventLog.ReadStream(ctx, stream, afterVersion, limit)
+	return l.EventLog.ReadStream(ctx, stream, afterVersion, limit)
 }
 
-func openOrchestratorLog(t *testing.T) eventlog.WorkspaceEventLog {
+func openOrchestratorLog(t *testing.T) eventlog.EventLog {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -818,13 +751,12 @@ func openOrchestratorLog(t *testing.T) eventlog.WorkspaceEventLog {
 			t.Fatalf("close event log: %v", err)
 		}
 	})
-	return workspaceTestLog{EventLog: log}
+	return log
 }
 
 func createRun(t *testing.T, ctx context.Context, orch *Orchestrator) {
 	t.Helper()
 	_, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_1",
 		CommandKey:     "cmd_create",
 		IdempotencyKey: "idem_create",
@@ -855,10 +787,9 @@ func eventTypes(events []eventlog.StoredEvent) []string {
 
 func orchRevision() domain.WorkloadRevision {
 	return domain.WorkloadRevision{
-		ID:          "wrev_1",
-		WorkspaceID: "ws_1",
-		WorkloadID:  "wrk_1",
-		Digest:      "sha256:revision",
+		ID:         "wrev_1",
+		WorkloadID: "wrk_1",
+		Digest:     "sha256:revision",
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{
 				Name:     "main",
@@ -971,11 +902,11 @@ func TestAdvanceRunDoesNotAppendUnchangedObservations(t *testing.T) {
 	createRun(t, ctx, orch)
 
 	for i := 0; i < 1500; i++ {
-		if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 			t.Fatalf("advance %d: %v", i, err)
 		}
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	events, err := orch.GetRunEvents(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
@@ -984,17 +915,17 @@ func TestAdvanceRunDoesNotAppendUnchangedObservations(t *testing.T) {
 	}
 
 	// The next poll observes the terminal phase; the run must still close.
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("terminal advance: %v", err)
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
 	if record.Phase != "closed" || record.Outcome != domain.RunOutcomeSucceeded {
 		t.Fatalf("expected closed/succeeded run, got phase=%q outcome=%q", record.Phase, record.Outcome)
 	}
-	events, err = orch.GetRunEvents(ctx, "ws_1", "run_1")
+	events, err = orch.GetRunEvents(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get events after close: %v", err)
 	}
@@ -1038,7 +969,7 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 			})
 		}
 		if _, err := log.Append(ctx, eventlog.AppendRequest{
-			Stream:                runStream("ws_1", "run_1"),
+			Stream:                runStream("run_1"),
 			ExpectedStreamVersion: version,
 			CommandKey:            fmt.Sprintf("run_1:filler:%d", batch),
 			RequestHash:           mustHash(t, filler),
@@ -1051,7 +982,7 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 		version += 100
 	}
 
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	events, err := orch.GetRunEvents(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
@@ -1060,11 +991,11 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 			t.Fatalf("advance %d past read page: %v", i, err)
 		}
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -1081,10 +1012,10 @@ func TestAdvanceRunClosesRunOnDefinitiveLaunchFailure(t *testing.T) {
 	orch := newTestOrchestrator(t, conflictAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}))})
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err == nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err == nil {
 		t.Fatal("expected advance to report the launch failure")
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -1095,7 +1026,7 @@ func TestAdvanceRunClosesRunOnDefinitiveLaunchFailure(t *testing.T) {
 		t.Fatalf("nothing launched, so cleanup must not be required; got %q", record.Cleanup)
 	}
 	// Subsequent advances are no-ops on the closed run, not relaunch attempts.
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance on closed run must be a no-op, got %v", err)
 	}
 }

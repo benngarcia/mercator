@@ -41,7 +41,7 @@ func TestLocalSessionEstablishesDeveloperIdentity(t *testing.T) {
 	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("local session cookie must be HttpOnly and SameSite=Lax: %+v", cookie)
 	}
-	authenticated := httptest.NewRequest(http.MethodGet, "/v1/workspaces", nil)
+	authenticated := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
 	authenticated.AddCookie(cookie)
 	if email, ok := authenticator.SessionEmail(authenticated); !ok || email != "developer@localhost" {
 		t.Fatalf("cookie should authenticate developer@localhost, got %q ok=%v", email, ok)
@@ -54,7 +54,7 @@ func TestLocalLoginPreservesDeepLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new local authenticator: %v", err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/auth/login?next=%2Fcanvas%3Fworkspace_id%3Dws_local", nil)
+	request := httptest.NewRequest(http.MethodGet, "/auth/login?next=%2Fcanvas%3Fscenario%3Dwarm-pool-burst", nil)
 	recorder := httptest.NewRecorder()
 
 	// Act
@@ -64,7 +64,7 @@ func TestLocalLoginPreservesDeepLink(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("login expected 303, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if location := recorder.Header().Get("Location"); location != "/canvas?workspace_id=ws_local" {
+	if location := recorder.Header().Get("Location"); location != "/canvas?scenario=warm-pool-burst" {
 		t.Fatalf("login should preserve deep link, got %q", location)
 	}
 	if sessionCookie(t, recorder) == nil {

@@ -40,7 +40,6 @@ func newTestAdapter(t *testing.T, fn roundTripFunc) *Adapter {
 // 9001. Tests mutate the returned value for their scenario.
 func launchRequest() adapter.LaunchRequest {
 	return adapter.LaunchRequest{
-		WorkspaceID:            "ws_1",
 		RunID:                  "run_1",
 		AttemptID:              "att_1",
 		LaunchKey:              "lk1",
@@ -60,10 +59,10 @@ func terminateRequest() adapter.TerminateRequest {
 	return adapter.TerminateRequest{LaunchKey: "lk1", OwnershipToken: "own1", LaunchRequestHash: "rh1"}
 }
 
-func ownershipQuery(workspaceID string) adapter.OwnershipQuery {
-	return adapter.OwnershipQuery{WorkspaceID: workspaceID}
+func ownershipQuery() adapter.OwnershipQuery {
+	return adapter.OwnershipQuery{}
 }
 
 func offerRequest() adapter.OfferRequest {
-	return adapter.OfferRequest{WorkspaceID: "ws_1"}
+	return adapter.OfferRequest{}
 }

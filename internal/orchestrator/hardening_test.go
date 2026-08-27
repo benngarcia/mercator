@@ -20,7 +20,6 @@ func TestGetRunSurfacesExitCode(t *testing.T) {
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	))
 	req := CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_exit",
 		CommandKey:     "cmd_exit",
 		IdempotencyKey: "idem_exit",
@@ -29,10 +28,10 @@ func TestGetRunSurfacesExitCode(t *testing.T) {
 	if _, err := orch.CreateRun(ctx, req); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_exit"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_exit"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_exit")
+	record, err := orch.GetRun(ctx, "run_exit")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -56,7 +55,6 @@ func TestCreateRunReplayIgnoresCosmeticRevisionID(t *testing.T) {
 	rev := orchRevision()
 	rev.ID = "wrev_minted_aaaa"
 	first, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_replay",
 		IdempotencyKey: "idem_replay",
 		Workload:       rev,
@@ -70,7 +68,6 @@ func TestCreateRunReplayIgnoresCosmeticRevisionID(t *testing.T) {
 	rev2 := orchRevision()
 	rev2.ID = "wrev_minted_bbbb"
 	second, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_replay",
 		IdempotencyKey: "idem_replay",
 		Workload:       rev2,
@@ -102,7 +99,6 @@ func TestCreateRunPinsResolvedDigestAfterHashing(t *testing.T) {
 	pinned := "docker.io/library/busybox@sha256:" + strings.Repeat("a", 64)
 	resolveCalls := 0
 	_, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_pin",
 		IdempotencyKey: "idem_pin",
 		Workload:       rev,
@@ -125,7 +121,7 @@ func TestCreateRunPinsResolvedDigestAfterHashing(t *testing.T) {
 	}
 
 	// The stored revision must carry the pinned digest reference.
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_pin")
+	events, err := orch.GetRunEvents(ctx, "run_pin")
 	if err != nil {
 		t.Fatalf("events: %v", err)
 	}
@@ -145,7 +141,6 @@ func TestCreateRunReplayReturnsOriginalGeneratedRunID(t *testing.T) {
 	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
 
 	first, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_gen_original",
 		GeneratedRunID: true,
 		IdempotencyKey: "idem_gen",
@@ -157,7 +152,6 @@ func TestCreateRunReplayReturnsOriginalGeneratedRunID(t *testing.T) {
 
 	// Retry with the SAME idempotency key but a DIFFERENT generated run_id.
 	second, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_gen_DIFFERENT",
 		GeneratedRunID: true,
 		IdempotencyKey: "idem_gen",
@@ -181,7 +175,6 @@ func TestCreateRunSurfacesResolutionFailure(t *testing.T) {
 	rev := orchRevision()
 	rev.Spec.Containers[0].Image = "busybox"
 	_, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_resolve_fail",
 		IdempotencyKey: "idem_resolve_fail",
 		Workload:       rev,

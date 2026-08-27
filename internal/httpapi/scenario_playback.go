@@ -14,7 +14,7 @@ func (s *Server) CommandScenarioPlayback(_ context.Context, request CommandScena
 	if request.Body == nil {
 		return CommandScenarioPlayback400JSONResponse(apiError("INVALID_SCENARIO_COMMAND", "Scenario command body is required.")), nil
 	}
-	err := s.scenarios.Command(request.WorkspaceId, scenario.DashboardCommand{
+	err := s.scenarios.Command(scenario.DashboardCommand{
 		Type:  string(request.Body.Type),
 		Speed: int(request.Body.Speed),
 	})

@@ -1,1 +1,1 @@
-export * from "./WorkspaceCanvas";
+export * from "./DeploymentCanvas";

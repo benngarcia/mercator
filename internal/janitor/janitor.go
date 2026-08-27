@@ -42,27 +42,19 @@ func New(adapter Adapter, options ...Option) *Janitor {
 	return j
 }
 
-func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error) {
+func (j *Janitor) Sweep(ctx context.Context) (Result, error) {
 	if j.adapter == nil {
 		return Result{}, fmt.Errorf("janitor: adapter is required")
 	}
 	if j.log == nil {
 		return Result{}, fmt.Errorf("janitor: event log is required")
 	}
-	if workspaceID == "" {
-		return Result{}, fmt.Errorf("janitor: workspace_id is required")
-	}
-	owned, err := j.adapter.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: workspaceID})
+	owned, err := j.adapter.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		return Result{}, err
 	}
 	result := Result{Found: len(owned)}
 	for _, object := range owned {
-		if object.WorkspaceID == "" {
-			// An orphan listed without workspace labels still belongs to the
-			// swept workspace; requests need it to route through the broker.
-			object.WorkspaceID = workspaceID
-		}
 		releasable, disposition, err := j.releasable(ctx, object)
 		if err != nil {
 			return result, err
@@ -75,7 +67,6 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 		switch disposition {
 		case domain.DispositionTerminate:
 			req := adapter.TerminateRequest{
-				WorkspaceID:       object.WorkspaceID,
 				ConnectionID:      object.ConnectionID,
 				OperationKey:      "janitor:terminate:" + object.LaunchKey,
 				LaunchKey:         object.LaunchKey,
@@ -92,7 +83,6 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 			}
 		case domain.DispositionRelease:
 			req := adapter.ReleaseRequest{
-				WorkspaceID:       object.WorkspaceID,
 				ConnectionID:      object.ConnectionID,
 				OperationKey:      "janitor:release:" + object.LaunchKey,
 				LaunchKey:         object.LaunchKey,
@@ -122,7 +112,7 @@ func (j *Janitor) releasable(ctx context.Context, object adapter.OwnedExternalOb
 	if object.RunID == "" {
 		return true, domain.DispositionRelease, nil
 	}
-	history, err := eventlog.ReadFullStream(ctx, j.log, eventlog.StreamKey{WorkspaceID: object.WorkspaceID, Type: "run", ID: object.RunID})
+	history, err := eventlog.ReadFullStream(ctx, j.log, eventlog.StreamKey{Type: "run", ID: object.RunID})
 	if err != nil {
 		return false, "", err
 	}

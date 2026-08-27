@@ -25,7 +25,7 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 	})
 	var orch *Orchestrator
 	provider.beforeLaunch = func(req adapter.LaunchRequest) {
-		events, err := orch.GetRunEvents(ctx, req.WorkspaceID, req.RunID)
+		events, err := orch.GetRunEvents(ctx, req.RunID)
 		if err != nil {
 			t.Fatalf("read launch intent: %v", err)
 		}
@@ -48,18 +48,18 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 	orch = New(log, scheduler.New(), provider, WithRentalSchedules(schedules))
 	createReplacementRun(t, orch, 2)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_replacement"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_replacement"); err != nil {
 		t.Fatalf("advance replacement: %v", err)
 	}
 
-	record, err := orch.GetRun(ctx, "ws_1", "run_replacement")
+	record, err := orch.GetRun(ctx, "run_replacement")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
 	if record.Closed || record.Phase != "running" {
 		t.Fatalf("replacement should keep the run alive on alternate capacity: %+v", record)
 	}
-	decision, err := orch.GetBookingDecision(ctx, "ws_1", "run_replacement")
+	decision, err := orch.GetBookingDecision(ctx, "run_replacement")
 	if err != nil {
 		t.Fatalf("get latest placement: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 		t.Fatalf("fixture must prove identity exclusion rather than native-ref exclusion: %+v", provider.launches)
 	}
 	assertCompleteAttemptHistory(t, orch, "run_replacement", 2, 1, 1)
-	stored, err := schedules.List(ctx, "ws_1")
+	stored, err := schedules.List(ctx)
 	if err != nil {
 		t.Fatalf("list Rental Schedules: %v", err)
 	}
@@ -100,11 +100,11 @@ func TestAdvanceRunClosesWithRetryExhaustedAfterBoundedAttempts(t *testing.T) {
 	orch := newReplacementOrchestrator(t, provider)
 	createReplacementRun(t, orch, 2)
 
-	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); err != nil {
+	if err := orch.AdvanceRun(t.Context(), "run_replacement"); err != nil {
 		t.Fatalf("bounded capacity rejection is a managed terminal outcome: %v", err)
 	}
 
-	record, err := orch.GetRun(t.Context(), "ws_1", "run_replacement")
+	record, err := orch.GetRun(t.Context(), "run_replacement")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -126,11 +126,11 @@ func TestAdvanceRunRecordsTheDecisionThatExhaustsEligibleOffers(t *testing.T) {
 	orch := newReplacementOrchestrator(t, provider)
 	createReplacementRun(t, orch, 3)
 
-	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); err != nil {
+	if err := orch.AdvanceRun(t.Context(), "run_replacement"); err != nil {
 		t.Fatalf("exhaust eligible offers: %v", err)
 	}
 
-	decision, err := orch.GetBookingDecision(t.Context(), "ws_1", "run_replacement")
+	decision, err := orch.GetBookingDecision(t.Context(), "run_replacement")
 	if err != nil {
 		t.Fatalf("get exhausted placement: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestAdvanceRunResumesReplacementFromDurableAttemptHistory(t *testing.T) {
 	orch := New(log, scheduler.New(), beforeRestart)
 	createReplacementRun(t, orch, 2)
 
-	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); !errors.Is(err, ErrOfferQuery) {
+	if err := orch.AdvanceRun(t.Context(), "run_replacement"); !errors.Is(err, ErrOfferQuery) {
 		t.Fatalf("first process = %v, want replacement offer query interruption", err)
 	}
 	if len(beforeRestart.launches) != 1 || beforeRestart.launches[0].SelectedOfferSnapshotID != stale.ID {
@@ -160,7 +160,7 @@ func TestAdvanceRunResumesReplacementFromDurableAttemptHistory(t *testing.T) {
 
 	afterRestart := newReplacementProvider([]domain.OfferSnapshot{stale, alternate}, nil)
 	orch = New(log, scheduler.New(), afterRestart)
-	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); err != nil {
+	if err := orch.AdvanceRun(t.Context(), "run_replacement"); err != nil {
 		t.Fatalf("resume replacement: %v", err)
 	}
 	if len(afterRestart.launches) != 1 || afterRestart.launches[0].SelectedOfferSnapshotID != alternate.ID {
@@ -180,10 +180,10 @@ func TestCancelRunClosesLocallyAfterSideEffectFreeLaunchFailure(t *testing.T) {
 	orch := newReplacementOrchestrator(t, provider)
 	createReplacementRun(t, orch, 2)
 
-	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); !errors.Is(err, ErrOfferQuery) {
+	if err := orch.AdvanceRun(t.Context(), "run_replacement"); !errors.Is(err, ErrOfferQuery) {
 		t.Fatalf("interrupted replacement = %v, want offer query error", err)
 	}
-	record, err := orch.CancelRun(t.Context(), "ws_1", "run_replacement", nil)
+	record, err := orch.CancelRun(t.Context(), "run_replacement", nil)
 	if err != nil {
 		t.Fatalf("cancel side-effect-free attempt: %v", err)
 	}
@@ -214,11 +214,11 @@ func TestAdvanceRunLeavesNonCapacityFailuresTerminal(t *testing.T) {
 			orch := newReplacementOrchestrator(t, provider)
 			createReplacementRun(t, orch, 3)
 
-			if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); err == nil {
+			if err := orch.AdvanceRun(t.Context(), "run_replacement"); err == nil {
 				t.Fatal("terminal provider failure should be returned")
 			}
 
-			record, err := orch.GetRun(t.Context(), "ws_1", "run_replacement")
+			record, err := orch.GetRun(t.Context(), "run_replacement")
 			if err != nil {
 				t.Fatalf("get run: %v", err)
 			}
@@ -244,17 +244,17 @@ func TestAdvanceRunReconcilesIndeterminateCreateWithoutReplacement(t *testing.T)
 	orch := newReplacementOrchestrator(t, provider)
 	createReplacementRun(t, orch, 3)
 
-	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+	if err := orch.AdvanceRun(t.Context(), "run_replacement"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		t.Fatalf("first advance = %v, want indeterminate Create", err)
 	}
-	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); err != nil {
+	if err := orch.AdvanceRun(t.Context(), "run_replacement"); err != nil {
 		t.Fatalf("reconcile original launch: %v", err)
 	}
-	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); err != nil {
+	if err := orch.AdvanceRun(t.Context(), "run_replacement"); err != nil {
 		t.Fatalf("repeat reconciliation: %v", err)
 	}
 
-	owned, err := provider.ListOwned(t.Context(), adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := provider.ListOwned(t.Context(), adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -399,7 +399,6 @@ func createReplacementRun(t *testing.T, orch *Orchestrator, maxAttempts int) {
 	workload := orchRevision()
 	workload.Spec.Execution.MaxPreStartAttempts = maxAttempts
 	if _, err := orch.CreateRun(t.Context(), CreateRunRequest{
-		WorkspaceID:    "ws_1",
 		RunID:          "run_replacement",
 		IdempotencyKey: "idem_replacement",
 		Workload:       workload,
@@ -442,7 +441,7 @@ func assertCompleteAttemptHistory(t *testing.T, orch *Orchestrator, runID string
 
 func bookingDecisionsFromRun(t *testing.T, orch *Orchestrator, runID string) []domain.BookingDecision {
 	t.Helper()
-	events, err := orch.GetRunEvents(t.Context(), "ws_1", runID)
+	events, err := orch.GetRunEvents(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("get Booking Decisions: %v", err)
 	}
@@ -496,7 +495,7 @@ func assertOfferRejected(t *testing.T, decision domain.BookingDecision, offerID,
 
 func replacementEvents(t *testing.T, orch *Orchestrator, runID string) []eventlog.StoredEvent {
 	t.Helper()
-	events, err := orch.GetRunEvents(t.Context(), "ws_1", runID)
+	events, err := orch.GetRunEvents(t.Context(), runID)
 	if err != nil {
 		t.Fatalf("get run events: %v", err)
 	}

@@ -86,14 +86,6 @@
         "operationId": "streamConsoleEvents",
         "parameters": [
           {
-            "name": "workspace_id",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "name": "Last-Event-ID",
             "in": "header",
             "required": false,
@@ -115,13 +107,16 @@
             "required": false,
             "schema": {
               "type": "string",
-              "enum": ["0", "1"]
+              "enum": [
+                "0",
+                "1"
+              ]
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "Replay-complete public Workspace event feed followed by live events",
+            "description": "Replay-complete public deployment event feed followed by live events",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -184,19 +179,9 @@
         }
       }
     },
-    "/v1/dev/scenario-sessions/{workspace_id}/commands": {
+    "/v1/dev/scenario-session/commands": {
       "post": {
         "operationId": "commandScenarioPlayback",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -214,9 +199,13 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["accepted"],
+                  "required": [
+                    "accepted"
+                  ],
                   "properties": {
-                    "accepted": {"type": "boolean"}
+                    "accepted": {
+                      "type": "boolean"
+                    }
                   }
                 }
               }
@@ -268,16 +257,7 @@
     "/v1/runs": {
       "get": {
         "operationId": "listRuns",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "responses": {
           "200": {
             "description": "Run list",
@@ -338,14 +318,6 @@
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -456,14 +428,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -528,14 +492,6 @@
             "name": "run_id",
             "in": "path",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -626,14 +582,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -698,14 +646,6 @@
             "name": "run_id",
             "in": "path",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -776,14 +716,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -851,14 +783,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -918,16 +842,7 @@
     "/v1/placements:preview": {
       "post": {
         "operationId": "previewPlacement",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -1002,166 +917,10 @@
         }
       }
     },
-    "/v1/workspaces": {
-      "get": {
-        "operationId": "listWorkspaces",
-        "parameters": [
-          {
-            "name": "include_archived",
-            "in": "query",
-            "required": false,
-            "schema": { "type": "boolean", "default": false }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Saved workspace list",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/WorkspaceListResponse" }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "500": {
-            "description": "Workspace catalog failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "operationId": "createWorkspace",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/CreateWorkspaceRequest" }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Workspace created",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/WorkspaceResponse" }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "409": {
-            "description": "Workspace ID conflict",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "500": {
-            "description": "Workspace catalog failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/workspaces/{workspace_id}/archive": {
-      "post": {
-        "operationId": "archiveWorkspace",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "path",
-            "required": true,
-            "schema": { "type": "string" }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Workspace archived",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/WorkspaceResponse" }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "401": {
-            "description": "Authentication failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "404": {
-            "description": "Workspace not found",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          },
-          "500": {
-            "description": "Workspace catalog failed",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/connections": {
       "get": {
         "operationId": "listConnections",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "responses": {
           "200": {
             "description": "Connection list",
@@ -1222,14 +981,6 @@
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -1341,14 +1092,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -1444,14 +1187,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -1531,7 +1266,7 @@
     "/v1/adapters": {
       "get": {
         "operationId": "listAdapters",
-        "description": "Registered provider adapters' onboarding manifests: display metadata, config fields, credential expectations, and ordered setup steps. Static per process; no workspace scoping.",
+        "description": "Registered provider adapters' onboarding manifests: display metadata, config fields, credential expectations, and ordered setup steps. Static per deployment.",
         "responses": {
           "200": {
             "description": "Adapter manifest list",
@@ -1565,14 +1300,6 @@
           {
             "name": "run_id",
             "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -1693,16 +1420,7 @@
     "/v1/offers": {
       "get": {
         "operationId": "listOffers",
-        "parameters": [
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "responses": {
           "200": {
             "description": "Offer list",
@@ -1863,14 +1581,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -1943,14 +1653,6 @@
             "name": "workload_id",
             "in": "path",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -2054,14 +1756,6 @@
             "name": "revision_id",
             "in": "path",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "workspace_id",
-            "in": "query",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -2412,9 +2106,6 @@
         "type": "object",
         "description": "Create a run. The only required input is an image (top-level shorthand) or a full workload spec. run_id is optional and server-generated (uuidv7) when omitted; an Idempotency-Key header is required for retry-safe replay.",
         "properties": {
-          "workspace_id": {
-            "type": "string"
-          },
           "run_id": {
             "type": "string",
             "description": "Optional. When omitted the server generates a uuidv7-based run id and returns it."
@@ -2448,42 +2139,41 @@
           }
         }
       },
-	  "CleanupError": {
-		"type": "object",
-		"required": [
-		  "code",
-		  "message",
-		  "retryable",
-		  "launch_key",
-		  "disposition"
-		],
-		"properties": {
-		  "code": {
-			"type": "string"
-		  },
-		  "message": {
-			"type": "string"
-		  },
-		  "retryable": {
-			"type": "boolean"
-		  },
-		  "launch_key": {
-			"type": "string"
-		  },
-		  "disposition": {
-			"type": "string",
-			"enum": [
-			  "release",
-			  "terminate"
-			]
-		  }
-		}
-	  },
+      "CleanupError": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable",
+          "launch_key",
+          "disposition"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "launch_key": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "release",
+              "terminate"
+            ]
+          }
+        }
+      },
       "Run": {
         "type": "object",
         "required": [
           "id",
-          "workspace_id",
           "workload_revision_id",
           "phase",
           "cleanup",
@@ -2491,9 +2181,6 @@
         ],
         "properties": {
           "id": {
-            "type": "string"
-          },
-          "workspace_id": {
             "type": "string"
           },
           "workload_revision_id": {
@@ -2529,9 +2216,9 @@
               "terminate"
             ]
           },
-		  "cleanup_error": {
-			"$ref": "#/components/schemas/CleanupError"
-		  },
+          "cleanup_error": {
+            "$ref": "#/components/schemas/CleanupError"
+          },
           "closed": {
             "type": "boolean"
           },
@@ -2551,14 +2238,10 @@
       "CreateWorkloadRequest": {
         "type": "object",
         "required": [
-          "workspace_id",
           "workload_id",
           "name"
         ],
         "properties": {
-          "workspace_id": {
-            "type": "string"
-          },
           "workload_id": {
             "type": "string"
           },
@@ -2708,9 +2391,6 @@
         ],
         "properties": {
           "run_id": {
-            "type": "string"
-          },
-          "workspace_id": {
             "type": "string"
           },
           "workload": {
@@ -2889,10 +2569,6 @@
           "adapter_type"
         ],
         "properties": {
-          "workspace_id": {
-            "type": "string",
-            "description": "Optional. Defaults to the request's authorized workspace."
-          },
           "connection_id": {
             "type": "string"
           },
@@ -3059,15 +2735,28 @@
       },
       "ScenarioPlaybackCommand": {
         "type": "object",
-        "required": ["type"],
+        "required": [
+          "type"
+        ],
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["play", "pause", "previous", "next", "restart", "set_speed"]
+            "enum": [
+              "play",
+              "pause",
+              "previous",
+              "next",
+              "restart",
+              "set_speed"
+            ]
           },
           "speed": {
             "type": "integer",
-            "enum": [1, 2, 4]
+            "enum": [
+              1,
+              2,
+              4
+            ]
           }
         },
         "additionalProperties": false
@@ -3405,16 +3094,12 @@
         "type": "object",
         "required": [
           "id",
-          "workspace_id",
           "workload_id",
           "digest",
           "spec"
         ],
         "properties": {
           "id": {
-            "type": "string"
-          },
-          "workspace_id": {
             "type": "string"
           },
           "workload_id": {
@@ -4161,7 +3846,6 @@
           "type",
           "subject",
           "time",
-          "workspaceid",
           "streamversion",
           "globalposition",
           "data"
@@ -4185,9 +3869,6 @@
           "time": {
             "type": "string",
             "format": "date-time"
-          },
-          "workspaceid": {
-            "type": "string"
           },
           "streamversion": {
             "type": "integer",
@@ -4237,62 +3918,15 @@
           "name": "credential"
         }
       },
-      "CreateWorkspaceRequest": {
-        "type": "object",
-        "required": ["display_name"],
-        "properties": {
-          "display_name": {
-            "type": "string",
-            "minLength": 1
-          }
-        }
-      },
-      "Workspace": {
-        "type": "object",
-        "required": ["id", "display_name", "created_at", "created_by"],
-        "properties": {
-          "id": { "type": "string" },
-          "display_name": { "type": "string" },
-          "created_at": { "type": "string", "format": "date-time" },
-          "created_by": { "type": "string" },
-          "archived_at": { "type": "string", "format": "date-time" }
-        },
-        "x-go-type": "workspace.Workspace",
-        "x-go-type-import": {
-          "path": "github.com/benngarcia/mercator/internal/workspace",
-          "name": "workspace"
-        }
-      },
-      "WorkspaceResponse": {
-        "type": "object",
-        "required": ["workspace"],
-        "properties": {
-          "workspace": { "$ref": "#/components/schemas/Workspace" }
-        }
-      },
-      "WorkspaceListResponse": {
-        "type": "object",
-        "required": ["workspaces"],
-        "properties": {
-          "workspaces": {
-            "type": "array",
-            "items": { "$ref": "#/components/schemas/Workspace" }
-          }
-        }
-      },
       "ConnectionRecord": {
         "type": "object",
         "required": [
           "id",
-          "workspace_id",
           "adapter_type",
           "authorized"
         ],
         "properties": {
           "id": {
-            "type": "string"
-          },
-          "workspace_id": {
             "type": "string"
           },
           "adapter_type": {

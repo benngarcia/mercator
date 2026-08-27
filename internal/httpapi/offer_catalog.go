@@ -13,22 +13,21 @@ import (
 const offerObservationInterval = 10 * time.Second
 
 type offerCatalogSnapshot struct {
-	WorkspaceID string                 `json:"workspace_id"`
-	Revision    string                 `json:"revision"`
-	ObservedAt  time.Time              `json:"observed_at"`
-	Offers      []domain.OfferSnapshot `json:"offers"`
-	Failures    []ConnectionFailure    `json:"failures"`
-	Err         error                  `json:"-"`
+	Revision   string                 `json:"revision"`
+	ObservedAt time.Time              `json:"observed_at"`
+	Offers     []domain.OfferSnapshot `json:"offers"`
+	Failures   []ConnectionFailure    `json:"failures"`
+	Err        error                  `json:"-"`
 }
 
 type offerCatalog struct {
-	offers     OfferAggregator
-	interval   time.Duration
-	mu         sync.Mutex
-	workspaces map[string]*offerCatalogWorkspace
+	offers   OfferAggregator
+	interval time.Duration
+	mu       sync.Mutex
+	state    *offerCatalogState
 }
 
-type offerCatalogWorkspace struct {
+type offerCatalogState struct {
 	cancel      context.CancelFunc
 	refresh     chan struct{}
 	subscribers map[chan offerCatalogSnapshot]struct{}
@@ -36,71 +35,67 @@ type offerCatalogWorkspace struct {
 }
 
 func newOfferCatalog(offers OfferAggregator, interval time.Duration) *offerCatalog {
-	return &offerCatalog{
-		offers:     offers,
-		interval:   interval,
-		workspaces: map[string]*offerCatalogWorkspace{},
-	}
+	return &offerCatalog{offers: offers, interval: interval}
 }
 
-func (c *offerCatalog) Subscribe(ctx context.Context, workspaceID string) <-chan offerCatalogSnapshot {
+func (c *offerCatalog) Subscribe(ctx context.Context) <-chan offerCatalogSnapshot {
 	updates := make(chan offerCatalogSnapshot, 1)
 	c.mu.Lock()
-	workspace := c.workspaces[workspaceID]
-	if workspace == nil {
+	state := c.state
+	if state == nil {
 		watchCtx, cancel := context.WithCancel(context.Background())
-		workspace = &offerCatalogWorkspace{
+		state = &offerCatalogState{
 			cancel:      cancel,
 			refresh:     make(chan struct{}, 1),
 			subscribers: map[chan offerCatalogSnapshot]struct{}{},
 		}
-		c.workspaces[workspaceID] = workspace
-		go c.observe(watchCtx, workspaceID, workspace)
+		c.state = state
+		go c.observe(watchCtx, state)
 	}
-	workspace.subscribers[updates] = struct{}{}
-	if workspace.latest != nil {
-		updates <- *workspace.latest
+	state.subscribers[updates] = struct{}{}
+	if state.latest != nil {
+		updates <- *state.latest
 	}
 	c.mu.Unlock()
 	go func() {
 		<-ctx.Done()
-		c.unsubscribe(workspaceID, workspace, updates)
+		c.unsubscribe(state, updates)
 	}()
 	return updates
 }
 
-func (c *offerCatalog) Refresh(workspaceID string) {
+func (c *offerCatalog) Refresh() {
 	c.mu.Lock()
-	workspace := c.workspaces[workspaceID]
+	state := c.state
 	c.mu.Unlock()
-	if workspace == nil {
+	if state == nil {
 		return
 	}
 	select {
-	case workspace.refresh <- struct{}{}:
+	case state.refresh <- struct{}{}:
 	default:
 	}
 }
 
-func (c *offerCatalog) observe(ctx context.Context, workspaceID string, workspace *offerCatalogWorkspace) {
+func (c *offerCatalog) observe(ctx context.Context, state *offerCatalogState) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-workspace.refresh:
+		case <-state.refresh:
 		case <-timer.C:
 		}
-		c.publish(workspaceID, workspace, c.snapshot(ctx, workspaceID))
+		c.publish(state, c.snapshot(ctx))
 		timer.Reset(c.interval)
 	}
 }
 
-func (c *offerCatalog) snapshot(ctx context.Context, workspaceID string) offerCatalogSnapshot {
-	aggregation, err := c.offers.AggregateOffers(ctx, adapter.OfferRequest{WorkspaceID: workspaceID})
+func (c *offerCatalog) snapshot(ctx context.Context) offerCatalogSnapshot {
+	aggregation, err := c.offers.AggregateOffers(ctx, adapter.OfferRequest{})
 	if err != nil {
-		return offerCatalogSnapshot{WorkspaceID: workspaceID, Err: err}
+		return offerCatalogSnapshot{Err: err}
 	}
 	offers := append([]domain.OfferSnapshot{}, aggregation.Offers...)
 	sort.Slice(offers, func(i, j int) bool { return offers[i].ID < offers[j].ID })
@@ -110,33 +105,28 @@ func (c *offerCatalog) snapshot(ctx context.Context, workspaceID string) offerCa
 		Failures []ConnectionFailure
 	}{offers, failures})
 	return offerCatalogSnapshot{
-		WorkspaceID: workspaceID,
-		Revision:    revision,
-		ObservedAt:  time.Now().UTC(),
-		Offers:      offers,
-		Failures:    failures,
-		Err:         err,
+		Revision:   revision,
+		ObservedAt: time.Now().UTC(),
+		Offers:     offers,
+		Failures:   failures,
+		Err:        err,
 	}
 }
 
-func (c *offerCatalog) publish(workspaceID string, workspace *offerCatalogWorkspace, snapshot offerCatalogSnapshot) {
+func (c *offerCatalog) publish(state *offerCatalogState, snapshot offerCatalogSnapshot) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.workspaces[workspaceID] != workspace {
+	if c.state != state {
 		return
 	}
-	if snapshot.Err == nil && workspace.latest != nil && workspace.latest.Err == nil && workspace.latest.Revision == snapshot.Revision {
+	if snapshot.Err == nil && state.latest != nil && state.latest.Err == nil && state.latest.Revision == snapshot.Revision {
 		return
 	}
-	workspace.latest = &snapshot
-	for subscriber := range workspace.subscribers {
+	state.latest = &snapshot
+	for subscriber := range state.subscribers {
 		select {
 		case subscriber <- snapshot:
 		default:
-			// The subscriber may drain its buffer between the failed send above
-			// and this eviction, so the receive must not block: publish holds
-			// c.mu, and a parked publish would wedge Subscribe, Refresh, and
-			// unsubscribe with it.
 			select {
 			case <-subscriber:
 			default:
@@ -146,16 +136,16 @@ func (c *offerCatalog) publish(workspaceID string, workspace *offerCatalogWorksp
 	}
 }
 
-func (c *offerCatalog) unsubscribe(workspaceID string, workspace *offerCatalogWorkspace, updates chan offerCatalogSnapshot) {
+func (c *offerCatalog) unsubscribe(state *offerCatalogState, updates chan offerCatalogSnapshot) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.workspaces[workspaceID] != workspace {
+	if c.state != state {
 		return
 	}
-	delete(workspace.subscribers, updates)
+	delete(state.subscribers, updates)
 	close(updates)
-	if len(workspace.subscribers) == 0 {
-		delete(c.workspaces, workspaceID)
-		workspace.cancel()
+	if len(state.subscribers) == 0 {
+		c.state = nil
+		state.cancel()
 	}
 }

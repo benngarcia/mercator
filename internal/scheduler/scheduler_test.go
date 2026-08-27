@@ -458,10 +458,9 @@ func TestSchedulerPopulatesDeterministicCollectionAndCandidateAuditData(t *testi
 
 func schedulerRevision() domain.WorkloadRevision {
 	return domain.WorkloadRevision{
-		ID:          "wrev_1",
-		WorkspaceID: "ws_1",
-		WorkloadID:  "wrk_1",
-		Digest:      "sha256:revision",
+		ID:         "wrev_1",
+		WorkloadID: "wrk_1",
+		Digest:     "sha256:revision",
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{
 				Name:     "main",

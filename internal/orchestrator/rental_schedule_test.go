@@ -25,15 +25,15 @@ func TestOrchestratorQueuesSecondRunWithoutLaunchingIt(t *testing.T) {
 	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
 
 	createScheduledRun(t, ctx, orch, "run-active")
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-active"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-active"); err != nil {
 		t.Fatalf("advance active Run: %v", err)
 	}
 	createScheduledRun(t, ctx, orch, "run-queued")
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-queued"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-queued"); err != nil {
 		t.Fatalf("advance queued Run: %v", err)
 	}
 
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run-queued")
+	events, err := orch.GetRunEvents(ctx, "run-queued")
 	if err != nil {
 		t.Fatalf("get queued Run events: %v", err)
 	}
@@ -59,21 +59,21 @@ func TestOrchestratorDispatchesQueuedRunWhenActiveBookingCompletes(t *testing.T)
 	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
 
 	createScheduledRun(t, ctx, orch, "run-active")
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-active"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-active"); err != nil {
 		t.Fatalf("start active Run: %v", err)
 	}
 	createScheduledRun(t, ctx, orch, "run-queued")
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-queued"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-queued"); err != nil {
 		t.Fatalf("queue second Run: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-active"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-active"); err != nil {
 		t.Fatalf("complete active Run: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-queued"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-queued"); err != nil {
 		t.Fatalf("dispatch queued Run: %v", err)
 	}
 
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run-queued")
+	events, err := orch.GetRunEvents(ctx, "run-queued")
 	if err != nil {
 		t.Fatalf("get dispatched Run events: %v", err)
 	}
@@ -95,22 +95,22 @@ func TestOrchestratorReleasesQueuedBookingWhenItsRunIsCancelled(t *testing.T) {
 	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
 
 	createScheduledRun(t, ctx, orch, "run-active")
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-active"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-active"); err != nil {
 		t.Fatalf("start active Run: %v", err)
 	}
 	createScheduledRun(t, ctx, orch, "run-queued")
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-queued"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-queued"); err != nil {
 		t.Fatalf("queue second Run: %v", err)
 	}
 
-	if _, err := orch.CancelRun(ctx, "ws_1", "run-queued", nil); err != nil {
+	if _, err := orch.CancelRun(ctx, "run-queued", nil); err != nil {
 		t.Fatalf("cancel queued Run: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-queued"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-queued"); err != nil {
 		t.Fatalf("close cancelled Run: %v", err)
 	}
 
-	schedules, err := orch.schedules.List(ctx, "ws_1")
+	schedules, err := orch.schedules.List(ctx)
 	if err != nil {
 		t.Fatalf("list Rental Schedules: %v", err)
 	}
@@ -120,17 +120,17 @@ func TestOrchestratorReleasesQueuedBookingWhenItsRunIsCancelled(t *testing.T) {
 		}
 	}
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-active"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-active"); err != nil {
 		t.Fatalf("complete active Run: %v", err)
 	}
 	createScheduledRun(t, ctx, orch, "run-next")
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-next"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-next"); err != nil {
 		t.Fatalf("place next Run: %v", err)
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-next"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-next"); err != nil {
 		t.Fatalf("dispatch next Run: %v", err)
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run-next")
+	events, err := orch.GetRunEvents(ctx, "run-next")
 	if err != nil {
 		t.Fatalf("get next Run events: %v", err)
 	}
@@ -145,9 +145,7 @@ func createScheduledRun(t *testing.T, ctx context.Context, orch *Orchestrator, r
 	revision.ID = "wrev_" + runID
 	revision.WorkloadID = "wrk_" + runID
 	revision.Digest = "sha256:" + runID
-	if _, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "create:" + runID, Workload: revision,
-	}); err != nil {
+	if _, err := orch.CreateRun(ctx, CreateRunRequest{RunID: runID, IdempotencyKey: "create:" + runID, Workload: revision}); err != nil {
 		t.Fatalf("create %s: %v", runID, err)
 	}
 }
