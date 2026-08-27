@@ -101,12 +101,11 @@ limits.
   including its terminal verdict. Let in-flight runs finish before rotating;
   there is no drain command
   ([#215](https://github.com/benngarcia/mercator/issues/215)).
-- The non-loopback TLS rule reads the bind address and nothing else, which makes
-  it conservative in one real case: a container that binds `0.0.0.0` so that a
-  loopback-only published port can reach it is required to carry a certificate
-  even though nothing off the host can reach the listener. The alternative,
-  inferring exposure from anything other than the address this process binds,
-  would be guessing.
+- `MERCATOR_TRANSPORT_BOUNDARY=tls-proxy|private-network` is an operator
+  assertion. Mercator verifies that a proxy announces HTTPS and that a private
+  network announces no public URL, but it cannot verify the container network
+  or host publication policy. Publishing that plaintext service port bypasses
+  the declared boundary and violates the deployment contract.
 - No Mercator-managed secret vault, grant API, or KMS integration exists.
   Workloads and runtimes own their secret-management backend. Master-key
   rotation does exist: `mercator rekey` re-seals every stored connection

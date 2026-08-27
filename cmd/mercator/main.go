@@ -100,12 +100,8 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("configure TLS: %v", err)
 		return 1
 	}
-	// A non-loopback listener with no certificate would put bearer tokens and
-	// run data on the wire in the clear. That used to be a warning followed by
-	// serving anyway; it is now a refusal, because a warning in a startup log is
-	// not a security control.
-	if !isLoopback(addr) && !tlsFiles.Configured() {
-		stdlog.Printf("configure TLS: MERCATOR_ADDR %s is not loopback and no TLS material is configured; set %s and %s, or bind a loopback address", addr, tlsmaterial.CertFileVar, tlsmaterial.KeyFileVar)
+	if err := validateTLSExposure(addr, tlsFiles.Configured(), env[transportBoundaryVar], env[publicURLVar]); err != nil {
+		stdlog.Printf("configure TLS: %v", err)
 		return 1
 	}
 	// Inviting a machine and forcing a sink to deliver are
@@ -224,6 +220,35 @@ const adminAddrVar = "MERCATOR_ADMIN_ADDR"
 // Nodes dial it and workloads report to it, and an operator behind a proxy or a
 // tunnel sets it while binding loopback.
 const publicURLVar = "MERCATOR_PUBLIC_URL"
+const transportBoundaryVar = "MERCATOR_TRANSPORT_BOUNDARY"
+
+func validateTLSExposure(addr string, configured bool, boundary, publicURL string) error {
+	boundary = strings.TrimSpace(boundary)
+	switch boundary {
+	case "":
+	case "tls-proxy":
+		if configured {
+			return fmt.Errorf("%s=tls-proxy cannot be combined with process TLS material", transportBoundaryVar)
+		}
+		parsed, err := url.Parse(strings.TrimSpace(publicURL))
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+			return fmt.Errorf("%s=tls-proxy requires %s to be an absolute https:// URL", transportBoundaryVar, publicURLVar)
+		}
+	case "private-network":
+		if configured {
+			return fmt.Errorf("%s=private-network cannot be combined with process TLS material", transportBoundaryVar)
+		}
+		if strings.TrimSpace(publicURL) != "" {
+			return fmt.Errorf("%s=private-network cannot announce %s", transportBoundaryVar, publicURLVar)
+		}
+	default:
+		return fmt.Errorf("%s must be tls-proxy, private-network, or unset, got %q", transportBoundaryVar, boundary)
+	}
+	if !isLoopback(addr) && !configured && boundary == "" {
+		return fmt.Errorf("MERCATOR_ADDR %s is not loopback and no TLS material is configured; set %s and %s, declare %s, or bind a loopback address", addr, tlsmaterial.CertFileVar, tlsmaterial.KeyFileVar, transportBoundaryVar)
+	}
+	return nil
+}
 
 // publicExposure names the reason this deployment answers to something other
 // than this machine, and is empty when it does not. Two facts say so, and only

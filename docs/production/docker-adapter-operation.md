@@ -54,6 +54,20 @@ go run ./cmd/mercator connection create \
   --config arch=amd64
 ```
 
+A broker deployment that must recover its workloads without a live Mercator
+API can assign the Docker connection a deployment identity:
+
+```sh
+go run ./cmd/mercator connection create \
+  --connection-id conn_docker_local \
+  --adapter-type docker \
+  --config deployment_id=local-test-a1b2c3d4
+```
+
+Every workload from that connection then carries
+`mercator.deployment_id=local-test-a1b2c3d4`. The identity is deployment
+ownership, not scheduling or tenancy; it never changes placement behavior.
+
 Private images use the Docker connection's optional registry credential. The
 connection config identifies the registry and username; the connection
 credential carries a pull-only token through the existing environment or
@@ -117,6 +131,7 @@ Important labels:
 - `mercator.request_hash`
 - `mercator.workload_id`
 - `mercator.revision_id`
+- `mercator.deployment_id` when the Docker connection declares one
 
 ## Cleanup Verification
 

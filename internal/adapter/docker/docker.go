@@ -54,12 +54,13 @@ type Container struct {
 }
 
 type Adapter struct {
-	client Client
-	now    func() time.Time
+	client       Client
+	now          func() time.Time
+	deploymentID string
 }
 
-func New(client Client) *Adapter {
-	return &Adapter{client: client, now: time.Now}
+func New(client Client, deploymentID string) *Adapter {
+	return &Adapter{client: client, now: time.Now, deploymentID: deploymentID}
 }
 
 // Verify checks that the Docker endpoint is reachable by running a cheap Info
@@ -94,7 +95,7 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		Args:       append([]string(nil), req.Args...),
 		Env:        env,
 		Ports:      dockerPorts(req),
-		Labels:     dockerLabels(req),
+		Labels:     dockerLabels(req, a.deploymentID),
 		GPUCount:   requestedAcceleratorCount(req.Resources.Accelerators),
 	})
 	var container Container
@@ -105,7 +106,7 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		if err != nil {
 			return adapter.LaunchReceipt{}, indeterminateLaunchError("inspect existing container", err)
 		}
-		if !labelsMatch(container.Labels, dockerLabels(req)) {
+		if !labelsMatch(container.Labels, dockerLabels(req, a.deploymentID)) {
 			return adapter.LaunchReceipt{}, adapter.ErrIdempotencyConflict
 		}
 	}
@@ -243,8 +244,8 @@ func containerName(req adapter.LaunchRequest) string {
 	return req.LaunchKey
 }
 
-func dockerLabels(req adapter.LaunchRequest) map[string]string {
-	return map[string]string{
+func dockerLabels(req adapter.LaunchRequest, deploymentID string) map[string]string {
+	labels := map[string]string{
 		"mercator.managed":         "true",
 		"mercator.run_id":          req.RunID,
 		"mercator.attempt_id":      req.AttemptID,
@@ -255,6 +256,10 @@ func dockerLabels(req adapter.LaunchRequest) map[string]string {
 		"mercator.workload_id":     req.WorkloadID,
 		"mercator.revision_id":     req.WorkloadRevisionID,
 	}
+	if deploymentID != "" {
+		labels["mercator.deployment_id"] = deploymentID
+	}
+	return labels
 }
 
 func dockerEnv(bindings []adapter.EnvironmentBinding) (map[string]string, error) {

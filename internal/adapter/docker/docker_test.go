@@ -20,7 +20,7 @@ import (
 
 func TestAdapterLaunchObserveReleaseAndListOwned(t *testing.T) {
 	client := newFakeClient()
-	ad := New(client)
+	ad := New(client, "integration-stack-a1b2c3d4")
 	req := launchRequest()
 
 	receipt, err := ad.Launch(context.Background(), req)
@@ -36,6 +36,9 @@ func TestAdapterLaunchObserveReleaseAndListOwned(t *testing.T) {
 	}
 	if created.Labels["mercator.launch_key"] != req.LaunchKey || created.Labels["mercator.ownership_token"] != req.OwnershipToken {
 		t.Fatalf("launch did not set ownership labels: %+v", created.Labels)
+	}
+	if created.Labels["mercator.deployment_id"] != "integration-stack-a1b2c3d4" {
+		t.Fatalf("launch did not carry the broker deployment identity: %+v", created.Labels)
 	}
 	if len(client.started) != 1 || client.started[0] != req.LaunchKey {
 		t.Fatalf("launch did not start created container: %+v", client.started)
@@ -83,7 +86,7 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	req.CleanupLocator = req.LaunchKey
 	req.Entrypoint = nil
 	req.Args = []string{"sleep", "5"}
-	ad := New(NewCLIClient(""))
+	ad := New(NewCLIClient(""), "")
 	t.Cleanup(func() {
 		_, _ = ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "cleanup_" + req.LaunchKey, RequestHash: "sha256:cleanup", LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, LaunchRequestHash: req.RequestHash})
 	})
@@ -189,7 +192,7 @@ func hostPlatform(t *testing.T) domain.Platform {
 
 func TestAdapterLaunchIsIdempotentByDeterministicName(t *testing.T) {
 	client := newFakeClient()
-	ad := New(client)
+	ad := New(client, "")
 	req := launchRequest()
 	first, err := ad.Launch(context.Background(), req)
 	if err != nil {
@@ -209,7 +212,7 @@ func TestAdapterLaunchIsIdempotentByDeterministicName(t *testing.T) {
 
 func TestAdapterLaunchRejectsForeignContainerWithSameName(t *testing.T) {
 	client := newFakeClient()
-	ad := New(client)
+	ad := New(client, "")
 	req := launchRequest()
 	client.objects[req.LaunchKey] = Container{
 		ID:     "docker-foreign",
@@ -227,7 +230,7 @@ func TestAdapterLaunchRejectsForeignContainerWithSameName(t *testing.T) {
 func TestAdapterLaunchTreatsStartFailureAfterCreateAsIndeterminate(t *testing.T) {
 	client := newFakeClient()
 	client.startErr = errors.New("docker daemon disconnected")
-	ad := New(client)
+	ad := New(client, "")
 
 	_, err := ad.Launch(context.Background(), launchRequest())
 
@@ -239,7 +242,7 @@ func TestAdapterLaunchTreatsStartFailureAfterCreateAsIndeterminate(t *testing.T)
 func TestAdapterLaunchTreatsInspectionFailureAfterCreateAsIndeterminate(t *testing.T) {
 	client := newFakeClient()
 	client.inspectErr = errors.New("docker daemon disconnected")
-	ad := New(client)
+	ad := New(client, "")
 
 	_, err := ad.Launch(context.Background(), launchRequest())
 
@@ -250,7 +253,7 @@ func TestAdapterLaunchTreatsInspectionFailureAfterCreateAsIndeterminate(t *testi
 
 func TestAdapterObserveAndReleaseRejectForeignContainerWithSameName(t *testing.T) {
 	client := newFakeClient()
-	ad := New(client)
+	ad := New(client, "")
 	req := launchRequest()
 	client.objects[req.LaunchKey] = Container{
 		ID:     "docker-foreign",
@@ -274,7 +277,7 @@ func TestAdapterObserveAndReleaseRejectForeignContainerWithSameName(t *testing.T
 
 func TestAdapterObserveAndReleaseRequireOwnershipMaterial(t *testing.T) {
 	client := newFakeClient()
-	ad := New(client)
+	ad := New(client, "")
 	req := launchRequest()
 	if _, err := ad.Launch(context.Background(), req); err != nil {
 		t.Fatalf("launch: %v", err)
@@ -289,7 +292,7 @@ func TestAdapterObserveAndReleaseRequireOwnershipMaterial(t *testing.T) {
 }
 
 func TestAdapterReleaseIsIdempotentWhenContainerAlreadyRemoved(t *testing.T) {
-	ad := New(newFakeClient())
+	ad := New(newFakeClient(), "")
 
 	released, err := ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "release_missing", RequestHash: "sha256:release", LaunchKey: "missing"})
 	if err != nil {
@@ -304,7 +307,7 @@ func TestAdapterReleaseIsIdempotentWhenContainerAlreadyRemoved(t *testing.T) {
 // Terminate is an explicit, contract-documented error rather than a silent
 // no-op or container removal.
 func TestAdapterTerminateIsUnsupportedForStandingPool(t *testing.T) {
-	ad := New(newFakeClient())
+	ad := New(newFakeClient(), "")
 
 	_, err := ad.Terminate(context.Background(), adapter.TerminateRequest{OperationKey: "terminate_1", RequestHash: "sha256:terminate", LaunchKey: "any"})
 	if !errors.Is(err, adapter.ErrTerminateUnsupported) {
@@ -324,7 +327,7 @@ func TestPhaseFromStateDoesNotMarkCreatedContainerRunning(t *testing.T) {
 // actual exit.
 func TestObserveOmitsExitCodeUntilExited(t *testing.T) {
 	client := newFakeClient()
-	ad := New(client)
+	ad := New(client, "")
 	req := launchRequest()
 	if _, err := ad.Launch(context.Background(), req); err != nil {
 		t.Fatalf("launch: %v", err)
@@ -365,7 +368,7 @@ func TestObserveOmitsExitCodeUntilExited(t *testing.T) {
 // carries no start, because zero is the epoch and not an instant a workload began.
 func TestObserveReportsWhenTheDaemonGaveTheContainerAProcess(t *testing.T) {
 	client := newFakeClient()
-	ad := New(client)
+	ad := New(client, "")
 	req := launchRequest()
 	if _, err := ad.Launch(context.Background(), req); err != nil {
 		t.Fatalf("launch: %v", err)
@@ -410,7 +413,7 @@ func TestObserveReportsWhenTheDaemonGaveTheContainerAProcess(t *testing.T) {
 // only the accepted moment would move.
 func TestLaunchReportsTheMomentTheDaemonTookTheLaunch(t *testing.T) {
 	client := newFakeClient()
-	ad := New(client)
+	ad := New(client, "")
 	req := launchRequest()
 
 	receipt, err := ad.Launch(context.Background(), req)
@@ -669,7 +672,7 @@ func intPtr(value int) *int {
 
 func TestLaunchPassesGPUCountForAcceleratorWorkloads(t *testing.T) {
 	client := newFakeClient()
-	ad := New(client)
+	ad := New(client, "")
 	req := launchRequest()
 	req.Resources.Accelerators = []domain.AcceleratorRequirement{{Vendor: "nvidia", ModelAnyOf: []string{"nvidia-rtx-5090"}, Count: 1}}
 
@@ -684,7 +687,7 @@ func TestLaunchPassesGPUCountForAcceleratorWorkloads(t *testing.T) {
 
 func TestLaunchGrantsNoGPUAccessWithoutAcceleratorRequirement(t *testing.T) {
 	client := newFakeClient()
-	ad := New(client)
+	ad := New(client, "")
 
 	if _, err := ad.Launch(context.Background(), launchRequest()); err != nil {
 		t.Fatalf("launch: %v", err)
@@ -800,7 +803,7 @@ func TestIntegrationTheJanitorConvergesOneAttemptsContainerByThatAttemptsLaunch(
 	provisioned.Entrypoint = nil
 	provisioned.Args = []string{"sleep", "30"}
 	provisioned.Disposition = domain.DispositionTerminate
-	ad := New(NewCLIClient(""))
+	ad := New(NewCLIClient(""), "")
 	t.Cleanup(func() {
 		_, _ = ad.Release(context.Background(), adapter.ReleaseRequest{
 			OperationKey:      "cleanup_" + provisioned.LaunchKey,

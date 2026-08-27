@@ -430,6 +430,39 @@ func TestServeRefusesAProxiedLoopbackDeploymentWithNoAdministrativeAddress(t *te
 	}
 }
 
+func TestAContainerListenerMayTrustItsDeclaredTLSProxy(t *testing.T) {
+	err := validateTLSExposure("0.0.0.0:8080", false, "tls-proxy", "https://mercator.example.com")
+	if err != nil {
+		t.Fatalf("proxy-terminated container listener refused: %v", err)
+	}
+}
+
+func TestProxyTerminationRequiresAnHTTPSPublicURL(t *testing.T) {
+	for _, publicURL := range []string{"", "http://mercator.example.com"} {
+		if err := validateTLSExposure("0.0.0.0:8080", false, "tls-proxy", publicURL); err == nil {
+			t.Fatalf("proxy termination accepted public URL %q", publicURL)
+		}
+	}
+}
+
+func TestAContainerListenerMayTrustItsDeclaredPrivateNetwork(t *testing.T) {
+	if err := validateTLSExposure("0.0.0.0:8080", false, "private-network", ""); err != nil {
+		t.Fatalf("private container network refused: %v", err)
+	}
+}
+
+func TestPrivateNetworkCannotAnnounceAPublicURL(t *testing.T) {
+	if err := validateTLSExposure("0.0.0.0:8080", false, "private-network", "https://mercator.example.com"); err == nil {
+		t.Fatal("private network accepted a public URL")
+	}
+}
+
+func TestTLSExposureRejectsUnknownTerminationModes(t *testing.T) {
+	if err := validateTLSExposure("0.0.0.0:8080", false, "edge", "https://mercator.example.com"); err == nil {
+		t.Fatal("unknown TLS termination mode was accepted")
+	}
+}
+
 // captureStandardLog collects what startup refuses with. `serve` reports
 // configuration failures through the standard logger, which is where an
 // operator reads them from.
