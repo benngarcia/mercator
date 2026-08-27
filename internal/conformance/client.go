@@ -28,8 +28,8 @@ func (client trialClient) ready(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		var response map[string]any
-		if err := client.do(ctx, http.MethodGet, "/health/ready", "", nil, &response); err == nil {
+		var response httpapi.HealthReady200JSONResponse
+		if err := client.do(ctx, http.MethodGet, "/health/ready", "", nil, &response); err == nil && response.Status == "ready" {
 			return nil
 		}
 		select {
