@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -57,6 +58,87 @@ func TestWorkspaceSchemaFlatteningPreservesDeploymentHistory(t *testing.T) {
 		}
 	}
 	assertLegacyCapacityRows(t, ctx, db)
+}
+
+func TestWorkspaceSchemaFlatteningDiscardsDuplicateDeletedConnections(t *testing.T) {
+	ctx := context.Background()
+	db := legacyWorkspaceDatabase(t, legacyCollisions{})
+	seedLegacyConnectionCollision(t, db, "compute.connection.deleted.v1")
+
+	storage, err := New(ctx, db)
+	if err != nil {
+		t.Fatalf("open legacy deployment: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	events, err := storage.EventLog().ReadStream(ctx, eventlog.StreamKey{Type: "connection", ID: "conn_docker_loopback"}, 0, 10)
+	if err != nil {
+		t.Fatalf("read discarded connection stream: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("discarded connection events = %+v", events)
+	}
+	var commands int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM command_appends`).Scan(&commands); err != nil {
+		t.Fatalf("count retained commands: %v", err)
+	}
+	if commands != 2 {
+		t.Fatalf("retained commands = %d, want only the unrelated Run commands", commands)
+	}
+	for _, runID := range []string{"run_released", "run_experiment"} {
+		events, err := storage.EventLog().ReadStream(ctx, eventlog.StreamKey{Type: "run", ID: runID}, 0, 10)
+		if err != nil || len(events) != 1 {
+			t.Fatalf("read retained stream %s: events=%+v err=%v", runID, events, err)
+		}
+	}
+}
+
+func TestWorkspaceSchemaFlatteningRefusesDuplicateConnectionUnlessEveryCopyIsDeleted(t *testing.T) {
+	ctx := context.Background()
+	db := legacyWorkspaceDatabase(t, legacyCollisions{})
+	t.Cleanup(func() { _ = db.Close() })
+	seedLegacyConnectionCollision(t, db, "compute.connection.authorized.v1")
+
+	err := flattenWorkspaceSchema(ctx, db)
+	if err == nil || !strings.Contains(err.Error(), "duplicate active connection conn_docker_loopback") {
+		t.Fatalf("collision error = %v", err)
+	}
+
+	partitioned, inspectErr := tableHasColumn(ctx, db, "events", "workspace_id")
+	if inspectErr != nil {
+		t.Fatalf("inspect rolled-back events: %v", inspectErr)
+	}
+	if !partitioned {
+		t.Fatal("events changed despite refused migration")
+	}
+	var events int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&events); err != nil || events != 8 {
+		t.Fatalf("legacy events changed: count=%d err=%v", events, err)
+	}
+}
+
+func TestWorkspaceSchemaFlatteningRefusesDisjointActiveConnectionCopies(t *testing.T) {
+	ctx := context.Background()
+	db := legacyWorkspaceDatabase(t, legacyCollisions{})
+	t.Cleanup(func() { _ = db.Close() })
+	seedLegacyDisjointActiveConnectionCollision(t, db)
+
+	err := flattenWorkspaceSchema(ctx, db)
+	if err == nil || !strings.Contains(err.Error(), "duplicate active connection conn_docker_loopback") {
+		t.Fatalf("collision error = %v", err)
+	}
+
+	partitioned, inspectErr := tableHasColumn(ctx, db, "events", "workspace_id")
+	if inspectErr != nil {
+		t.Fatalf("inspect rolled-back events: %v", inspectErr)
+	}
+	if !partitioned {
+		t.Fatal("events changed despite refused migration")
+	}
+	var credentials int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM connection_secret WHERE connection_id = 'conn_docker_loopback'`).Scan(&credentials); err != nil || credentials != 1 {
+		t.Fatalf("legacy credential changed: count=%d err=%v", credentials, err)
+	}
 }
 
 func TestWorkspaceSchemaCollisionLeavesTheCompleteDatabaseUntouched(t *testing.T) {
@@ -301,6 +383,79 @@ func legacyWorkspaceDatabase(t *testing.T, collision legacyCollisions) *sql.DB {
 		}
 	}
 	return db
+}
+
+func seedLegacyConnectionCollision(t *testing.T, db *sql.DB, secondTerminalEvent string) {
+	t.Helper()
+	for workspaceIndex, workspaceID := range []string{"staging", "staging-experiments"} {
+		terminalEvent := "compute.connection.deleted.v1"
+		if workspaceIndex == 1 {
+			terminalEvent = secondTerminalEvent
+		}
+		for eventIndex, eventType := range []string{
+			"compute.connection.created.v1",
+			"compute.connection.authorized.v1",
+			terminalEvent,
+		} {
+			version := eventIndex + 1
+			commandKey := fmt.Sprintf("connection:%d", version)
+			result, err := db.Exec(`INSERT INTO events (
+				workspace_id, event_id, stream_type, stream_id, stream_version,
+				event_type, schema_version, occurred_at, actor_json, correlation_id,
+				causation_id, command_key, request_hash, visibility, data_json
+			) VALUES (?, ?, 'connection', 'conn_docker_loopback', ?, ?, 1,
+				'2026-08-27T00:00:00Z', '{}', 'conn_docker_loopback', 'seed', ?, ?, 'public', '{}')`,
+				workspaceID, fmt.Sprintf("evt_%d_%d", workspaceIndex, version), version,
+				eventType, commandKey, fmt.Sprintf("sha256:%d:%d", workspaceIndex, version))
+			if err != nil {
+				t.Fatalf("seed legacy connection event: %v", err)
+			}
+			position, err := result.LastInsertId()
+			if err != nil {
+				t.Fatalf("read legacy connection position: %v", err)
+			}
+			if _, err := db.Exec(`INSERT INTO command_appends VALUES (?, ?, ?, ?, ?)`,
+				workspaceID, commandKey, fmt.Sprintf("sha256:%d:%d", workspaceIndex, version), position, position); err != nil {
+				t.Fatalf("seed legacy connection command: %v", err)
+			}
+		}
+	}
+}
+
+func seedLegacyDisjointActiveConnectionCollision(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, event := range []struct {
+		workspaceID   string
+		eventID       string
+		streamVersion int
+		eventType     string
+	}{
+		{"staging", "evt_deleted", 1, "compute.connection.deleted.v1"},
+		{"staging-experiments", "evt_active", 4, "compute.connection.authorized.v1"},
+	} {
+		commandKey := "command:" + event.eventID
+		result, err := db.Exec(`INSERT INTO events (
+			workspace_id, event_id, stream_type, stream_id, stream_version,
+			event_type, schema_version, occurred_at, actor_json, correlation_id,
+			causation_id, command_key, request_hash, visibility, data_json
+		) VALUES (?, ?, 'connection', 'conn_docker_loopback', ?, ?, 1,
+			'2026-08-27T00:00:00Z', '{}', 'conn_docker_loopback', 'seed', ?, ?, 'public', '{}')`,
+			event.workspaceID, event.eventID, event.streamVersion, event.eventType, commandKey, "sha256:"+event.eventID)
+		if err != nil {
+			t.Fatalf("seed disjoint connection event: %v", err)
+		}
+		position, err := result.LastInsertId()
+		if err != nil {
+			t.Fatalf("read disjoint connection position: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO command_appends VALUES (?, ?, ?, ?, ?)`,
+			event.workspaceID, commandKey, "sha256:"+event.eventID, position, position); err != nil {
+			t.Fatalf("seed disjoint connection command: %v", err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO connection_secret VALUES ('staging-experiments', 'conn_docker_loopback', 'sealed')`); err != nil {
+		t.Fatalf("seed active connection credential: %v", err)
+	}
 }
 
 func assertLegacyCapacityRows(t *testing.T, ctx context.Context, db *sql.DB) {
