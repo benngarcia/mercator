@@ -2,7 +2,6 @@ package scenario
 
 import (
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/orchestrator"
@@ -37,20 +36,13 @@ type RunCancellationSpec struct {
 }
 
 type RunArrivalSpec struct {
-	Name string `json:"name"`
-	// Workspace is the label of the tenant this Run belongs to. Empty means the
-	// Blueprint's default workspace, which is where a single-tenant fixture puts
-	// everything. It is a label rather than an ID because each backend mints its
-	// own workspace identities, and a fixture that wrote one would be asserting
-	// the Lab's naming as part of the public contract.
-	Workspace string      `json:"workspace,omitempty"`
-	At        Duration    `json:"at"`
-	Request   RequestSpec `json:"request"`
+	Name    string      `json:"name"`
+	At      Duration    `json:"at"`
+	Request RequestSpec `json:"request"`
 }
 
 type RunFamilySpec struct {
 	NamePrefix string      `json:"name_prefix"`
-	Workspace  string      `json:"workspace,omitempty"`
 	At         Duration    `json:"at"`
 	Interval   Duration    `json:"interval"`
 	Count      int         `json:"count"`
@@ -148,17 +140,6 @@ func (plan ArrivalPlan) validate(world WorldSpec) error {
 		}
 		if err := world.validRequest(arrival.Request); err != nil {
 			return fmt.Errorf("Run arrival %q: %w", arrival.Name, err)
-		}
-		// An Artifact belongs to one workspace, and a Blueprint's catalog is
-		// declared in the default one. A Run in another workspace naming one of
-		// those versions would be a fixture implying content crosses a workspace,
-		// which it never does, so it is refused at the door rather than silently
-		// held by admission for a version its own workspace has no entry for.
-		if arrival.Workspace != "" && len(arrival.Request.ConsumesArtifacts)+len(arrival.Request.ProducesArtifacts) > 0 {
-			return fmt.Errorf(
-				"Run arrival %q is in workspace %q and names an Artifact: an Artifact belongs to the workspace that declared it",
-				arrival.Name, arrival.Workspace,
-			)
 		}
 		for _, artifactID := range arrival.Request.ProducesArtifacts {
 			if producer := producers[artifactID]; producer != "" {
@@ -265,31 +246,12 @@ func expandRunFamily(family RunFamilySpec, burst bool) ([]RunArrivalSpec, error)
 			at += time.Duration(index) * family.Interval.Duration()
 		}
 		runs[index] = RunArrivalSpec{
-			Name:      fmt.Sprintf("%s-%03d", family.NamePrefix, index+1),
-			Workspace: family.Workspace,
-			At:        Duration(at),
-			Request:   family.Request,
+			Name:    fmt.Sprintf("%s-%03d", family.NamePrefix, index+1),
+			At:      Duration(at),
+			Request: family.Request,
 		}
 	}
 	return runs, nil
-}
-
-// Workspaces is every workspace label this plan's Runs belong to, in sorted
-// order, with the default workspace always first. A backend creates one
-// workspace per label, which is what lets one Blueprint state two tenants.
-func (plan ArrivalPlan) Workspaces() []string {
-	runs, err := plan.ExpandedRuns()
-	if err != nil {
-		return []string{""}
-	}
-	labels := []string{""}
-	for _, arrival := range runs {
-		if arrival.Workspace != "" && !slices.Contains(labels, arrival.Workspace) {
-			labels = append(labels, arrival.Workspace)
-		}
-	}
-	slices.Sort(labels)
-	return labels
 }
 
 func (plan ArrivalPlan) runNames() map[string]bool {

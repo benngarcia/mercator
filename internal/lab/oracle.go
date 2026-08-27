@@ -388,7 +388,7 @@ func referenceBilledSeconds(seconds float64, granularity int64) float64 {
 func referenceDisk(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.DiskDemand {
 	work, locality := input.Image.StartWork(offer.Images)
 	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
-	caches := domain.CacheLandBytes(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches)
+	caches := domain.CacheLandBytes(input.Workload.Spec.Caches, offer.Caches)
 	established := int64(0)
 	for _, found := range evidence {
 		if found.Locality != domain.LocalityUnknown {

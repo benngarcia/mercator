@@ -22,7 +22,7 @@ const publicPullImage = "runner@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1
 // TestAPrivatePullAndAnArtifactReadAreMintedForOneOperationEach is the slice's
 // claim at L1: through the real orchestrator, the real event log and the real
 // Broker seam, the two fetches a queued Run needs reach the machine carrying
-// material that names one operation, one workspace, one piece of content and an
+// material that names one operation, one deployment, one piece of content and an
 // expiry, and the machine that would otherwise have been refused takes them on.
 //
 // It reads what the world watched cross the seam rather than what Mercator wrote
@@ -57,9 +57,6 @@ func TestAPrivatePullAndAnArtifactReadAreMintedForOneOperationEach(t *testing.T)
 	for kind, credential := range minted {
 		if credential.Scope.Operation != credential.Operation {
 			t.Fatalf("the %s credential was minted for %q and arrived on %q", kind, credential.Scope.Operation, credential.Operation)
-		}
-		if credential.Scope.WorkspaceID != labWorkspace {
-			t.Fatalf("the %s credential reaches workspace %q", kind, credential.Scope.WorkspaceID)
 		}
 		if window := credential.Scope.ExpiresAt.Sub(credential.At); window <= 0 || window > contentCredentialWindow {
 			t.Fatalf("the %s credential stays presentable for %s", kind, window)

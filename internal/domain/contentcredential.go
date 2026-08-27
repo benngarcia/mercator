@@ -10,33 +10,27 @@ import (
 //
 // A node is a host an operator rents by the hour, and everything Mercator gives
 // it is material an attacker who takes that host also has. The registry account
-// that can read every private image in the workspace, and the object-store key
+// that can read every private image, and the object-store key
 // that can read every Artifact ever published, are therefore never what a
 // machine holds. What it holds is one credential minted for one fetch: it names
-// the operation it was minted for, the workspace whose content it reaches, the
-// content itself, and the moment it stops being accepted, and the machine
+// the operation it was minted for, the content it reaches, and the moment it
+// stops being accepted, and the machine
 // forgets it when the fetch ends.
 //
 // The scope is not decoration. It is what the node checks before presenting the
-// material, so a credential that arrived for another workspace's pull is refused
-// on the machine rather than spent, and it is what a reader of the record can
-// hold Mercator to: a credential nobody can name a bound for is the account
-// itself under another name.
+// material, and it is what a reader of the record can hold Mercator to: a
+// credential nobody can name a bound for is the account itself under another
+// name.
 
 // ContentCredentialScope is what every credential Mercator mints for a machine
-// states about itself. All four are required, and each of them is a way the
+// states about itself. All three are required, and each of them is a way the
 // material can be narrower than the account behind it: one operation rather than
-// a standing right, one workspace rather than the fleet, one piece of content
-// rather than a repository, and a window rather than for ever.
+// a standing right, one piece of content rather than a repository, and a window
+// rather than for ever.
 type ContentCredentialScope struct {
 	// Operation is the one node command this material was minted for, named the
 	// way the control plane and the machine both name it.
 	Operation string `json:"operation"`
-	// WorkspaceID is whose content this reaches. It is stated rather than
-	// inferred from the operation, because the operation is a string two
-	// workspaces could conceivably agree on and the tenancy boundary may not
-	// rest on that.
-	WorkspaceID string `json:"workspace_id"`
 	// Content is the one image digest or Artifact version this authorises.
 	Content string `json:"content"`
 	// ExpiresAt is when the material stops being presentable. A credential
@@ -48,19 +42,17 @@ type ContentCredentialScope struct {
 // Authorises is the check a machine makes before it presents this material. It
 // answers with the reason rather than a bare no, because every way it can fail
 // is a different incident: material with no bound, material minted for somebody
-// else's content, and material whose window has closed are three different
+// different content, and material whose window has closed are three different
 // things for an operator to read in a node's refusal.
-func (scope ContentCredentialScope) Authorises(operation, workspaceID, content string, at time.Time) error {
+func (scope ContentCredentialScope) Authorises(operation, content string, at time.Time) error {
 	switch {
-	case scope.Operation == "" || scope.WorkspaceID == "" || scope.Content == "" || scope.ExpiresAt.IsZero():
+	case scope.Operation == "" || scope.Content == "" || scope.ExpiresAt.IsZero():
 		return fmt.Errorf(
-			"this credential names operation %q, workspace %q, content %q and expiry %s, and a credential that cannot state all four is the account it was minted from",
-			scope.Operation, scope.WorkspaceID, scope.Content, scope.ExpiresAt,
+			"this credential names operation %q, content %q and expiry %s, and a credential that cannot state all three is the account it was minted from",
+			scope.Operation, scope.Content, scope.ExpiresAt,
 		)
 	case scope.Operation != operation:
 		return fmt.Errorf("this credential was minted for operation %q and is being presented for %q", scope.Operation, operation)
-	case scope.WorkspaceID != workspaceID:
-		return fmt.Errorf("this credential was minted for workspace %q and is being presented for %q", scope.WorkspaceID, workspaceID)
 	case scope.Content != content:
 		return fmt.Errorf("this credential was minted for %q and is being presented for %q", scope.Content, content)
 	case !at.Before(scope.ExpiresAt):

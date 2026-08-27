@@ -175,11 +175,10 @@ Commands:
 Environment (always wins over the config file, for CI):
   MERCATOR_API_URL      API URL for CLI commands, for example http://127.0.0.1:8080
   MERCATOR_API_TOKEN    Bearer token for CLI commands
-  MERCATOR_WORKSPACE_ID Default workspace for run commands
   MERCATOR_CONFIG       Config file path (default ~/.config/mercator/config.json)
 
 Examples:
-  mercator context set staging --api-url https://mercator.example.com --workspace-id ws_1
+  mercator context set staging --api-url https://mercator.example.com
   mercator login
   mercator run create busybox -- echo hi
   mercator context use production
@@ -203,7 +202,7 @@ const runHelp = `Usage: mercator run <command> [flags]
 
 Run commands:
   create    Create a run from an image shorthand or workload JSON
-  list      List runs in a workspace
+  list      List runs in this deployment
   get       Read one run
   wait      Wait for one run to close
   events    List public run events
@@ -212,7 +211,6 @@ Run commands:
   cancel    Request cancellation
 
 Common flags:
-  --workspace-id ID     Workspace id; defaults to MERCATOR_WORKSPACE_ID
   --run-id ID           Run id for read/action commands
 
 Examples:
@@ -221,24 +219,23 @@ Examples:
   mercator help run create
 `
 
-const runCreateHelp = `Usage: mercator run create [--workspace-id ID] [--run-id ID] [--idempotency-key KEY] <image> [-- args...]
-       mercator run create [--workspace-id ID] [--run-id ID] [--idempotency-key KEY] --workload-json JSON
+const runCreateHelp = `Usage: mercator run create [--run-id ID] [--idempotency-key KEY] <image> [-- args...]
+       mercator run create [--run-id ID] [--idempotency-key KEY] --workload-json JSON
 
 Create a run. The simplest path is an image shorthand:
 
   mercator run create busybox -- echo hi
 
 Flags:
-  --workspace-id ID       Workspace id; defaults to MERCATOR_WORKSPACE_ID
   --run-id ID             Optional caller-supplied run id
   --idempotency-key KEY   Optional idempotency key; derived or minted when omitted
   --image IMAGE           Image shorthand, alternative to positional image
   --workload-json JSON    Full workload revision JSON
 `
 
-const runListHelp = `Usage: mercator run list [--workspace-id ID] [--cursor CURSOR] [--limit N]
+const runListHelp = `Usage: mercator run list [--cursor CURSOR] [--limit N]
 
-List runs in a workspace. --workspace-id defaults to MERCATOR_WORKSPACE_ID.
+List runs in this deployment.
 The response includes next_cursor when another page exists. Pass it back with
 --cursor. --limit accepts 1 through 100 and defaults to 50 on the server.
 `
@@ -265,7 +262,7 @@ Clear the stored login credential from the named (or current) context.
 const contextHelp = `Usage: mercator context <command>
 
 Contexts name Mercator deployments so you can target staging or production by
-name. The current context supplies api_url, workspace_id, and a credential to
+name. The current context supplies api_url and a credential to
 every API command; MERCATOR_* environment variables always win over it.
 
 Commands:
@@ -273,12 +270,11 @@ Commands:
   use <name>                  Switch the current context
   set <name> [flags]          Create or update a context
       --api-url URL           API base URL
-      --workspace-id ID       Default workspace
       --token TOKEN           Static API token (machine credential)
   delete <name>               Remove a context
 
 Examples:
-  mercator context set staging --api-url https://staging.example.com --workspace-id ws_1
+  mercator context set staging --api-url https://staging.example.com
   mercator context use staging
   mercator login
 `
@@ -286,13 +282,12 @@ Examples:
 const connectionHelp = `Usage: mercator connection <command> [flags]
 
 Connection commands:
-  list        List connections in a workspace
+  list        List connections in this deployment
   create      Register a provider connection
   authorize   Verify and authorize a connection
   delete      Delete a connection
 
 Flags:
-  --workspace-id ID          Workspace id; defaults to MERCATOR_WORKSPACE_ID
   --connection-id ID         Connection id
   --adapter-type TYPE        Adapter type (docker, runpod) on create
   --config KEY=VALUE         Adapter config; repeatable
@@ -320,7 +315,6 @@ Workload commands:
   revision get               Read one revision
 
 Flags:
-  --workspace-id ID          Workspace id; defaults to MERCATOR_WORKSPACE_ID
   --workload-id ID           Workload id
   --name NAME                Display name on create
   --revision-json JSON       Full workload revision JSON (revision create)
@@ -360,15 +354,15 @@ Replay events after a global position.
 `
 
 func runReadHelp(command string) string {
-	return fmt.Sprintf(`Usage: mercator run %s [--workspace-id ID] --run-id ID
+	return fmt.Sprintf(`Usage: mercator run %s --run-id ID
 
-Read run data. --workspace-id defaults to MERCATOR_WORKSPACE_ID.
+Read run data from this deployment.
 `, command)
 }
 
 func runActionHelp(command string) string {
-	return fmt.Sprintf(`Usage: mercator run %s [--workspace-id ID] --run-id ID
+	return fmt.Sprintf(`Usage: mercator run %s --run-id ID
 
-Post a run action. --workspace-id defaults to MERCATOR_WORKSPACE_ID.
+Post a run action to this deployment.
 `, command)
 }

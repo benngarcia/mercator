@@ -92,7 +92,7 @@ func TestReinvitingAnIdentityNobodyRedeemedHandsBackTheSameInvitation(t *testing
 func TestAnInvitationLastsAsLongAsTheCallerWaits(t *testing.T) {
 	registry, clock := newRegistry(t)
 	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
-		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		NodeID: testNode, RentalID: testRental, Generation: 1,
 		ShadowPriceUSDPerHour: 1.5,
 		RedeemableThrough:     clock.Now().Add(45 * time.Minute),
 	})
@@ -119,7 +119,7 @@ func TestAnInvitationLastsAsLongAsTheCallerWaits(t *testing.T) {
 func TestAnInvitationThatLapsesInsideTheWaitIsReplaced(t *testing.T) {
 	registry, clock := newRegistry(t)
 	shortLived, err := registry.Invite(context.Background(), node.Invitation{
-		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		NodeID: testNode, RentalID: testRental, Generation: 1,
 		ShadowPriceUSDPerHour: 1.5,
 		RedeemableThrough:     clock.Now().Add(5 * time.Minute),
 	})
@@ -127,7 +127,7 @@ func TestAnInvitationThatLapsesInsideTheWaitIsReplaced(t *testing.T) {
 		t.Fatalf("invite node: %v", err)
 	}
 
-	replacement, err := registry.Reinvite(context.Background(), testWorkspace, testNode, clock.Now().Add(45*time.Minute))
+	replacement, err := registry.Reinvite(context.Background(), testNode, clock.Now().Add(45*time.Minute))
 	if err != nil {
 		t.Fatalf("reinvite node: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestAnInvitationNobodyCouldRedeemIsRefused(t *testing.T) {
 	registry, clock := newRegistry(t)
 
 	_, err := registry.Invite(context.Background(), node.Invitation{
-		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		NodeID: testNode, RentalID: testRental, Generation: 1,
 		ShadowPriceUSDPerHour: 1.5,
 		RedeemableThrough:     clock.Now().Add(-time.Minute),
 	})
@@ -600,7 +600,7 @@ func TestARoomNobodyMeasuredIsNeverOfferedAsRoom(t *testing.T) {
 		},
 	})
 
-	offers, err := registry.Offers(context.Background(), testWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("list node offers: %v", err)
 	}
@@ -611,7 +611,7 @@ func TestARoomNobodyMeasuredIsNeverOfferedAsRoom(t *testing.T) {
 		t.Fatalf("the offer advertises %d bytes of room from a measurement the node says it did not make",
 			offers[0].Resources.EphemeralDiskBytes)
 	}
-	records, err := registry.List(context.Background(), testWorkspace)
+	records, err := registry.List(context.Background())
 	if err != nil {
 		t.Fatalf("list nodes: %v", err)
 	}
@@ -632,7 +632,7 @@ func TestAnInvitedNodeHasReportedNothingRatherThanFailedToMeasure(t *testing.T) 
 	registry, _ := newRegistry(t)
 	bootstrap := invite(t, registry)
 
-	records, err := registry.List(context.Background(), testWorkspace)
+	records, err := registry.List(context.Background())
 	if err != nil {
 		t.Fatalf("list nodes: %v", err)
 	}
@@ -714,7 +714,7 @@ func TestRetiringARuntimeEndsTheSessionItIsHoldingOpen(t *testing.T) {
 	enrollment := enroll(t, registry, bootstrap)
 	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
 
-	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+	if err := registry.Retire(context.Background(), bootstrap.NodeID); err != nil {
 		t.Fatalf("retire the runtime: %v", err)
 	}
 
@@ -737,7 +737,7 @@ func TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet(t *testing.T) {
 	registry, clock := newRegistry(t)
 	bootstrap := invite(t, registry)
 	enrollment := enroll(t, registry, bootstrap)
-	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+	if err := registry.Retire(context.Background(), bootstrap.NodeID); err != nil {
 		t.Fatalf("retire the runtime: %v", err)
 	}
 
@@ -755,14 +755,14 @@ func TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a retired runtime reporting its liveness: %v", err)
 	}
-	offers, err := registry.Offers(context.Background(), testWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("read the offers: %v", err)
 	}
 	if len(offers) != 0 {
 		t.Fatalf("offers = %+v, want a machine Mercator gave up published to nobody", offers)
 	}
-	fleet, err := registry.List(context.Background(), testWorkspace)
+	fleet, err := registry.List(context.Background())
 	if err != nil {
 		t.Fatalf("list the fleet: %v", err)
 	}
@@ -785,7 +785,7 @@ func TestARetiredRuntimeOpensNoFurtherSessionOnTheCredentialItHolds(t *testing.T
 	if _, err := registry.LaunchWorkload(context.Background(), launchCommand(bootstrap, enrollment, "op-launch-1")); err != nil {
 		t.Fatalf("launch the workload: %v", err)
 	}
-	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+	if err := registry.Retire(context.Background(), bootstrap.NodeID); err != nil {
 		t.Fatalf("retire the runtime: %v", err)
 	}
 
@@ -809,7 +809,7 @@ func TestARetiredRuntimeStillReportsWhatItsContainerDid(t *testing.T) {
 	if _, err := registry.LaunchWorkload(context.Background(), launchCommand(bootstrap, enrollment, "op-launch-1")); err != nil {
 		t.Fatalf("launch the workload: %v", err)
 	}
-	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+	if err := registry.Retire(context.Background(), bootstrap.NodeID); err != nil {
 		t.Fatalf("retire the runtime: %v", err)
 	}
 
@@ -858,7 +858,7 @@ func TestARetiredRuntimeSettlesTheCommandItAlreadyApplied(t *testing.T) {
 	if _, err := registry.StopWorkload(context.Background(), stop); err != nil {
 		t.Fatalf("stop the workload: %v", err)
 	}
-	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+	if err := registry.Retire(context.Background(), bootstrap.NodeID); err != nil {
 		t.Fatalf("retire the runtime: %v", err)
 	}
 
@@ -889,7 +889,7 @@ func TestARetiredRuntimeIsAskedForNothingFurther(t *testing.T) {
 	registry, _ := newRegistry(t)
 	bootstrap := invite(t, registry)
 	enrollment := enroll(t, registry, bootstrap)
-	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+	if err := registry.Retire(context.Background(), bootstrap.NodeID); err != nil {
 		t.Fatalf("retire the runtime: %v", err)
 	}
 
@@ -920,7 +920,7 @@ func TestTheRegistryAnswersAboutANodeAndAGenerationTogether(t *testing.T) {
 	invite(t, registry)
 
 	invited, err := registry.EnrolledAt(context.Background(), capability.NodeRef{
-		WorkspaceID: testWorkspace, NodeID: testNode, Generation: 1,
+		NodeID: testNode, Generation: 1,
 	})
 	if err != nil {
 		t.Fatalf("the generation this node was invited for was refused: %v", err)
@@ -930,7 +930,7 @@ func TestTheRegistryAnswersAboutANodeAndAGenerationTogether(t *testing.T) {
 	}
 
 	_, err = registry.EnrolledAt(context.Background(), capability.NodeRef{
-		WorkspaceID: testWorkspace, NodeID: testNode, Generation: 2,
+		NodeID: testNode, Generation: 2,
 	})
 
 	if err == nil {
@@ -972,7 +972,7 @@ func (clock *testClock) Advance(by time.Duration) { clock.now = clock.now.Add(by
 func invite(t *testing.T, registry *node.Registry) capability.NodeBootstrap {
 	t.Helper()
 	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
-		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		NodeID: testNode, RentalID: testRental, Generation: 1,
 		ShadowPriceUSDPerHour: 1.5,
 	})
 	if err != nil {
@@ -986,7 +986,7 @@ func invite(t *testing.T, registry *node.Registry) capability.NodeBootstrap {
 // It states no deadline, so the registry answers on its own policy.
 func reinvite(t *testing.T, registry *node.Registry, previous capability.NodeBootstrap) capability.NodeBootstrap {
 	t.Helper()
-	bootstrap, err := registry.Reinvite(context.Background(), testWorkspace, previous.NodeID, time.Time{})
+	bootstrap, err := registry.Reinvite(context.Background(), previous.NodeID, time.Time{})
 	if err != nil {
 		t.Fatalf("reinvite node: %v", err)
 	}
@@ -1017,10 +1017,10 @@ func enrollmentRequest(bootstrap capability.NodeBootstrap) capability.Enrollment
 
 func nodeRef(bootstrap capability.NodeBootstrap) capability.NodeRef {
 	return capability.NodeRef{
-		WorkspaceID: testWorkspace,
-		NodeID:      bootstrap.NodeID,
-		RentalID:    bootstrap.RentalID,
-		Generation:  bootstrap.Generation,
+
+		NodeID:     bootstrap.NodeID,
+		RentalID:   bootstrap.RentalID,
+		Generation: bootstrap.Generation,
 	}
 }
 
@@ -1152,7 +1152,7 @@ func TestAPathANodeMeasuredReachesTheOfferItPrices(t *testing.T) {
 		},
 	})
 
-	offers, err := registry.Offers(context.Background(), testWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("list node offers: %v", err)
 	}
@@ -1282,7 +1282,7 @@ func newRegistryOn(t *testing.T, store node.Store) (*node.Registry, *testClock) 
 
 func onlyPendingOperation(t *testing.T, store node.Store) node.Operation {
 	t.Helper()
-	pending, err := store.PendingOperations(context.Background(), testWorkspace, testNode)
+	pending, err := store.PendingOperations(context.Background(), testNode)
 	if err != nil {
 		t.Fatalf("read the durable record of what the node was told: %v", err)
 	}
@@ -1302,10 +1302,10 @@ func privatePullCommand(
 	command.Reference = "registry.test/analyst@" + command.ManifestDigest
 	command.RegistryCredential = domain.RegistryPull{
 		ContentCredentialScope: domain.ContentCredentialScope{
-			Operation:   operationID,
-			WorkspaceID: testWorkspace,
-			Content:     command.ManifestDigest,
-			ExpiresAt:   now.Add(15 * time.Minute),
+			Operation: operationID,
+
+			Content:   command.ManifestDigest,
+			ExpiresAt: now.Add(15 * time.Minute),
 		},
 		Registry: "registry.test",
 		Username: "mercator",
@@ -1326,10 +1326,10 @@ func artifactFetchCommand(
 		Source:        "objects://corpus/v3",
 		SourceCredential: domain.ArtifactRead{
 			ContentCredentialScope: domain.ContentCredentialScope{
-				Operation:   operationID,
-				WorkspaceID: testWorkspace,
-				Content:     "artifact:corpus:v3",
-				ExpiresAt:   now.Add(15 * time.Minute),
+				Operation: operationID,
+
+				Content:   "artifact:corpus:v3",
+				ExpiresAt: now.Add(15 * time.Minute),
 			},
 			Location: readLocation,
 		},

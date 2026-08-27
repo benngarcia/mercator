@@ -56,8 +56,7 @@ func (p ExternalPhase) Valid() bool {
 }
 
 type OfferRequest struct {
-	WorkspaceID string
-	Resources   domain.ResourceRequirements
+	Resources domain.ResourceRequirements
 }
 
 // OfferCollection is one answer to an offer query together with the census of who
@@ -69,7 +68,7 @@ type OfferRequest struct {
 // offers states the two identically. Placement reads an empty answer as the
 // strongest thing a fleet can say about an ask, and an operator reading that has
 // to be able to tell a marketplace that sells no machine of the shape from a
-// workspace whose providers were never asked.
+// deployment whose providers were never asked.
 type OfferCollection struct {
 	Offers []domain.OfferSnapshot
 	// Queried is every connection that was asked, whatever it answered.
@@ -81,9 +80,9 @@ type OfferCollection struct {
 }
 
 type LaunchRequest struct {
-	OperationKey       string                      `json:"operation_key"`
-	RequestHash        string                      `json:"request_hash"`
-	WorkspaceID        string                      `json:"workspace_id"`
+	OperationKey string `json:"operation_key"`
+	RequestHash  string `json:"request_hash"`
+
 	RunID              string                      `json:"run_id"`
 	AttemptID          string                      `json:"attempt_id"`
 	WorkloadID         string                      `json:"workload_id"`
@@ -141,7 +140,6 @@ type LaunchReceipt struct {
 }
 
 type ObserveRequest struct {
-	WorkspaceID    string
 	ConnectionID   string
 	LaunchKey      string
 	OwnershipToken string
@@ -219,7 +217,6 @@ func (o ExternalObservation) EstablishedStart() (time.Time, bool) {
 }
 
 type ReleaseRequest struct {
-	WorkspaceID       string
 	ConnectionID      string
 	OperationKey      string
 	RequestHash       string
@@ -245,7 +242,6 @@ type ReleaseReceipt struct {
 // ownership material (OwnershipToken/LaunchRequestHash) as ReleaseRequest so
 // the no-orphan reconciliation path is identical.
 type TerminateRequest struct {
-	WorkspaceID       string
 	ConnectionID      string
 	OperationKey      string
 	RequestHash       string
@@ -260,12 +256,11 @@ type TerminateReceipt struct {
 }
 
 type OwnershipQuery struct {
-	WorkspaceID string
 }
 
 type OwnedExternalObject struct {
-	ExternalID  string
-	WorkspaceID string
+	ExternalID string
+
 	// ConnectionID names the connection the object was listed through.
 	// Individual adapters may leave it empty; the Broker stamps it during
 	// aggregation so callers (e.g. the janitor) can route Release/Terminate

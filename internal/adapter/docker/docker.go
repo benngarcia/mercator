@@ -218,15 +218,15 @@ func (a *Adapter) Terminate(context.Context, adapter.TerminateRequest) (adapter.
 }
 
 func (a *Adapter) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
-	containers, err := a.client.ListContainers(ctx, map[string]string{"mercator.workspace_id": req.WorkspaceID})
+	containers, err := a.client.ListContainers(ctx, map[string]string{"mercator.managed": "true"})
 	if err != nil {
 		return nil, err
 	}
 	owned := make([]adapter.OwnedExternalObject, 0, len(containers))
 	for _, container := range containers {
 		owned = append(owned, adapter.OwnedExternalObject{
-			ExternalID:     container.ID,
-			WorkspaceID:    container.Labels["mercator.workspace_id"],
+			ExternalID: container.ID,
+
 			RunID:          container.Labels["mercator.run_id"],
 			AttemptID:      container.Labels["mercator.attempt_id"],
 			OwnershipToken: container.Labels["mercator.ownership_token"],
@@ -245,7 +245,7 @@ func containerName(req adapter.LaunchRequest) string {
 
 func dockerLabels(req adapter.LaunchRequest) map[string]string {
 	return map[string]string{
-		"mercator.workspace_id":    req.WorkspaceID,
+		"mercator.managed":         "true",
 		"mercator.run_id":          req.RunID,
 		"mercator.attempt_id":      req.AttemptID,
 		"mercator.launch_key":      req.LaunchKey,

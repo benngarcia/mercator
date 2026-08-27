@@ -10,11 +10,8 @@ import (
 type trialIdentity struct {
 	trialID string
 	// suffix is the random half of the trial ID, which is what every identity
-	// this trial mints for itself is named after. A capacity trial creates no
-	// workspace through the API and still has to tag its machines with one, so
-	// what keeps two trials from adopting each other's machines is this.
+	// this trial mints for itself is named after.
 	suffix       string
-	workspaceID  string
 	connectionID string
 }
 

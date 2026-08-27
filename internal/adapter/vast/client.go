@@ -53,10 +53,10 @@ type offer struct {
 	// an ask Mercator cannot tell apart from hardware nobody sells: the search is
 	// how the fleet answers, and a fleet that answered with nothing is the
 	// strongest thing it can say.
-	Rented bool `json:"rented"`
-	MachineID    int64    `json:"machine_id"`
-	Geolocation  string   `json:"geolocation"`
-	StaticIP     bool     `json:"static_ip"`
+	Rented      bool   `json:"rented"`
+	MachineID   int64  `json:"machine_id"`
+	Geolocation string `json:"geolocation"`
+	StaticIP    bool   `json:"static_ip"`
 }
 
 // instance is one row from the instances endpoints. extra_env round-trips the

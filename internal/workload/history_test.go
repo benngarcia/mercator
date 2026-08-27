@@ -15,7 +15,7 @@ func TestServiceSeesWorkloadRevisionBeyondOneStreamPage(t *testing.T) {
 	ctx := context.Background()
 	log := openWorkloadTestLog(t)
 	svc := New(log)
-	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_history", Name: "history"}); err != nil {
+	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkloadID: "wrk_history", Name: "history"}); err != nil {
 		t.Fatalf("create workload: %v", err)
 	}
 
@@ -44,7 +44,7 @@ func TestServiceSeesWorkloadRevisionBeyondOneStreamPage(t *testing.T) {
 		}
 	}
 	if _, err := log.Append(ctx, eventlog.AppendRequest{
-		Stream:                workloadStream("ws_1", "wrk_history"),
+		Stream:                workloadStream("wrk_history"),
 		ExpectedStreamVersion: 1,
 		CommandKey:            "seed:workload-history",
 		RequestHash:           "sha256:workload-history",
@@ -53,7 +53,7 @@ func TestServiceSeesWorkloadRevisionBeyondOneStreamPage(t *testing.T) {
 		t.Fatalf("append workload history: %v", err)
 	}
 
-	revisions, err := svc.ListRevisions(ctx, "ws_1", "wrk_history")
+	revisions, err := svc.ListRevisions(ctx, "wrk_history")
 	if err != nil {
 		t.Fatalf("list revisions: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestServiceSeesWorkloadRevisionBeyondOneStreamPage(t *testing.T) {
 
 	duplicate := validRevision()
 	duplicate.ID = "wrev_1000"
-	_, err = svc.CreateRevision(ctx, CreateRevisionRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_history", Revision: duplicate})
+	_, err = svc.CreateRevision(ctx, CreateRevisionRequest{WorkloadID: "wrk_history", Revision: duplicate})
 	if err == nil || !strings.Contains(err.Error(), "revision already exists") {
 		t.Fatalf("create duplicate revision error = %v, want revision already exists", err)
 	}

@@ -28,7 +28,7 @@ func TestCreateRunMinimalImageShorthandSucceeds(t *testing.T) {
 	handler := newMinimalCreateServer(t, adapter.ExternalPhaseSucceeded)
 
 	body := []byte(`{"image":"busybox","args":["echo","hi"]}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_minimal")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -51,7 +51,7 @@ func TestCreateRunMinimalImageShorthandSucceeds(t *testing.T) {
 	}
 
 	// The stored revision image must be digest-pinned (resolved server-side).
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/"+created.Run.ID+"/events?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/"+created.Run.ID+"/events", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if !strings.Contains(rec.Body.String(), "@sha256:") {
@@ -67,7 +67,7 @@ func TestCreateRunReplaySameKeyReturnsOriginalRunID(t *testing.T) {
 
 	post := func() RunResponse {
 		body := []byte(`{"image":"busybox"}`)
-		req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 		req.Header.Set("Idempotency-Key", "idem_replay_http")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -97,7 +97,7 @@ func TestCreateRunFailedExitPath(t *testing.T) {
 	handler := newMinimalCreateServer(t, adapter.ExternalPhaseFailed, fake.WithExitCode(42))
 
 	body := []byte(`{"run_id":"run_failed","image":"busybox"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_failed")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -105,7 +105,7 @@ func TestCreateRunFailedExitPath(t *testing.T) {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_failed?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_failed", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -135,7 +135,7 @@ func TestCreateRunFullWorkloadTakesPrecedenceOverShorthand(t *testing.T) {
 		"workload": rev,
 	}
 	body := mustMarshal(t, payload)
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_precedence")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -143,7 +143,7 @@ func TestCreateRunFullWorkloadTakesPrecedenceOverShorthand(t *testing.T) {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_precedence/events?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_precedence/events", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if strings.Contains(rec.Body.String(), "ignored-shorthand") {
@@ -163,7 +163,7 @@ func TestCreateRunRefusesAnArtifactReadThisMercatorCannotEstablish(t *testing.T)
 	handler := newMinimalCreateServer(t, adapter.ExternalPhaseSucceeded)
 
 	body := []byte(`{"run_id":"run_consumer","workload":{"spec":{"containers":[{"image":"busybox"}],"artifacts":{"consumes":["artifact:ds:v1"]}}}}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_consumer")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -182,7 +182,7 @@ func TestCreateRunRefusesAnArtifactReadThisMercatorCannotEstablish(t *testing.T)
 		t.Fatalf("the refusal says %q, and it has to name the Artifact nothing can establish", refusal.Message)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_consumer?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_consumer", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -208,9 +208,9 @@ func newMinimalCreateServer(t *testing.T, outcome adapter.ExternalPhase, extra .
 	}, extra...)
 	ad := fake.New(opts...)
 	sched := scheduler.New()
-	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
+	orch := orchestrator.New(log, sched, ad)
 	resolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests(), ociresolver.WithAssumedPlatform("linux/amd64"))
-	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: resolver})
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver})
 }
 
 // TestCreateRunRefusesAServiceClassMercatorCannotPrice is the answer a caller gets
@@ -223,7 +223,7 @@ func TestCreateRunRefusesAServiceClassMercatorCannotPrice(t *testing.T) {
 	handler := newMinimalCreateServer(t, adapter.ExternalPhaseSucceeded)
 
 	body := []byte(`{"run_id":"run_urgent","workload":{"spec":{"containers":[{"image":"busybox"}],"placement":{"service_class":"urgent"}}}}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_urgent")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -239,7 +239,7 @@ func TestCreateRunRefusesAServiceClassMercatorCannotPrice(t *testing.T) {
 		t.Fatalf("the refusal is %+v, and the caller has to be able to tell which field they got wrong", refusal)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_urgent?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_urgent", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -256,7 +256,7 @@ func TestCreateRunRefusesAServiceClassMercatorCannotPrice(t *testing.T) {
 // PlacementPolicy this API publishes.
 func TestBothDoorsFillTheOmittedServiceClass(t *testing.T) {
 	handler := newHTTPTestServer(t)
-	createBody := mustMarshal(t, CreateWorkloadRequest{WorkspaceId: "ws_1", WorkloadId: "wrk_1", Name: "trainer"})
+	createBody := mustMarshal(t, CreateWorkloadRequest{WorkloadId: "wrk_1", Name: "trainer"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(createBody))
 	req.Header.Set("Idempotency-Key", "idem_workload")
 	rec := httptest.NewRecorder()
@@ -267,7 +267,7 @@ func TestBothDoorsFillTheOmittedServiceClass(t *testing.T) {
 	classless := httpRevision()
 	classless.Spec.Placement = domain.PlacementPolicy{ExpectedRuntimeSeconds: 60}
 
-	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_1/revisions?workspace_id=ws_1", bytes.NewReader(mustMarshal(t, CreateRevisionRequest{Revision: classless})))
+	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_1/revisions", bytes.NewReader(mustMarshal(t, CreateRevisionRequest{Revision: classless})))
 	req.Header.Set("Idempotency-Key", "idem_revision")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -275,7 +275,7 @@ func TestBothDoorsFillTheOmittedServiceClass(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("storing a revision that omits its class returned %d: %s", rec.Code, rec.Body.String())
 	}
-	req = httptest.NewRequest(http.MethodGet, "/v1/workloads/wrk_1/revisions/wrev_1?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/workloads/wrk_1/revisions/wrev_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	var stored struct {
@@ -288,7 +288,7 @@ func TestBothDoorsFillTheOmittedServiceClass(t *testing.T) {
 		t.Errorf("the stored revision reads class %q, and a revision the API serves has to state one", stored.Revision.Spec.Placement.Class)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(mustMarshal(t, CreateRunRequest{RunId: "run_classless", Workload: classless})))
+	req = httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(mustMarshal(t, CreateRunRequest{RunId: "run_classless", Workload: classless})))
 	req.Header.Set("Idempotency-Key", "idem_run_classless")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)

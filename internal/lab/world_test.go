@@ -26,7 +26,7 @@ func TestPlacementReadsTheHostAWorkloadWarmed(t *testing.T) {
 
 	world.setNow(world.nowTime().Add(time.Hour))
 
-	offers, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
+	offers, err := world.ListOffers(context.Background(), adapter.OfferRequest{})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestPlacementCanReadAnOfferTheWorldHasAlreadyReclaimed(t *testing.T) {
 
 	world.setOfferAvailable("rental-warm", false)
 
-	stale, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
+	stale, err := world.ListOffers(context.Background(), adapter.OfferRequest{})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestPlacementCanReadAnOfferTheWorldHasAlreadyReclaimed(t *testing.T) {
 
 	world.setNow(world.nowTime().Add(time.Minute))
 
-	fresh, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
+	fresh, err := world.ListOffers(context.Background(), adapter.OfferRequest{})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 	_, _ = world.Launch(context.Background(), request)
 
 	observation, err := world.Observe(context.Background(), adapter.ObserveRequest{
-		WorkspaceID:    labWorkspace,
+
 		ConnectionID:   "connection:lab",
 		LaunchKey:      request.LaunchKey,
 		OwnershipToken: request.OwnershipToken,
@@ -256,7 +256,7 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 	// cannot have started before the image it runs finished arriving.
 	world.setNow(world.nowTime().Add(arrival.ActualRuntime.Duration()))
 	observation, err = world.Observe(context.Background(), adapter.ObserveRequest{
-		WorkspaceID:    labWorkspace,
+
 		ConnectionID:   "connection:lab",
 		LaunchKey:      request.LaunchKey,
 		OwnershipToken: request.OwnershipToken,
@@ -271,7 +271,7 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 
 	world.setNow(world.executionHorizon())
 	observation, err = world.Observe(context.Background(), adapter.ObserveRequest{
-		WorkspaceID:    labWorkspace,
+
 		ConnectionID:   "connection:lab",
 		LaunchKey:      request.LaunchKey,
 		OwnershipToken: request.OwnershipToken,
@@ -291,7 +291,7 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 	if hasArtifactReplica(truth.ArtifactReplicas, "artifact:model-checkpoint:v1", "rental-warm") {
 		t.Fatalf("the producer's own output is filed as a copy something checked: %+v", truth.ArtifactReplicas)
 	}
-	if revision := cacheMountRevision(truth.CacheMounts, "rental-warm", labWorkspace, "compiler-cache"); revision != 2 {
+	if revision := cacheMountRevision(truth.CacheMounts, "rental-warm", "compiler-cache"); revision != 2 {
 		t.Fatalf("mutable Cache Mount revision = %d, want 2", revision)
 	}
 	assertEffect(
@@ -319,10 +319,10 @@ func worldLaunchAttempt(arrival RunArrival, offerID string, attempt int) adapter
 		// they do in production. The world reads and writes what the control plane
 		// declared rather than what the fixture's arrival says, so a launch that
 		// dropped them would leave the cache untouched.
-		CacheMounts:               arrival.Request.CacheRequirements(),
-		OperationKey:              "launch:producer:" + ordinal,
-		RequestHash:               "sha256:producer-launch-" + ordinal,
-		WorkspaceID:               labWorkspace,
+		CacheMounts:  arrival.Request.CacheRequirements(),
+		OperationKey: "launch:producer:" + ordinal,
+		RequestHash:  "sha256:producer-launch-" + ordinal,
+
 		RunID:                     "run-producer",
 		AttemptID:                 "attempt-producer-" + ordinal,
 		OwnershipToken:            "owner-producer-" + ordinal,
@@ -347,13 +347,11 @@ func hasArtifactReplica(replicas []ArtifactReplica, artifactID, offerID string) 
 	return false
 }
 
-// cacheMountRevision is how many times this workspace's cache of that name has
-// been written on that machine. The workspace is part of the lookup because it is
-// part of the identity: a cache of the same name in another workspace is another
-// cache.
-func cacheMountRevision(mounts []CacheMountState, offerID, workspaceID, name string) uint64 {
+// cacheMountRevision is how many times this cache has been written on that
+// machine.
+func cacheMountRevision(mounts []CacheMountState, offerID, name string) uint64 {
 	for _, mount := range mounts {
-		if mount.OfferID == offerID && mount.WorkspaceID == workspaceID && mount.Name == name {
+		if mount.OfferID == offerID && mount.Name == name {
 			return mount.Revision
 		}
 	}

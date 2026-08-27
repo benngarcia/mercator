@@ -103,7 +103,7 @@ func IsRunEventType(candidate string) bool {
 }
 
 type Orchestrator struct {
-	log                eventlog.WorkspaceEventLog
+	log                eventlog.EventLog
 	runs               runprojection.Store
 	scheduler          scheduler.Scheduler
 	adapter            Adapter
@@ -114,16 +114,16 @@ type Orchestrator struct {
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
 	runLocks           keyedMutex
-	// admissionLocks serialises admission within one workspace. Every other
+	// admissionLock serialises deployment-wide admission. Every other
 	// transition a Run makes is guarded by that Run's own stream version, and the
 	// log refuses an append written against a version somebody else has already
-	// spent. Admission is the one decision read over the whole workspace and
+	// spent. Admission is the one decision read over the whole deployment and
 	// written to a single Run, so nothing in the log can refuse it: two members of
 	// one family asked at the same instant each replay a queue the other is not in
 	// yet, and each appends a decision the log has no reason to reject.
 	//
 	// It is a lock in this process because the log is this process's own SQLite
-	// file, so a workspace's admissions are all decided here or not at all. A
+	// file, so a deployment's admissions are all decided here or not at all. A
 	// second control plane over one log would need the log to arbitrate, which is a
 	// different design rather than a wider mutex.
 	admissionLocks   keyedMutex
@@ -212,7 +212,7 @@ func WithRunProjection(runs runprojection.Store) Option {
 	}
 }
 
-func New(log eventlog.WorkspaceEventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
+func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
 	o := &Orchestrator{
 		log:       log,
 		runs:      historyRunProjection{log: log},
@@ -228,7 +228,6 @@ func New(log eventlog.WorkspaceEventLog, scheduler scheduler.Scheduler, adapter 
 }
 
 type CreateRunRequest struct {
-	WorkspaceID    string
 	RunID          string
 	CommandKey     string
 	IdempotencyKey string
@@ -299,17 +298,14 @@ type CreateRunResult struct {
 }
 
 func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
-	if req.WorkspaceID == "" || req.RunID == "" {
-		return CreateRunResult{}, fmt.Errorf("orchestrator: workspace_id and run_id are required")
+	if req.RunID == "" {
+		return CreateRunResult{}, fmt.Errorf("orchestrator: run_id is required")
 	}
 	if req.CommandKey == "" {
 		req.CommandKey = req.IdempotencyKey
 	}
 	if req.CommandKey == "" {
 		return CreateRunResult{}, fmt.Errorf("orchestrator: idempotency key is required")
-	}
-	if req.Workload.WorkspaceID != "" && req.WorkspaceID != req.Workload.WorkspaceID {
-		return CreateRunResult{}, fmt.Errorf("WORKSPACE_MISMATCH: request workspace_id must match workload workspace_id")
 	}
 	// Fill omitted, defaultable fields so a minimal create body (just an image)
 	// expands toward a fully-specified revision. Architecture is not one of
@@ -361,8 +357,8 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if err != nil {
 		return CreateRunResult{}, err
 	}
-	result, err := o.appendRunIfWorkspaceActive(ctx, eventlog.AppendRequest{
-		Stream:                runStream(req.WorkspaceID, req.RunID),
+	result, err := o.appendRun(ctx, eventlog.AppendRequest{
+		Stream:                runStream(req.RunID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            req.CommandKey,
 		RequestHash:           requestHash,
@@ -370,7 +366,7 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 		CorrelationID:         req.RunID,
 		CausationID:           req.CommandKey,
 		Events: []eventlog.NewEvent{{
-			ID:            eventID(req.WorkspaceID, req.RunID, "requested"),
+			ID:            eventID(req.RunID, "requested"),
 			Type:          EventRunRequested,
 			SchemaVersion: 1,
 			OccurredAt:    o.now().UTC(),
@@ -387,7 +383,7 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	}
 	runID := req.RunID
 	if result.Duplicate {
-		// A replay (same workspace + command key) returns the ORIGINAL stored
+		// A replay of the same command key returns the ORIGINAL stored
 		// events. The run identifier is the stream id of the original
 		// run_requested event, NOT the (possibly freshly generated) req.RunID.
 		// This preserves the idempotency invariant: same Idempotency-Key replay
@@ -408,12 +404,12 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 // cancel, refresh, wait, and the background sweep drive those facts through
 // this loop. Each iteration re-reads the stream, so state is always derived
 // from the log rather than threaded through in memory.
-func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string) error {
-	unlock := o.runLocks.Lock(workspaceID + "/" + runID)
+func (o *Orchestrator) AdvanceRun(ctx context.Context, runID string) error {
+	unlock := o.runLocks.Lock(runID)
 	defer unlock()
 
 	for {
-		events, err := o.GetRunEvents(ctx, workspaceID, runID)
+		events, err := o.GetRunEvents(ctx, runID)
 		if err != nil {
 			return err
 		}
@@ -421,7 +417,7 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 		if err != nil {
 			return err
 		}
-		progressed, err := o.step(ctx, workspaceID, runID, streamVersion(events), state)
+		progressed, err := o.step(ctx, runID, streamVersion(events), state)
 		if err != nil || !progressed {
 			return err
 		}
@@ -467,45 +463,45 @@ func (m *keyedMutex) Lock(key string) func() {
 // step performs the run's next transition and reports whether the run may have
 // further work (true → reduce and step again). Every transition is one side
 // effect plus one event append at the given optimistic-concurrency version.
-func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
+func (o *Orchestrator) step(ctx context.Context, runID string, version uint64, state runState) (bool, error) {
 	switch {
 	case state.closed:
 		return false, nil
 	case state.cleanupRequested && !state.cleanupConfirmed:
-		return true, o.releaseAndCloseScheduled(ctx, workspaceID, runID, version, state)
+		return true, o.releaseAndCloseScheduled(ctx, runID, version, state)
 	case state.firstTerminal != nil && !state.outcomeRecorded:
-		return true, o.recordTerminalTransition(ctx, workspaceID, runID, version, state)
+		return true, o.recordTerminalTransition(ctx, runID, version, state)
 	case state.bookingQueued():
-		return o.dispatchQueuedBooking(ctx, workspaceID, runID, version, state)
+		return o.dispatchQueuedBooking(ctx, runID, version, state)
 	case state.launchIntent == nil, state.replacementEligible():
 		// A Run whose declared Artifacts are not all durable is not admitted at
 		// all, and stays exactly where it is until one of them is published. It
 		// is not queued either: waiting for content nobody has written yet is
 		// not waiting for capacity, and the queue is about capacity.
-		durable, err := o.inputsAreDurable(ctx, workspaceID, state.requested.Workload)
+		durable, err := o.inputsAreDurable(ctx, state.requested.Workload)
 		if err != nil || !durable {
 			return false, err
 		}
-		return o.stepAdmit(ctx, workspaceID, runID, version, state)
+		return o.stepAdmit(ctx, runID, version, state)
 	case state.capacity != nil && !state.nodeEnrolled:
 		// A placement that chose to provision has to build the machine before
 		// anything can be launched on it. Until an agent enrols there is no
 		// session to create a container through, whatever the provider says about
 		// the allocation.
-		return o.stepBuildCapacity(ctx, workspaceID, runID, version, state)
+		return o.stepBuildCapacity(ctx, runID, version, state)
 	case !state.launchAccepted && state.launchFailure == nil:
-		return o.stepLaunch(ctx, workspaceID, runID, version, state)
+		return o.stepLaunch(ctx, runID, version, state)
 	default:
-		observation, err := o.observeLaunch(ctx, workspaceID, state)
+		observation, err := o.observeLaunch(ctx, state)
 		if err != nil {
 			return false, err
 		}
-		return o.recordObservation(ctx, workspaceID, runID, version, state, observation)
+		return o.recordObservation(ctx, runID, version, state, observation)
 	}
 }
 
-func (o *Orchestrator) dispatchQueuedBooking(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
-	schedules, err := o.schedules.List(ctx, workspaceID)
+func (o *Orchestrator) dispatchQueuedBooking(ctx context.Context, runID string, version uint64, state runState) (bool, error) {
+	schedules, err := o.schedules.List(ctx)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
 	}
@@ -523,17 +519,17 @@ func (o *Orchestrator) dispatchQueuedBooking(ctx context.Context, workspaceID, r
 	if err != nil {
 		return false, err
 	}
-	attempt := newAttempt(workspaceID, runID, state.attemptCount+1)
+	attempt := newAttempt(runID, state.attemptCount+1)
 	reportPublicURL, reportToken := "", ""
 	if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
 		reportPublicURL = o.reportingPublicURL
-		reportToken = o.reportingSigner.Token(workspaceID, runID)
+		reportToken = o.reportingSigner.Token(runID)
 	}
-	launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
+	launchReq, err := buildLaunchRequest(runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
 	if err != nil {
 		return false, err
 	}
-	err = o.appendEvents(ctx, workspaceID, runID, version, "advance:dispatch:"+booking.ID, []eventlog.NewEvent{
+	err = o.appendEvents(ctx, runID, version, "advance:dispatch:"+booking.ID, []eventlog.NewEvent{
 		mustEvent(runID, "booking_dispatched_"+booking.ID, EventBookingDispatched, bookingDispatchedData{Booking: booking}, o.now()),
 		mustEvent(runID, "attempt_created_"+attempt.AttemptID, EventAttemptCreated, attempt, o.now()),
 		mustPrivateEvent(runID, "launch_intent_recorded_"+attempt.AttemptID, EventLaunchIntentRecorded, publicLaunchRequest(launchReq), launchReq, o.now()),
@@ -580,10 +576,10 @@ func offerFromDecision(decision domain.BookingDecision) (domain.OfferSnapshot, e
 // intent in one append, so the intent is durable before any adapter call. It
 // reports whether the Run moved, because a placement that selected nothing has
 // not moved it: admission queues that Run and the next tick asks again.
-func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState, run queuePosition) (bool, error) {
+func (o *Orchestrator) stepPlace(ctx context.Context, runID string, version uint64, state runState, run queuePosition) (bool, error) {
 	attemptNumber := state.attemptCount + 1
 	supersedes, supersedesReason := state.supersession()
-	decision, attempt, selectedOffer, schedule, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, placementRequest{
+	decision, attempt, selectedOffer, schedule, err := o.decide(ctx, *state.requested, runID, attemptNumber, placementRequest{
 		excluded:         state.excluded,
 		supersedes:       supersedes,
 		supersedesReason: supersedesReason,
@@ -593,10 +589,10 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	}
 	if decision.SelectedOfferSnapshotID == "" {
 		if state.replacementEligible() {
-			return true, o.closeRetryExhausted(ctx, workspaceID, runID, version, decision)
+			return true, o.closeRetryExhausted(ctx, runID, version, decision)
 		}
 		deferral, projected := placementDeferral(run, decision)
-		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, run, admissionAnswer{
+		return false, o.deferOrRefuse(ctx, runID, version, state, run, admissionAnswer{
 			deferral:  deferral,
 			projected: projected,
 			decision:  &decision,
@@ -609,7 +605,7 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	events := []eventlog.NewEvent{decisionEvent(runID, decision, o.now())}
 	commandKey := "advance:placement:" + decision.Booking.ID
 	if decision.Booking.State == domain.BookingStateQueued {
-		request, requestErr := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
+		request, requestErr := runAppendRequest(nil, runID, version, commandKey, events)
 		if requestErr != nil {
 			return false, requestErr
 		}
@@ -619,9 +615,9 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	reportPublicURL, reportToken := "", ""
 	if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
 		reportPublicURL = o.reportingPublicURL
-		reportToken = o.reportingSigner.Token(workspaceID, runID)
+		reportToken = o.reportingSigner.Token(runID)
 	}
-	launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
+	launchReq, err := buildLaunchRequest(runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
 	if err != nil {
 		return false, err
 	}
@@ -636,7 +632,7 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	if plan := capacityPlan(decision, selectedOffer, o.now().UTC()); plan != nil {
 		events = append(events, mustEvent(runID, "capacity_requested_"+plan.RentalID, EventCapacityRequested, *plan, o.now()))
 	}
-	request, err := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
+	request, err := runAppendRequest(nil, runID, version, commandKey, events)
 	if err != nil {
 		return false, err
 	}
@@ -690,7 +686,7 @@ func reserveDecision(requested runRequestedData, decision domain.BookingDecision
 
 // recordTerminalTransition converts the first terminal fact in stream order
 // into the run's single outcome and cleanup intent.
-func (o *Orchestrator) recordTerminalTransition(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
+func (o *Orchestrator) recordTerminalTransition(ctx context.Context, runID string, version uint64, state runState) error {
 	if !state.externalObjectPossible() {
 		events := []eventlog.NewEvent{
 			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: state.firstTerminal.Outcome}, o.now()),
@@ -703,18 +699,18 @@ func (o *Orchestrator) recordTerminalTransition(ctx context.Context, workspaceID
 		// already released by a replaceable launch failure must not complete
 		// twice.
 		if state.bookingQueued() {
-			return o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:terminal-before-launch", events)
+			return o.completeBookingAndAppend(ctx, runID, version, state, "advance:terminal-before-launch", events)
 		}
-		return o.appendEvents(ctx, workspaceID, runID, version, "advance:terminal-before-launch", events)
+		return o.appendEvents(ctx, runID, version, "advance:terminal-before-launch", events)
 	}
-	return o.appendEvents(ctx, workspaceID, runID, version, "advance:terminal", []eventlog.NewEvent{
+	return o.appendEvents(ctx, runID, version, "advance:terminal", []eventlog.NewEvent{
 		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: state.firstTerminal.Outcome}, o.now()),
 		mustEvent(runID, "cleanup_requested", EventCleanupRequested, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, o.now()),
 	})
 }
 
-func (o *Orchestrator) GetRunEvents(ctx context.Context, workspaceID, runID string) ([]eventlog.StoredEvent, error) {
-	history, err := eventlog.ReadFullStream(ctx, o.log, runStream(workspaceID, runID))
+func (o *Orchestrator) GetRunEvents(ctx context.Context, runID string) ([]eventlog.StoredEvent, error) {
+	history, err := eventlog.ReadFullStream(ctx, o.log, runStream(runID))
 	return history.Events, err
 }
 
@@ -728,8 +724,8 @@ func streamVersion(events []eventlog.StoredEvent) uint64 {
 	return events[len(events)-1].StreamVersion
 }
 
-func (o *Orchestrator) GetRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {
-	events, err := o.GetRunEvents(ctx, workspaceID, runID)
+func (o *Orchestrator) GetRun(ctx context.Context, runID string) (domain.RunRecord, error) {
+	events, err := o.GetRunEvents(ctx, runID)
 	if err != nil {
 		return domain.RunRecord{}, err
 	}
@@ -740,27 +736,27 @@ func (o *Orchestrator) GetRun(ctx context.Context, workspaceID, runID string) (d
 	if err != nil {
 		return domain.RunRecord{}, err
 	}
-	return runRecordFromState(workspaceID, runID, state), nil
+	return runRecordFromState(runID, state), nil
 }
 
-func (o *Orchestrator) ListRuns(ctx context.Context, workspaceID string, request runprojection.PageRequest) (runprojection.Page, error) {
-	return o.runs.List(ctx, workspaceID, request)
+func (o *Orchestrator) ListRuns(ctx context.Context, request runprojection.PageRequest) (runprojection.Page, error) {
+	return o.runs.List(ctx, request)
 }
 
-// RebuildRunProjection replaces one Workspace projection from the event log,
+// RebuildRunProjection replaces the Run projection from the event log,
 // which remains the source of truth.
-func (o *Orchestrator) RebuildRunProjection(ctx context.Context, workspaceID string) error {
-	records, err := o.runRecordsFromHistory(ctx, workspaceID)
+func (o *Orchestrator) RebuildRunProjection(ctx context.Context) error {
+	records, err := o.runRecordsFromHistory(ctx)
 	if err != nil {
 		return err
 	}
-	return o.runs.Replace(ctx, workspaceID, records)
+	return o.runs.Replace(ctx, records)
 }
 
-func (o *Orchestrator) runRecordsFromHistory(ctx context.Context, workspaceID string) ([]domain.RunRecord, error) {
+func (o *Orchestrator) runRecordsFromHistory(ctx context.Context) ([]domain.RunRecord, error) {
 	states := make(map[string]*runState)
 	filter := eventlog.EventFilter{
-		WorkspaceID: workspaceID,
+
 		StreamTypes: []string{"run"},
 	}
 	head, err := o.log.LatestPosition(ctx, filter)
@@ -785,52 +781,40 @@ func (o *Orchestrator) runRecordsFromHistory(ctx context.Context, workspaceID st
 		if err := state.validate(); err != nil {
 			return nil, err
 		}
-		records = append(records, runRecordFromState(workspaceID, runID, *state))
+		records = append(records, runRecordFromState(runID, *state))
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
 	return records, nil
 }
 
-// ListRunWorkspaces returns the durable event-log partitions that have owned a
-// run. Workspace IDs are data carried by run facts, not server configuration;
-// the background reconciler reads the event log's distinct-partition index so
-// every persisted run continues to converge after restart without repeatedly
-// scanning historical run facts.
-func (o *Orchestrator) ListRunWorkspaces(ctx context.Context) ([]string, error) {
-	return o.log.ListWorkspaceIDs(ctx, eventlog.EventFilter{
-		StreamTypes: []string{"run"},
-		EventTypes:  []string{EventRunRequested},
-	})
-}
-
 // AdvanceOpenRunsResult summarizes one background advancement sweep of a
-// workspace: how many open runs were found and how many of them reached the
+// deployment: how many open runs were found and how many of them reached the
 // closed state during the sweep.
 type AdvanceOpenRunsResult struct {
 	Open   int
 	Closed int
 }
 
-// AdvanceOpenRuns drives every open (not yet closed) run in the workspace
+// AdvanceOpenRuns drives every open (not yet closed) run
 // through AdvanceRun so runs converge to closed with zero client involvement:
 // observing container exits, recording terminal outcomes, and confirming
 // cleanup is the broker's job, not something every client must poll for via
 // /refresh or /wait. An error on one run never stops advancement of the
 // others; per-run errors are joined into the returned error alongside the
 // sweep result, which stays valid either way.
-func (o *Orchestrator) AdvanceOpenRuns(ctx context.Context, workspaceID string) (AdvanceOpenRunsResult, error) {
-	openRuns, err := o.listOpenRunIDs(ctx, workspaceID)
+func (o *Orchestrator) AdvanceOpenRuns(ctx context.Context) (AdvanceOpenRunsResult, error) {
+	openRuns, err := o.listOpenRunIDs(ctx)
 	if err != nil {
 		return AdvanceOpenRunsResult{}, err
 	}
 	result := AdvanceOpenRunsResult{Open: len(openRuns)}
 	var errs []error
 	for _, runID := range openRuns {
-		if err := o.AdvanceRun(ctx, workspaceID, runID); err != nil {
+		if err := o.AdvanceRun(ctx, runID); err != nil {
 			errs = append(errs, fmt.Errorf("advance %s: %w", runID, err))
 			continue
 		}
-		record, err := o.GetRun(ctx, workspaceID, runID)
+		record, err := o.GetRun(ctx, runID)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("advance %s: %w", runID, err))
 			continue
@@ -845,10 +829,10 @@ func (o *Orchestrator) AdvanceOpenRuns(ctx context.Context, workspaceID string) 
 // listOpenRunIDs enumerates run streams that recorded RunRequested but no
 // RunClosed, using the same paginated event-index scan as ListRuns but without
 // hydrating per-run streams. That keeps the background sweep cheap when idle:
-// a workspace whose history is all closed runs costs one filtered index scan
+// a deployment whose history is all closed runs costs one filtered index scan
 // and zero stream reads per tick.
-func (o *Orchestrator) listOpenRunIDs(ctx context.Context, workspaceID string) ([]string, error) {
-	return o.runs.ListOpenIDs(ctx, workspaceID)
+func (o *Orchestrator) listOpenRunIDs(ctx context.Context) ([]string, error) {
+	return o.runs.ListOpenIDs(ctx)
 }
 
 // GetBookingDecisions is every decision Mercator recorded about this Run, in the
@@ -858,8 +842,8 @@ func (o *Orchestrator) listOpenRunIDs(ctx context.Context, workspaceID string) (
 // last entry was showing a reader a Run that had only ever been answered once,
 // with the refusal that came first and the machine that turned it away nowhere on
 // the page.
-func (o *Orchestrator) GetBookingDecisions(ctx context.Context, workspaceID, runID string) ([]domain.BookingDecision, error) {
-	events, err := o.GetRunEvents(ctx, workspaceID, runID)
+func (o *Orchestrator) GetBookingDecisions(ctx context.Context, runID string) ([]domain.BookingDecision, error) {
+	events, err := o.GetRunEvents(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -880,18 +864,18 @@ func (o *Orchestrator) GetBookingDecisions(ctx context.Context, workspaceID, run
 	return chain, nil
 }
 
-func (o *Orchestrator) RefreshRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {
-	if err := o.AdvanceRun(ctx, workspaceID, runID); err != nil {
+func (o *Orchestrator) RefreshRun(ctx context.Context, runID string) (domain.RunRecord, error) {
+	if err := o.AdvanceRun(ctx, runID); err != nil {
 		return domain.RunRecord{}, err
 	}
-	return o.GetRun(ctx, workspaceID, runID)
+	return o.GetRun(ctx, runID)
 }
 
 // CancelRun records the cancel request as a fact attributed to the acting
 // principal, then advances it through the same terminal cleanup transition as
 // workload exit and provider exit. Cancelling a closed run returns it unchanged.
-func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string, actor json.RawMessage) (domain.RunRecord, error) {
-	events, err := o.GetRunEvents(ctx, workspaceID, runID)
+func (o *Orchestrator) CancelRun(ctx context.Context, runID string, actor json.RawMessage) (domain.RunRecord, error) {
+	events, err := o.GetRunEvents(ctx, runID)
 	if err != nil {
 		return domain.RunRecord{}, err
 	}
@@ -903,34 +887,34 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string,
 		return domain.RunRecord{}, err
 	}
 	if state.closed {
-		return runRecordFromState(workspaceID, runID, state), nil
+		return runRecordFromState(runID, state), nil
 	}
 	if !state.cancelRequested {
 		data := cancelRequestedData{Reason: "user"}
 		if state.launchIntent != nil {
 			data = cancelRequestedData{LaunchKey: state.launchIntent.LaunchKey}
 		}
-		if err := o.appendEventsAs(ctx, actor, workspaceID, runID, streamVersion(events), "cancel:requested", []eventlog.NewEvent{
+		if err := o.appendEventsAs(ctx, actor, runID, streamVersion(events), "cancel:requested", []eventlog.NewEvent{
 			mustEvent(runID, "cancel_requested", EventCancelRequested, data, o.now()),
 		}); err != nil {
 			return domain.RunRecord{}, err
 		}
 	}
-	if err := o.AdvanceRun(ctx, workspaceID, runID); err != nil {
+	if err := o.AdvanceRun(ctx, runID); err != nil {
 		return domain.RunRecord{}, err
 	}
-	return o.GetRun(ctx, workspaceID, runID)
+	return o.GetRun(ctx, runID)
 }
 
 // RecordReport appends a compute.run.reported.v1 fact and returns before
 // cleanup. Terminal reports use one semantic command per run, so an exact
 // replay is idempotent and conflicting terminal data fails explicitly.
-func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID string, report RunReport) error {
+func (o *Orchestrator) RecordReport(ctx context.Context, runID string, report RunReport) error {
 	if report == nil {
 		return fmt.Errorf("%w: report is required", ErrInvalidReport)
 	}
 	payload := report.payload()
-	unlock := o.runLocks.Lock(workspaceID + "/" + runID)
+	unlock := o.runLocks.Lock(runID)
 	defer unlock()
 
 	encoded, err := json.Marshal(payload)
@@ -939,7 +923,7 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID stri
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		events, err := o.GetRunEvents(ctx, workspaceID, runID)
+		events, err := o.GetRunEvents(ctx, runID)
 		if err != nil {
 			return fmt.Errorf("orchestrator: read run stream: %w", err)
 		}
@@ -959,7 +943,7 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID stri
 			}
 		}
 		evt := eventlog.NewEvent{
-			ID:            eventID(workspaceID, runID, suffix),
+			ID:            eventID(runID, suffix),
 			Type:          EventRunReported,
 			SchemaVersion: 1,
 			OccurredAt:    o.now().UTC(),
@@ -973,7 +957,7 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID stri
 			}
 		}
 		_, appendErr := o.appendRun(ctx, eventlog.AppendRequest{
-			Stream:                runStream(workspaceID, runID),
+			Stream:                runStream(runID),
 			ExpectedStreamVersion: version,
 			CommandKey:            commandKey,
 			RequestHash:           requestHash,
@@ -1003,9 +987,9 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID stri
 // it as ours, CleanupLocator addresses its cleanup. The derivations are part
 // of the adapter wire contract (container labels, pod env), so they are
 // recorded on the launch intent and never re-derived after launch.
-func newAttempt(workspaceID, runID string, attemptNumber int) attemptData {
+func newAttempt(runID string, attemptNumber int) attemptData {
 	ordinal := fmt.Sprintf("%d", attemptNumber)
-	id := "att_" + externalIDPart(workspaceID) + "_" + externalIDPart(strings.TrimPrefix(runID, "run_")) + "_" + ordinal + "_" + shortExternalHash(workspaceID, runID, ordinal)
+	id := "att_" + externalIDPart(strings.TrimPrefix(runID, "run_")) + "_" + ordinal + "_" + shortExternalHash(runID, ordinal)
 	return attemptData{
 		AttemptID:      id,
 		LaunchKey:      "launch_" + id,
@@ -1014,7 +998,7 @@ func newAttempt(workspaceID, runID string, attemptNumber int) attemptData {
 	}
 }
 
-func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, attempt attemptData, selectedOffer domain.OfferSnapshot, reportPublicURL, reportToken string) (adapter.LaunchRequest, error) {
+func buildLaunchRequest(runID string, requested runRequestedData, attempt attemptData, selectedOffer domain.OfferSnapshot, reportPublicURL, reportToken string) (adapter.LaunchRequest, error) {
 	container := requested.Workload.Spec.Containers[0]
 	disposition, err := selectedOffer.CleanupDisposition()
 	if err != nil {
@@ -1026,12 +1010,11 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 			adapter.EnvironmentBinding{Name: "MERCATOR_RUN_ID", Value: stringPtr(runID)},
 			adapter.EnvironmentBinding{Name: "MERCATOR_REPORT_URL", Value: stringPtr(reportPublicURL)},
 			adapter.EnvironmentBinding{Name: "MERCATOR_RUN_TOKEN", Value: stringPtr(reportToken)},
-			adapter.EnvironmentBinding{Name: "MERCATOR_WORKSPACE_ID", Value: stringPtr(workspaceID)},
 		)
 	}
 	launchReq := adapter.LaunchRequest{
-		OperationKey:              attempt.LaunchKey,
-		WorkspaceID:               workspaceID,
+		OperationKey: attempt.LaunchKey,
+
 		RunID:                     runID,
 		AttemptID:                 attempt.AttemptID,
 		WorkloadID:                requested.Workload.WorkloadID,
@@ -1070,7 +1053,7 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 // advance iteration record the outcome and cleanup intent. A repeated
 // non-terminal phase carries no new information, so it is not appended on
 // every poll.
-func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID string, version uint64, state runState, observation adapter.ExternalObservation) (bool, error) {
+func (o *Orchestrator) recordObservation(ctx context.Context, runID string, version uint64, state runState, observation adapter.ExternalObservation) (bool, error) {
 	started := startMoment(state, observation)
 	if !isTerminal(observation.Phase) && observation.Phase == state.lastObservedPhase && started == nil {
 		return false, nil
@@ -1084,11 +1067,11 @@ func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID
 			StartedAt: *started,
 		}, o.now()))
 	}
-	request, err := runAppendRequest(nil, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), events)
+	request, err := runAppendRequest(nil, runID, version, fmt.Sprintf("advance:observe:%d", version), events)
 	if err != nil {
 		return false, err
 	}
-	if err := o.commitObservation(ctx, workspaceID, request, state, observation); err != nil {
+	if err := o.commitObservation(ctx, request, state, observation); err != nil {
 		return false, err
 	}
 	return isTerminal(observation.Phase), nil
@@ -1124,12 +1107,12 @@ func startMoment(state runState, observation adapter.ExternalObservation) *time.
 // could disagree with the run's own history about when the machine said it.
 func (o *Orchestrator) commitObservation(
 	ctx context.Context,
-	workspaceID string,
+
 	request eventlog.AppendRequest,
 	state runState,
 	observation adapter.ExternalObservation,
 ) error {
-	started, establishes, err := o.workloadStarted(ctx, workspaceID, state, observation)
+	started, establishes, err := o.workloadStarted(ctx, state, observation)
 	if err != nil {
 		return err
 	}
@@ -1156,14 +1139,14 @@ func (o *Orchestrator) commitObservation(
 // Run's container would bury it.
 func (o *Orchestrator) workloadStarted(
 	ctx context.Context,
-	workspaceID string,
+
 	state runState,
 	observation adapter.ExternalObservation,
 ) (domain.RentalSchedule, bool, error) {
 	if observation.Phase != adapter.ExternalPhaseRunning || state.bookingDecision == nil || state.bookingDecision.Booking == nil {
 		return domain.RentalSchedule{}, false, nil
 	}
-	schedules, err := o.schedules.List(ctx, workspaceID)
+	schedules, err := o.schedules.List(ctx)
 	if err != nil {
 		return domain.RentalSchedule{}, false, fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
 	}
@@ -1202,9 +1185,9 @@ func bookingStartedAt(observation adapter.ExternalObservation) time.Time {
 	return observation.ObservedAt
 }
 
-func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, state runState) (adapter.ExternalObservation, error) {
+func (o *Orchestrator) observeLaunch(ctx context.Context, state runState) (adapter.ExternalObservation, error) {
 	observation, err := o.adapter.Observe(ctx, adapter.ObserveRequest{
-		WorkspaceID:    workspaceID,
+
 		ConnectionID:   state.launchIntent.SelectedOfferConnectionID,
 		LaunchKey:      state.launchIntent.LaunchKey,
 		OwnershipToken: state.launchIntent.OwnershipToken,
@@ -1220,7 +1203,7 @@ func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, st
 	if observation.Phase != adapter.ExternalPhaseReleased || !state.launchIndeterminate() {
 		return observation, nil
 	}
-	owned, err := o.adapter.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: workspaceID})
+	owned, err := o.adapter.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		return adapter.ExternalObservation{}, err
 	}
@@ -1241,11 +1224,11 @@ func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, st
 	return observation, nil
 }
 
-func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID string, version uint64, launchReq *adapter.LaunchRequest) error {
-	return o.releaseAndCloseScheduled(ctx, workspaceID, runID, version, runState{launchIntent: launchReq})
+func (o *Orchestrator) releaseAndClose(ctx context.Context, runID string, version uint64, launchReq *adapter.LaunchRequest) error {
+	return o.releaseAndCloseScheduled(ctx, runID, version, runState{launchIntent: launchReq})
 }
 
-func (o *Orchestrator) releaseAndCloseScheduled(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
+func (o *Orchestrator) releaseAndCloseScheduled(ctx context.Context, runID string, version uint64, state runState) error {
 	launchReq := state.launchIntent
 	if launchReq == nil {
 		return fmt.Errorf("orchestrator: cleanup requested without launch intent")
@@ -1257,21 +1240,21 @@ func (o *Orchestrator) releaseAndCloseScheduled(ctx context.Context, workspaceID
 	if !disposition.Valid() {
 		return fmt.Errorf("orchestrator: cleanup requires a valid recorded disposition, got %q", disposition)
 	}
-	if err := o.cleanup(ctx, workspaceID, launchReq); err != nil {
-		return o.recordCleanupFailure(ctx, workspaceID, runID, version, launchReq.LaunchKey, disposition, err)
+	if err := o.cleanup(ctx, launchReq); err != nil {
+		return o.recordCleanupFailure(ctx, runID, version, launchReq.LaunchKey, disposition, err)
 	}
 	events := []eventlog.NewEvent{
 		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, cleanupConfirmedData{LaunchKey: launchReq.LaunchKey, Disposition: disposition}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
 	}
-	return o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:cleanup", events)
+	return o.completeBookingAndAppend(ctx, runID, version, state, "advance:cleanup", events)
 }
 
-func (o *Orchestrator) completeBookingAndAppend(ctx context.Context, workspaceID, runID string, version uint64, state runState, commandKey string, events []eventlog.NewEvent) error {
+func (o *Orchestrator) completeBookingAndAppend(ctx context.Context, runID string, version uint64, state runState, commandKey string, events []eventlog.NewEvent) error {
 	if state.bookingDecision == nil || state.bookingDecision.Booking == nil {
 		return fmt.Errorf("orchestrator: transition requires a recorded Booking")
 	}
-	schedules, err := o.schedules.List(ctx, workspaceID)
+	schedules, err := o.schedules.List(ctx)
 	if err != nil {
 		return fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
 	}
@@ -1280,7 +1263,7 @@ func (o *Orchestrator) completeBookingAndAppend(ctx context.Context, workspaceID
 	if err != nil {
 		return err
 	}
-	request, err := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
+	request, err := runAppendRequest(nil, runID, version, commandKey, events)
 	if err != nil {
 		return err
 	}
@@ -1301,19 +1284,19 @@ func (o *Orchestrator) commitSchedule(
 	return o.schedules.Commit(ctx, request, expectedVersion, next, run)
 }
 
-func (o *Orchestrator) cleanup(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
+func (o *Orchestrator) cleanup(ctx context.Context, launchReq *adapter.LaunchRequest) error {
 	switch launchReq.Disposition {
 	case domain.DispositionTerminate:
-		return o.terminate(ctx, workspaceID, launchReq)
+		return o.terminate(ctx, launchReq)
 	case domain.DispositionRelease:
-		return o.release(ctx, workspaceID, launchReq)
+		return o.release(ctx, launchReq)
 	default:
 		return fmt.Errorf("orchestrator: unknown cleanup disposition %q", launchReq.Disposition)
 	}
 }
 
-func (o *Orchestrator) terminate(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
-	request := adapter.TerminateRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "terminate_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+func (o *Orchestrator) terminate(ctx context.Context, launchReq *adapter.LaunchRequest) error {
+	request := adapter.TerminateRequest{ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "terminate_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
 	hash, err := domain.CanonicalHash(request)
 	if err != nil {
 		return err
@@ -1323,9 +1306,9 @@ func (o *Orchestrator) terminate(ctx context.Context, workspaceID string, launch
 	return err
 }
 
-func (o *Orchestrator) release(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
+func (o *Orchestrator) release(ctx context.Context, launchReq *adapter.LaunchRequest) error {
 	request := adapter.ReleaseRequest{
-		WorkspaceID:       workspaceID,
+
 		ConnectionID:      launchReq.SelectedOfferConnectionID,
 		OperationKey:      "release_" + launchReq.AttemptID,
 		LaunchKey:         launchReq.LaunchKey,
@@ -1344,39 +1327,28 @@ func (o *Orchestrator) release(ctx context.Context, workspaceID string, launchRe
 	return err
 }
 
-func (o *Orchestrator) recordCleanupFailure(ctx context.Context, workspaceID, runID string, version uint64, launchKey string, disposition domain.Disposition, cleanupErr error) error {
-	appendErr := o.appendEvents(ctx, workspaceID, runID, version, fmt.Sprintf("advance:cleanup-failed:%d", version), []eventlog.NewEvent{
+func (o *Orchestrator) recordCleanupFailure(ctx context.Context, runID string, version uint64, launchKey string, disposition domain.Disposition, cleanupErr error) error {
+	appendErr := o.appendEvents(ctx, runID, version, fmt.Sprintf("advance:cleanup-failed:%d", version), []eventlog.NewEvent{
 		mustEvent(runID, fmt.Sprintf("cleanup_failed_%d", version+1), EventCleanupFailed, publicCleanupError(cleanupErr, launchKey, disposition), o.now()),
 	})
 	return errors.Join(cleanupErr, appendErr)
 }
 
-func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {
-	return o.appendEventsAs(ctx, nil, workspaceID, runID, expectedVersion, commandKey, events)
+func (o *Orchestrator) appendEvents(ctx context.Context, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {
+	return o.appendEventsAs(ctx, nil, runID, expectedVersion, commandKey, events)
 }
 
 // appendEventsAs is appendEvents with an explicit envelope actor, used by the
 // human-command entry points (cancel). Advance-loop appends stay actorless:
 // their events are system observations, and the issuing command is already
 // captured on the command fact itself.
-func (o *Orchestrator) appendEventsAs(ctx context.Context, actor json.RawMessage, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {
-	request, err := runAppendRequest(actor, workspaceID, runID, expectedVersion, commandKey, events)
+func (o *Orchestrator) appendEventsAs(ctx context.Context, actor json.RawMessage, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {
+	request, err := runAppendRequest(actor, runID, expectedVersion, commandKey, events)
 	if err != nil {
 		return err
 	}
 	_, err = o.appendRun(ctx, request)
 	return err
-}
-
-func (o *Orchestrator) appendRunIfWorkspaceActive(
-	ctx context.Context,
-	request eventlog.AppendRequest,
-) (eventlog.AppendResult, error) {
-	next, err := o.projectRunAppend(ctx, request)
-	if err != nil {
-		return eventlog.AppendResult{}, err
-	}
-	return o.runs.AppendIfWorkspaceActive(ctx, request, next)
 }
 
 func (o *Orchestrator) appendRun(
@@ -1407,8 +1379,8 @@ func (o *Orchestrator) projectRunAppend(
 	if history.LastVersion == request.ExpectedStreamVersion {
 		for index, event := range request.Events {
 			stored := eventlog.StoredEvent{
-				ID:            event.ID,
-				WorkspaceID:   request.Stream.WorkspaceID,
+				ID: event.ID,
+
 				StreamType:    request.Stream.Type,
 				StreamID:      request.Stream.ID,
 				StreamVersion: request.ExpectedStreamVersion + uint64(index) + 1,
@@ -1428,17 +1400,17 @@ func (o *Orchestrator) projectRunAppend(
 	if err := state.validate(); err != nil {
 		return domain.RunRecord{}, err
 	}
-	return runRecordFromState(request.Stream.WorkspaceID, request.Stream.ID, state), nil
+	return runRecordFromState(request.Stream.ID, state), nil
 }
 
-func runAppendRequest(actor json.RawMessage, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) (eventlog.AppendRequest, error) {
-	events = scopeEventIDs(workspaceID, runID, events)
+func runAppendRequest(actor json.RawMessage, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) (eventlog.AppendRequest, error) {
+	events = scopeEventIDs(runID, events)
 	requestHash, err := domain.CanonicalHash(events)
 	if err != nil {
 		return eventlog.AppendRequest{}, err
 	}
 	return eventlog.AppendRequest{
-		Stream:                runStream(workspaceID, runID),
+		Stream:                runStream(runID),
 		ExpectedStreamVersion: expectedVersion,
 		CommandKey:            runID + ":" + commandKey,
 		RequestHash:           requestHash,
@@ -1474,25 +1446,13 @@ func mustPrivateEvent(runID, suffix, eventType string, publicData any, privateDa
 	return event
 }
 
-func scopeEventIDs(workspaceID, runID string, events []eventlog.NewEvent) []eventlog.NewEvent {
+func scopeEventIDs(runID string, events []eventlog.NewEvent) []eventlog.NewEvent {
 	scoped := slices.Clone(events)
-	unscopedPrefix := "evt_" + runID + "_"
-	scopedPrefix := "evt_" + workspaceID + "_" + runID + "_"
-	for i := range scoped {
-		if strings.HasPrefix(scoped[i].ID, scopedPrefix) {
-			continue
-		}
-		if strings.HasPrefix(scoped[i].ID, unscopedPrefix) {
-			scoped[i].ID = scopedPrefix + strings.TrimPrefix(scoped[i].ID, unscopedPrefix)
-			continue
-		}
-		scoped[i].ID = workspaceID + "_" + scoped[i].ID
-	}
 	return scoped
 }
 
-func eventID(workspaceID, runID, suffix string) string {
-	return "evt_" + workspaceID + "_" + runID + "_" + suffix
+func eventID(runID, suffix string) string {
+	return "evt_" + runID + "_" + suffix
 }
 
 func externalIDPart(value string) string {
@@ -1519,8 +1479,8 @@ func shortExternalHash(parts ...string) string {
 	return hex.EncodeToString(hash.Sum(nil))[:12]
 }
 
-func runStream(workspaceID, runID string) eventlog.StreamKey {
-	return eventlog.StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID}
+func runStream(runID string) eventlog.StreamKey {
+	return eventlog.StreamKey{Type: "run", ID: runID}
 }
 
 func isTerminal(phase adapter.ExternalPhase) bool {

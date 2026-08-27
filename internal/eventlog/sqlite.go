@@ -57,14 +57,22 @@ func (l *SQLiteEventLog) Close() error {
 }
 
 func (l *SQLiteEventLog) init(ctx context.Context) error {
-	stmts := []string{
+	for _, stmt := range []string{
 		`PRAGMA journal_mode=WAL`,
 		// Wait for competing writers instead of failing instantly with SQLITE_BUSY.
 		`PRAGMA busy_timeout=5000`,
+	} {
+		if _, err := l.db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	if err := flattenWorkspacePartitions(ctx, l.db); err != nil {
+		return err
+	}
+	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS events (
 			global_position INTEGER PRIMARY KEY AUTOINCREMENT,
 			event_id TEXT NOT NULL UNIQUE,
-			workspace_id TEXT NOT NULL,
 			stream_type TEXT NOT NULL,
 			stream_id TEXT NOT NULL,
 			stream_version INTEGER NOT NULL,
@@ -79,23 +87,21 @@ func (l *SQLiteEventLog) init(ctx context.Context) error {
 			visibility TEXT NOT NULL,
 			data_json BLOB,
 			private_data BLOB,
-			UNIQUE(workspace_id, stream_type, stream_id, stream_version)
+			UNIQUE(stream_type, stream_id, stream_version)
 		)`,
 		`CREATE TABLE IF NOT EXISTS command_appends (
-			workspace_id TEXT NOT NULL,
-			command_key TEXT NOT NULL,
+			command_key TEXT PRIMARY KEY,
 			request_hash TEXT NOT NULL,
 			first_position INTEGER NOT NULL,
-			last_position INTEGER NOT NULL,
-			PRIMARY KEY(workspace_id, command_key)
+			last_position INTEGER NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS subscription_offsets (
 			subscription_id TEXT PRIMARY KEY,
 			global_position INTEGER NOT NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_events_stream ON events(workspace_id, stream_type, stream_id, stream_version)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_stream ON events(stream_type, stream_id, stream_version)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_global ON events(global_position)`,
-		`CREATE INDEX IF NOT EXISTS idx_events_workspace_ids ON events(stream_type, event_type, workspace_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_types ON events(stream_type, event_type)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := l.db.ExecContext(ctx, stmt); err != nil {
@@ -103,6 +109,221 @@ func (l *SQLiteEventLog) init(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func flattenWorkspacePartitions(ctx context.Context, db *sql.DB) error {
+	eventsPartitioned, err := tableHasColumn(ctx, db, "events", "workspace_id")
+	if err != nil {
+		return err
+	}
+	commandsPartitioned, err := tableHasColumn(ctx, db, "command_appends", "workspace_id")
+	if err != nil {
+		return err
+	}
+	commandsExist, err := tableExists(ctx, db, "command_appends")
+	if err != nil {
+		return err
+	}
+	if !eventsPartitioned && !commandsPartitioned {
+		return nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if eventsPartitioned {
+		if err := refuseFlattenedStreamCollisions(ctx, tx); err != nil {
+			return err
+		}
+	}
+	if commandsPartitioned {
+		if err := refuseFlattenedCommandCollisions(ctx, tx, eventsPartitioned); err != nil {
+			return err
+		}
+	}
+	if eventsPartitioned {
+		if err := migratePartitionedEvents(ctx, tx); err != nil {
+			return err
+		}
+	}
+	if commandsPartitioned {
+		if err := migratePartitionedCommands(ctx, tx); err != nil {
+			return err
+		}
+	} else if eventsPartitioned && commandsExist {
+		if err := pruneCommandsForRemovedStreams(ctx, tx); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func refuseFlattenedStreamCollisions(ctx context.Context, tx *sql.Tx) error {
+	var streamType, streamID string
+	var streamVersion int64
+	err := tx.QueryRowContext(ctx, `SELECT stream_type, stream_id, stream_version
+		FROM events
+		WHERE stream_type <> 'workspace'
+		GROUP BY stream_type, stream_id, stream_version
+		HAVING COUNT(*) > 1
+		LIMIT 1`).Scan(&streamType, &streamID, &streamVersion)
+	if err == nil {
+		return fmt.Errorf("eventlog: workspace migration cannot flatten duplicate stream %s/%s at version %d", streamType, streamID, streamVersion)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	return nil
+}
+
+func refuseFlattenedCommandCollisions(ctx context.Context, tx *sql.Tx, eventsPartitioned bool) error {
+	query := `SELECT command_appends.command_key
+		FROM command_appends
+		WHERE EXISTS (
+			SELECT 1 FROM events
+			WHERE events.command_key = command_appends.command_key
+			  AND events.global_position BETWEEN command_appends.first_position
+			      AND command_appends.last_position
+		)
+		GROUP BY command_appends.command_key
+		HAVING COUNT(*) > 1
+		LIMIT 1`
+	if eventsPartitioned {
+		query = `SELECT command_appends.command_key
+			FROM command_appends
+			WHERE EXISTS (
+				SELECT 1 FROM events
+				WHERE events.command_key = command_appends.command_key
+				  AND events.workspace_id = command_appends.workspace_id
+				  AND events.stream_type <> 'workspace'
+			)
+			GROUP BY command_appends.command_key
+			HAVING COUNT(*) > 1
+			LIMIT 1`
+	}
+	var commandKey string
+	err := tx.QueryRowContext(ctx, query).Scan(&commandKey)
+	if err == nil {
+		return fmt.Errorf("eventlog: workspace migration cannot flatten duplicate command key %q", commandKey)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	return nil
+}
+
+func migratePartitionedEvents(ctx context.Context, tx *sql.Tx) error {
+	for _, statement := range []string{
+		`ALTER TABLE events RENAME TO events_workspace_legacy`,
+		`CREATE TABLE events (
+			global_position INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id TEXT NOT NULL UNIQUE,
+			stream_type TEXT NOT NULL,
+			stream_id TEXT NOT NULL,
+			stream_version INTEGER NOT NULL,
+			event_type TEXT NOT NULL,
+			schema_version INTEGER NOT NULL,
+			occurred_at TEXT NOT NULL,
+			actor_json BLOB,
+			correlation_id TEXT,
+			causation_id TEXT,
+			command_key TEXT NOT NULL,
+			request_hash TEXT NOT NULL,
+			visibility TEXT NOT NULL,
+			data_json BLOB,
+			private_data BLOB,
+			UNIQUE(stream_type, stream_id, stream_version)
+		)`,
+		`INSERT INTO events (
+			global_position, event_id, stream_type, stream_id, stream_version,
+			event_type, schema_version, occurred_at, actor_json, correlation_id,
+			causation_id, command_key, request_hash, visibility, data_json, private_data
+		) SELECT
+			global_position, event_id, stream_type, stream_id, stream_version,
+			event_type, schema_version, occurred_at, actor_json, correlation_id,
+			causation_id, command_key, request_hash, visibility, data_json, private_data
+		FROM events_workspace_legacy
+		WHERE stream_type <> 'workspace'
+		ORDER BY global_position`,
+		`DROP TABLE events_workspace_legacy`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("eventlog: flatten workspace events: %w", err)
+		}
+	}
+	return nil
+}
+
+func migratePartitionedCommands(ctx context.Context, tx *sql.Tx) error {
+	for _, statement := range []string{
+		`ALTER TABLE command_appends RENAME TO command_appends_workspace_legacy`,
+		`CREATE TABLE command_appends (
+			command_key TEXT PRIMARY KEY,
+			request_hash TEXT NOT NULL,
+			first_position INTEGER NOT NULL,
+			last_position INTEGER NOT NULL
+		)`,
+		`INSERT INTO command_appends (command_key, request_hash, first_position, last_position)
+		SELECT command_key, request_hash, first_position, last_position
+		FROM command_appends_workspace_legacy
+		WHERE EXISTS (
+			SELECT 1 FROM events
+			WHERE events.command_key = command_appends_workspace_legacy.command_key
+			  AND events.global_position BETWEEN command_appends_workspace_legacy.first_position
+			      AND command_appends_workspace_legacy.last_position
+		)`,
+		`DROP TABLE command_appends_workspace_legacy`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("eventlog: flatten workspace commands: %w", err)
+		}
+	}
+	return nil
+}
+
+func pruneCommandsForRemovedStreams(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM command_appends
+		WHERE NOT EXISTS (
+			SELECT 1 FROM events
+			WHERE events.command_key = command_appends.command_key
+			  AND events.global_position BETWEEN command_appends.first_position
+			      AND command_appends.last_position
+		)`)
+	if err != nil {
+		return fmt.Errorf("eventlog: prune commands for removed workspace streams: %w", err)
+	}
+	return nil
+}
+
+func tableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	var exists bool
+	err := db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?
+	)`, table).Scan(&exists)
+	return exists, err
+}
+
+func tableHasColumn(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (l *SQLiteEventLog) Append(ctx context.Context, req AppendRequest) (AppendResult, error) {
@@ -143,7 +364,7 @@ func (l *SQLiteEventLog) append(ctx context.Context, req AppendRequest, mutation
 		_ = tx.Rollback()
 	}()
 
-	existing, err := readCommand(ctx, tx, req.Stream.WorkspaceID, req.CommandKey)
+	existing, err := readCommand(ctx, tx, req.CommandKey)
 	if err != nil {
 		return AppendResult{}, err
 	}
@@ -174,11 +395,11 @@ func (l *SQLiteEventLog) append(ctx context.Context, req AppendRequest, mutation
 		}
 		streamVersion := req.ExpectedStreamVersion + uint64(i) + 1
 		result, err := tx.ExecContext(ctx, `INSERT INTO events (
-			event_id, workspace_id, stream_type, stream_id, stream_version,
+			event_id, stream_type, stream_id, stream_version,
 			event_type, schema_version, occurred_at, actor_json, correlation_id,
 			causation_id, command_key, request_hash, visibility, data_json, private_data
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			event.ID, req.Stream.WorkspaceID, req.Stream.Type, req.Stream.ID, streamVersion,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			event.ID, req.Stream.Type, req.Stream.ID, streamVersion,
 			event.Type, event.SchemaVersion, occurredAt.UTC().Format(time.RFC3339Nano), []byte(req.Actor),
 			req.CorrelationID, req.CausationID, req.CommandKey, req.RequestHash, string(visibility),
 			[]byte(event.Data), event.PrivateData,
@@ -196,7 +417,6 @@ func (l *SQLiteEventLog) append(ctx context.Context, req AppendRequest, mutation
 		stored = append(stored, StoredEvent{
 			GlobalPosition: GlobalPosition(pos),
 			ID:             event.ID,
-			WorkspaceID:    req.Stream.WorkspaceID,
 			StreamType:     req.Stream.Type,
 			StreamID:       req.Stream.ID,
 			StreamVersion:  streamVersion,
@@ -220,9 +440,9 @@ func (l *SQLiteEventLog) append(ctx context.Context, req AppendRequest, mutation
 	}
 	if len(stored) > 0 {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO command_appends (
-			workspace_id, command_key, request_hash, first_position, last_position
-		) VALUES (?, ?, ?, ?, ?)`,
-			req.Stream.WorkspaceID, req.CommandKey, req.RequestHash,
+			command_key, request_hash, first_position, last_position
+		) VALUES (?, ?, ?, ?)`,
+			req.CommandKey, req.RequestHash,
 			stored[0].GlobalPosition, stored[len(stored)-1].GlobalPosition); err != nil {
 			if isConstraintViolation(err) {
 				return AppendResult{}, ErrIdempotencyConflict
@@ -244,13 +464,13 @@ func (l *SQLiteEventLog) ReadStream(ctx context.Context, stream StreamKey, after
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := l.db.QueryContext(ctx, `SELECT global_position, event_id, workspace_id, stream_type, stream_id,
+	rows, err := l.db.QueryContext(ctx, `SELECT global_position, event_id, stream_type, stream_id,
 		stream_version, event_type, schema_version, occurred_at, actor_json, correlation_id, causation_id,
 		command_key, request_hash, visibility, data_json, private_data
 		FROM events
-		WHERE workspace_id = ? AND stream_type = ? AND stream_id = ? AND stream_version > ?
+		WHERE stream_type = ? AND stream_id = ? AND stream_version > ?
 		ORDER BY stream_version ASC
-		LIMIT ?`, stream.WorkspaceID, stream.Type, stream.ID, afterVersion, limit)
+		LIMIT ?`, stream.Type, stream.ID, afterVersion, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +488,7 @@ func (l *SQLiteEventLog) ReadAll(ctx context.Context, after GlobalPosition, limi
 	where = append(where, filterWhere...)
 	args = append(args, filterArgs...)
 	args = append(args, limit)
-	rows, err := l.db.QueryContext(ctx, `SELECT global_position, event_id, workspace_id, stream_type, stream_id,
+	rows, err := l.db.QueryContext(ctx, `SELECT global_position, event_id, stream_type, stream_id,
 		stream_version, event_type, schema_version, occurred_at, actor_json, correlation_id, causation_id,
 		command_key, request_hash, visibility, data_json, private_data
 		FROM events
@@ -295,42 +515,9 @@ func (l *SQLiteEventLog) LatestPosition(ctx context.Context, filter EventFilter)
 	return position, nil
 }
 
-// ListWorkspaceIDs returns the durable partitions that match the event index.
-// Unlike ReadAll, it never walks historical rows: SQLite answers from the
-// stream-type/event-type/workspace index, so background control loops pay for
-// live partitions rather than total event history.
-func (l *SQLiteEventLog) ListWorkspaceIDs(ctx context.Context, filter EventFilter) ([]string, error) {
-	where, args := eventFilterSQL(filter)
-	query := "SELECT DISTINCT workspace_id FROM events"
-	if len(where) > 0 {
-		query += " WHERE " + strings.Join(where, " AND ")
-	}
-	rows, err := l.db.QueryContext(ctx, query+" ORDER BY workspace_id ASC", args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var workspaceIDs []string
-	for rows.Next() {
-		var workspaceID string
-		if err := rows.Scan(&workspaceID); err != nil {
-			return nil, err
-		}
-		workspaceIDs = append(workspaceIDs, workspaceID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return workspaceIDs, nil
-}
-
 func eventFilterSQL(filter EventFilter) ([]string, []any) {
-	where := make([]string, 0, 4)
-	args := make([]any, 0, 2+len(filter.StreamTypes)+len(filter.EventTypes))
-	if filter.WorkspaceID != "" {
-		where = append(where, "workspace_id = ?")
-		args = append(args, filter.WorkspaceID)
-	}
+	where := make([]string, 0, 3)
+	args := make([]any, 0, 1+len(filter.StreamTypes)+len(filter.EventTypes))
 	if len(filter.StreamTypes) > 0 {
 		where = append(where, "stream_type IN ("+placeholders(len(filter.StreamTypes))+")")
 		for _, value := range filter.StreamTypes {
@@ -467,24 +654,24 @@ func isConstraintViolation(err error) bool {
 	return false
 }
 
-func readCommand(ctx context.Context, tx *sql.Tx, workspaceID, commandKey string) ([]StoredEvent, error) {
+func readCommand(ctx context.Context, tx *sql.Tx, commandKey string) ([]StoredEvent, error) {
 	var requestHash string
 	var firstPosition, lastPosition int64
 	err := tx.QueryRowContext(ctx, `SELECT request_hash, first_position, last_position
 		FROM command_appends
-		WHERE workspace_id = ? AND command_key = ?`, workspaceID, commandKey).Scan(&requestHash, &firstPosition, &lastPosition)
+		WHERE command_key = ?`, commandKey).Scan(&requestHash, &firstPosition, &lastPosition)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT global_position, event_id, workspace_id, stream_type, stream_id,
+	rows, err := tx.QueryContext(ctx, `SELECT global_position, event_id, stream_type, stream_id,
 		stream_version, event_type, schema_version, occurred_at, actor_json, correlation_id, causation_id,
 		command_key, request_hash, visibility, data_json, private_data
 		FROM events
-		WHERE workspace_id = ? AND command_key = ? AND global_position BETWEEN ? AND ?
-		ORDER BY global_position ASC`, workspaceID, commandKey, firstPosition, lastPosition)
+		WHERE command_key = ? AND global_position BETWEEN ? AND ?
+		ORDER BY global_position ASC`, commandKey, firstPosition, lastPosition)
 	if err != nil {
 		return nil, err
 	}
@@ -495,8 +682,8 @@ func readCommand(ctx context.Context, tx *sql.Tx, workspaceID, commandKey string
 func currentStreamVersion(ctx context.Context, tx *sql.Tx, stream StreamKey) (uint64, error) {
 	var version sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT MAX(stream_version) FROM events
-		WHERE workspace_id = ? AND stream_type = ? AND stream_id = ?`,
-		stream.WorkspaceID, stream.Type, stream.ID).Scan(&version); err != nil {
+		WHERE stream_type = ? AND stream_id = ?`,
+		stream.Type, stream.ID).Scan(&version); err != nil {
 		return 0, err
 	}
 	if !version.Valid {
@@ -514,7 +701,7 @@ func scanEvents(rows *sql.Rows) ([]StoredEvent, error) {
 		var actor, data []byte
 		var streamVersion int64
 		var position int64
-		if err := rows.Scan(&position, &event.ID, &event.WorkspaceID, &event.StreamType, &event.StreamID,
+		if err := rows.Scan(&position, &event.ID, &event.StreamType, &event.StreamID,
 			&streamVersion, &event.Type, &event.SchemaVersion, &occurredAt, &actor, &event.CorrelationID,
 			&event.CausationID, &event.CommandKey, &event.RequestHash, &visibility, &data, &event.PrivateData); err != nil {
 			return nil, err

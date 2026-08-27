@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,7 +20,6 @@ import (
 const releaseUpgradeToken = "release-upgrade-test-token"
 
 type releaseUpgradeManifest struct {
-	WorkspaceID        string                  `json:"workspace_id"`
 	RunID              string                  `json:"run_id"`
 	DataClassification string                  `json:"data_classification"`
 	Lineage            []releaseUpgradeFixture `json:"lineage"`
@@ -73,7 +71,7 @@ func readReleaseUpgradeManifest(t *testing.T) releaseUpgradeManifest {
 	if err := json.Unmarshal(contents, &manifest); err != nil {
 		t.Fatalf("decode release upgrade manifest: %v", err)
 	}
-	if manifest.WorkspaceID == "" || manifest.RunID == "" || manifest.DataClassification != "synthetic" || len(manifest.Lineage) == 0 {
+	if manifest.RunID == "" || manifest.DataClassification != "synthetic" || len(manifest.Lineage) == 0 {
 		t.Fatalf("incomplete release upgrade manifest: %+v", manifest)
 	}
 	return manifest
@@ -204,7 +202,7 @@ func assertReleaseReadiness(t *testing.T, baseURL string) {
 
 func assertAuthenticatedRunReplay(t *testing.T, baseURL string, manifest releaseUpgradeManifest) {
 	t.Helper()
-	runsURL := baseURL + "/v1/runs?workspace_id=" + url.QueryEscape(manifest.WorkspaceID)
+	runsURL := baseURL + "/v1/runs"
 	unauthorized, err := http.Get(runsURL)
 	if err != nil {
 		t.Fatalf("get runs without token: %v", err)

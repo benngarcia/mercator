@@ -95,29 +95,29 @@ func validProviderFailureKind(kind adapter.ProviderFailureKind) bool {
 	}
 }
 
-func (o *Orchestrator) stepLaunch(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
+func (o *Orchestrator) stepLaunch(ctx context.Context, runID string, version uint64, state runState) (bool, error) {
 	receipt, err := o.adapter.Launch(ctx, *state.launchIntent)
 	if err != nil {
-		return o.recordLaunchFailure(ctx, workspaceID, runID, version, state, err)
+		return o.recordLaunchFailure(ctx, runID, version, state, err)
 	}
-	return true, o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_accepted:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
+	return true, o.appendEvents(ctx, runID, version, "advance:launch_accepted:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
 		mustEvent(runID, "launch_accepted_"+state.launchIntent.AttemptID, EventLaunchAccepted, receipt, o.now()),
 	})
 }
 
-func (o *Orchestrator) recordLaunchFailure(ctx context.Context, workspaceID, runID string, version uint64, state runState, launchErr error) (bool, error) {
+func (o *Orchestrator) recordLaunchFailure(ctx context.Context, runID string, version uint64, state runState, launchErr error) (bool, error) {
 	failure := launchFailureFrom(launchErr, state.launchIntent.LaunchKey)
 	if failure.indeterminate() {
-		return false, o.recordIndeterminateLaunch(ctx, workspaceID, runID, version, state, failure, launchErr)
+		return false, o.recordIndeterminateLaunch(ctx, runID, version, state, failure, launchErr)
 	}
 	if failure.replacementEligible() {
-		return o.recordReplaceableLaunchFailure(ctx, workspaceID, runID, version, state, failure)
+		return o.recordReplaceableLaunchFailure(ctx, runID, version, state, failure)
 	}
-	return false, o.recordTerminalLaunchFailure(ctx, workspaceID, runID, version, state, failure, launchErr)
+	return false, o.recordTerminalLaunchFailure(ctx, runID, version, state, failure, launchErr)
 }
 
-func (o *Orchestrator) recordIndeterminateLaunch(ctx context.Context, workspaceID, runID string, version uint64, state runState, failure launchFailureData, launchErr error) error {
-	appendErr := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_indeterminate:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
+func (o *Orchestrator) recordIndeterminateLaunch(ctx context.Context, runID string, version uint64, state runState, failure launchFailureData, launchErr error) error {
+	appendErr := o.appendEvents(ctx, runID, version, "advance:launch_indeterminate:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
 		mustPrivateEvent(runID, "launch_indeterminate_"+state.launchIntent.AttemptID, EventLaunchIndeterminate, failure.publicData(), failure, o.now()),
 	})
 	if appendErr != nil {
@@ -126,7 +126,7 @@ func (o *Orchestrator) recordIndeterminateLaunch(ctx context.Context, workspaceI
 	return launchErr
 }
 
-func (o *Orchestrator) recordReplaceableLaunchFailure(ctx context.Context, workspaceID, runID string, version uint64, state runState, failure launchFailureData) (bool, error) {
+func (o *Orchestrator) recordReplaceableLaunchFailure(ctx context.Context, runID string, version uint64, state runState, failure launchFailureData) (bool, error) {
 	exhausted := state.attemptCount >= state.requested.Workload.Spec.Execution.MaxPreStartAttempts
 	toAppend := []eventlog.NewEvent{
 		mustPrivateEvent(runID, "launch_failed_"+state.launchIntent.AttemptID, EventLaunchFailed, failure.publicData(), failure, o.now()),
@@ -134,7 +134,7 @@ func (o *Orchestrator) recordReplaceableLaunchFailure(ctx context.Context, works
 	if exhausted {
 		toAppend = append(toAppend, retryExhaustedEvents(runID, o.now())...)
 	}
-	if err := o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:launch_failed:"+state.launchIntent.AttemptID, toAppend); err != nil {
+	if err := o.completeBookingAndAppend(ctx, runID, version, state, "advance:launch_failed:"+state.launchIntent.AttemptID, toAppend); err != nil {
 		return false, err
 	}
 	return !exhausted, nil
@@ -143,8 +143,8 @@ func (o *Orchestrator) recordReplaceableLaunchFailure(ctx context.Context, works
 // A definitive launch rejection closes the run terminally. The provider did
 // not create an object, so cleanup is not required and a later poll must never
 // repeat the rejected launch.
-func (o *Orchestrator) recordTerminalLaunchFailure(ctx context.Context, workspaceID, runID string, version uint64, state runState, failure launchFailureData, launchErr error) error {
-	if err := o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:launch_failed:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
+func (o *Orchestrator) recordTerminalLaunchFailure(ctx context.Context, runID string, version uint64, state runState, failure launchFailureData, launchErr error) error {
+	if err := o.completeBookingAndAppend(ctx, runID, version, state, "advance:launch_failed:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
 		mustPrivateEvent(runID, "launch_failed_"+state.launchIntent.AttemptID, EventLaunchFailed, failure.publicData(), failure, o.now()),
 		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeFailed}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
@@ -154,10 +154,10 @@ func (o *Orchestrator) recordTerminalLaunchFailure(ctx context.Context, workspac
 	return launchErr
 }
 
-func (o *Orchestrator) closeRetryExhausted(ctx context.Context, workspaceID, runID string, version uint64, decision domain.BookingDecision) error {
+func (o *Orchestrator) closeRetryExhausted(ctx context.Context, runID string, version uint64, decision domain.BookingDecision) error {
 	events := []eventlog.NewEvent{decisionEvent(runID, decision, o.now())}
 	events = append(events, retryExhaustedEvents(runID, o.now())...)
-	return o.appendEvents(ctx, workspaceID, runID, version, "advance:retry_exhausted", events)
+	return o.appendEvents(ctx, runID, version, "advance:retry_exhausted", events)
 }
 
 func retryExhaustedEvents(runID string, now time.Time) []eventlog.NewEvent {

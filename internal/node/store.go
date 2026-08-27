@@ -55,17 +55,17 @@ type Store interface {
 	// Invite records a node identity before any machine exists to fill it, so
 	// an accepted-but-lost provision is still reconcilable.
 	Invite(ctx context.Context, record Record) error
-	Get(ctx context.Context, workspaceID, nodeID string) (Record, error)
+	Get(ctx context.Context, nodeID string) (Record, error)
 	// Find resolves a node by identity alone. An enrolling machine knows which
-	// node it is and nothing else, so enrollment cannot be workspace-scoped.
+	// node it is and nothing else, so enrollment is deployment-scoped.
 	Find(ctx context.Context, nodeID string) (Record, error)
-	List(ctx context.Context, workspaceID string) ([]Record, error)
+	List(ctx context.Context) ([]Record, error)
 	// Enroll redeems an invitation exactly once, bumping the fencing token and
 	// opening a lease. Redeeming a spent invitation returns ErrEnrollmentSpent.
-	Enroll(ctx context.Context, workspaceID, nodeID string, enrollment Enrollment) (Record, error)
+	Enroll(ctx context.Context, nodeID string, enrollment Enrollment) (Record, error)
 	// Reinvite replaces an existing identity's redeemable invitation without
 	// disturbing its current enrollment.
-	Reinvite(ctx context.Context, workspaceID, nodeID, enrollmentTokenID string, expires time.Time) error
+	Reinvite(ctx context.Context, nodeID, enrollmentTokenID string, expires time.Time) error
 	// Retire ends a node's working life, because the Rental generation it was
 	// invited for is over. It can never enroll again, it renews no lease, and it
 	// is offered as capacity no more, whatever state it was in: a generation can
@@ -74,18 +74,18 @@ type Store interface {
 	// Retiring a retired node changes nothing. A generation's end is reached
 	// again by any reconciliation that lost its answer, and telling the second
 	// pass it failed would leave a caller retrying work already done.
-	Retire(ctx context.Context, workspaceID, nodeID string) error
+	Retire(ctx context.Context, nodeID string) error
 	// Heartbeat renews a lease and stores the node's latest facts.
-	Heartbeat(ctx context.Context, workspaceID, nodeID string, facts capability.NodeFacts, leaseExpires time.Time) (Record, error)
+	Heartbeat(ctx context.Context, nodeID string, facts capability.NodeFacts, leaseExpires time.Time) (Record, error)
 	// RecordEvent stores one node-authored fact, reporting false when this
 	// event ID was already recorded so a replayed spool changes nothing.
 	RecordEvent(ctx context.Context, event Event) (bool, error)
 	// LatestWorkload returns the node's most recent observation of one
 	// workload, and whether the node has ever reported it.
-	LatestWorkload(ctx context.Context, workspaceID, nodeID, runID, attemptID string) (capability.WorkloadObservation, bool, error)
+	LatestWorkload(ctx context.Context, nodeID, runID, attemptID string) (capability.WorkloadObservation, bool, error)
 	// Workloads returns the node's latest observation of every workload it has
 	// reported, which is what reconciliation compares against.
-	Workloads(ctx context.Context, workspaceID, nodeID string) ([]capability.WorkloadObservation, error)
+	Workloads(ctx context.Context, nodeID string) ([]capability.WorkloadObservation, error)
 	// AppendOperation records one command durably, reporting true when this
 	// operation ID was already recorded and is not reissuable. What the stored
 	// operation became decides that: a refused command that cannot have left an
@@ -93,13 +93,13 @@ type Store interface {
 	// again instead of being answered from a record of the pull that failed.
 	AppendOperation(ctx context.Context, operation Operation) (Operation, bool, error)
 	// SettleOperation records what the node did with one command.
-	SettleOperation(ctx context.Context, workspaceID, nodeID string, result Result) error
+	SettleOperation(ctx context.Context, nodeID string, result Result) error
 	// PendingOperations returns commands the node has not acknowledged, oldest
 	// first. They are redelivered when a node reconnects.
-	PendingOperations(ctx context.Context, workspaceID, nodeID string) ([]Operation, error)
+	PendingOperations(ctx context.Context, nodeID string) ([]Operation, error)
 	// AppliedOperationIDs returns every operation the node acknowledged, which
 	// is what tells a restarted control plane not to act twice.
-	AppliedOperationIDs(ctx context.Context, workspaceID, nodeID string) ([]string, error)
+	AppliedOperationIDs(ctx context.Context, nodeID string) ([]string, error)
 	// ExpireLeases marks every node whose lease elapsed as lost and returns
 	// them, so a caller can reconcile what those nodes were running.
 	ExpireLeases(ctx context.Context, now time.Time) ([]Record, error)

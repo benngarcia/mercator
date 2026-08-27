@@ -72,15 +72,14 @@ func unreachableFetch(t *testing.T) capability.PrepareArtifactCommand {
 		Source:        "objects://mercator/ws_1/artifacts/corpus",
 		SourceCredential: domain.ArtifactRead{
 			ContentCredentialScope: domain.ContentCredentialScope{
-				Operation:   "prepare:artifact:nod_alpha:artifact:corpus:v3",
-				WorkspaceID: "ws_1",
-				Content:     "artifact:corpus:v3",
-				ExpiresAt:   time.Now().UTC().Add(15 * time.Minute),
+				Operation: "prepare:artifact:nod_alpha:artifact:corpus:v3",
+
+				Content:   "artifact:corpus:v3",
+				ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
 			},
 			Location: signedRead,
 		},
 	}
-	command.WorkspaceID = "ws_1"
 	command.OperationID = "prepare:artifact:nod_alpha:artifact:corpus:v3"
 	return command
 }
@@ -92,16 +91,15 @@ func replayedPull() capability.PrepareImageCommand {
 		Reference:      "registry.test/analyst@" + digest,
 		RegistryCredential: domain.RegistryPull{
 			ContentCredentialScope: domain.ContentCredentialScope{
-				Operation:   "prepare:image:nod_alpha:" + digest,
-				WorkspaceID: "ws_1",
-				Content:     digest,
-				ExpiresAt:   time.Now().UTC().Add(15 * time.Minute),
+				Operation: "prepare:image:nod_alpha:" + digest,
+
+				Content:   digest,
+				ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
 			},
 			Registry: "registry.test",
 			Username: "mercator",
 		},
 	}
-	command.WorkspaceID = "ws_1"
 	command.OperationID = "prepare:image:nod_alpha:" + digest
 	return command
 }

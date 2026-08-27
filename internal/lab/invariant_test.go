@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 53 {
-		t.Fatalf("latest invariant results = %d, want 53", len(latest))
+	if len(latest) != 52 {
+		t.Fatalf("latest invariant results = %d, want 52", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -244,16 +244,6 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				Resident:      []ResidentContent{{Kind: ResidentLayer, Name: "sha256:base", SizeBytes: 40 << 30}},
 				ReservedBytes: 40 << 30,
 			}}
-		},
-		// Two tenants attached to one cache. Each attachment names the identity it
-		// landed in, and that identity has to be the one its own workspace, name,
-		// and key produce, so a world that keyed this cache by the name alone is
-		// caught handing both tenants the same bytes.
-		"safety.cache_mount_workspace_isolation": func(observation *InvariantObservation) {
-			observation.Effects = []EffectRecord{
-				cacheMountAccessedUnderSharedIdentity(1, "ws_lab_alpha"),
-				cacheMountAccessedUnderSharedIdentity(2, "ws_lab_beta"),
-			}
 		},
 		"safety.projection_rebuild_equivalence": func(observation *InvariantObservation) {
 			observation.ProjectionRebuildEquivalent = false
@@ -572,7 +562,7 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				placedUnderABudget("run-watched", domain.ClassInteractive, 1.00, pricedAt(1.3333)),
 			}
 		},
-		// One impossible submission emptying a workspace: a Run nothing in the fleet
+		// One impossible submission emptying a deployment: a Run nothing in the fleet
 		// can hold is queued, and the Run that does fit the fleet is then told it is
 		// waiting behind it. The machine stands idle beside work it could run, and
 		// nothing frees it, because the wait the queue is respecting is a wait for
@@ -599,7 +589,7 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		},
 		// A machine that could not measure its disk, and a wait recorded as the
 		// strongest thing a fleet can say. Every Run carries a disk floor, so a
-		// silence read as a full disk turns one failed measurement into a workspace
+		// silence read as a full disk turns one failed measurement into a deployment
 		// of Runs no capacity can ever hold, and every one of them then loses its
 		// place in the queue to whatever arrives next.
 		"safety.a_silence_is_not_an_answer_about_capacity": func(observation *InvariantObservation) {
@@ -802,7 +792,7 @@ func TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated(t *testing
 			answers: [2]string{`{"state":"starting"}`, `{"state":"active"}`},
 		},
 		OperationCapacityListOwned: {
-			request: `{"workspace_id":"ws_lab"}`,
+			request: `{}`,
 			answers: [2]string{`{"owned":1}`, `{"owned":2}`},
 		},
 		OperationNodeEnrolled: {
@@ -2108,8 +2098,8 @@ func historyAnsweredFetch() scheduler.SchedulingInput {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	image := "sha256:" + strings.Repeat("a", 64)
 	dataset := domain.ArtifactVersion{
-		ID:            "art_dataset",
-		WorkspaceID:   labWorkspace,
+		ID: "art_dataset",
+
 		ContentDigest: "sha256:" + strings.Repeat("d", 64),
 		SizeBytes:     40_000_000_000,
 		Location:      "s3://mercator-lab/dataset",
@@ -2270,31 +2260,6 @@ func TestEveryClauseOfTheDiskRuleCanFail(t *testing.T) {
 				t.Fatalf("a machine that %s was reported as keeping an account that adds up: %+v", name, result)
 			}
 		})
-	}
-}
-
-// cacheMountAccessedUnderSharedIdentity is one workload attached to a cache
-// filed under an identity that carries no workspace, which is what a world keyed
-// by name alone produces. It is the shape a cross-workspace leak actually has:
-// each attachment names the tenant it happened under, and the identity they
-// landed in is the same one.
-func cacheMountAccessedUnderSharedIdentity(sequence uint64, workspaceID string) EffectRecord {
-	request, err := json.Marshal(map[string]any{
-		"identity":          "compiler-cache",
-		"workspace_id":      workspaceID,
-		"name":              "compiler-cache",
-		"compatibility_key": "cuda-12.4",
-		"offer_id":          "shared-builder",
-	})
-	if err != nil {
-		panic(err)
-	}
-	return EffectRecord{
-		Sequence:  sequence,
-		Operation: OperationCacheMountAttach,
-		Command:   EffectCommandAccepted,
-		Response:  EffectResponseDelivered,
-		Request:   request,
 	}
 }
 
@@ -2900,7 +2865,7 @@ func classedWorkload(class domain.ServiceClass) domain.WorkloadRevision {
 // admissionDeferredEvent is Mercator telling a Run to wait for a machine to come
 // free, as the public log carries it: one machine weighed, and it could take this
 // Run once whatever it is spending now comes back. That is a wait the rest of the
-// workspace has to respect, which is what the ordering rules are stated over.
+// deployment has to respect, which is what the ordering rules are stated over.
 func admissionDeferredEvent(runID string, at time.Time, class domain.ServiceClass) eventlog.CloudEvent {
 	return deferralEvent(runID, at, domain.AdmissionDeferral{
 		Reason: domain.DeferredNoFeasibleOffer,

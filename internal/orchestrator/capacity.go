@@ -43,7 +43,7 @@ type Capacity interface {
 // enrol nowhere while the Run waits out a patience that was never going to end.
 type Inviter interface {
 	Invite(ctx context.Context, invitation node.Invitation) (capability.NodeBootstrap, error)
-	Reinvite(ctx context.Context, workspaceID, nodeID string, redeemableThrough time.Time) (capability.NodeBootstrap, error)
+	Reinvite(ctx context.Context, nodeID string, redeemableThrough time.Time) (capability.NodeBootstrap, error)
 	// EnrolledAt is when the agent opened its session, and the zero time while
 	// none has. The moment is asked for rather than a yes because the registry is
 	// the only holder of it: the agent calls in, so the arrival is dated where it
@@ -171,9 +171,9 @@ func nodeIdentityFor(rentalID string) string {
 	return "nod_" + strings.TrimPrefix(rentalID, "rnt_")
 }
 
-func (data capacityRequestedData) ref(workspaceID, ownershipToken string) capability.CapacityRef {
+func (data capacityRequestedData) ref(ownershipToken string) capability.CapacityRef {
 	return capability.CapacityRef{
-		WorkspaceID:    workspaceID,
+
 		ConnectionID:   data.ConnectionID,
 		RentalID:       data.RentalID,
 		NativeRef:      data.NativeRef,
@@ -181,12 +181,12 @@ func (data capacityRequestedData) ref(workspaceID, ownershipToken string) capabi
 	}
 }
 
-func (data capacityRequestedData) nodeRef(workspaceID string) capability.NodeRef {
+func (data capacityRequestedData) nodeRef() capability.NodeRef {
 	return capability.NodeRef{
-		WorkspaceID: workspaceID,
-		NodeID:      data.NodeID,
-		RentalID:    data.RentalID,
-		Generation:  data.Generation,
+
+		NodeID:     data.NodeID,
+		RentalID:   data.RentalID,
+		Generation: data.Generation,
 	}
 }
 
@@ -236,14 +236,14 @@ type capacityReclaimedData struct {
 // Each turn is one external act and one append, in the order a machine comes
 // into existence: the allocation, then what the provider and the registry say
 // about it, then giving it back if neither ever says the agent came.
-func (o *Orchestrator) stepBuildCapacity(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
+func (o *Orchestrator) stepBuildCapacity(ctx context.Context, runID string, version uint64, state runState) (bool, error) {
 	if o.capacity == nil || o.inviter == nil {
 		return false, fmt.Errorf("orchestrator: Run %q was placed on capacity to provision and this deployment has no capacity seam", runID)
 	}
 	if state.capacityAccepted == nil {
-		return o.allocateCapacity(ctx, workspaceID, runID, version, state)
+		return o.allocateCapacity(ctx, runID, version, state)
 	}
-	return o.watchCapacityArrive(ctx, workspaceID, runID, version, state)
+	return o.watchCapacityArrive(ctx, runID, version, state)
 }
 
 // allocateCapacity asks the provider for the machine, and asks first whether
@@ -255,26 +255,26 @@ func (o *Orchestrator) stepBuildCapacity(ctx context.Context, workspaceID, runID
 // travels to the provider precisely so this question has an answer, and asking
 // it is what makes a lost response cost one read rather than a second machine
 // nobody will ever come for.
-func (o *Orchestrator) allocateCapacity(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
+func (o *Orchestrator) allocateCapacity(ctx context.Context, runID string, version uint64, state runState) (bool, error) {
 	requested := *state.capacity
-	owned, held, err := o.capacityAlreadyHeld(ctx, workspaceID, requested.RentalID)
+	owned, held, err := o.capacityAlreadyHeld(ctx, requested.RentalID)
 	if err != nil {
 		return false, err
 	}
 	if held {
-		return true, o.recordCapacityAccepted(ctx, workspaceID, runID, version, capacityAcceptedData{
+		return true, o.recordCapacityAccepted(ctx, runID, version, capacityAcceptedData{
 			NativeRef:  owned.NativeRef,
 			State:      owned.State,
 			AcceptedAt: owned.CreatedAt.UTC(),
 			Adopted:    true,
 		})
 	}
-	bootstrap, err := o.bootstrapFor(ctx, workspaceID, requested)
+	bootstrap, err := o.bootstrapFor(ctx, requested)
 	if err != nil {
 		return false, err
 	}
 	command := capability.ProvisionCommand{
-		WorkspaceID:     workspaceID,
+
 		ConnectionID:    requested.ConnectionID,
 		OperationKey:    "provision_" + requested.RentalID,
 		RentalID:        requested.RentalID,
@@ -299,7 +299,7 @@ func (o *Orchestrator) allocateCapacity(ctx context.Context, workspaceID, runID 
 		// again under the same operation key.
 		return false, fmt.Errorf("orchestrator: provision capacity for Rental %q: %w", requested.RentalID, err)
 	}
-	return true, o.recordCapacityAccepted(ctx, workspaceID, runID, version, capacityAcceptedData{
+	return true, o.recordCapacityAccepted(ctx, runID, version, capacityAcceptedData{
 		NativeRef:  receipt.NativeRef,
 		State:      receipt.State,
 		AcceptedAt: receipt.AcceptedAt.UTC(),
@@ -312,12 +312,12 @@ func (o *Orchestrator) allocateCapacity(ctx context.Context, workspaceID, runID 
 // back to the node it was always going to be: an identity that already exists is
 // reinvited rather than duplicated, which is what keeps one Rental generation to
 // one node.
-func (o *Orchestrator) bootstrapFor(ctx context.Context, workspaceID string, requested capacityRequestedData) (capability.NodeBootstrap, error) {
+func (o *Orchestrator) bootstrapFor(ctx context.Context, requested capacityRequestedData) (capability.NodeBootstrap, error) {
 	bootstrap, err := o.inviter.Invite(ctx, node.Invitation{
-		WorkspaceID: workspaceID,
-		NodeID:      requested.NodeID,
-		RentalID:    requested.RentalID,
-		Generation:  requested.Generation,
+
+		NodeID:     requested.NodeID,
+		RentalID:   requested.RentalID,
+		Generation: requested.Generation,
 		// What the listing said holding this machine costs. A node invited without
 		// it is refused, because placement weighs an enrolled node against fresh
 		// capacity by its price and has no reading for silence.
@@ -334,15 +334,15 @@ func (o *Orchestrator) bootstrapFor(ctx context.Context, workspaceID string, req
 	if !errors.Is(err, node.ErrIdentityExists) {
 		return capability.NodeBootstrap{}, fmt.Errorf("orchestrator: invite node %q: %w", requested.NodeID, err)
 	}
-	bootstrap, err = o.inviter.Reinvite(ctx, workspaceID, requested.NodeID, requested.EnrolmentDeadlineAt)
+	bootstrap, err = o.inviter.Reinvite(ctx, requested.NodeID, requested.EnrolmentDeadlineAt)
 	if err != nil {
 		return capability.NodeBootstrap{}, fmt.Errorf("orchestrator: reinvite node %q: %w", requested.NodeID, err)
 	}
 	return bootstrap, nil
 }
 
-func (o *Orchestrator) capacityAlreadyHeld(ctx context.Context, workspaceID, rentalID string) (capability.OwnedCapacity, bool, error) {
-	owned, err := o.capacity.ListOwnedCapacity(ctx, capability.OwnershipQuery{WorkspaceID: workspaceID})
+func (o *Orchestrator) capacityAlreadyHeld(ctx context.Context, rentalID string) (capability.OwnedCapacity, bool, error) {
+	owned, err := o.capacity.ListOwnedCapacity(ctx, capability.OwnershipQuery{})
 	if err != nil {
 		return capability.OwnedCapacity{}, false, fmt.Errorf("orchestrator: list owned capacity: %w", err)
 	}
@@ -354,8 +354,8 @@ func (o *Orchestrator) capacityAlreadyHeld(ctx context.Context, workspaceID, ren
 	return capability.OwnedCapacity{}, false, nil
 }
 
-func (o *Orchestrator) recordCapacityAccepted(ctx context.Context, workspaceID, runID string, version uint64, accepted capacityAcceptedData) error {
-	return o.appendEvents(ctx, workspaceID, runID, version, "advance:capacity_accepted:"+accepted.NativeRef, []eventlog.NewEvent{
+func (o *Orchestrator) recordCapacityAccepted(ctx context.Context, runID string, version uint64, accepted capacityAcceptedData) error {
+	return o.appendEvents(ctx, runID, version, "advance:capacity_accepted:"+accepted.NativeRef, []eventlog.NewEvent{
 		mustEvent(runID, "capacity_accepted_"+accepted.NativeRef, EventCapacityAccepted, accepted, o.now()),
 	})
 }
@@ -365,13 +365,13 @@ func (o *Orchestrator) recordCapacityAccepted(ctx context.Context, workspaceID, 
 // allocation and boot; the registry owns whether an agent opened a session, and
 // nothing else can answer that. A machine that has reached neither by the
 // deadline is handed back.
-func (o *Orchestrator) watchCapacityArrive(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
+func (o *Orchestrator) watchCapacityArrive(ctx context.Context, runID string, version uint64, state runState) (bool, error) {
 	requested := *state.capacity
-	observation, err := o.capacity.ObserveCapacity(ctx, requested.ref(workspaceID, state.launchIntent.OwnershipToken))
+	observation, err := o.capacity.ObserveCapacity(ctx, requested.ref(state.launchIntent.OwnershipToken))
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: observe capacity for Rental %q: %w", requested.RentalID, err)
 	}
-	enrolledAt, err := o.inviter.EnrolledAt(ctx, requested.nodeRef(workspaceID))
+	enrolledAt, err := o.inviter.EnrolledAt(ctx, requested.nodeRef())
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: read whether node %q enrolled: %w", requested.NodeID, err)
 	}
@@ -379,10 +379,10 @@ func (o *Orchestrator) watchCapacityArrive(ctx context.Context, workspaceID, run
 	events := capacityStageEvents(runID, state, observation, enrolledAt, now)
 	switch {
 	case len(events) > 0:
-		return true, o.appendEvents(ctx, workspaceID, runID, version,
+		return true, o.appendEvents(ctx, runID, version,
 			fmt.Sprintf("advance:capacity_stages:%s:%d", requested.RentalID, len(state.capacityStages)), events)
 	case !now.Before(requested.EnrolmentDeadlineAt):
-		return o.reclaimCapacity(ctx, workspaceID, runID, version, state, now)
+		return o.reclaimCapacity(ctx, runID, version, state, now)
 	default:
 		return false, nil
 	}
@@ -463,10 +463,10 @@ func provisioningStagesFinished(observation capability.CapacityObservation, enro
 // capacity back before the work moves is the whole of the rule: a control plane
 // that runs the work elsewhere and leaves the machine to the provider's own
 // backstop is one an operator pays twice.
-func (o *Orchestrator) reclaimCapacity(ctx context.Context, workspaceID, runID string, version uint64, state runState, now time.Time) (bool, error) {
+func (o *Orchestrator) reclaimCapacity(ctx context.Context, runID string, version uint64, state runState, now time.Time) (bool, error) {
 	requested := *state.capacity
 	command := capability.CapacityCommand{
-		CapacityRef:  requested.ref(workspaceID, state.launchIntent.OwnershipToken),
+		CapacityRef:  requested.ref(state.launchIntent.OwnershipToken),
 		OperationKey: "reclaim_" + requested.RentalID,
 		Generation:   requested.Generation,
 	}
@@ -489,7 +489,7 @@ func (o *Orchestrator) reclaimCapacity(ctx context.Context, workspaceID, runID s
 		WaitedSeconds:   now.Sub(requested.RequestedAt).Seconds(),
 		Disposition:     domain.DispositionTerminate,
 	}
-	return true, o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:capacity_reclaimed:"+requested.RentalID, []eventlog.NewEvent{
+	return true, o.completeBookingAndAppend(ctx, runID, version, state, "advance:capacity_reclaimed:"+requested.RentalID, []eventlog.NewEvent{
 		mustEvent(runID, "capacity_reclaimed_"+requested.RentalID, EventCapacityReclaimed, reclaimed, o.now()),
 	})
 }

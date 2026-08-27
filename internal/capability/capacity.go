@@ -162,21 +162,19 @@ func (support CapacitySupport) Validate() error {
 	return nil
 }
 
-// CapacityQuery scopes a capacity listing to one workspace and requirement.
+// CapacityQuery scopes a capacity listing to one requirement.
 type CapacityQuery struct {
-	WorkspaceID string
-	Resources   domain.ResourceRequirements
+	Resources domain.ResourceRequirements
 }
 
 // CapacityRef names allocated capacity well enough to observe it after a
 // control-plane restart, without consulting any in-memory state.
 type CapacityRef struct {
-	WorkspaceID  string
 	ConnectionID string
 	RentalID     string
 	// NativeRef is the provider's own identifier for the machine.
 	NativeRef string
-	// OwnershipToken proves the capacity belongs to this workspace, so a
+	// OwnershipToken proves the capacity belongs to this deployment, so a
 	// reconciler never acts on a machine it merely resembles.
 	OwnershipToken string
 }
@@ -195,7 +193,6 @@ type CapacityCommand struct {
 
 // ProvisionCommand allocates fresh capacity for one Rental.
 type ProvisionCommand struct {
-	WorkspaceID  string
 	ConnectionID string
 	OperationKey string
 	RequestHash  string
@@ -308,15 +305,14 @@ type CapacityObservation struct {
 
 // OwnershipQuery scopes an owned-capacity listing.
 type OwnershipQuery struct {
-	WorkspaceID string
 }
 
 // OwnedCapacity is one machine the provider says belongs to this connection.
 // Reconciliation compares it against known Rentals to find orphans.
 type OwnedCapacity struct {
-	NativeRef      string        `json:"native_ref"`
-	ConnectionID   string        `json:"connection_id"`
-	WorkspaceID    string        `json:"workspace_id"`
+	NativeRef    string `json:"native_ref"`
+	ConnectionID string `json:"connection_id"`
+
 	RentalID       string        `json:"rental_id,omitempty"`
 	Generation     uint64        `json:"generation,omitempty"`
 	OwnershipToken string        `json:"ownership_token,omitempty"`

@@ -66,7 +66,7 @@ type fanoutResult[T any] struct {
 	err        error
 }
 
-// fanOut asks every connection this workspace holds and reports which ones it
+// fanOut asks every connection this deployment holds and reports which ones it
 // asked. A connection an operator de-authorised is not asked, and it is named
 // rather than dropped: an answer nobody was asked for is not an answer, and a
 // reader of the record cannot otherwise tell one from a fleet that published

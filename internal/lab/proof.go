@@ -49,7 +49,7 @@ func VerifyVerticalProof(ctx context.Context, bundle RunBundle) (ProofReport, er
 		facts.result(8, scenario.EvidenceQueueVsFreshCompared, facts.comparesQueueAndFresh("run-consumer"), "consumer scheduling compared standing queue delay with fresh provisioning"),
 		facts.result(9, scenario.EvidenceAmbiguousDelivery, facts.hasLostAcceptedLaunch(), "the provider accepted a launch whose response was lost"),
 		facts.result(10, scenario.EvidenceReconciledWithoutDuplicate, facts.oneAcceptedLaunchPerRun(), "reconciliation produced one accepted external launch per Run"),
-		facts.result(11, scenario.EvidenceControlPlaneRestarted, facts.hasAcceptedEffect(OperationControlPlaneRestart, labWorkspace), "the control plane restarted while external state survived"),
+		facts.result(11, scenario.EvidenceControlPlaneRestarted, facts.hasAcceptedEffect(OperationControlPlaneRestart, "deployment"), "the control plane restarted while external state survived"),
 	}
 	restartEquivalent := verifyRestartEquivalence(ctx, bundle) == nil
 	results = append(results, facts.result(12, scenario.EvidenceRestartEquivalent, restartEquivalent, "restart and no-extra-restart terminal semantics match"))

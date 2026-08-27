@@ -5,18 +5,11 @@ import (
 	"net/http"
 )
 
-// administrativePatterns are the operations that change what this deployment
-// is rather than what a workspace contains: which tenants exist, which machines
-// Mercator may use, and when the event sinks deliver. None of them belongs on
-// the address ordinary API traffic arrives at.
-//
-// They are patterns rather than prefixes because the reads beside them are not
-// administrative: GET /v1/workspaces lists what the caller can see and GET
-// /v1/sinks/{sink_id} reports delivery lag, and a console that cannot read
-// those is a console that cannot render.
+// administrativePatterns are the operations that change which machines
+// Mercator may use or force event delivery. None belongs on the address ordinary
+// API traffic arrives at. They are patterns rather than prefixes because the
+// reads beside them are not administrative.
 var administrativePatterns = []string{
-	"POST /v1/workspaces",
-	"POST /v1/workspaces/{workspace_id}/archive",
 	"POST /v1/nodes",
 	"POST /v1/sinks/{sink_id}/deliver",
 	"POST /v1/sinks/{sink_id}/replay",

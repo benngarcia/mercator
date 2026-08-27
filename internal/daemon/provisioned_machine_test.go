@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
-	"github.com/benngarcia/mercator/internal/daemon"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/nodeagent"
 )
@@ -102,7 +101,7 @@ func startProvisionedFleet(t *testing.T, provider *bootstrappingProvider, docker
 
 	bootstrap := harness.invite(t, 1.25)
 	if _, err := provider.ProvisionCapacity(t.Context(), capability.ProvisionCommand{
-		WorkspaceID:     daemon.DefaultWorkspaceID,
+
 		ConnectionID:    "conn_machines",
 		OperationKey:    "provision_" + bootstrap.RentalID,
 		RentalID:        bootstrap.RentalID,
@@ -195,7 +194,7 @@ func (f *fleet) awaitRealOutcome(t *testing.T, runID, want string) {
 				Outcome string `json:"outcome"`
 			} `json:"run"`
 		}
-		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &refreshed, http.StatusOK)
+		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh", nil, &refreshed, http.StatusOK)
 		outcome = refreshed.Run.Outcome
 		return outcome == want
 	}, "Run "+runID+" never reached outcome "+want+" (last outcome "+outcome+")")

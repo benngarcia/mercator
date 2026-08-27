@@ -88,6 +88,12 @@ func TestPublicObjectSchemasAreConcrete(t *testing.T) {
 	assertConcreteObjectSchemas(t, "openapi", document)
 }
 
+func TestContractHasNoWorkspaceSurface(t *testing.T) {
+	if strings.Contains(strings.ToLower(string(openAPIJSON)), "workspace") {
+		t.Fatal("OpenAPI contract still exposes the removed workspace abstraction")
+	}
+}
+
 func assertConcreteObjectSchemas(t *testing.T, path string, value any) {
 	t.Helper()
 	switch value := value.(type) {

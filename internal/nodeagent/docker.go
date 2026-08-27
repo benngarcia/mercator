@@ -180,10 +180,10 @@ func (docker *DockerRuntime) PrepareImage(ctx context.Context, command capabilit
 }
 
 // authorisedPull is the machine checking its own material before it presents it.
-// The control plane minted it for one operation, one workspace and one digest,
+// The control plane minted it for one operation and one digest,
 // and a node that presented whatever it was handed would make that scope a claim
 // in a comment rather than something either end enforces: the case it catches is
-// a credential for one workspace's private image arriving on a command to pull
+// a credential for one private image arriving on a command to pull
 // another's.
 //
 // No credential is not a refusal. An image any anonymous reader can have is
@@ -207,7 +207,7 @@ func (docker *DockerRuntime) authorisedPull(command capability.PrepareImageComma
 			credential.Content,
 		)
 	}
-	if err := credential.Authorises(command.OperationID, command.WorkspaceID, command.ManifestDigest, docker.now().UTC()); err != nil {
+	if err := credential.Authorises(command.OperationID, command.ManifestDigest, docker.now().UTC()); err != nil {
 		return err
 	}
 	if host := domain.ReferenceRegistry(command.Reference); credential.Registry != host {
@@ -334,7 +334,7 @@ func (docker *DockerRuntime) LaunchWorkload(ctx context.Context, command capabil
 		args = append(args, "--env", binding.Name+"="+*binding.Value)
 	}
 	for _, mount := range command.CacheMounts {
-		attachment, err := docker.cacheMount(command.WorkspaceID, mount)
+		attachment, err := docker.cacheMount(mount)
 		if err != nil {
 			return err
 		}
@@ -496,8 +496,8 @@ func (docker *DockerRuntime) cacheLabel(part string) string {
 }
 
 // cacheMount is the volume flag one Cache Mount contributes to `docker run`.
-// The volume's name is derived from the workspace, the cache's name, and the
-// compatibility key together, so a second workspace asking for "compiler-cache"
+// The volume's name is derived from the cache's name and compatibility key
+// together, so two Runs asking for "compiler-cache"
 // gets its own storage by construction rather than by a comparison this function
 // could forget to make, and a new compatibility key gets an empty cache rather
 // than the generation the application has just said it cannot use.
@@ -507,17 +507,14 @@ func (docker *DockerRuntime) cacheLabel(part string) string {
 // so a launch that never reaches container creation leaves nothing behind: an
 // image this machine cannot resolve, a full disk, a refused command. The agent
 // used to open the volume itself before dispatching the run, which made every
-// failed launch a machine reporting a cache no workload of that tenant and
+// failed launch a machine reporting a cache no workload of this deployment and
 // generation had ever been attached to, and the next Run's decision recorded it
 // as warmth.
 //
 // What is left behind is the previous generation's volume, which nothing
 // reclaims: garbage collection is its own capability and this runtime still
 // declares it unsupported.
-func (docker *DockerRuntime) cacheMount(workspaceID string, mount domain.CacheMountRequirement) (string, error) {
-	if workspaceID == "" {
-		return "", fmt.Errorf("cache mount %q has no workspace, and a cache's identity is workspace-scoped", mount.Name)
-	}
+func (docker *DockerRuntime) cacheMount(mount domain.CacheMountRequirement) (string, error) {
 	if !domain.ValidCacheName(mount.Name) {
 		return "", fmt.Errorf("cache mount %q is not a name a volume can be derived from", mount.Name)
 	}
@@ -530,9 +527,8 @@ func (docker *DockerRuntime) cacheMount(workspaceID string, mount domain.CacheMo
 	}
 	return strings.Join([]string{
 		"type=volume",
-		"source=" + domain.CacheVolumeName(workspaceID, mount),
+		"source=" + domain.CacheVolumeName(mount),
 		"target=" + domain.CacheMountPath(mount.Name),
-		"volume-label=" + docker.cacheLabel("workspace") + "=" + workspaceID,
 		"volume-label=" + docker.cacheLabel("name") + "=" + mount.Name,
 		"volume-label=" + docker.cacheLabel("key") + "=" + mount.CompatibilityKey,
 	}, ","), nil
@@ -555,7 +551,7 @@ func (docker *DockerRuntime) cacheMount(workspaceID string, mount domain.CacheMo
 // So the report is the intersection of two facts the daemon holds: the volumes
 // stamped as caches, and the volumes some container of this node's was attached
 // to while running. Nothing is reclaimed here. Removing a volume because a
-// launch failed would delete a tenant's warm cache whenever the failing launch
+// launch failed would delete the deployment's warm cache whenever the failing launch
 // was the second one, and reclaiming storage is garbage collection, which this
 // runtime still declares unsupported. A cache nothing can be shown to have run
 // against is left on the disk and left out of the report.
@@ -657,8 +653,8 @@ func (docker *DockerRuntime) unreadableCaches(ctx context.Context, err error) (d
 }
 
 // describedVolume is one volume as the daemon accounts for it. The labels are
-// the identity: a cache is a workspace, a name, and the generation of content
-// the application declared, and none of that can be read off a volume's bytes.
+// the identity: a cache is a name and the generation of content the application
+// declared, and neither can be read off a volume's bytes.
 type describedVolume struct {
 	Name      string            `json:"name"`
 	CreatedAt string            `json:"created_at"`
@@ -666,16 +662,14 @@ type describedVolume struct {
 }
 
 // cache is the Cache Mount this volume holds, or nothing when its labels do not
-// name one. A volume missing a workspace or a name is not a cache this control
-// plane can address, and reporting it under a guessed identity is how one
-// workspace ends up reading another's bytes.
+// name one. A volume missing a name is not a cache this control plane can
+// address.
 func (volume describedVolume) cache(label func(string) string) (domain.CacheMount, bool) {
 	mount := domain.CacheMount{
-		WorkspaceID:      volume.Labels[label("workspace")],
 		Name:             volume.Labels[label("name")],
 		CompatibilityKey: volume.Labels[label("key")],
 	}
-	if mount.WorkspaceID == "" || mount.Name == "" {
+	if mount.Name == "" {
 		return domain.CacheMount{}, false
 	}
 	if created, err := time.Parse(time.RFC3339, volume.CreatedAt); err == nil {

@@ -10,8 +10,8 @@ import (
 )
 
 // ListAdapters serves the registered adapters' onboarding manifests. The list
-// is static per process and carries no workspace state, but it sits behind the
-// same /v1 auth gate as everything else.
+// is static per process and sits behind the same /v1 auth gate as everything
+// else.
 func (s *Server) ListAdapters(context.Context, ListAdaptersRequestObject) (ListAdaptersResponseObject, error) {
 	if s.manifests == nil {
 		return ListAdapters200JSONResponse{Adapters: []adapter.Manifest{}}, nil
@@ -24,14 +24,7 @@ func (s *Server) ListAdapters(context.Context, ListAdaptersRequestObject) (ListA
 }
 
 func (s *Server) ListOffers(ctx context.Context, request ListOffersRequestObject) (ListOffersResponseObject, error) {
-	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		if workspaceErr.Forbidden {
-			return ListOffers403JSONResponse(workspaceErr.Response), nil
-		}
-		return ListOffers400JSONResponse(workspaceErr.Response), nil
-	}
-	aggregation, err := s.offers.AggregateOffers(ctx, adapter.OfferRequest{WorkspaceID: workspaceID})
+	aggregation, err := s.offers.AggregateOffers(ctx, adapter.OfferRequest{})
 	if err != nil {
 		return ListOffers502JSONResponse(internalAPIError(http.StatusBadGateway, "LIST_OFFERS_FAILED", err)), nil
 	}

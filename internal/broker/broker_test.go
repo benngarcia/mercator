@@ -17,11 +17,11 @@ import (
 
 type fakeConns struct{ recs []connection.Record }
 
-func (f fakeConns) List(context.Context, string) ([]connection.Record, error) { return f.recs, nil }
+func (f fakeConns) List(context.Context) ([]connection.Record, error) { return f.recs, nil }
 
 type nilResolver struct{}
 
-func (nilResolver) Resolve(context.Context, string, credential.Credential) (string, error) {
+func (nilResolver) Resolve(context.Context, credential.Credential) (string, error) {
 	return "secret", nil
 }
 
@@ -63,7 +63,7 @@ func TestBrokerAggregateOffersReturnsPartialResultsAndConnectionErrors(t *testin
 		}},
 	})
 
-	aggregation, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	aggregation, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{})
 
 	if err != nil {
 		t.Fatalf("aggregate offers: %v", err)
@@ -87,7 +87,7 @@ func TestBrokerListOffersRejectsPartialResults(t *testing.T) {
 		}},
 	})
 
-	offers, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	offers, err := broker.ListOffers(t.Context(), adapter.OfferRequest{})
 
 	if offers != nil {
 		t.Fatalf("offers = %#v, want no incomplete offer set", offers)
@@ -114,7 +114,7 @@ func TestBrokerListOffersQueriesConnectionsConcurrently(t *testing.T) {
 	})
 	done := make(chan error, 1)
 	go func() {
-		_, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+		_, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{})
 		done <- err
 	}()
 
@@ -141,7 +141,7 @@ func TestBrokerListOffersSortsConcurrentResultsDeterministically(t *testing.T) {
 		}},
 	})
 
-	aggregation, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	aggregation, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{})
 
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
@@ -150,7 +150,7 @@ func TestBrokerListOffersSortsConcurrentResultsDeterministically(t *testing.T) {
 	for i, offer := range aggregation.Offers {
 		got[i] = offer.ConnectionID + "/" + offer.ID
 	}
-	again, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	again, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{})
 	if err != nil {
 		t.Fatalf("list offers again: %v", err)
 	}
@@ -178,11 +178,11 @@ func TestBrokerListOffersScopesOfferIdentityToConnection(t *testing.T) {
 		"b": fanoutAdapter{listOffers: sharedOffer},
 	})
 
-	first, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	first, err := broker.ListOffers(t.Context(), adapter.OfferRequest{})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
-	second, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	second, err := broker.ListOffers(t.Context(), adapter.OfferRequest{})
 	if err != nil {
 		t.Fatalf("list offers again: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestAggregationCarriesWhatACandidateCanBeLearnedAbout(t *testing.T) {
 		}},
 	})
 
-	offers, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	offers, err := broker.ListOffers(t.Context(), adapter.OfferRequest{})
 
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
@@ -259,7 +259,7 @@ func TestBrokerListOffersPropagatesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	aggregation, err := broker.AggregateOffers(ctx, adapter.OfferRequest{WorkspaceID: "ws_1"})
+	aggregation, err := broker.AggregateOffers(ctx, adapter.OfferRequest{})
 
 	if err != nil {
 		t.Fatalf("aggregate offers: %v", err)
@@ -280,7 +280,7 @@ func TestBrokerListOwnedRejectsPartialResultsWithConnectionErrors(t *testing.T) 
 		}},
 	})
 
-	objects, err := broker.ListOwned(t.Context(), adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	objects, err := broker.ListOwned(t.Context(), adapter.OwnershipQuery{})
 
 	if objects != nil {
 		t.Fatalf("objects = %#v, want no incomplete ownership set", objects)
@@ -325,7 +325,7 @@ func TestBrokerAggregatesOffersAcrossConnections(t *testing.T) {
 		return recAdapter{id: "x"}, nil
 	})
 	b := NewBroker(conns, f, nilResolver{})
-	offers, err := b.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	offers, err := b.ListOffers(context.Background(), adapter.OfferRequest{})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestBrokerAggregatesOffersAcrossConnections(t *testing.T) {
 // connection that was asked and had nothing, so a report derived from the offers
 // stated the two identically. Placement reads an empty answer as the strongest
 // thing a fleet can say about an ask, and an operator reading that has to be able
-// to tell a marketplace selling no machine of the shape from a workspace whose
+// to tell a marketplace selling no machine of the shape from a deployment whose
 // provider nobody contacted.
 func TestACollectionNamesTheConnectionNobodyAsked(t *testing.T) {
 	conns := fakeConns{recs: []connection.Record{
@@ -352,7 +352,7 @@ func TestACollectionNamesTheConnectionNobodyAsked(t *testing.T) {
 	})
 	b := NewBroker(conns, f, nilResolver{})
 
-	collection, err := b.CollectOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	collection, err := b.CollectOffers(context.Background(), adapter.OfferRequest{})
 
 	if err != nil {
 		t.Fatalf("collect offers: %v", err)
@@ -417,7 +417,7 @@ func TestBrokerListOwnedFansOut(t *testing.T) {
 		{ID: "conn_b", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "b"}},
 	}}
 	b := NewBroker(conns, f, nilResolver{})
-	owned, err := b.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := b.ListOwned(context.Background(), adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestBrokerRoutesObserveByConnection(t *testing.T) {
 	}}
 	b := NewBroker(conns, f, nilResolver{})
 	_, err := b.Observe(context.Background(), adapter.ObserveRequest{
-		WorkspaceID:  "ws_1",
+
 		ConnectionID: "conn_b",
 	})
 	if err != nil {
@@ -471,13 +471,13 @@ func TestBrokerVerifyConnectionBuildsAndVerifies(t *testing.T) {
 		{ID: "conn_a", AdapterType: "stub", Authorized: false, Config: map[string]string{"id": "conn_a"}},
 	}}
 	b := NewBroker(conns, f, nilResolver{})
-	if err := b.VerifyConnection(context.Background(), "ws_1", "conn_a"); err != nil {
+	if err := b.VerifyConnection(context.Background(), "conn_a"); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
 	if verified != "conn_a" {
 		t.Fatalf("expected Verify on conn_a, got %q", verified)
 	}
-	if err := b.VerifyConnection(context.Background(), "ws_1", "nope"); !errors.Is(err, ErrConnectionNotFound) {
+	if err := b.VerifyConnection(context.Background(), "nope"); !errors.Is(err, ErrConnectionNotFound) {
 		t.Fatalf("expected ErrConnectionNotFound, got %v", err)
 	}
 }

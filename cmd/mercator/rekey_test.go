@@ -25,7 +25,7 @@ var (
 func TestRekeyRotatesTheMasterKeyOfARealStore(t *testing.T) {
 	// Arrange: a stored credential sealed under the key about to be retired.
 	dsn := "file:" + filepath.Join(t.TempDir(), "mercator.db")
-	seal(t, dsn, retiredMasterKey, "ws_1", "conn_vast", "vast-token")
+	seal(t, dsn, retiredMasterKey, "conn_vast", "vast-token")
 
 	// Act
 	var stdout, stderr bytes.Buffer
@@ -43,10 +43,10 @@ func TestRekeyRotatesTheMasterKeyOfARealStore(t *testing.T) {
 	if !strings.Contains(stdout.String(), "re-sealed 1 credential") {
 		t.Fatalf("stdout = %q, want the rotated row count", stdout.String())
 	}
-	if got := resolve(t, dsn, newMasterKey, "ws_1", "conn_vast"); got != "vast-token" {
+	if got := resolve(t, dsn, newMasterKey, "conn_vast"); got != "vast-token" {
 		t.Fatalf("resolve under the new key = %q, want %q", got, "vast-token")
 	}
-	if got := resolve(t, dsn, retiredMasterKey, "ws_1", "conn_vast"); got != "" {
+	if got := resolve(t, dsn, retiredMasterKey, "conn_vast"); got != "" {
 		t.Fatalf("the retired key still resolves the credential as %q", got)
 	}
 }
@@ -180,7 +180,7 @@ func TestRekeyNamesTheDatabaseWhenItMovesNothing(t *testing.T) {
 	}
 }
 
-func seal(t *testing.T, dsn string, masterKey []byte, workspaceID, connectionID, secret string) {
+func seal(t *testing.T, dsn string, masterKey []byte, connectionID, secret string) {
 	t.Helper()
 	storage, err := sqlitestore.Open(t.Context(), dsn)
 	if err != nil {
@@ -192,14 +192,14 @@ func seal(t *testing.T, dsn string, masterKey []byte, workspaceID, connectionID,
 	if !ok {
 		t.Fatal("seal credential")
 	}
-	if err := store.Put(t.Context(), workspaceID, connectionID, blob); err != nil {
+	if err := store.Put(t.Context(), connectionID, blob); err != nil {
 		t.Fatalf("put credential: %v", err)
 	}
 }
 
 // resolve answers with the plaintext the master key reads, or "" when it reads
 // nothing at all.
-func resolve(t *testing.T, dsn string, masterKey []byte, workspaceID, connectionID string) string {
+func resolve(t *testing.T, dsn string, masterKey []byte, connectionID string) string {
 	t.Helper()
 	storage, err := sqlitestore.Open(t.Context(), dsn)
 	if err != nil {
@@ -207,7 +207,7 @@ func resolve(t *testing.T, dsn string, masterKey []byte, workspaceID, connection
 	}
 	defer func() { _ = storage.Close() }()
 	resolver := credential.NewResolver(nil, storage.CredentialStore(), masterKey)
-	plaintext, err := resolver.Resolve(t.Context(), workspaceID,
+	plaintext, err := resolver.Resolve(t.Context(),
 		credential.Credential{Source: credential.SourceMercator, Ref: connectionID})
 	if err != nil {
 		return ""

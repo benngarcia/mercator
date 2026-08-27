@@ -13,7 +13,7 @@ func TestReadFullStreamContinuesAfterShortPages(t *testing.T) {
 		{ID: "evt_3", StreamVersion: 3, GlobalPosition: 3},
 	}}
 
-	history, err := ReadFullStream(context.Background(), reader, StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"})
+	history, err := ReadFullStream(context.Background(), reader, StreamKey{Type: "run", ID: "run_1"})
 	if err != nil {
 		t.Fatalf("read full stream: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestScanAllContinuesAfterShortPages(t *testing.T) {
 
 func TestCompleteScansRejectNonAdvancingReaders(t *testing.T) {
 	reader := stalledReader{}
-	_, streamErr := ReadFullStream(context.Background(), reader, StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"})
+	_, streamErr := ReadFullStream(context.Background(), reader, StreamKey{Type: "run", ID: "run_1"})
 	if streamErr == nil || !strings.Contains(streamErr.Error(), "did not advance") {
 		t.Fatalf("stream error = %v, want cursor progress error", streamErr)
 	}

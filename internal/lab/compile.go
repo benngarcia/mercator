@@ -73,7 +73,6 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 		samples = append(samples, runtimeSamples...)
 		data, err := json.Marshal(RunArrival{
 			Name:                 arrival.Name,
-			Workspace:            arrival.Workspace,
 			Request:              arrival.Request,
 			ActualRuntime:        scenario.Duration(actualRuntime),
 			ActualRuntimeByOffer: actualByOffer,
@@ -123,26 +122,19 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 	return tape, samples, nil
 }
 
-// cancellationEvents is every withdrawal this Blueprint declared, carrying the
-// workspace its Run arrived into so the cancellation reaches the same tenant.
-// The sequence is offset past every arrival so a withdrawal at the same instant
-// as an arrival is ordered after it; the tape resequences everything once it is
-// sorted by time.
+// cancellationEvents is every withdrawal this Blueprint declared. The sequence
+// is offset past every arrival so a withdrawal at the same instant as an arrival
+// is ordered after it; the tape resequences everything once it is sorted by time.
 func cancellationEvents(
 	seed string,
 	start time.Time,
 	arrivals []scenario.RunArrivalSpec,
 	cancellations []scenario.RunCancellationSpec,
 ) ([]WorldEvent, error) {
-	workspaces := make(map[string]string, len(arrivals))
-	for _, arrival := range arrivals {
-		workspaces[arrival.Name] = arrival.Workspace
-	}
 	events := make([]WorldEvent, 0, len(cancellations))
 	for index, cancellation := range cancellations {
 		data, err := json.Marshal(RunCancellation{
-			Name:      cancellation.Run,
-			Workspace: workspaces[cancellation.Run],
+			Name: cancellation.Run,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("encode Run cancellation %q: %w", cancellation.Run, err)

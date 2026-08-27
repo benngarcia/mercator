@@ -18,7 +18,6 @@ func TestE2EFakeAdapterHTTPAndCLI(t *testing.T) {
 		t.Skip("set MERCATOR_E2E_FAKE=1 to run fake-adapter E2E")
 	}
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
-	seedCLIWorkspace(t, dsn)
 	handler, closeFn, err := httpapi.HandlerForSQLite(context.Background(), dsn, []domain.OfferSnapshot{cliOffer()})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -33,12 +32,12 @@ func TestE2EFakeAdapterHTTPAndCLI(t *testing.T) {
 
 	workload := mustJSON(t, cliRevision())
 	commands := [][]string{
-		{"run", "create", "--workspace-id", "ws_1", "--run-id", "run_e2e", "--idempotency-key", "idem_e2e", "--workload-json", workload},
-		{"run", "get", "--workspace-id", "ws_1", "--run-id", "run_e2e"},
-		{"run", "events", "--workspace-id", "ws_1", "--run-id", "run_e2e"},
-		{"run", "decision", "--workspace-id", "ws_1", "--run-id", "run_e2e"},
-		{"run", "refresh", "--workspace-id", "ws_1", "--run-id", "run_e2e"},
-		{"run", "cancel", "--workspace-id", "ws_1", "--run-id", "run_e2e"},
+		{"run", "create", "--run-id", "run_e2e", "--idempotency-key", "idem_e2e", "--workload-json", workload},
+		{"run", "get", "--run-id", "run_e2e"},
+		{"run", "events", "--run-id", "run_e2e"},
+		{"run", "decision", "--run-id", "run_e2e"},
+		{"run", "refresh", "--run-id", "run_e2e"},
+		{"run", "cancel", "--run-id", "run_e2e"},
 	}
 	var last bytes.Buffer
 	for _, args := range commands {

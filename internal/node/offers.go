@@ -29,8 +29,8 @@ const ConnectionID = "connection:nodes"
 // A node that has gone quiet is not offered. Its workloads still need
 // reconciling, but nothing new should be sent to a machine Mercator has
 // stopped hearing from.
-func (registry *Registry) Offers(ctx context.Context, workspaceID string) ([]domain.OfferSnapshot, error) {
-	records, err := registry.store.List(ctx, workspaceID)
+func (registry *Registry) Offers(ctx context.Context) ([]domain.OfferSnapshot, error) {
+	records, err := registry.store.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +55,7 @@ func (registry *Registry) Offers(ctx context.Context, workspaceID string) ([]dom
 // running occupies the machine whether or not Mercator has a Booking for it, and
 // a Booking Mercator holds for a container that has exited occupies nothing.
 func (registry *Registry) occupied(ctx context.Context, record Record) (int, error) {
-	workloads, err := registry.store.Workloads(ctx, record.WorkspaceID, record.ID)
+	workloads, err := registry.store.Workloads(ctx, record.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -90,8 +90,8 @@ func (registry *Registry) offerFreshness() time.Duration { return registry.lease
 // Ref resolves a node's current identity, including the generation a command
 // must be stamped with. A node that has gone quiet is refused here rather than
 // sent work, because the control plane cannot say what it is doing.
-func (registry *Registry) Ref(ctx context.Context, workspaceID, nodeID string) (capability.NodeRef, error) {
-	record, err := registry.store.Get(ctx, workspaceID, nodeID)
+func (registry *Registry) Ref(ctx context.Context, nodeID string) (capability.NodeRef, error) {
+	record, err := registry.store.Get(ctx, nodeID)
 	if err != nil {
 		return capability.NodeRef{}, err
 	}
@@ -145,9 +145,9 @@ func (registry *Registry) offer(record Record, occupied int) domain.OfferSnapsho
 			//
 			// Publishing the silence as a zero is what made one failed
 			// measurement the strongest thing a fleet can say. Every Run carries
-			// a disk floor, so every Run in the workspace was refused, every
+			// a disk floor, so every Run in the deployment was refused, every
 			// refusal read as a machine that can never hold the work, and the
-			// whole workspace lost its queue ordering until the next heartbeat
+			// whole deployment lost its queue ordering until the next heartbeat
 			// happened to succeed.
 			EphemeralDiskBytes: host.Disk.FreeBytes,
 			EphemeralDiskKnown: host.Disk.Known,
@@ -215,7 +215,7 @@ func (registry *Registry) offer(record Record, occupied int) domain.OfferSnapsho
 		// every runtime that has no replica store to look in.
 		Artifacts: record.Facts.Artifacts,
 		// The caches this node holds travel the same way, and for the same
-		// reason: each entry names the workspace that owns it, and only the node
+		// reason: each entry names the deployment that owns it, and only the node
 		// can say what is on its disk.
 		Caches: record.Facts.Caches,
 		// What this machine can take right now, from what it says it is already

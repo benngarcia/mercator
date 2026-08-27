@@ -21,7 +21,7 @@ import (
 // node leaves the catalog through the same predicate that makes the node registry
 // refuse to hand out its address, so the preparation Mercator states becomes a
 // command the Broker refuses and the whole fleet's pass ends on that error. Every
-// other tenant's desire then goes unstated, including the withdrawals that stop
+// other Runs' desire then goes unstated, including the withdrawals that stop
 // transfers nobody wants any more, and it repeats on every trigger for as long as
 // the Booking stays queued there.
 func TestNothingIsPreparedOnCapacityMercatorCannotSee(t *testing.T) {
@@ -94,11 +94,11 @@ func queuedBehindRunningWork(t *testing.T) preparedFleet {
 		withTestCapacity(),
 	)
 	createScheduledRun(t, ctx, orch, "run-active")
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-active"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-active"); err != nil {
 		t.Fatalf("advance the running Run: %v", err)
 	}
 	createScheduledRun(t, ctx, orch, "run-queued")
-	if err := orch.AdvanceRun(ctx, "ws_1", "run-queued"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run-queued"); err != nil {
 		t.Fatalf("advance the queued Run: %v", err)
 	}
 	at = now.Add(10 * time.Minute)

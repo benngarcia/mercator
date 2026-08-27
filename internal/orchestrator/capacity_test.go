@@ -32,7 +32,7 @@ func TestTheInvitationCarriesWhatTheListingChargesForTheMachine(t *testing.T) {
 	orch := newProvisioningOrchestrator(t, seam, provisionableOfferAt(2.5))
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
 
@@ -61,7 +61,7 @@ func TestTheProviderIsHandedTheBootstrapVerbatim(t *testing.T) {
 	orch := newProvisioningOrchestrator(t, seam, provisionableOfferAt(1))
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
 
@@ -98,10 +98,10 @@ func TestAProvisionWhoseAnswerWasLostAllocatesNoSecondMachine(t *testing.T) {
 	orch := newProvisioningOrchestrator(t, seam, provisionableOfferAt(1))
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err == nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err == nil {
 		t.Fatal("the lost provision was reported as a success, and a control plane that cannot tell has to say so")
 	}
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("reconcile the lost provision: %v", err)
 	}
 
@@ -141,7 +141,7 @@ func TestTheThreeProvisioningStagesAreMeasuredRatherThanDeclared(t *testing.T) {
 	), WithCapacity(seam), WithInviter(seam), WithClock(clock.Now))
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("allocate the machine: %v", err)
 	}
 	reach(t, ctx, orch, clock, seam.acquiredAt(start.Add(30*time.Second)), start.Add(37*time.Second))
@@ -187,7 +187,7 @@ func TestAStageNoAuthorityDatesIsRecordedAsABound(t *testing.T) {
 	), WithCapacity(seam), WithInviter(seam), WithClock(clock.Now))
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("allocate the machine: %v", err)
 	}
 	reach(t, ctx, orch, clock, seam.acquiredAt(start.Add(30*time.Second)), start.Add(37*time.Second))
@@ -207,7 +207,7 @@ func reach(t *testing.T, ctx context.Context, orch *Orchestrator, clock *steppin
 	t.Helper()
 	world()
 	clock.stopAt(looked)
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("look at the machine: %v", err)
 	}
 }
@@ -431,11 +431,11 @@ func (c *recordingCapacity) ListOwnedCapacity(_ context.Context, query capabilit
 	var owned []capability.OwnedCapacity
 	for rentalID, native := range c.machines {
 		owned = append(owned, capability.OwnedCapacity{
-			NativeRef:   native,
-			WorkspaceID: query.WorkspaceID,
-			RentalID:    rentalID,
-			State:       c.state,
-			CreatedAt:   time.Now().UTC(),
+			NativeRef: native,
+
+			RentalID:  rentalID,
+			State:     c.state,
+			CreatedAt: time.Now().UTC(),
 		})
 	}
 	return owned, nil
@@ -452,7 +452,7 @@ func (c *recordingCapacity) Invite(_ context.Context, invitation node.Invitation
 	return c.bootstrapFor(invitation.NodeID), nil
 }
 
-func (c *recordingCapacity) Reinvite(_ context.Context, _, nodeID string, _ time.Time) (capability.NodeBootstrap, error) {
+func (c *recordingCapacity) Reinvite(_ context.Context, nodeID string, _ time.Time) (capability.NodeBootstrap, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, exists := c.nodes[nodeID]; !exists {
@@ -542,7 +542,7 @@ func stringContains(haystack, needle string) bool {
 
 func runEventsFor(t *testing.T, ctx context.Context, orch *Orchestrator) []eventlog.StoredEvent {
 	t.Helper()
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	events, err := orch.GetRunEvents(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("read run events: %v", err)
 	}
@@ -572,11 +572,11 @@ func TestTheWorkDoesNotMoveUntilTheBillEnds(t *testing.T) {
 	), WithCapacity(seam), WithInviter(seam), WithClock(clock.Now))
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("allocate the machine: %v", err)
 	}
 	clock.step(11 * time.Minute)
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err == nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err == nil {
 		t.Fatal("the reclamation was reported as done, and this provider refused to destroy the machine")
 	}
 

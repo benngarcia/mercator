@@ -276,67 +276,18 @@ esac
 	}
 }
 
-// TestTwoWorkspacesGetTwoVolumesForOneCacheName is the hard isolation claim
-// against a real daemon. Two tenants declare a cache called compiler-cache and
-// both containers run on this machine; what each is attached to is read back with
-// `docker inspect` rather than asserted about the arguments this code built,
-// because the promise is about the running container and not about a string.
-//
-// The third launch is the same tenant and name under a new compatibility key. The
-// application has said that content belongs to another generation, so it gets its
-// own volume too: a comparison Mercator makes and then mounts across anyway would
-// be a comparison with no consequence.
-func TestTwoWorkspacesGetTwoVolumesForOneCacheName(t *testing.T) {
-	requireDocker(t)
-	pull(t, "busybox:latest")
-	runtime := NewDockerRuntime("")
-	cache := domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-12.4"}
-	nextGeneration := domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-13.0"}
-
-	alpha := launchWithCache(t, runtime, "ws_alpha", "run-alpha", cache)
-	beta := launchWithCache(t, runtime, "ws_beta", "run-beta", cache)
-	rebuilt := launchWithCache(t, runtime, "ws_alpha", "run-rebuilt", nextGeneration)
-
-	if alpha == beta {
-		t.Fatalf("two workspaces naming one cache were attached to the same volume %q", alpha)
-	}
-	if alpha == rebuilt {
-		t.Fatalf("a new compatibility key was attached to the previous generation's volume %q", alpha)
-	}
-	if want := domain.CacheVolumeName("ws_alpha", cache); alpha != want {
-		t.Fatalf("the running container is attached to %q, and this cache's volume is %q", alpha, want)
-	}
-	if !strings.Contains(alpha, "ws_alpha") || !strings.Contains(beta, "ws_beta") {
-		t.Fatalf("volumes %q and %q do not name the workspace that owns them", alpha, beta)
-	}
-
-	facts, err := runtime.Facts(context.Background())
-	if err != nil {
-		t.Fatalf("read node facts: %v", err)
-	}
-	if !facts.Caches.Known {
-		t.Fatal("a node that enumerated its caches reported that it had not")
-	}
-	if !facts.Caches.Holds("ws_alpha", cache) || !facts.Caches.Holds("ws_beta", cache) {
-		t.Fatalf("the node reports %+v, and both tenants' caches are on this disk", facts.Caches.Mounts)
-	}
-	if facts.Caches.Holds("ws_beta", nextGeneration) {
-		t.Fatal("the node reports a generation for a tenant that never asked for one")
-	}
-}
-
 // TestALaunchThatNeverRunsLeavesNoCacheBehind is what makes a reported cache
 // mean something. Creating the container is what creates its storage, so a
 // launch the daemon refuses before it gets there leaves nothing on the disk and
 // nothing in the node's report. The agent used to open the volume itself before
 // dispatching the run, which made every failed launch a machine advertising a
-// cache no workload of that tenant and generation was ever attached to, and the
+// cache no workload of that generation was ever attached to, and the
 // next Run's decision recorded that empty directory as warmth.
 func TestALaunchThatNeverRunsLeavesNoCacheBehind(t *testing.T) {
 	requireDocker(t)
 	runtime := NewDockerRuntime("")
 	cache := domain.CacheMountRequirement{Name: "never-run-cache", CompatibilityKey: "cuda-12.4"}
-	volume := domain.CacheVolumeName("ws_alpha", cache)
+	volume := domain.CacheVolumeName(cache)
 	t.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "--force", volume).Run() })
 	command := capability.LaunchWorkloadCommand{
 		RunID:       "run-never",
@@ -350,7 +301,6 @@ func TestALaunchThatNeverRunsLeavesNoCacheBehind(t *testing.T) {
 			Image: "busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		}}},
 	}
-	command.WorkspaceID = "ws_alpha"
 
 	if err := runtime.LaunchWorkload(context.Background(), command); err == nil {
 		t.Fatal("a launch of an image no registry can serve reported success")
@@ -363,7 +313,7 @@ func TestALaunchThatNeverRunsLeavesNoCacheBehind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read node facts: %v", err)
 	}
-	if facts.Caches.Holds("ws_alpha", cache) {
+	if facts.Caches.Holds(cache) {
 		t.Fatalf("the node reports holding a cache no workload ever ran against: %+v", facts.Caches.Mounts)
 	}
 }
@@ -384,7 +334,7 @@ func TestAContainerThatNeverStartsIsNotACacheThisNodeHolds(t *testing.T) {
 	pull(t, "busybox:latest")
 	runtime := NewDockerRuntime("")
 	cache := domain.CacheMountRequirement{Name: "never-started-cache", CompatibilityKey: "cuda-12.4"}
-	volume := domain.CacheVolumeName("ws_alpha", cache)
+	volume := domain.CacheVolumeName(cache)
 	t.Cleanup(func() {
 		_ = exec.Command("docker", "rm", "--force", "mercator-run-never-started-1").Run()
 		_ = exec.Command("docker", "volume", "rm", "--force", volume).Run()
@@ -402,7 +352,6 @@ func TestAContainerThatNeverStartsIsNotACacheThisNodeHolds(t *testing.T) {
 			Entrypoint: &[]string{"/definitely-not-in-this-image"},
 		}}},
 	}
-	command.WorkspaceID = "ws_alpha"
 
 	if err := runtime.LaunchWorkload(context.Background(), command); err == nil {
 		t.Fatal("a launch whose container could not start reported success")
@@ -415,7 +364,7 @@ func TestAContainerThatNeverStartsIsNotACacheThisNodeHolds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read node facts: %v", err)
 	}
-	if facts.Caches.Holds("ws_alpha", cache) {
+	if facts.Caches.Holds(cache) {
 		t.Fatalf("the node reports a cache whose container never started: %+v", facts.Caches.Mounts)
 	}
 }
@@ -432,11 +381,11 @@ func TestOneUnreadableCacheVolumeDoesNotCostTheNodeItsReport(t *testing.T) {
 case "$1 $2" in
   "info --format") echo '{"OperatingSystem":"linux","Architecture":"x86_64","ServerVersion":"29.4.0","NCPU":8,"MemTotal":1}' ;;
   "images --digests") ;;
-  "ps --all") echo '{"Names":"mercator-run-alpha-1","State":"exited","Status":"Exited (0) 2m ago","Labels":"mercator.run=run-alpha","Mounts":"mercator-cache-ws_alpha-compiler-cache-aaaaaaaa,mercator-cache-ws_alpha-pruned-cache-bbbbbbbb"}' ;;
-  "volume ls") echo 'mercator-cache-ws_alpha-compiler-cache-aaaaaaaa'
-               echo 'mercator-cache-ws_alpha-pruned-cache-bbbbbbbb' ;;
-  "volume inspect") echo '{"name":"mercator-cache-ws_alpha-compiler-cache-aaaaaaaa","created_at":"2030-01-01T00:00:00Z","labels":{"mercator.cache.workspace":"ws_alpha","mercator.cache.name":"compiler-cache","mercator.cache.key":"cuda-12.4"}}'
-                    echo 'Error response from daemon: get mercator-cache-ws_alpha-pruned-cache-bbbbbbbb: no such volume' >&2
+  "ps --all") echo '{"Names":"mercator-run-alpha-1","State":"exited","Status":"Exited (0) 2m ago","Labels":"mercator.run=run-alpha","Mounts":"mercator-cache-compiler-cache-aaaaaaaa,mercator-cache-pruned-cache-bbbbbbbb"}' ;;
+  "volume ls") echo 'mercator-cache-compiler-cache-aaaaaaaa'
+               echo 'mercator-cache-pruned-cache-bbbbbbbb' ;;
+  "volume inspect") echo '{"name":"mercator-cache-compiler-cache-aaaaaaaa","created_at":"2030-01-01T00:00:00Z","labels":{"mercator.cache.name":"compiler-cache","mercator.cache.key":"cuda-12.4"}}'
+                    echo 'Error response from daemon: get mercator-cache-pruned-cache-bbbbbbbb: no such volume' >&2
                     exit 1 ;;
 esac
 `)
@@ -449,7 +398,7 @@ esac
 	if !facts.Caches.Known {
 		t.Fatal("a node that described a cache reported that it had enumerated nothing")
 	}
-	if !facts.Caches.Holds("ws_alpha", domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-12.4"}) {
+	if !facts.Caches.Holds(domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-12.4"}) {
 		t.Fatalf("the node dropped the cache the daemon described: %+v", facts.Caches.Mounts)
 	}
 }
@@ -459,22 +408,22 @@ esac
 // because the daemon stamps them when it creates the mount point; only one of
 // them belongs to a container that ever held a process. The other is what a
 // launch that got as far as container creation and no further leaves behind, and
-// the whole point of reporting a cache is to say a workload of this tenant and
+// the whole point of reporting a cache is to say a workload of this deployment and
 // generation ran here.
 func TestANodeReportsOnlyTheCachesAWorkloadRanAgainst(t *testing.T) {
 	daemon := standInDaemon(t, `#!/bin/sh
 case "$1 $2" in
   "info --format") echo '{"OperatingSystem":"linux","Architecture":"x86_64","ServerVersion":"29.4.0","NCPU":8,"MemTotal":1}' ;;
   "images --digests") ;;
-  "ps --all") echo '{"Names":"mercator-run-ran-1","State":"exited","Status":"Exited (0) 2m ago","Labels":"mercator.run=run-ran","Mounts":"mercator-cache-ws_alpha-ran-cache-aaaaaaaa"}'
-              echo '{"Names":"mercator-run-stillborn-1","State":"created","Status":"Created","Labels":"mercator.run=run-stillborn","Mounts":"mercator-cache-ws_alpha-stillborn-cache-bbbbbbbb"}' ;;
-  "volume ls") echo 'mercator-cache-ws_alpha-ran-cache-aaaaaaaa'
-               echo 'mercator-cache-ws_alpha-stillborn-cache-bbbbbbbb' ;;
+  "ps --all") echo '{"Names":"mercator-run-ran-1","State":"exited","Status":"Exited (0) 2m ago","Labels":"mercator.run=run-ran","Mounts":"mercator-cache-ran-cache-aaaaaaaa"}'
+              echo '{"Names":"mercator-run-stillborn-1","State":"created","Status":"Created","Labels":"mercator.run=run-stillborn","Mounts":"mercator-cache-stillborn-cache-bbbbbbbb"}' ;;
+  "volume ls") echo 'mercator-cache-ran-cache-aaaaaaaa'
+               echo 'mercator-cache-stillborn-cache-bbbbbbbb' ;;
   "volume inspect")
     for volume in "$@"; do
       case "$volume" in
-        *ran-cache*) echo '{"name":"mercator-cache-ws_alpha-ran-cache-aaaaaaaa","created_at":"2030-01-01T00:00:00Z","labels":{"mercator.cache.workspace":"ws_alpha","mercator.cache.name":"ran-cache","mercator.cache.key":"cuda-12.4"}}' ;;
-        *stillborn-cache*) echo '{"name":"mercator-cache-ws_alpha-stillborn-cache-bbbbbbbb","created_at":"2030-01-01T00:00:00Z","labels":{"mercator.cache.workspace":"ws_alpha","mercator.cache.name":"stillborn-cache","mercator.cache.key":"cuda-12.4"}}' ;;
+        *ran-cache*) echo '{"name":"mercator-cache-ran-cache-aaaaaaaa","created_at":"2030-01-01T00:00:00Z","labels":{"mercator.cache.name":"ran-cache","mercator.cache.key":"cuda-12.4"}}' ;;
+        *stillborn-cache*) echo '{"name":"mercator-cache-stillborn-cache-bbbbbbbb","created_at":"2030-01-01T00:00:00Z","labels":{"mercator.cache.name":"stillborn-cache","mercator.cache.key":"cuda-12.4"}}' ;;
       esac
     done ;;
 esac
@@ -485,10 +434,10 @@ esac
 	if err != nil {
 		t.Fatalf("read node facts: %v", err)
 	}
-	if !facts.Caches.Holds("ws_alpha", domain.CacheMountRequirement{Name: "ran-cache", CompatibilityKey: "cuda-12.4"}) {
+	if !facts.Caches.Holds(domain.CacheMountRequirement{Name: "ran-cache", CompatibilityKey: "cuda-12.4"}) {
 		t.Fatalf("the node dropped a cache a workload ran against: %+v", facts.Caches.Mounts)
 	}
-	if facts.Caches.Holds("ws_alpha", domain.CacheMountRequirement{Name: "stillborn-cache", CompatibilityKey: "cuda-12.4"}) {
+	if facts.Caches.Holds(domain.CacheMountRequirement{Name: "stillborn-cache", CompatibilityKey: "cuda-12.4"}) {
 		t.Fatalf("the node reports a cache whose container never started: %+v", facts.Caches.Mounts)
 	}
 }
@@ -515,42 +464,6 @@ esac
 	if facts.Caches.Known {
 		t.Fatalf("a node that could not read its caches claims it enumerated them: %+v", facts.Caches)
 	}
-}
-
-// launchWithCache runs one throwaway container with one cache attached and
-// answers which volume the daemon says it mounted.
-func launchWithCache(t *testing.T, runtime *DockerRuntime, workspaceID, runID string, cache domain.CacheMountRequirement) string {
-	t.Helper()
-	command := capability.LaunchWorkloadCommand{
-		RunID:       runID,
-		AttemptID:   "1",
-		BookingID:   "bkg-" + runID,
-		CacheMounts: []domain.CacheMountRequirement{cache},
-		Workload: domain.WorkloadSpec{Containers: []domain.ContainerSpec{{
-			Name:  "main",
-			Image: "busybox:latest",
-			Args:  []string{"sleep", "30"},
-		}}},
-	}
-	command.WorkspaceID = workspaceID
-	container := "mercator-" + runID + "-1"
-	t.Cleanup(func() {
-		_ = exec.Command("docker", "rm", "--force", container).Run()
-		_ = exec.Command("docker", "volume", "rm", "--force", domain.CacheVolumeName(workspaceID, cache)).Run()
-	})
-	if err := runtime.LaunchWorkload(context.Background(), command); err != nil {
-		t.Fatalf("launch %s: %v", runID, err)
-	}
-	output, err := exec.Command("docker", "inspect", container, "--format",
-		`{{range .Mounts}}{{if eq .Destination "`+domain.CacheMountPath(cache.Name)+`"}}{{.Name}}{{end}}{{end}}`).CombinedOutput()
-	if err != nil {
-		t.Fatalf("docker inspect %s: %v\n%s", container, err, output)
-	}
-	mounted := strings.TrimSpace(string(output))
-	if mounted == "" {
-		t.Fatalf("the container for %s has nothing mounted at %s", runID, domain.CacheMountPath(cache.Name))
-	}
-	return mounted
 }
 
 // standInContentStore is a scripted daemon keeping its images in the containerd
@@ -636,7 +549,7 @@ func inspect(t *testing.T, reference, format string) string {
 // promise: what the node declares and what the runtime answers have to be the
 // same answer, and this is the one place the runtime says no out loud. An agent
 // started with nowhere to keep Artifact copies replicates none and says so,
-// rather than writing a tenant's dataset into whichever directory it happens to
+// rather than writing a dataset into whichever directory it happens to
 // have been started in.
 func TestTheDockerRuntimeRefusesTheWorkItDoesNotDo(t *testing.T) {
 	runtime := NewDockerRuntime("")
@@ -916,7 +829,6 @@ func TestTheNodeReportsWhenTheContainerStarted(t *testing.T) {
 			Args:  []string{"sleep", "30"},
 		}}},
 	}
-	command.WorkspaceID = "ws_alpha"
 	if err := runtime.LaunchWorkload(context.Background(), command); err != nil {
 		t.Fatalf("launch the workload: %v", err)
 	}

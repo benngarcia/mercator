@@ -32,10 +32,10 @@ func TestTheBrokerDeliversTheMaterialTheControlPlaneMintedForEachFetch(t *testin
 	}
 	image.RegistryCredential = domain.RegistryPull{
 		ContentCredentialScope: domain.ContentCredentialScope{
-			Operation:   image.Operation(),
-			WorkspaceID: "ws_1",
-			Content:     image.Content(),
-			ExpiresAt:   expiry,
+			Operation: image.Operation(),
+
+			Content:   image.Content(),
+			ExpiresAt: expiry,
 		},
 		Registry: "registry.mercator.test",
 		Username: "mercator",
@@ -52,16 +52,16 @@ func TestTheBrokerDeliversTheMaterialTheControlPlaneMintedForEachFetch(t *testin
 	}
 	artifact.SourceCredential = domain.ArtifactRead{
 		ContentCredentialScope: domain.ContentCredentialScope{
-			Operation:   artifact.Operation(),
-			WorkspaceID: "ws_1",
-			Content:     artifact.Content(),
-			ExpiresAt:   expiry,
+			Operation: artifact.Operation(),
+
+			Content:   artifact.Content(),
+			ExpiresAt: expiry,
 		},
 		Location: "https://objects.test/mercator/ws_1/artifacts/corpus?X-Amz-Signature=one-read",
 	}
 
 	if _, err := broker.Prepare(context.Background(), adapter.PrepareRequest{
-		WorkspaceID:  "ws_1",
+
 		OperationKey: "prepare/ws_1",
 		Wanted:       []adapter.PrepareItem{image, artifact},
 	}); err != nil {
@@ -88,7 +88,7 @@ func TestAnImageAnyoneCanReadReachesTheNodeWithNoMaterial(t *testing.T) {
 	broker := brokerServing(t, runtime, map[string]capability.Backend{})
 
 	if _, err := broker.Prepare(context.Background(), adapter.PrepareRequest{
-		WorkspaceID:  "ws_1",
+
 		OperationKey: "prepare/ws_1",
 		Wanted: []adapter.PrepareItem{{
 			Kind:            adapter.PrepareImage,
@@ -114,8 +114,8 @@ type recordingRuntime struct {
 	read capability.PrepareArtifactCommand
 }
 
-func (runtime *recordingRuntime) Ref(_ context.Context, workspaceID, nodeID string) (capability.NodeRef, error) {
-	return capability.NodeRef{WorkspaceID: workspaceID, NodeID: nodeID, Generation: 1}, nil
+func (runtime *recordingRuntime) Ref(_ context.Context, nodeID string) (capability.NodeRef, error) {
+	return capability.NodeRef{NodeID: nodeID, Generation: 1}, nil
 }
 
 func (runtime *recordingRuntime) PrepareImage(_ context.Context, command capability.PrepareImageCommand) (capability.OperationReceipt, error) {

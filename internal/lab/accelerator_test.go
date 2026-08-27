@@ -15,7 +15,7 @@ import (
 // against the candidates the decision recorded, and a machine struck out for an
 // inventory nobody took counts as one that said too little rather than as one
 // that can never run the work. An accelerator floor read as a measured zero puts
-// the machine in the third column and the whole workspace loses its ordering to
+// the machine in the third column and the whole deployment loses its ordering to
 // one nvidia-smi that would not run.
 func TestAMachineNobodyCountedIsRefusedAsASilence(t *testing.T) {
 	execution := openBlueprintExecution(t,

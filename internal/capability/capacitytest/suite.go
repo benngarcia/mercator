@@ -59,12 +59,12 @@ type Origin struct {
 
 // Lease is the identity every machine this suite rents is held under. It is the
 // caller's rather than the suite's because a trial has to be able to find its own
-// machines afterwards: the workspace is what an owned-capacity listing is scoped
+// machines afterwards: the deployment is what an owned-capacity listing is scoped
 // to, and the trial ID is what keeps two runs of this suite from adopting each
 // other's leases.
 type Lease struct {
-	TrialID      string
-	WorkspaceID  string
+	TrialID string
+
 	ConnectionID string
 	// ControlPlaneURL is the origin written into every bootstrap this suite hands
 	// a machine.
@@ -210,7 +210,7 @@ func listedCapacityIsCapacityToAcquire(ctx context.Context, subject Subject) err
 		return err
 	}
 	support := subject.Provider.CapacitySupport()
-	listings, err := subject.Provider.ListCapacity(ctx, capability.CapacityQuery{WorkspaceID: subject.Lease.WorkspaceID})
+	listings, err := subject.Provider.ListCapacity(ctx, capability.CapacityQuery{})
 	if err != nil {
 		return fmt.Errorf("list capacity: %w", err)
 	}
@@ -362,8 +362,6 @@ func aLostAnswerCostsNoSecondMachine(ctx context.Context, subject Subject) (err 
 	switch {
 	case machine.NativeRef != receipt.NativeRef:
 		return fmt.Errorf("Rental %q was accepted as machine %q and is owned as %q", rented.RentalID, receipt.NativeRef, machine.NativeRef)
-	case machine.WorkspaceID != rented.WorkspaceID:
-		return fmt.Errorf("machine %q is owned by workspace %q, and it was rented for %q", machine.NativeRef, machine.WorkspaceID, rented.WorkspaceID)
 	case machine.OwnershipToken != rented.OwnershipToken:
 		return fmt.Errorf("machine %q carries ownership token %q, and a reconciler acting on it would be acting on somebody else's machine", machine.NativeRef, machine.OwnershipToken)
 	case machine.Generation != rented.Generation:
@@ -469,7 +467,7 @@ func anOperationTheProviderNeverPromisedIsRefused(ctx context.Context, subject S
 			return err
 		}},
 		{capability.CapacityListOwned, func() error {
-			_, err := subject.Provider.ListOwnedCapacity(ctx, capability.OwnershipQuery{WorkspaceID: rental.command.WorkspaceID})
+			_, err := subject.Provider.ListOwnedCapacity(ctx, capability.OwnershipQuery{})
 			return err
 		}},
 	} {
@@ -491,7 +489,7 @@ func anOperationTheProviderNeverPromisedIsRefused(ctx context.Context, subject S
 // aTrialLeavesNothingOwned is the promise a bounded trial rests on: renting a
 // machine and giving it back leaves the connection holding nothing this trial
 // put there. Run after the promises above, it reads the whole trial rather than
-// its own machine, because every one of them rents under this workspace.
+// its own machine, because every one of them rents under this deployment.
 func aTrialLeavesNothingOwned(ctx context.Context, subject Subject) (err error) {
 	support := subject.Provider.CapacitySupport()
 	if !support.ListOwned {
@@ -512,7 +510,7 @@ func aTrialLeavesNothingOwned(ctx context.Context, subject Subject) (err error) 
 		return err
 	}
 	if len(owned) != 0 {
-		return fmt.Errorf("this trial's workspace still holds %d machines: %+v", len(owned), owned)
+		return fmt.Errorf("this trial's deployment still holds %d machines: %+v", len(owned), owned)
 	}
 	return nil
 }
@@ -691,7 +689,7 @@ func (rental *lease) rentalID() string {
 // held names one machine of this lease well enough to observe it.
 func (rental *lease) held(nativeRef string) capability.CapacityRef {
 	return capability.CapacityRef{
-		WorkspaceID:    rental.command.WorkspaceID,
+
 		ConnectionID:   rental.command.ConnectionID,
 		RentalID:       rental.command.RentalID,
 		NativeRef:      nativeRef,
@@ -720,7 +718,7 @@ func (subject Subject) owned(ctx context.Context) ([]capability.OwnedCapacity, e
 	if !subject.Provider.CapacitySupport().ListOwned {
 		return nil, nil
 	}
-	owned, err := subject.Provider.ListOwnedCapacity(ctx, capability.OwnershipQuery{WorkspaceID: subject.Lease.WorkspaceID})
+	owned, err := subject.Provider.ListOwnedCapacity(ctx, capability.OwnershipQuery{})
 	if err != nil {
 		return nil, fmt.Errorf("list what this connection owns: %w", err)
 	}
@@ -733,7 +731,7 @@ func (subject Subject) owned(ctx context.Context) ([]capability.OwnedCapacity, e
 func (subject Subject) command(promise string, origin Origin) capability.ProvisionCommand {
 	rentalID := "rnt_" + subject.Lease.TrialID + "_" + promise
 	return capability.ProvisionCommand{
-		WorkspaceID:     subject.Lease.WorkspaceID,
+
 		ConnectionID:    subject.Lease.ConnectionID,
 		OperationKey:    "provision_" + rentalID,
 		RentalID:        rentalID,
@@ -759,8 +757,8 @@ func (subject Subject) check() error {
 		return errors.New("capacitytest: a subject with no provider has nothing to keep a promise")
 	case subject.Capacity == nil:
 		return errors.New("capacitytest: a subject that names no capacity to rent cannot be provisioned from")
-	case subject.Lease.TrialID == "" || subject.Lease.WorkspaceID == "" || subject.Lease.ConnectionID == "":
-		return errors.New("capacitytest: every machine is rented under a trial, a workspace, and a connection")
+	case subject.Lease.TrialID == "" || subject.Lease.ConnectionID == "":
+		return errors.New("capacitytest: every machine is rented under a trial and a connection")
 	case subject.Lease.ControlPlaneURL == "" || subject.Lease.AgentVersion == "" || subject.Lease.EnrollmentToken == "":
 		return errors.New("capacitytest: a bootstrap names a control plane, an agent build, and the material to join with")
 	case subject.Lease.MaxLifetime <= 0:

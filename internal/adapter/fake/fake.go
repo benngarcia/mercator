@@ -208,8 +208,8 @@ func (a *Adapter) Launch(_ context.Context, req adapter.LaunchRequest) (adapter.
 	externalID := "fake-" + req.AttemptID
 	phase := a.launchOutcome
 	object := adapter.OwnedExternalObject{
-		ExternalID:     externalID,
-		WorkspaceID:    req.WorkspaceID,
+		ExternalID: externalID,
+
 		RunID:          req.RunID,
 		AttemptID:      req.AttemptID,
 		OwnershipToken: req.OwnershipToken,
@@ -379,9 +379,7 @@ func (a *Adapter) ListOwned(_ context.Context, req adapter.OwnershipQuery) ([]ad
 	defer a.mu.Unlock()
 	var objects []adapter.OwnedExternalObject
 	for _, object := range a.objects {
-		if req.WorkspaceID == "" || object.WorkspaceID == req.WorkspaceID {
-			objects = append(objects, object)
-		}
+		objects = append(objects, object)
 	}
 	return objects, nil
 }

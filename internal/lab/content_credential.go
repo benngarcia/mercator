@@ -21,17 +21,17 @@ import (
 // machine, beside what the command it arrived on was really for. The two halves
 // are separate on purpose. What the credential says about itself is a claim, and
 // what the command is about is the fact; a rule that read only the claim would
-// pass a credential minted for another workspace as long as it was internally
+// pass a credential minted for another fetch as long as it was internally
 // consistent.
 type contentCredential struct {
 	// Kind is which of the two fetches this was, so a violation names the act
 	// rather than a bare string.
 	Kind adapter.PrepareKind
-	// Operation, WorkspaceID and Content are what the machine was told to do,
+	// Operation and Content are what the machine was told to do,
 	// read off the command.
-	Operation   string
-	WorkspaceID string
-	Content     string
+	Operation string
+
+	Content string
 	// Scope is what the credential states about itself.
 	Scope domain.ContentCredentialScope
 	// Material is what the machine would present: the registry secret, or the
@@ -48,29 +48,29 @@ type contentCredential struct {
 // machine was never given is not recorded: a public image is minted nothing, and
 // filing a blank credential against it would have every rule about scope fail on
 // content that correctly needed none.
-func (world *simulatedWorld) noteContentCredentials(workspaceID string, item adapter.PrepareItem) {
+func (world *simulatedWorld) noteContentCredentials(item adapter.PrepareItem) {
 	if pull := item.RegistryCredential; !pull.Zero() {
-		world.handedOver = append(world.handedOver, world.handed(workspaceID, item, pull.ContentCredentialScope, pull.Secret))
+		world.handedOver = append(world.handedOver, world.handed(item, pull.ContentCredentialScope, pull.Secret))
 	}
 	if read := item.SourceCredential; !read.Zero() {
-		world.handedOver = append(world.handedOver, world.handed(workspaceID, item, read.ContentCredentialScope, read.Location))
+		world.handedOver = append(world.handedOver, world.handed(item, read.ContentCredentialScope, read.Location))
 	}
 }
 
 func (world *simulatedWorld) handed(
-	workspaceID string,
+
 	item adapter.PrepareItem,
 	scope domain.ContentCredentialScope,
 	material string,
 ) contentCredential {
 	return contentCredential{
-		Kind:        item.Kind,
-		Operation:   item.Operation(),
-		WorkspaceID: workspaceID,
-		Content:     item.Content(),
-		Scope:       scope,
-		Material:    material,
-		At:          world.now,
+		Kind:      item.Kind,
+		Operation: item.Operation(),
+
+		Content:  item.Content(),
+		Scope:    scope,
+		Material: material,
+		At:       world.now,
 	}
 }
 
@@ -84,8 +84,8 @@ func (world *simulatedWorld) handed(
 // which is a different and usually smaller thing. Collapsing the two would let
 // the Lab describe a registry that enforces Mercator's scope, and no registry
 // does.
-func (world *simulatedWorld) contentRefusal(workspaceID string, item adapter.PrepareItem) string {
-	if reason := world.machineRefusal(workspaceID, item); reason != "" {
+func (world *simulatedWorld) contentRefusal(item adapter.PrepareItem) string {
+	if reason := world.machineRefusal(item); reason != "" {
 		return reason
 	}
 	if item.Kind == adapter.PrepareImage {
@@ -102,7 +102,7 @@ func (world *simulatedWorld) contentRefusal(workspaceID string, item adapter.Pre
 // No credential is not a refusal here. Content any anonymous reader can have is
 // minted nothing, and whether the far side serves it is the far side's answer
 // below.
-func (world *simulatedWorld) machineRefusal(workspaceID string, item adapter.PrepareItem) string {
+func (world *simulatedWorld) machineRefusal(item adapter.PrepareItem) string {
 	if item.RegistryCredential.Zero() && item.SourceCredential.Zero() {
 		return ""
 	}
@@ -110,7 +110,7 @@ func (world *simulatedWorld) machineRefusal(workspaceID string, item adapter.Pre
 	if item.Kind == adapter.PrepareImage {
 		scope = item.RegistryCredential.ContentCredentialScope
 	}
-	if err := scope.Authorises(item.Operation(), workspaceID, item.Content(), world.now); err != nil {
+	if err := scope.Authorises(item.Operation(), item.Content(), world.now); err != nil {
 		return err.Error()
 	}
 	return ""
@@ -118,7 +118,7 @@ func (world *simulatedWorld) machineRefusal(workspaceID string, item adapter.Pre
 
 // registryRefusal is what the registry itself says, which is far less than the
 // scope. A password registry checks the password and has never heard of an
-// operation, a workspace, a digest or an expiry, so what it can turn away is a
+// operation, a digest or an expiry, so what it can turn away is a
 // reader presenting nothing and a reader presenting another host's account. An
 // image anyone can read is served to anyone.
 func (world *simulatedWorld) registryRefusal(item adapter.PrepareItem) string {

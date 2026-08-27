@@ -39,7 +39,6 @@ type allocation struct {
 	// destroyed, and the machine goes on existing after the listing is withdrawn.
 	offerID        string
 	nativeRef      string
-	workspaceID    string
 	connectionID   string
 	ownershipToken string
 	bootstrap      capability.NodeBootstrap
@@ -86,11 +85,11 @@ func (w *World) Verify(_ context.Context) error { return nil }
 // this world allocated, a Rental a Blueprint declared, and a host Mercator merely
 // reaches are all in that answer and none of them is in this one. The test is
 // what the capacity is rather than whether this world happens to hold a lease on
-// it: a filter on the lease sold a standing host back to the workspace that was
+// it: a filter on the lease sold a standing host back to the deployment that was
 // already running work on it, because capacity that keeps nothing carries no
 // Rental identity to be filtered by.
 func (w *World) ListCapacity(ctx context.Context, query capability.CapacityQuery) ([]domain.OfferSnapshot, error) {
-	offers, err := w.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: query.WorkspaceID, Resources: query.Resources})
+	offers, err := w.ListOffers(ctx, adapter.OfferRequest{Resources: query.Resources})
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +136,6 @@ func (w *World) ProvisionCapacity(_ context.Context, command capability.Provisio
 		rentalID:       command.RentalID,
 		offerID:        command.OfferSnapshotID,
 		nativeRef:      nativeRef,
-		workspaceID:    command.WorkspaceID,
 		connectionID:   command.ConnectionID,
 		ownershipToken: command.OwnershipToken,
 		bootstrap:      command.Bootstrap,
@@ -298,7 +296,7 @@ func (w *World) transition(command capability.CapacityCommand, state capability.
 }
 
 // ListOwnedCapacity is every machine this world is still holding for a
-// workspace. It is the answer a lost provision response is reconciled against,
+// deployment. It is the answer a lost provision response is reconciled against,
 // so it names the Rental the machine was allocated for: without that a
 // reconciler could only count machines, and counting cannot tell the machine
 // this Run is waiting for from the machine the Run beside it is waiting for.
@@ -308,13 +306,13 @@ func (w *World) ListOwnedCapacity(_ context.Context, query capability.OwnershipQ
 	var owned []capability.OwnedCapacity
 	for _, rentalID := range slices.Sorted(maps.Keys(w.allocations)) {
 		held := w.allocations[rentalID]
-		if held.terminated || held.workspaceID != query.WorkspaceID {
+		if held.terminated {
 			continue
 		}
 		owned = append(owned, capability.OwnedCapacity{
-			NativeRef:      held.nativeRef,
-			ConnectionID:   held.connectionID,
-			WorkspaceID:    held.workspaceID,
+			NativeRef:    held.nativeRef,
+			ConnectionID: held.connectionID,
+
 			RentalID:       held.rentalID,
 			Generation:     held.bootstrap.Generation,
 			OwnershipToken: held.ownershipToken,

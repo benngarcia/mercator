@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "Two tenants, two machines, and an operator who allowed one speculative transfer at a time and one no sooner than five minutes after the last. Each machine is occupied for the whole window and already holds what its own tenant runs, so each queued Run wants exactly twenty gigabytes on its own host: the first tenant a corpus out of the object store, the second the one layer of an image its machine is missing. The first tenant's Run arrives at five minutes and Mercator asks for its corpus. The second tenant's arrives ninety seconds later and gets nothing, because the bounds an operator states are the fleet's: what they protect is a machine's link and this process's own egress, and every tenant shares both. The second transfer starts once the first has landed, eleven minutes in. A control plane keeping a rate clock and a depth budget per workspace breaks both bounds at once, starting a second transfer ninety seconds after the first and holding two in flight, and this fixture fails it through safety.prewarm_rate_within_bound and again through safety.prewarm_yields_to_real_work. The second tenant's Run arrives between two reconciliation ticks, so the moment its desire is first computed is not a moment the driver chose.",
+  "summary": "Two machines and an operator who allowed one speculative transfer at a time and one no sooner than five minutes after the last. Each machine is occupied for the whole window and already holds the image its occupant runs, so each queued Run wants exactly twenty gigabytes on its preferred host: one a corpus out of the object store, the other the one layer of an image its machine is missing. The first queued Run arrives at five minutes and Mercator asks for its corpus. The second arrives ninety seconds later and gets nothing because the bounds protect the fleet's links and this deployment's egress. Its transfer starts once the first has landed, eleven minutes in. A control plane with more than one rate clock or depth budget breaks both bounds, starting a second transfer ninety seconds after the first and holding two in flight; this fixture fails it through safety.prewarm_rate_within_bound and safety.prewarm_yields_to_real_work. The second Run arrives between two reconciliation ticks, so the moment its desire is first computed is not a moment the driver chose.",
   "seed": "mercator-lab-prewarm-fleet-bound-v1",
   "world": {
     "prewarm": {
@@ -116,7 +116,6 @@
       },
       {
         "name": "beta-occupant",
-        "workspace": "beta",
         "at": "0s",
         "request": {
           "image": "surveyor@sha256:2e4f6a8c0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a",
@@ -136,7 +135,6 @@
       },
       {
         "name": "beta-patient",
-        "workspace": "beta",
         "at": "6m30s",
         "request": {
           "image": "auditor@sha256:5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e",

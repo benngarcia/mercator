@@ -34,10 +34,10 @@ type capacityLease struct {
 	// world that kept only the token would have to reconstruct the other three
 	// from what Mercator asked the provider for, and then no enrolment could ever
 	// disagree with the provision that carried it. It never leaves this world.
-	Bootstrap      capability.NodeBootstrap
-	OfferID        string
-	NativeRef      string
-	WorkspaceID    string
+	Bootstrap capability.NodeBootstrap
+	OfferID   string
+	NativeRef string
+
 	ConnectionID   string
 	OwnershipToken string
 	AcceptedAt     time.Time
@@ -138,12 +138,12 @@ func (world *simulatedWorld) ProvisionCapacity(_ context.Context, command capabi
 		return capability.CapacityReceipt{}, fmt.Errorf("Lab has no listing %q to allocate from", command.OfferSnapshotID)
 	}
 	lease := &capacityLease{
-		RentalID:       command.RentalID,
-		Generation:     command.Generation,
-		Bootstrap:      command.Bootstrap,
-		OfferID:        command.OfferSnapshotID,
-		NativeRef:      "lab-machine-" + command.RentalID,
-		WorkspaceID:    command.WorkspaceID,
+		RentalID:   command.RentalID,
+		Generation: command.Generation,
+		Bootstrap:  command.Bootstrap,
+		OfferID:    command.OfferSnapshotID,
+		NativeRef:  "lab-machine-" + command.RentalID,
+
 		ConnectionID:   labConnection,
 		OwnershipToken: command.OwnershipToken,
 		AcceptedAt:     world.now,
@@ -232,7 +232,7 @@ func (world *simulatedWorld) TerminateCapacity(_ context.Context, command capabi
 	return receipt, nil
 }
 
-// ListOwnedCapacity is every machine this world still holds for a workspace,
+// ListOwnedCapacity is every machine this world still holds for the deployment,
 // each naming the Rental it was allocated for. Without that name a reconciler
 // could only count machines, and counting cannot tell the machine this Run is
 // waiting for from the machine the Run beside it is waiting for.
@@ -242,13 +242,13 @@ func (world *simulatedWorld) ListOwnedCapacity(_ context.Context, query capabili
 	var owned []capability.OwnedCapacity
 	for _, rentalID := range slices.Sorted(maps.Keys(world.leases)) {
 		lease := world.leases[rentalID]
-		if lease.Terminated || lease.Unlisted || (query.WorkspaceID != "" && query.WorkspaceID != lease.WorkspaceID) {
+		if lease.Terminated || lease.Unlisted {
 			continue
 		}
 		owned = append(owned, capability.OwnedCapacity{
-			NativeRef:      lease.NativeRef,
-			ConnectionID:   lease.ConnectionID,
-			WorkspaceID:    lease.WorkspaceID,
+			NativeRef:    lease.NativeRef,
+			ConnectionID: lease.ConnectionID,
+
 			RentalID:       lease.RentalID,
 			Generation:     lease.Generation,
 			OwnershipToken: lease.OwnershipToken,
@@ -256,8 +256,8 @@ func (world *simulatedWorld) ListOwnedCapacity(_ context.Context, query capabili
 			CreatedAt:      lease.AcceptedAt,
 		})
 	}
-	world.recordCapacityEffect(OperationCapacityListOwned, "", "", query.WorkspaceID, EffectCommandAccepted,
-		map[string]any{"workspace_id": query.WorkspaceID}, map[string]any{"rental_ids": ownedRentalIDs(owned)})
+	world.recordCapacityEffect(OperationCapacityListOwned, "", "", "", EffectCommandAccepted,
+		map[string]any{}, map[string]any{"rental_ids": ownedRentalIDs(owned)})
 	return owned, nil
 }
 
@@ -347,8 +347,8 @@ func (registry *labRegistry) Invite(ctx context.Context, invitation node.Invitat
 	return bootstrap, nil
 }
 
-func (registry *labRegistry) Reinvite(ctx context.Context, workspaceID, nodeID string, redeemableThrough time.Time) (capability.NodeBootstrap, error) {
-	bootstrap, err := registry.Registry.Reinvite(ctx, workspaceID, nodeID, redeemableThrough)
+func (registry *labRegistry) Reinvite(ctx context.Context, nodeID string, redeemableThrough time.Time) (capability.NodeBootstrap, error) {
+	bootstrap, err := registry.Registry.Reinvite(ctx, nodeID, redeemableThrough)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
 	}

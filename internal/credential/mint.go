@@ -21,7 +21,7 @@ import (
 // it in every dimension the far side can be told to check.
 //
 // The two accounts here are the ones a node would otherwise need. A registry
-// account can read every private image the workspace has, and an object-store
+// account can read every private image the deployment can reach, and an object-store
 // key can read every Artifact ever published; both stay in the control plane,
 // and what crosses to the machine is a pull of one image or a read of one
 // object, expiring.
@@ -125,12 +125,12 @@ func NewMint(config MintConfig) (*Mint, error) {
 // by anyone, so a machine presenting no credential for it is behaving exactly
 // correctly. What would be a failure is minting material for it anyway, which
 // would put an account on a machine for content that never needed one.
-func (mint *Mint) RegistryPull(_ context.Context, operation, workspaceID, reference string) (domain.RegistryPull, error) {
+func (mint *Mint) RegistryPull(_ context.Context, operation, reference string) (domain.RegistryPull, error) {
 	digest := domain.ReferenceDigest(reference)
-	if operation == "" || workspaceID == "" || digest == "" {
+	if operation == "" || digest == "" {
 		return domain.RegistryPull{}, fmt.Errorf(
-			"credential: a pull is minted for one operation, one workspace and one digest, and this names %q, %q and %q",
-			operation, workspaceID, reference,
+			"credential: a pull is minted for one operation and one digest, and this names %q and %q",
+			operation, reference,
 		)
 	}
 	account, held := mint.registries[domain.ReferenceRegistry(reference)]
@@ -138,7 +138,7 @@ func (mint *Mint) RegistryPull(_ context.Context, operation, workspaceID, refere
 		return domain.RegistryPull{}, nil
 	}
 	return domain.RegistryPull{
-		ContentCredentialScope: mint.scope(operation, workspaceID, digest),
+		ContentCredentialScope: mint.scope(operation, digest),
 		Registry:               account.Registry,
 		Username:               account.Username,
 		Secret:                 account.Secret,
@@ -154,11 +154,11 @@ func (mint *Mint) RegistryPull(_ context.Context, operation, workspaceID, refere
 // read would go to the network with a URI nothing serves; saying so here names
 // the missing configuration instead of leaving an operator to read it off a
 // machine's fetch failure.
-func (mint *Mint) ArtifactRead(_ context.Context, operation, workspaceID, artifactID, location string) (domain.ArtifactRead, error) {
-	if operation == "" || workspaceID == "" || artifactID == "" || location == "" {
+func (mint *Mint) ArtifactRead(_ context.Context, operation, artifactID, location string) (domain.ArtifactRead, error) {
+	if operation == "" || artifactID == "" || location == "" {
 		return domain.ArtifactRead{}, fmt.Errorf(
-			"credential: a read is minted for one operation, one workspace and one version, and this names %q, %q, %q at %q",
-			operation, workspaceID, artifactID, location,
+			"credential: a read is minted for one operation and one version, and this names %q, %q at %q",
+			operation, artifactID, location,
 		)
 	}
 	if mint.objectStore == nil {
@@ -167,7 +167,7 @@ func (mint *Mint) ArtifactRead(_ context.Context, operation, workspaceID, artifa
 			artifactID, location,
 		)
 	}
-	scope := mint.scope(operation, workspaceID, artifactID)
+	scope := mint.scope(operation, artifactID)
 	signed, err := mint.objectStore.presign(objectKey(location), scope.ExpiresAt.Sub(mint.now().UTC()), mint.now().UTC())
 	if err != nil {
 		return domain.ArtifactRead{}, err
@@ -175,12 +175,11 @@ func (mint *Mint) ArtifactRead(_ context.Context, operation, workspaceID, artifa
 	return domain.ArtifactRead{ContentCredentialScope: scope, Location: signed}, nil
 }
 
-func (mint *Mint) scope(operation, workspaceID, content string) domain.ContentCredentialScope {
+func (mint *Mint) scope(operation, content string) domain.ContentCredentialScope {
 	return domain.ContentCredentialScope{
-		Operation:   operation,
-		WorkspaceID: workspaceID,
-		Content:     content,
-		ExpiresAt:   mint.now().UTC().Add(mint.window),
+		Operation: operation,
+		Content:   content,
+		ExpiresAt: mint.now().UTC().Add(mint.window),
 	}
 }
 

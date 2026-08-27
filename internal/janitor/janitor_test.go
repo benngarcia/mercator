@@ -23,9 +23,9 @@ func TestJanitorTerminatesCapacityMercatorCannotAccountFor(t *testing.T) {
 	ctx := context.Background()
 	ad := fake.New()
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
-		OperationKey:       "launch_orphan",
-		RequestHash:        "sha256:orphan",
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_orphan",
+		RequestHash:  "sha256:orphan",
+
 		RunID:              "run_orphan",
 		AttemptID:          "att_orphan",
 		OwnershipToken:     "own_orphan",
@@ -40,7 +40,7 @@ func TestJanitorTerminatesCapacityMercatorCannotAccountFor(t *testing.T) {
 
 	log := openJanitorTestLog(t)
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestJanitorTerminatesCapacityMercatorCannotAccountFor(t *testing.T) {
 	if convergence.Reason != reasonNoRecordedRun {
 		t.Fatalf("the record gives reason %q, want the Run nobody recorded", convergence.Reason)
 	}
-	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -74,9 +74,9 @@ func TestJanitorSkipsActiveRunResources(t *testing.T) {
 	ctx := context.Background()
 	ad := fake.New()
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
-		OperationKey:       "launch_active",
-		RequestHash:        "sha256:active",
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_active",
+		RequestHash:  "sha256:active",
+
 		RunID:              "run_active",
 		AttemptID:          "att_active",
 		OwnershipToken:     "own_active",
@@ -91,14 +91,14 @@ func TestJanitorSkipsActiveRunResources(t *testing.T) {
 	log := openJanitorTestLog(t)
 	appendRunEvent(t, log, "ws_1", "run_active", "compute.run.requested.v1")
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 	if result.Found != 1 || result.Converged() != 0 {
 		t.Fatalf("live work should be found and left alone: %+v", result)
 	}
-	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -117,9 +117,9 @@ func TestJanitorAdoptsCapacityItsOwnRecordSaysSurvives(t *testing.T) {
 	ctx := context.Background()
 	ad := fake.New()
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
-		OperationKey:       "launch_adopt",
-		RequestHash:        "sha256:adopt",
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_adopt",
+		RequestHash:  "sha256:adopt",
+
 		RunID:              "run_adopt",
 		AttemptID:          "att_adopt",
 		OwnershipToken:     "own_adopt",
@@ -135,7 +135,7 @@ func TestJanitorAdoptsCapacityItsOwnRecordSaysSurvives(t *testing.T) {
 	log := openJanitorTestLog(t)
 	appendLaunchIntent(t, log, "ws_1", "run_adopt", domain.DispositionRelease)
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -168,9 +168,9 @@ func TestJanitorTerminatesCapacityLeftBehindByAClosedRun(t *testing.T) {
 	ctx := context.Background()
 	ad := fake.New()
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
-		OperationKey:       "launch_closed",
-		RequestHash:        "sha256:closed",
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_closed",
+		RequestHash:  "sha256:closed",
+
 		RunID:              "run_closed",
 		AttemptID:          "att_closed",
 		OwnershipToken:     "own_closed",
@@ -185,7 +185,7 @@ func TestJanitorTerminatesCapacityLeftBehindByAClosedRun(t *testing.T) {
 	log := openJanitorTestLog(t)
 	appendRunEvent(t, log, "ws_1", "run_closed", "compute.run.closed.v1")
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -213,9 +213,9 @@ func TestJanitorAdoptsCapacityAClosedRunLeftOnAMachineMercatorDoesNotOwn(t *test
 	ctx := context.Background()
 	ad := fake.New()
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
-		OperationKey:       "launch_stranded",
-		RequestHash:        "sha256:stranded",
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_stranded",
+		RequestHash:  "sha256:stranded",
+
 		RunID:              "run_stranded",
 		AttemptID:          "att_stranded",
 		OwnershipToken:     "own_stranded",
@@ -231,7 +231,7 @@ func TestJanitorAdoptsCapacityAClosedRunLeftOnAMachineMercatorDoesNotOwn(t *test
 	log := openJanitorTestLog(t)
 	appendLaunchThenClose(t, log, "ws_1", "run_stranded", domain.DispositionRelease)
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -258,15 +258,15 @@ func TestJanitorAdoptsCapacityAClosedRunLeftOnAMachineMercatorDoesNotOwn(t *test
 //
 // Stopping at the provider's refusal left that container standing and returned an
 // error before anything later in the same listing was looked at, so one object
-// nothing could account for stopped every sweep of the workspace from then on.
+// nothing could account for stopped every sweep of the deployment from then on.
 func TestJanitorReleasesTheSlotOfCapacityItsProviderCannotDestroy(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ad := &standingPool{Adapter: fake.New()}
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
-		OperationKey:       "launch_forgotten",
-		RequestHash:        "sha256:forgotten",
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_forgotten",
+		RequestHash:  "sha256:forgotten",
+
 		RunID:              "run_forgotten",
 		AttemptID:          "att_forgotten",
 		OwnershipToken:     "own_forgotten",
@@ -280,7 +280,7 @@ func TestJanitorReleasesTheSlotOfCapacityItsProviderCannotDestroy(t *testing.T) 
 	}
 	log := openJanitorTestLog(t)
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestJanitorReleasesTheSlotOfCapacityItsProviderCannotDestroy(t *testing.T) 
 	if ad.ReleaseCount() != 1 {
 		t.Fatalf("a provider that cannot destroy this capacity was asked to release it %d times, want once", ad.ReleaseCount())
 	}
-	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -314,9 +314,9 @@ func TestJanitorRecordsItsDecisionBeforeItActsOnIt(t *testing.T) {
 	ctx := context.Background()
 	ad := &refusesFirstReclaim{Adapter: fake.New()}
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
-		OperationKey:       "launch_unrecorded",
-		RequestHash:        "sha256:unrecorded",
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_unrecorded",
+		RequestHash:  "sha256:unrecorded",
+
 		RunID:              "run_unrecorded",
 		AttemptID:          "att_unrecorded",
 		OwnershipToken:     "own_unrecorded",
@@ -331,7 +331,7 @@ func TestJanitorRecordsItsDecisionBeforeItActsOnIt(t *testing.T) {
 	log := openJanitorTestLog(t)
 	janitor := New(ad, WithEventLog(log))
 
-	if _, err := janitor.Sweep(ctx, "ws_1"); err == nil {
+	if _, err := janitor.Sweep(ctx); err == nil {
 		t.Fatal("the sweep hid a provider that would not reclaim the capacity")
 	}
 
@@ -339,7 +339,7 @@ func TestJanitorRecordsItsDecisionBeforeItActsOnIt(t *testing.T) {
 	if decided.Outcome != OrphanTerminated || decided.Reason != reasonNoRecordedRun {
 		t.Fatalf("the record says %+v, want the decision the failed sweep took", decided)
 	}
-	result, err := janitor.Sweep(ctx, "ws_1")
+	result, err := janitor.Sweep(ctx)
 	if err != nil {
 		t.Fatalf("second sweep: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestJanitorConvergesCapacityByTheLaunchThatTookIt(t *testing.T) {
 		attemptLaunch("run_replaced", "att_two", domain.DispositionRelease),
 	)
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestJanitorKeepsAMachineTheReplacedLaunchDidNotProvision(t *testing.T) {
 		attemptLaunch("run_moved", "att_two", domain.DispositionTerminate),
 	)
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -440,9 +440,9 @@ func TestJanitorDestroysCapacityNoRecordedLaunchAccountsFor(t *testing.T) {
 	ctx := context.Background()
 	ad := fake.New()
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
-		OperationKey:       "launch_unnamed",
-		RequestHash:        "sha256:unnamed",
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_unnamed",
+		RequestHash:  "sha256:unnamed",
+
 		RunID:              "run_disagreeing",
 		AttemptID:          "att_the_provider_minted",
 		OwnershipToken:     "own_unnamed",
@@ -460,7 +460,7 @@ func TestJanitorDestroysCapacityNoRecordedLaunchAccountsFor(t *testing.T) {
 		attemptLaunch("run_disagreeing", "att_two", domain.DispositionRelease),
 	)
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -478,9 +478,9 @@ func TestJanitorDestroysCapacityNoRecordedLaunchAccountsFor(t *testing.T) {
 // the identities Mercator minted for that attempt's capacity.
 func attemptLaunch(runID, attemptID string, disposition domain.Disposition) adapter.LaunchRequest {
 	return adapter.LaunchRequest{
-		OperationKey:       "launch_" + attemptID,
-		RequestHash:        "sha256:" + attemptID,
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_" + attemptID,
+		RequestHash:  "sha256:" + attemptID,
+
 		RunID:              runID,
 		AttemptID:          attemptID,
 		OwnershipToken:     "own_" + attemptID,
@@ -494,7 +494,7 @@ func attemptLaunch(runID, attemptID string, disposition domain.Disposition) adap
 
 // appendLaunchesThenClose is a Run that was launched once per attempt and then
 // ended, which is what a Run replaced onto other capacity leaves in the record.
-func appendLaunchesThenClose(t *testing.T, log eventlog.EventLog, workspaceID, runID string, launches ...adapter.LaunchRequest) {
+func appendLaunchesThenClose(t *testing.T, log eventlog.EventLog, fixtureID, runID string, launches ...adapter.LaunchRequest) {
 	t.Helper()
 	events := make([]eventlog.NewEvent, 0, len(launches)+1)
 	for _, launch := range launches {
@@ -502,12 +502,12 @@ func appendLaunchesThenClose(t *testing.T, log eventlog.EventLog, workspaceID, r
 		if err != nil {
 			t.Fatalf("marshal intent: %v", err)
 		}
-		event := runEvent(workspaceID, runID, "intent_"+launch.AttemptID, "compute.run.launch_intent_recorded.v1")
+		event := runEvent(fixtureID, runID, "intent_"+launch.AttemptID, "compute.run.launch_intent_recorded.v1")
 		event.PrivateData = private
 		events = append(events, event)
 	}
-	appendRunHistory(t, log, workspaceID, runID,
-		append(events, runEvent(workspaceID, runID, "closed", "compute.run.closed.v1"))...,
+	appendRunHistory(t, log, fixtureID, runID,
+		append(events, runEvent(fixtureID, runID, "closed", "compute.run.closed.v1"))...,
 	)
 }
 
@@ -536,17 +536,17 @@ func (r *refusesFirstReclaim) Terminate(ctx context.Context, request adapter.Ter
 	return r.Adapter.Terminate(ctx, request)
 }
 
-// onlyConvergence is the one orphan decision this workspace's record holds. It
+// onlyConvergence is the one orphan decision this deployment's record holds. It
 // reads the public log rather than the sweep's return value, because the record is
 // what an operator and every rule about the policy actually see.
-func onlyConvergence(t *testing.T, log eventlog.EventLog, workspaceID string) OrphanConvergence {
+func onlyConvergence(t *testing.T, log eventlog.EventLog, fixtureID string) OrphanConvergence {
 	t.Helper()
-	head, err := log.LatestPosition(context.Background(), eventlog.EventFilter{WorkspaceID: workspaceID})
+	head, err := log.LatestPosition(context.Background(), eventlog.EventFilter{})
 	if err != nil {
 		t.Fatalf("read log head: %v", err)
 	}
 	var found []OrphanConvergence
-	for event, err := range eventlog.ScanAll(context.Background(), log, head, eventlog.EventFilter{WorkspaceID: workspaceID}) {
+	for event, err := range eventlog.ScanAll(context.Background(), log, head, eventlog.EventFilter{}) {
 		if err != nil {
 			t.Fatalf("scan log: %v", err)
 		}
@@ -567,7 +567,7 @@ func onlyConvergence(t *testing.T, log eventlog.EventLog, workspaceID string) Or
 
 func TestJanitorRequiresEventLog(t *testing.T) {
 	t.Parallel()
-	_, err := New(fake.New()).Sweep(context.Background(), "ws_1")
+	_, err := New(fake.New()).Sweep(context.Background())
 	if err == nil {
 		t.Fatalf("expected missing event log error")
 	}
@@ -583,17 +583,17 @@ func openJanitorTestLog(t *testing.T) *eventlog.SQLiteEventLog {
 	return log
 }
 
-func appendRunEvent(t *testing.T, log eventlog.EventLog, workspaceID, runID, eventType string) {
+func appendRunEvent(t *testing.T, log eventlog.EventLog, fixtureID, runID, eventType string) {
 	t.Helper()
 	_, err := log.Append(context.Background(), eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID},
+		Stream:                eventlog.StreamKey{Type: "run", ID: runID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "seed:" + eventType,
 		RequestHash:           "sha256:seed",
 		CorrelationID:         runID,
 		CausationID:           "seed",
 		Events: []eventlog.NewEvent{{
-			ID:            "evt_" + workspaceID + "_" + runID + "_seed",
+			ID:            "evt_" + fixtureID + "_" + runID + "_seed",
 			Type:          eventType,
 			SchemaVersion: 1,
 			OccurredAt:    time.Now().UTC(),
@@ -611,9 +611,9 @@ func TestJanitorReclaimsViaRecordedTerminateDisposition(t *testing.T) {
 	ctx := context.Background()
 	ad := fake.New()
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
-		OperationKey:       "launch_term",
-		RequestHash:        "sha256:term",
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_term",
+		RequestHash:  "sha256:term",
+
 		RunID:              "run_term",
 		AttemptID:          "att_term",
 		OwnershipToken:     "own_term",
@@ -629,7 +629,7 @@ func TestJanitorReclaimsViaRecordedTerminateDisposition(t *testing.T) {
 	log := openJanitorTestLog(t)
 	appendLaunchIntent(t, log, "ws_1", "run_term", domain.DispositionTerminate)
 
-	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -649,9 +649,9 @@ func TestJanitorRejectsCleanupWithoutRecordedDisposition(t *testing.T) {
 	ctx := context.Background()
 	ad := fake.New()
 	_, err := ad.Launch(ctx, adapter.LaunchRequest{
-		OperationKey:       "launch_missing_disposition",
-		RequestHash:        "sha256:missing_disposition",
-		WorkspaceID:        "ws_1",
+		OperationKey: "launch_missing_disposition",
+		RequestHash:  "sha256:missing_disposition",
+
 		RunID:              "run_missing_disposition",
 		AttemptID:          "att_missing_disposition",
 		OwnershipToken:     "own_missing_disposition",
@@ -666,7 +666,7 @@ func TestJanitorRejectsCleanupWithoutRecordedDisposition(t *testing.T) {
 	log := openJanitorTestLog(t)
 	appendLaunchIntent(t, log, "ws_1", "run_missing_disposition", "")
 
-	if _, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1"); err == nil {
+	if _, err := New(ad, WithEventLog(log)).Sweep(ctx); err == nil {
 		t.Fatal("janitor accepted cleanup without a recorded disposition")
 	}
 	if ad.ReleaseCount() != 0 || ad.TerminateCount() != 0 {
@@ -676,29 +676,29 @@ func TestJanitorRejectsCleanupWithoutRecordedDisposition(t *testing.T) {
 
 // appendLaunchIntent is a Run that launched and whose capacity Mercator then
 // asked back, which is how work ordinarily ends.
-func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID string, disposition domain.Disposition) {
+func appendLaunchIntent(t *testing.T, log eventlog.EventLog, fixtureID, runID string, disposition domain.Disposition) {
 	t.Helper()
-	appendRunHistory(t, log, workspaceID, runID,
+	appendRunHistory(t, log, fixtureID, runID,
 		launchIntentEvent(t, runID, disposition),
-		runEvent(workspaceID, runID, "cleanup", "compute.run.cleanup_requested.v1"),
+		runEvent(fixtureID, runID, "cleanup", "compute.run.cleanup_requested.v1"),
 	)
 }
 
 // appendLaunchThenClose is a Run that launched and then ended with nobody asking
 // for its capacity back, which is what a launch whose attempts ran out leaves in
 // the record.
-func appendLaunchThenClose(t *testing.T, log eventlog.EventLog, workspaceID, runID string, disposition domain.Disposition) {
+func appendLaunchThenClose(t *testing.T, log eventlog.EventLog, fixtureID, runID string, disposition domain.Disposition) {
 	t.Helper()
-	appendRunHistory(t, log, workspaceID, runID,
+	appendRunHistory(t, log, fixtureID, runID,
 		launchIntentEvent(t, runID, disposition),
-		runEvent(workspaceID, runID, "closed", "compute.run.closed.v1"),
+		runEvent(fixtureID, runID, "closed", "compute.run.closed.v1"),
 	)
 }
 
-func appendRunHistory(t *testing.T, log eventlog.EventLog, workspaceID, runID string, events ...eventlog.NewEvent) {
+func appendRunHistory(t *testing.T, log eventlog.EventLog, fixtureID, runID string, events ...eventlog.NewEvent) {
 	t.Helper()
 	_, err := log.Append(context.Background(), eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID},
+		Stream:                eventlog.StreamKey{Type: "run", ID: runID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "seed:intent:" + runID,
 		RequestHash:           "sha256:seed_intent",
@@ -726,9 +726,9 @@ func launchIntentEvent(t *testing.T, runID string, disposition domain.Dispositio
 	return event
 }
 
-func runEvent(workspaceID, runID, name, eventType string) eventlog.NewEvent {
+func runEvent(fixtureID, runID, name, eventType string) eventlog.NewEvent {
 	return eventlog.NewEvent{
-		ID:            "evt_" + workspaceID + "_" + runID + "_" + name,
+		ID:            "evt_" + fixtureID + "_" + runID + "_" + name,
 		Type:          eventType,
 		SchemaVersion: 1,
 		OccurredAt:    time.Now().UTC(),

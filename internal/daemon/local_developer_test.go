@@ -14,12 +14,9 @@ import (
 	"github.com/benngarcia/mercator/internal/daemon"
 )
 
-// A workspace is the tenancy boundary, and the workspace a fresh database
-// starts with was created by the process rather than by a person, so no human
-// is a member of it. `serve --dev` authenticates exactly one human, who is the
-// deployment's own operator: without that, the developer's own console is
-// refused by their own server on first start.
-func TestTheLocalDeveloperReachesTheWorkspaceTheirServerSeeded(t *testing.T) {
+// `serve --dev` authenticates exactly one local operator and grants that session
+// access to the deployment without requiring the machine bearer token.
+func TestTheLocalDeveloperReachesTheirServer(t *testing.T) {
 	// Arrange
 	runtime, err := daemon.New(t.Context(), daemon.Config{
 		SQLiteDSN:      "file:" + filepath.Join(t.TempDir(), "mercator.db"),
@@ -60,7 +57,7 @@ func TestTheLocalDeveloperReachesTheWorkspaceTheirServerSeeded(t *testing.T) {
 		t.Fatalf("establish the local session: %v", err)
 	}
 	_ = signIn.Body.Close()
-	response, err := browser.Get("http://" + listener.Addr().String() + "/v1/runs?workspace_id=" + daemon.DefaultWorkspaceID)
+	response, err := browser.Get("http://" + listener.Addr().String() + "/v1/runs")
 	if err != nil {
 		t.Fatalf("read runs as the local developer: %v", err)
 	}
@@ -72,6 +69,6 @@ func TestTheLocalDeveloperReachesTheWorkspaceTheirServerSeeded(t *testing.T) {
 
 	// Assert
 	if response.StatusCode != http.StatusOK {
-		t.Fatalf("the local developer reading the seeded workspace = %d, want 200: %s", response.StatusCode, body)
+		t.Fatalf("the local developer reading the deployment = %d, want 200: %s", response.StatusCode, body)
 	}
 }

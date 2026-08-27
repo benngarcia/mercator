@@ -37,7 +37,6 @@ type instantNode struct {
 type instantLease struct {
 	rentalID     string
 	nativeRef    string
-	workspaceID  string
 	connectionID string
 	terminated   bool
 }
@@ -62,7 +61,6 @@ func (c *instantCapacity) ProvisionCapacity(_ context.Context, command capabilit
 	held := &instantLease{
 		rentalID:     command.RentalID,
 		nativeRef:    "machine-" + command.RentalID,
-		workspaceID:  command.WorkspaceID,
 		connectionID: command.ConnectionID,
 	}
 	c.leases[command.RentalID] = held
@@ -94,20 +92,20 @@ func (c *instantCapacity) TerminateCapacity(_ context.Context, command capabilit
 	return capability.CapacityReceipt{NativeRef: held.nativeRef, State: capability.CapacityStateTerminated}, nil
 }
 
-func (c *instantCapacity) ListOwnedCapacity(_ context.Context, query capability.OwnershipQuery) ([]capability.OwnedCapacity, error) {
+func (c *instantCapacity) ListOwnedCapacity(_ context.Context, _ capability.OwnershipQuery) ([]capability.OwnedCapacity, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var owned []capability.OwnedCapacity
 	for _, held := range c.leases {
-		if held.terminated || held.workspaceID != query.WorkspaceID {
+		if held.terminated {
 			continue
 		}
 		owned = append(owned, capability.OwnedCapacity{
 			NativeRef:    held.nativeRef,
 			ConnectionID: held.connectionID,
-			WorkspaceID:  held.workspaceID,
-			RentalID:     held.rentalID,
-			State:        capability.CapacityStateActive,
+
+			RentalID: held.rentalID,
+			State:    capability.CapacityStateActive,
 		})
 	}
 	return owned, nil
@@ -128,7 +126,7 @@ func (c *instantCapacity) Invite(_ context.Context, invitation node.Invitation) 
 	}, nil
 }
 
-func (c *instantCapacity) Reinvite(_ context.Context, _, nodeID string, _ time.Time) (capability.NodeBootstrap, error) {
+func (c *instantCapacity) Reinvite(_ context.Context, nodeID string, _ time.Time) (capability.NodeBootstrap, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	invited, exists := c.nodes[nodeID]

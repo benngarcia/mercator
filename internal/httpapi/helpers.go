@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io/fs"
 	"log"
 	"net/http"
@@ -20,7 +19,6 @@ import (
 	sinkspkg "github.com/benngarcia/mercator/internal/sinks"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workload"
-	"github.com/benngarcia/mercator/internal/workspace"
 	"github.com/benngarcia/mercator/web"
 )
 
@@ -64,78 +62,6 @@ func internalAPIError(status int, code string, err error) ErrorResponse {
 	return apiError(code, "Internal error; see server logs for detail.")
 }
 
-type workspaceError struct {
-	Forbidden bool
-	Response  ErrorResponse
-}
-
-// resolveWorkspace resolves the explicit workspace ID from the request body or
-// query and refuses a subject who has no standing in it. Workspace IDs
-// partition durable event history; server configuration never supplies or
-// authorizes one on the caller's behalf.
-//
-// Every operation that names a workspace reaches it through here, and archiving
-// a workspace names it in the path and asks refuseNonMember directly. Those two
-// are the whole of where tenancy is decided; a handler that reads a workspace id
-// off the request itself is a hole, and two of them were.
-func (s *Server) resolveWorkspace(ctx context.Context, bodyWorkspaceID, queryWorkspaceID string) (string, *workspaceError) {
-	workspaceID := bodyWorkspaceID
-	if workspaceID == "" {
-		workspaceID = queryWorkspaceID
-	}
-	if workspaceID == "" {
-		return "", &workspaceError{Response: apiError("WORKSPACE_ID_REQUIRED", "workspace_id is required.")}
-	}
-	if refusal := s.refuseNonMember(ctx, workspaceID); refusal != nil {
-		return "", refusal
-	}
-	return workspaceID, nil
-}
-
-// refuseNonMember answers with the 403 every workspace-scoped operation already
-// declares when the requesting human belongs to no such workspace.
-//
-// Three requests pass without a membership, and each for its own reason. The
-// instance credential is the deployment acting as itself, and a deployment is
-// not a tenant of its own workspaces. A request carrying no principal at all
-// reached a server started with no operator token, where nothing is
-// authenticated and there is no subject to scope; the daemon refuses to start
-// that way. Everything else is a human, and a human reaches exactly the
-// workspaces they are a member of.
-//
-// A store that cannot answer refuses, and says so in the log. A membership
-// lookup that failed is not evidence of membership.
-func (s *Server) refuseNonMember(ctx context.Context, workspaceID string) *workspaceError {
-	subject := requestMemberScope(ctx)
-	if subject == "" {
-		return nil
-	}
-	if s.workspaces == nil {
-		log.Printf("httpapi: no workspace catalog, so %s cannot be shown a member of %s", subject, workspaceID)
-		return forbiddenWorkspace()
-	}
-	if _, err := s.workspaces.MembershipOf(ctx, workspaceID, subject); err != nil {
-		if !errors.Is(err, workspace.ErrNotMember) {
-			log.Printf("httpapi: read membership of %s in %s: %v", subject, workspaceID, err)
-		}
-		return forbiddenWorkspace()
-	}
-	return nil
-}
-
-// forbiddenWorkspace names the workspace nowhere in its message. A caller who
-// is not a member learns only that they are not one.
-func forbiddenWorkspace() *workspaceError {
-	return &workspaceError{
-		Forbidden: true,
-		Response:  apiError("WORKSPACE_FORBIDDEN", "This subject is not a member of that workspace."),
-	}
-}
-
-func (s *Server) requiredWorkspace(ctx context.Context, queryWorkspaceID string) (string, *workspaceError) {
-	return s.resolveWorkspace(ctx, "", queryWorkspaceID)
-}
-
 // resolveImageFn adapts the server's OCI resolver into the orchestrator's
 // ResolveImage hook. It returns nil when no resolver is configured, in which
 // case a submitted tag reaches intake as a tag and the Run is refused there: a
@@ -160,14 +86,13 @@ func (s *Server) resolveImageFn() orchestrator.ResolveImageFunc {
 	}
 }
 
-func runLinks(workspaceID, runID string) map[string]string {
-	query := "?workspace_id=" + workspaceID
+func runLinks(runID string) map[string]string {
 	base := "/v1/runs/" + runID
 	return map[string]string{
-		"self":     base + query,
-		"events":   base + "/events" + query,
-		"decision": base + "/decision" + query,
-		"refresh":  base + "/refresh" + query,
+		"self":     base,
+		"events":   base + "/events",
+		"decision": base + "/decision",
+		"refresh":  base + "/refresh",
 	}
 }
 
@@ -191,17 +116,6 @@ func errorMessage(err error) string {
 	return err.Error()
 }
 
-func workspaceAPIError(err error) (ErrorResponse, bool) {
-	switch {
-	case errors.Is(err, workspace.ErrNotFound):
-		return apiError("WORKSPACE_NOT_FOUND", "Workspace not found."), true
-	case errors.Is(err, workspace.ErrArchived):
-		return apiError("WORKSPACE_ARCHIVED", "Workspace is archived."), true
-	default:
-		return ErrorResponse{}, false
-	}
-}
-
 // HandlerForSQLite builds a fully-wired handler over a SQLite event log with
 // the fake adapter serving the given offers. Used for evaluation and tests.
 func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot, options ...Option) (http.Handler, func() error, error) {
@@ -210,7 +124,6 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 		return nil, nil, err
 	}
 	log := storage.EventLog()
-	workspaces := storage.Workspaces()
 	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
 	sched := scheduler.New()
 	// Synthetic-digest resolution lets the minimal create path
@@ -230,7 +143,6 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 		Sinks:        sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}),
 		Connections:  connection.New(log),
 		Resolver:     resolver,
-		Workspaces:   workspaces,
 		Events:       log,
 	}, options...)
 	return handler, storage.Close, nil

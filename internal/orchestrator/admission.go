@@ -52,54 +52,54 @@ import (
 // here said the later of two broken promises and left the earlier one out of the
 // only record the caller gets.
 //
-// The whole stage is one decision per workspace at a time, because it is the one
+// The whole stage is one decision at a time, because it is the one
 // stage that reads a fact about every Run and writes to a single stream. A Run's
 // own version guards everything else it does, and the log refuses an append made
 // against a version somebody else has spent; a family's width has no such guard,
 // so a sweep submitted all at once had every member replay a queue none of the
 // others were in yet, and a family declared one wide took as many machines as it
-// had members. Ordering is always this Run's lock and then the workspace's, which
+// had members. Ordering is always this Run's lock and then the deployment's, which
 // is the order AdvanceRun already holds them in.
-func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
-	unlock := o.admissionLocks.Lock(workspaceID)
+func (o *Orchestrator) stepAdmit(ctx context.Context, runID string, version uint64, state runState) (bool, error) {
+	unlock := o.admissionLocks.Lock("deployment")
 	defer unlock()
 
-	queue, err := o.admissionQueue(ctx, workspaceID)
+	queue, err := o.admissionQueue(ctx)
 	if err != nil {
 		return false, err
 	}
 	waiting := queue.position(runID, state, o.now().UTC())
 	if siblings := queue.familyHolding(waiting); len(siblings) > 0 {
 		deferral := waiting.deferral(domain.DeferredGroupAtParallelism, siblings)
-		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, waiting, admissionAnswer{deferral: deferral})
+		return false, o.deferOrRefuse(ctx, runID, version, state, waiting, admissionAnswer{deferral: deferral})
 	}
 	if behind := queue.ahead(waiting); len(behind) > 0 {
 		deferral := waiting.deferral(domain.DeferredBehindHigherPriority, behind)
-		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, waiting, admissionAnswer{deferral: deferral})
+		return false, o.deferOrRefuse(ctx, runID, version, state, waiting, admissionAnswer{deferral: deferral})
 	}
 	if waiting.policy.DeadlinePassed(waiting.wait.Seconds) {
 		refusal := waiting.deferral(waiting.policy.BoundAlreadyBroken(waiting.wait), nil)
-		return false, o.recordRefusal(ctx, workspaceID, runID, version, state, admissionAnswer{deferral: refusal})
+		return false, o.recordRefusal(ctx, runID, version, state, admissionAnswer{deferral: refusal})
 	}
-	return o.stepPlace(ctx, workspaceID, runID, version, state, waiting)
+	return o.stepPlace(ctx, runID, version, state, waiting)
 }
 
-// admissionQueue is every Run in this workspace admission has already told to
+// admissionQueue is every Run admission has already told to
 // wait, built from the five public facts that put a Run in the queue or in the
 // count of the capacity a family holds, and take it out of either again.
 //
 // It reads those facts rather than the Run read model on purpose: the
 // read model is derived by reducing each Run's whole stream, so one Run carrying
-// an event Mercator cannot read would stop every other Run in the workspace from
+// an event Mercator cannot read would stop every other Run in the deployment from
 // being placed, and a queue nobody can join is worse than no queue at all.
 //
 // It is read once per admission rather than threaded between Runs, because each
 // Run asks the same question of it and answers independently: a Run is admitted
 // when nothing it may not pass is waiting, which is the same answer whatever
 // order a sweep reaches the Runs in.
-func (o *Orchestrator) admissionQueue(ctx context.Context, workspaceID string) (admissionQueue, error) {
+func (o *Orchestrator) admissionQueue(ctx context.Context) (admissionQueue, error) {
 	filter := eventlog.EventFilter{
-		WorkspaceID: workspaceID,
+
 		StreamTypes: []string{"run"},
 		EventTypes: []string{
 			EventAdmissionDeferred, EventAdmissionRefused, EventBookingDecided, EventLaunchFailed, EventRunClosed,
@@ -140,7 +140,7 @@ func (o *Orchestrator) admissionQueue(ctx context.Context, workspaceID string) (
 //
 // Keeping only membership ranked one Run two ways at once. A Run deferred, placed,
 // and told to wait again is one wait with a placement in the middle of it, and its
-// own door read the whole wait while every other Run in the tenant read it as an
+// own door read the whole wait while every other Run in the deployment read it as an
 // arrival that had waited nothing. So it went on ageing toward a queue delay
 // measured from a moment nobody else could see, and fresh work of a higher class
 // was admitted past a Run that outranked it. Nothing reaches that today, because a
@@ -236,7 +236,7 @@ func (replay queueReplay) apply(event eventlog.StoredEvent) error {
 // whoever is on it, and no priority takes that away.
 type admissionQueue struct {
 	waiting []waitingRun
-	// holding is every Run in this workspace that has been given capacity and
+	// holding is every Run in this deployment that has been given capacity and
 	// belongs to a family, by Run ID. It is the complement of the queue above: that
 	// is the work still owed an answer, and this is the work that has one, which is
 	// what a family's declared width is counted over.
@@ -249,7 +249,7 @@ type waitingRun struct {
 	runID string
 	class domain.ServiceClass
 	// since is the moment admission first told this Run to wait, which is the
-	// number every other Run in the tenant weighs it at. It survives a placement
+	// number every other Run in the deployment weighs it at. It survives a placement
 	// because queueReplay keeps it separately from membership, and it is the same
 	// moment runState.queuedSince holds for the Run's own door.
 	since time.Time
@@ -353,7 +353,7 @@ func (queue admissionQueue) familyHolding(run queuePosition) []domain.QueuedAhea
 // The second is a Run that holds no queue at all: one the fleet was asked about
 // and answered with no machine that could ever take it. Ordering work behind it is
 // ordering it behind a wait for capacity nobody has, which leaves a machine idle
-// beside work that fits it and stalls a workspace on one impossible submission
+// beside work that fits it and stalls a deployment on one impossible submission
 // until that Run's own deadline clears it.
 func (queue admissionQueue) ahead(run queuePosition) []domain.QueuedAhead {
 	var behind []domain.QueuedAhead
@@ -419,7 +419,7 @@ func (run queuePosition) deferral(reason string, behind []domain.QueuedAhead) do
 // still inside both bounds, which the record says cannot end in time.
 func (o *Orchestrator) deferOrRefuse(
 	ctx context.Context,
-	workspaceID, runID string,
+	runID string,
 	version uint64,
 	state runState,
 	run queuePosition,
@@ -427,13 +427,13 @@ func (o *Orchestrator) deferOrRefuse(
 ) error {
 	if reason := run.policy.BoundAlreadyBroken(run.wait); reason != "" {
 		answer.deferral.Reason = reason
-		return o.recordRefusal(ctx, workspaceID, runID, version, state, answer)
+		return o.recordRefusal(ctx, runID, version, state, answer)
 	}
 	if run.policy.DeadlineUnreachable(run.wait.Seconds, answer.deferral.ProjectedWaitSeconds, answer.projected) {
 		answer.deferral.Reason = domain.RefusedDeadlineUnreachable
-		return o.recordRefusal(ctx, workspaceID, runID, version, state, answer)
+		return o.recordRefusal(ctx, runID, version, state, answer)
 	}
-	return o.recordDeferral(ctx, workspaceID, runID, version, state, answer)
+	return o.recordDeferral(ctx, runID, version, state, answer)
 }
 
 // admissionAnswer is one answer admission reached about a Run it will not admit
@@ -570,7 +570,7 @@ func workAhead(candidates []domain.CandidateDecision) []domain.QueuedAhead {
 // changed.
 func (o *Orchestrator) recordDeferral(
 	ctx context.Context,
-	workspaceID, runID string,
+	runID string,
 	version uint64,
 	state runState,
 	answer admissionAnswer,
@@ -581,7 +581,7 @@ func (o *Orchestrator) recordDeferral(
 	events := append(answer.evidence(runID, o.now()),
 		mustEvent(runID, admissionEventID(state), EventAdmissionDeferred, admissionDeferredData{Deferral: answer.deferral}, o.now()),
 	)
-	return o.appendEvents(ctx, workspaceID, runID, version, admissionCommand(state, "deferred"), events)
+	return o.appendEvents(ctx, runID, version, admissionCommand(state, "deferred"), events)
 }
 
 // recordRefusal closes a Run admission will not queue, loudly: the reason, the
@@ -589,7 +589,7 @@ func (o *Orchestrator) recordDeferral(
 // be met from the Run rather than from the Run never starting.
 func (o *Orchestrator) recordRefusal(
 	ctx context.Context,
-	workspaceID, runID string,
+	runID string,
 	version uint64,
 	state runState,
 	answer admissionAnswer,
@@ -601,9 +601,9 @@ func (o *Orchestrator) recordRefusal(
 	)
 	command := admissionCommand(state, "refused")
 	if state.bookingQueued() {
-		return o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, command, events)
+		return o.completeBookingAndAppend(ctx, runID, version, state, command, events)
 	}
-	return o.appendEvents(ctx, workspaceID, runID, version, command, events)
+	return o.appendEvents(ctx, runID, version, command, events)
 }
 
 // admissionEventID numbers each deferral of one Run, because they are separate

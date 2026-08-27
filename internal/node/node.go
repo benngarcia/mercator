@@ -51,9 +51,9 @@ func (state State) Valid() bool {
 // immutable: a node does not choose its ID, and it cannot claim a generation it
 // was not invited for.
 type Record struct {
-	ID          string `json:"id"`
-	WorkspaceID string `json:"workspace_id"`
-	RentalID    string `json:"rental_id"`
+	ID string `json:"id"`
+
+	RentalID string `json:"rental_id"`
 	// Generation is the Rental lifecycle cycle this node belongs to. Capacity
 	// that stops and resumes comes back as a new generation, so a node from the
 	// previous one can never be mistaken for the current runtime.
@@ -156,10 +156,10 @@ func (record Record) CommittedUntil(now time.Time) time.Time {
 // Ref is this record's address in the capability contract.
 func (record Record) Ref() capability.NodeRef {
 	return capability.NodeRef{
-		WorkspaceID: record.WorkspaceID,
-		NodeID:      record.ID,
-		RentalID:    record.RentalID,
-		Generation:  record.Generation,
+
+		NodeID:     record.ID,
+		RentalID:   record.RentalID,
+		Generation: record.Generation,
 	}
 }
 
@@ -269,9 +269,9 @@ const (
 
 // Operation is the durable record of one command and what became of it.
 type Operation struct {
-	OperationID  string         `json:"operation_id"`
-	NodeID       string         `json:"node_id"`
-	WorkspaceID  string         `json:"workspace_id"`
+	OperationID string `json:"operation_id"`
+	NodeID      string `json:"node_id"`
+
 	Kind         CommandKind    `json:"kind"`
 	FencingToken uint64         `json:"fencing_token"`
 	State        OperationState `json:"state"`
@@ -320,13 +320,13 @@ type Result struct {
 // separately, through the run's own reporting path.
 type Event struct {
 	// ID deduplicates a spooled event replayed after a reconnection.
-	ID          string                          `json:"id"`
-	NodeID      string                          `json:"node_id"`
-	WorkspaceID string                          `json:"workspace_id"`
-	Kind        EventKind                       `json:"kind"`
-	ObservedAt  time.Time                       `json:"observed_at"`
-	Facts       *capability.NodeFacts           `json:"facts,omitempty"`
-	Workload    *capability.WorkloadObservation `json:"workload,omitempty"`
+	ID     string `json:"id"`
+	NodeID string `json:"node_id"`
+
+	Kind       EventKind                       `json:"kind"`
+	ObservedAt time.Time                       `json:"observed_at"`
+	Facts      *capability.NodeFacts           `json:"facts,omitempty"`
+	Workload   *capability.WorkloadObservation `json:"workload,omitempty"`
 }
 
 // EventKind names what a node is reporting.

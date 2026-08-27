@@ -25,7 +25,7 @@ const (
 	// stands turns that into a machine. Calling that a wait for capacity to come
 	// free is what let the most impossible ask of all be the one wait nothing
 	// exempted: it kept the queue, aged past every other class, and stalled a
-	// workspace whose fleet was selling exactly what the work behind it asked for.
+	// deployment whose fleet was selling exactly what the work behind it asked for.
 	//
 	// It is decided from what each machine refused the Run for and never from what
 	// each machine happens to be doing. A refusal that names capacity somebody is
@@ -166,7 +166,7 @@ type FleetAnswer struct {
 //
 // One machine nobody could measure stops the fleet from saying it. This is the
 // strongest statement a fleet can make and it is not one to make over a silence:
-// a workspace whose only node failed to stat its filesystem would otherwise
+// a deployment whose only node failed to stat its filesystem would otherwise
 // record every Run in it as work no machine can ever hold, and lose the ordering
 // of all of them to a measurement that comes back on the next heartbeat.
 func (answer FleetAnswer) HoldsNothing() bool {
@@ -200,7 +200,7 @@ func (answer FleetAnswer) Reason() string {
 // the only wait here that is not about capacity at all. No machine coming free
 // ends it, because the bound counts members rather than machines, so work behind
 // it is not competing with it for anything. A group whose members held the queue
-// would let one narrow family stop every other Run in the tenant, which is the
+// would let one narrow family stop every other Run in the deployment, which is the
 // same head-of-line block the fleet exemption exists to prevent.
 //
 // Otherwise only the fleet's own answer can say it, and it says it about the

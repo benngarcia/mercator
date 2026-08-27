@@ -34,7 +34,7 @@ func TestARunNothingCanTakeWaitsInsteadOfSpinning(t *testing.T) {
 	submitClassed(t, ctx, orch, "run_unplaceable", domain.ClassStandard)
 
 	for range 2 {
-		if err := orch.AdvanceRun(ctx, "ws_1", "run_unplaceable"); err != nil {
+		if err := orch.AdvanceRun(ctx, "run_unplaceable"); err != nil {
 			t.Fatalf("advance a Run nothing can take: %v", err)
 		}
 	}
@@ -82,7 +82,7 @@ func TestAWaitThatChangedIsRecordedAndNotRefused(t *testing.T) {
 	submitClassed(t, ctx, orch, "run_quiet", domain.ClassStandard)
 
 	for _, runID := range []string{"run_watched", "run_quiet", "run_watched_too", "run_quiet"} {
-		if err := orch.AdvanceRun(ctx, "ws_1", runID); err != nil {
+		if err := orch.AdvanceRun(ctx, runID); err != nil {
 			t.Fatalf("advance %q the way a sweep does: %v", runID, err)
 		}
 	}
@@ -120,14 +120,14 @@ func TestAWaitPastItsDeadlineIsRefusedBehindTheQueueToo(t *testing.T) {
 	submitClassed(t, ctx, orch, "run_iterating", domain.ClassExperimental)
 	submitClassed(t, ctx, orch, "run_watched", domain.ClassInteractive)
 	for _, runID := range []string{"run_iterating", "run_watched"} {
-		if err := orch.AdvanceRun(ctx, "ws_1", runID); err != nil {
+		if err := orch.AdvanceRun(ctx, runID); err != nil {
 			t.Fatalf("advance %q the way a sweep does: %v", runID, err)
 		}
 	}
 
 	deadline := domain.ClassInteractive.Admission().DeadlineSeconds
 	now = now.Add(time.Duration(deadline+1) * time.Second)
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_watched"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_watched"); err != nil {
 		t.Fatalf("advance a Run whose deadline passed while it waited: %v", err)
 	}
 
@@ -158,7 +158,7 @@ func TestAnImpossibleAskDoesNotStopWorkThatFits(t *testing.T) {
 	submitDisk(t, ctx, orch, "run_fits", offer.Resources.EphemeralDiskBytes/2)
 
 	for _, runID := range []string{"run_oversized", "run_fits"} {
-		if err := orch.AdvanceRun(ctx, "ws_1", runID); err != nil {
+		if err := orch.AdvanceRun(ctx, runID); err != nil {
 			t.Fatalf("advance %q the way a sweep does: %v", runID, err)
 		}
 	}
@@ -182,7 +182,7 @@ func TestAnImpossibleAskDoesNotStopWorkThatFits(t *testing.T) {
 // measured from, and runState.queuedSince holds that from the first deferral
 // without ever clearing it. The queue dropped it at the placement, so a Run
 // deferred, placed, and told to wait again was weighed by its own door at the
-// standing of the whole wait and by every other Run in the tenant as an arrival
+// standing of the whole wait and by every other Run in the deployment as an arrival
 // that had waited nothing: it went on ageing toward a queue delay measured from a
 // moment nobody else could see, while fresh work of a higher class was admitted
 // past a Run that outranked it.
@@ -201,7 +201,7 @@ func TestAPlacementDoesNotRestartTheWaitTheQueueOrdersOn(t *testing.T) {
 	appendWaitPlacedAndWaitedAgain(t, ctx, orch, "run_quiet", domain.ClassBatch, now)
 	submitClassed(t, ctx, orch, "run_fresh", domain.ClassStandard)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_fresh"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_fresh"); err != nil {
 		t.Fatalf("advance a fresh Run into a queue holding a replaced one: %v", err)
 	}
 
@@ -244,7 +244,7 @@ func appendWaitPlacedAndWaitedAgain(
 		t.Fatalf("state the placement: %v", err)
 	}
 	if _, err := orch.log.Append(ctx, eventlog.AppendRequest{
-		Stream:      eventlog.StreamKey{WorkspaceID: "ws_1", Type: "run", ID: runID},
+		Stream:      eventlog.StreamKey{Type: "run", ID: runID},
 		CommandKey:  "state:" + runID,
 		RequestHash: "sha256:" + runID,
 		Events: []eventlog.NewEvent{
@@ -287,7 +287,7 @@ func submitDisk(t *testing.T, ctx context.Context, orch *Orchestrator, runID str
 func submitRevision(t *testing.T, ctx context.Context, orch *Orchestrator, runID string, revision domain.WorkloadRevision) {
 	t.Helper()
 	if _, err := orch.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    "ws_1",
+
 		RunID:          runID,
 		IdempotencyKey: "idem_" + runID,
 		Workload:       revision,
@@ -298,7 +298,7 @@ func submitRevision(t *testing.T, ctx context.Context, orch *Orchestrator, runID
 
 func runEvents(t *testing.T, ctx context.Context, orch *Orchestrator, runID string) []eventlog.StoredEvent {
 	t.Helper()
-	events, err := orch.GetRunEvents(ctx, "ws_1", runID)
+	events, err := orch.GetRunEvents(ctx, runID)
 	if err != nil {
 		t.Fatalf("read the stream of %q: %v", runID, err)
 	}
@@ -344,7 +344,7 @@ func latestDeferral(t *testing.T, events []eventlog.StoredEvent) domain.Admissio
 // TestAFamilyBurstSubmittedIsStillHeldToItsWidth is the family bound under the
 // arrival pattern it exists for. A sweep is submitted all at once, Intake advances
 // each Run inside its own request, and the bound is decided by replaying the
-// workspace log and then appending to one Run's own stream. Two members asked at
+// deployment log and then appending to one Run's own stream. Two members asked at
 // the same instant therefore both read a family holding nothing and both took a
 // machine, so a family declared one wide held two, and nothing in the corpus could
 // see it: the Lab drives admission one Run at a time and the daemon case submits in
@@ -376,7 +376,7 @@ func TestAFamilyBurstSubmittedIsStillHeldToItsWidth(t *testing.T) {
 	for _, runID := range members {
 		go func() {
 			<-burst
-			advanced <- orch.AdvanceRun(ctx, "ws_1", runID)
+			advanced <- orch.AdvanceRun(ctx, runID)
 		}()
 	}
 	close(burst)
@@ -430,7 +430,7 @@ func TestAFamilyAtItsWidthHoldsItsOwnMembersBack(t *testing.T) {
 	appendMemberPlacedInFamily(t, ctx, orch, "run_first", sweep, now, false)
 	submitInFamily(t, ctx, orch, "run_second", sweep)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_second"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_second"); err != nil {
 		t.Fatalf("advance the second member of a family already at its width: %v", err)
 	}
 
@@ -464,7 +464,7 @@ func TestAMemberThatGaveItsCapacityBackLeavesRoomForItsFamily(t *testing.T) {
 	appendMemberPlacedInFamily(t, ctx, orch, "run_first", sweep, now, true)
 	submitInFamily(t, ctx, orch, "run_second", sweep)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_second"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_second"); err != nil {
 		t.Fatalf("advance a member whose sibling gave its capacity back: %v", err)
 	}
 
@@ -530,7 +530,7 @@ func appendMemberPlacedInFamily(
 		})
 	}
 	if _, err := orch.log.Append(ctx, eventlog.AppendRequest{
-		Stream:      eventlog.StreamKey{WorkspaceID: "ws_1", Type: "run", ID: runID},
+		Stream:      eventlog.StreamKey{Type: "run", ID: runID},
 		CommandKey:  "state:" + runID,
 		RequestHash: "sha256:" + runID,
 		Events:      events,
@@ -572,7 +572,7 @@ func TestAWaitAFamilyHeldIsNotChargedWhenTheFleetTakesOver(t *testing.T) {
 	submitInFamily(t, ctx, orch, "run_second", sweep)
 	appendHeldByItsFamily(t, ctx, orch, "run_second", sweep, now.Add(-70*time.Minute))
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_second"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_second"); err != nil {
 		t.Fatalf("advance a member whose family has just made room: %v", err)
 	}
 
@@ -611,7 +611,7 @@ func TestAHeldMemberPastItsDeadlineIsRefusedForItsDeadline(t *testing.T) {
 	submitInFamily(t, ctx, orch, "run_held", sweep)
 	appendHeldByItsFamily(t, ctx, orch, "run_held", sweep, now.Add(-(24*time.Hour + time.Minute)))
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_held"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_held"); err != nil {
 		t.Fatalf("advance a held member past its class deadline: %v", err)
 	}
 
@@ -641,12 +641,12 @@ func appendHeldByItsFamily(
 	if err != nil {
 		t.Fatalf("state the wait: %v", err)
 	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", runID)
+	events, err := orch.GetRunEvents(ctx, runID)
 	if err != nil {
 		t.Fatalf("read the stream of %q: %v", runID, err)
 	}
 	if _, err := orch.log.Append(ctx, eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: "ws_1", Type: "run", ID: runID},
+		Stream:                eventlog.StreamKey{Type: "run", ID: runID},
 		ExpectedStreamVersion: uint64(len(events)),
 		CommandKey:            "state:held:" + runID,
 		RequestHash:           "sha256:held:" + runID,

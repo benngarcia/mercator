@@ -79,7 +79,7 @@ func TestAMachineWhoseGenerationEndedRenewsNothing(t *testing.T) {
 	registry, _ := newRegistry(t)
 	bootstrap := invite(t, registry)
 	enrollment := enroll(t, registry, bootstrap)
-	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+	if err := registry.Retire(context.Background(), bootstrap.NodeID); err != nil {
 		t.Fatalf("retire the node: %v", err)
 	}
 

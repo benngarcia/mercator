@@ -86,10 +86,10 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 }
 
 type SecretStore interface {
-	Put(ctx context.Context, workspaceID, connectionID string, blob []byte) error
-	Get(ctx context.Context, workspaceID, connectionID string) ([]byte, error)
+	Put(ctx context.Context, connectionID string, blob []byte) error
+	Get(ctx context.Context, connectionID string) ([]byte, error)
 	// Delete removes the sealed blob. Deleting an absent row is a no-op.
-	Delete(ctx context.Context, workspaceID, connectionID string) error
+	Delete(ctx context.Context, connectionID string) error
 }
 
 type MemoryStore struct {
@@ -99,31 +99,29 @@ type MemoryStore struct {
 
 func NewMemoryStore() *MemoryStore { return &MemoryStore{m: map[string][]byte{}} }
 
-func memKey(ws, id string) string { return ws + "/" + id }
-
-func (s *MemoryStore) Put(_ context.Context, ws, id string, blob []byte) error {
+func (s *MemoryStore) Put(_ context.Context, id string, blob []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := make([]byte, len(blob))
 	copy(cp, blob)
-	s.m[memKey(ws, id)] = cp
+	s.m[id] = cp
 	return nil
 }
 
-func (s *MemoryStore) Get(_ context.Context, ws, id string) ([]byte, error) {
+func (s *MemoryStore) Get(_ context.Context, id string) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	blob, ok := s.m[memKey(ws, id)]
+	blob, ok := s.m[id]
 	if !ok {
 		return nil, ErrNotFound
 	}
 	return append([]byte(nil), blob...), nil
 }
 
-func (s *MemoryStore) Delete(_ context.Context, ws, id string) error {
+func (s *MemoryStore) Delete(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.m, memKey(ws, id))
+	delete(s.m, id)
 	return nil
 }
 
@@ -154,7 +152,7 @@ func (r *Resolver) Seal(plaintext []byte) ([]byte, bool) {
 
 // Resolve returns the plaintext credential value from the {source, ref} tuple.
 // An empty Source is treated as SourceEnv.
-func (r *Resolver) Resolve(ctx context.Context, workspaceID string, c Credential) (string, error) {
+func (r *Resolver) Resolve(ctx context.Context, c Credential) (string, error) {
 	switch c.Source {
 	case "", SourceEnv:
 		if r.getenv == nil {
@@ -174,7 +172,7 @@ func (r *Resolver) Resolve(ctx context.Context, workspaceID string, c Credential
 		if len(r.sealKey) == 0 {
 			return "", errors.New("credential: mercator source disabled (set MERCATOR_SECRET_KEY)")
 		}
-		blob, err := r.store.Get(ctx, workspaceID, c.Ref)
+		blob, err := r.store.Get(ctx, c.Ref)
 		if err != nil {
 			return "", err
 		}

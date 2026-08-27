@@ -16,10 +16,10 @@ import (
 // offer capacity, and the run lifecycle reaches them through the node runtime
 // rather than through a provider API.
 type Nodes interface {
-	Offers(ctx context.Context, workspaceID string) ([]domain.OfferSnapshot, error)
+	Offers(ctx context.Context) ([]domain.OfferSnapshot, error)
 	// Ref resolves a node's current identity, including the generation a
 	// command must be stamped with.
-	Ref(ctx context.Context, workspaceID, nodeID string) (capability.NodeRef, error)
+	Ref(ctx context.Context, nodeID string) (capability.NodeRef, error)
 	// PrepareImage and PrepareArtifact are the reusable lane's half of
 	// preparation. They have been on capability.NodeRuntime since it existed and
 	// were unreachable from the control plane's own abstraction, which declared
@@ -44,7 +44,7 @@ func WithNodes(nodes Nodes) Option {
 // key is the operation identity, so a redelivered launch produces one container
 // and the node answers Duplicate rather than starting a second.
 func (b *Broker) launchOnNode(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
-	ref, err := b.nodeRef(ctx, req.WorkspaceID, req.SelectedOfferNativeRef)
+	ref, err := b.nodeRef(ctx, req.SelectedOfferNativeRef)
 	if err != nil {
 		return adapter.LaunchReceipt{}, err
 	}
@@ -58,8 +58,7 @@ func (b *Broker) launchOnNode(ctx context.Context, req adapter.LaunchRequest) (a
 		ManifestDigest: domain.ReferenceDigest(req.Image),
 		Environment:    nodeEnvironment(req.Environment),
 		// The caches the workload declared, carried through as declared. The
-		// workspace scoping them is on the node ref below, which is what the
-		// runtime derives each cache's own volume from.
+		// runtime derives each cache's volume from.
 		CacheMounts:       slices.Clone(req.CacheMounts),
 		MaxRuntimeSeconds: req.MaxRuntimeSeconds,
 		Workload: domain.WorkloadSpec{
@@ -148,7 +147,7 @@ func (b *Broker) Prepare(ctx context.Context, request adapter.PrepareRequest) (a
 // than being answered out of the record of the failure. That is what makes the
 // node agent's own refusal to remember a failed pull mean something.
 func (b *Broker) prepareOnNode(ctx context.Context, request adapter.PrepareRequest, item adapter.PrepareItem) (capability.OperationReceipt, error) {
-	ref, err := b.nodeRef(ctx, request.WorkspaceID, item.NativeRef)
+	ref, err := b.nodeRef(ctx, item.NativeRef)
 	if err != nil {
 		return capability.OperationReceipt{}, err
 	}
@@ -188,7 +187,7 @@ func (b *Broker) prepareOnNode(ctx context.Context, request adapter.PrepareReque
 // observeOnNode reads what the node itself said about the container. It is the
 // node's authority, independent of anything the application reported.
 func (b *Broker) observeOnNode(ctx context.Context, req adapter.ObserveRequest, nodeID, runID, attemptID string) (adapter.ExternalObservation, error) {
-	ref, err := b.nodeRef(ctx, req.WorkspaceID, nodeID)
+	ref, err := b.nodeRef(ctx, nodeID)
 	if err != nil {
 		return adapter.ExternalObservation{}, err
 	}
@@ -232,7 +231,7 @@ func (b *Broker) observeOnNode(ctx context.Context, req adapter.ObserveRequest, 
 // destroys the node: the whole point of the reusable lane is that the machine
 // outlives the Run.
 func (b *Broker) releaseOnNode(ctx context.Context, req adapter.ReleaseRequest, nodeID, runID string) (adapter.ReleaseReceipt, error) {
-	ref, err := b.nodeRef(ctx, req.WorkspaceID, nodeID)
+	ref, err := b.nodeRef(ctx, nodeID)
 	if err != nil {
 		return adapter.ReleaseReceipt{}, err
 	}
@@ -246,14 +245,14 @@ func (b *Broker) releaseOnNode(ctx context.Context, req adapter.ReleaseRequest, 
 	return adapter.ReleaseReceipt{Released: true, Duplicate: receipt.Duplicate}, nil
 }
 
-func (b *Broker) nodeRef(ctx context.Context, workspaceID, nodeID string) (capability.NodeRef, error) {
+func (b *Broker) nodeRef(ctx context.Context, nodeID string) (capability.NodeRef, error) {
 	if b.nodes == nil {
 		return capability.NodeRef{}, fmt.Errorf(
 			"%w: this Mercator has no enrolled nodes, so nothing can execute a reusable-lane Run",
 			capability.ErrCapabilityUnsupported,
 		)
 	}
-	return b.nodes.Ref(ctx, workspaceID, nodeID)
+	return b.nodes.Ref(ctx, nodeID)
 }
 
 // externalPhase translates the node's container vocabulary into the run

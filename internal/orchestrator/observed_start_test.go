@@ -22,11 +22,11 @@ func TestARunRecordsTheStartMomentItsHolderPublished(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
 
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -50,11 +50,11 @@ func TestAStartAheadOfTheReadThatCarriedItIsNotThisRunsStart(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
 
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestAStartAheadOfTheReadThatCarriedItIsNotThisRunsStart(t *testing.T) {
 		t.Fatalf("the Run records a start of %s, which its holder published an hour ahead of the read that carried it",
 			record.StartedAt.Format(time.RFC3339Nano))
 	}
-	events, err := orch.log.ReadStream(ctx, runStream("ws_1", "run_1"), 0, 1000)
+	events, err := orch.log.ReadStream(ctx, runStream("run_1"), 0, 1000)
 	if err != nil {
 		t.Fatalf("read stream: %v", err)
 	}
@@ -89,11 +89,11 @@ func TestAQueuedObservationDoesNotStartAWorkload(t *testing.T) {
 	orch := newTestOrchestrator(t, ad)
 	createRun(t, ctx, orch)
 
-	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+	if err := orch.AdvanceRun(ctx, "run_1"); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
 
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}

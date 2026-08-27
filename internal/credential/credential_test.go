@@ -37,7 +37,7 @@ func TestResolveEnvSource(t *testing.T) {
 		}
 		return ""
 	}, NewMemoryStore(), nil)
-	got, err := r.Resolve(context.Background(), "ws_1", Credential{Source: SourceEnv, Ref: "MY_KEY"})
+	got, err := r.Resolve(context.Background(), Credential{Source: SourceEnv, Ref: "MY_KEY"})
 	if err != nil || got != "from-env" {
 		t.Fatalf("env resolve: %q err=%v", got, err)
 	}
@@ -46,11 +46,11 @@ func TestResolveEnvSource(t *testing.T) {
 func TestResolveMercatorSource(t *testing.T) {
 	store := NewMemoryStore()
 	blob, _ := Seal(DeriveSealKey(key32()), []byte("stored-secret"))
-	if err := store.Put(context.Background(), "ws_1", "conn_x", blob); err != nil {
+	if err := store.Put(context.Background(), "conn_x", blob); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	r := NewResolver(nil, store, key32())
-	got, err := r.Resolve(context.Background(), "ws_1", Credential{Source: SourceMercator, Ref: "conn_x"})
+	got, err := r.Resolve(context.Background(), Credential{Source: SourceMercator, Ref: "conn_x"})
 	if err != nil || got != "stored-secret" {
 		t.Fatalf("mercator resolve: %q err=%v", got, err)
 	}
@@ -58,7 +58,7 @@ func TestResolveMercatorSource(t *testing.T) {
 
 func TestResolveMercatorWithoutKeyDisabled(t *testing.T) {
 	r := NewResolver(nil, NewMemoryStore(), nil) // no master key
-	_, err := r.Resolve(context.Background(), "ws_1", Credential{Source: SourceMercator, Ref: "conn_x"})
+	_, err := r.Resolve(context.Background(), Credential{Source: SourceMercator, Ref: "conn_x"})
 	if err == nil {
 		t.Fatal("expected mercator source to be disabled without a master key")
 	}

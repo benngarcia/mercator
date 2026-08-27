@@ -21,18 +21,49 @@ import (
 // which is what makes two controllers ending one generation a conflict rather
 // than a last-writer-wins.
 const createRentals = `CREATE TABLE IF NOT EXISTS rentals (
-	workspace_id TEXT NOT NULL,
-	rental_id TEXT NOT NULL,
+	rental_id TEXT PRIMARY KEY,
 	version INTEGER NOT NULL,
-	rental_json BLOB NOT NULL,
-	PRIMARY KEY(workspace_id, rental_id)
+	rental_json BLOB NOT NULL
 )`
 
 func migrateRentals(ctx context.Context, db *sql.DB) error {
+	if err := flattenRentals(ctx, db); err != nil {
+		return err
+	}
 	if _, err := db.ExecContext(ctx, createRentals); err != nil {
 		return fmt.Errorf("migrate Rentals: %w", err)
 	}
 	return nil
+}
+
+func flattenRentals(ctx context.Context, db *sql.DB) error {
+	partitioned, err := tableHasColumn(ctx, db, "rentals", "workspace_id")
+	if err != nil || !partitioned {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var collision string
+	err = tx.QueryRowContext(ctx, `SELECT rental_id FROM rentals GROUP BY rental_id HAVING COUNT(*) > 1 LIMIT 1`).Scan(&collision)
+	if err == nil {
+		return fmt.Errorf("migrate Rentals: duplicate rental %q across workspaces", collision)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	for _, statement := range []string{
+		`ALTER TABLE rentals RENAME TO rentals_workspace_legacy`, createRentals,
+		`INSERT INTO rentals (rental_id, version, rental_json) SELECT rental_id, version, rental_json FROM rentals_workspace_legacy`,
+		`DROP TABLE rentals_workspace_legacy`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("migrate Rentals: flatten workspaces: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // RentalStore is the durable record of the capacity Mercator holds. A control
@@ -63,9 +94,8 @@ func (store *RentalStore) Save(ctx context.Context, expectedVersion uint64, next
 // the write is refused rather than overwriting what it holds.
 func (store *RentalStore) take(ctx context.Context, next domain.Rental, encoded []byte) error {
 	result, err := store.db.ExecContext(ctx, `
-		INSERT OR IGNORE INTO rentals (workspace_id, rental_id, version, rental_json)
-		VALUES (?, ?, ?, ?)`,
-		next.WorkspaceID, next.ID, next.Version, encoded)
+		INSERT OR IGNORE INTO rentals (rental_id, version, rental_json)
+		VALUES (?, ?, ?)`, next.ID, next.Version, encoded)
 	if err != nil {
 		return fmt.Errorf("take Rental %q: %w", next.ID, err)
 	}
@@ -77,8 +107,7 @@ func (store *RentalStore) take(ctx context.Context, next domain.Rental, encoded 
 func (store *RentalStore) advance(ctx context.Context, expectedVersion uint64, next domain.Rental, encoded []byte) error {
 	result, err := store.db.ExecContext(ctx, `
 		UPDATE rentals SET version = ?, rental_json = ?
-		WHERE workspace_id = ? AND rental_id = ? AND version = ?`,
-		next.Version, encoded, next.WorkspaceID, next.ID, expectedVersion)
+		WHERE rental_id = ? AND version = ?`, next.Version, encoded, next.ID, expectedVersion)
 	if err != nil {
 		return fmt.Errorf("store Rental %q: %w", next.ID, err)
 	}
@@ -96,11 +125,10 @@ func wroteOne(result sql.Result, rentalID string) error {
 	return nil
 }
 
-func (store *RentalStore) Get(ctx context.Context, workspaceID, rentalID string) (domain.Rental, error) {
+func (store *RentalStore) Get(ctx context.Context, rentalID string) (domain.Rental, error) {
 	var encoded []byte
 	err := store.db.QueryRowContext(ctx,
-		`SELECT rental_json FROM rentals WHERE workspace_id = ? AND rental_id = ?`,
-		workspaceID, rentalID).Scan(&encoded)
+		`SELECT rental_json FROM rentals WHERE rental_id = ?`, rentalID).Scan(&encoded)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Rental{}, fmt.Errorf("%w: %s", rental.ErrNotFound, rentalID)
 	}
@@ -110,9 +138,9 @@ func (store *RentalStore) Get(ctx context.Context, workspaceID, rentalID string)
 	return decodeRental(encoded)
 }
 
-func (store *RentalStore) List(ctx context.Context, workspaceID string) ([]domain.Rental, error) {
+func (store *RentalStore) List(ctx context.Context) ([]domain.Rental, error) {
 	rows, err := store.db.QueryContext(ctx,
-		`SELECT rental_json FROM rentals WHERE workspace_id = ? ORDER BY rental_id`, workspaceID)
+		`SELECT rental_json FROM rentals ORDER BY rental_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list Rentals: %w", err)
 	}

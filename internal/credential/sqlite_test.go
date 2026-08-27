@@ -33,14 +33,14 @@ func TestSQLiteStorePutGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	if err := store.Put(context.Background(), "ws_1", "conn_x", []byte{1, 2, 3}); err != nil {
+	if err := store.Put(context.Background(), "conn_x", []byte{1, 2, 3}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	got, err := store.Get(context.Background(), "ws_1", "conn_x")
+	got, err := store.Get(context.Background(), "conn_x")
 	if err != nil || string(got) != string([]byte{1, 2, 3}) {
 		t.Fatalf("get: %v err=%v", got, err)
 	}
-	if _, err := store.Get(context.Background(), "ws_1", "missing"); err != ErrNotFound {
+	if _, err := store.Get(context.Background(), "missing"); err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -56,14 +56,14 @@ func TestMigrateSealKeyResealsLegacyRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal legacy: %v", err)
 	}
-	if err := store.Put(ctx, "ws_1", "conn_legacy", legacy); err != nil {
+	if err := store.Put(ctx, "conn_legacy", legacy); err != nil {
 		t.Fatalf("put legacy: %v", err)
 	}
 	current, err := Seal(DeriveSealKey(key32()), []byte("current-secret"))
 	if err != nil {
 		t.Fatalf("seal current: %v", err)
 	}
-	if err := store.Put(ctx, "ws_1", "conn_current", current); err != nil {
+	if err := store.Put(ctx, "conn_current", current); err != nil {
 		t.Fatalf("put current: %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestMigrateSealKeyResealsLegacyRows(t *testing.T) {
 
 	r := NewResolver(nil, store, key32())
 	for id, want := range map[string]string{"conn_legacy": "legacy-secret", "conn_current": "current-secret"} {
-		got, err := r.Resolve(ctx, "ws_1", Credential{Source: SourceMercator, Ref: id})
+		got, err := r.Resolve(ctx, Credential{Source: SourceMercator, Ref: id})
 		if err != nil || got != want {
 			t.Errorf("resolve %s after migration: %q err=%v", id, got, err)
 		}
@@ -95,7 +95,7 @@ func TestMigrateSealKeyResealsLegacyRows(t *testing.T) {
 func TestMigrateSealKeyRefusesUndecryptableRows(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	if err := store.Put(ctx, "ws_1", "conn_bad", []byte("not-a-ciphertext")); err != nil {
+	if err := store.Put(ctx, "conn_bad", []byte("not-a-ciphertext")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 
@@ -103,7 +103,7 @@ func TestMigrateSealKeyRefusesUndecryptableRows(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected migration to fail on an undecryptable row")
 	}
-	if !strings.Contains(err.Error(), "ws_1/conn_bad") {
+	if !strings.Contains(err.Error(), "conn_bad") {
 		t.Fatalf("error must name the affected connection, got: %v", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestMigrateSealKeyRefusesUndecryptableRows(t *testing.T) {
 func TestMigrateSealKeyNoMasterKeyIsNoop(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
-	if err := store.Put(ctx, "ws_1", "conn_x", []byte("whatever")); err != nil {
+	if err := store.Put(ctx, "conn_x", []byte("whatever")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	migrated, err := store.MigrateSealKey(ctx, nil)
@@ -140,7 +140,7 @@ func TestRekeyMovesEveryRowToTheNewKey(t *testing.T) {
 		if !ok {
 			t.Fatalf("seal %s under the retired key", id)
 		}
-		if err := store.Put(ctx, "ws_1", id, blob); err != nil {
+		if err := store.Put(ctx, id, blob); err != nil {
 			t.Fatalf("put %s: %v", id, err)
 		}
 	}
@@ -157,11 +157,11 @@ func TestRekeyMovesEveryRowToTheNewKey(t *testing.T) {
 	}
 	current := NewResolver(nil, store, key32())
 	for id, want := range sealed {
-		got, err := current.Resolve(ctx, "ws_1", Credential{Source: SourceMercator, Ref: id})
+		got, err := current.Resolve(ctx, Credential{Source: SourceMercator, Ref: id})
 		if err != nil || got != want {
 			t.Errorf("resolve %s under the new key = %q, err = %v; want %q", id, got, err, want)
 		}
-		if _, err := retired.Resolve(ctx, "ws_1", Credential{Source: SourceMercator, Ref: id}); err == nil {
+		if _, err := retired.Resolve(ctx, Credential{Source: SourceMercator, Ref: id}); err == nil {
 			t.Errorf("%s still resolves under the retired key", id)
 		}
 	}
@@ -185,7 +185,7 @@ func TestRekeyRefusesTheWrongRetiredKey(t *testing.T) {
 	if !ok {
 		t.Fatal("seal under the stranger key")
 	}
-	if err := store.Put(ctx, "ws_1", "conn_orphan", blob); err != nil {
+	if err := store.Put(ctx, "conn_orphan", blob); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 
@@ -196,10 +196,10 @@ func TestRekeyRefusesTheWrongRetiredKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("a row neither key opens must abort the rotation")
 	}
-	if !strings.Contains(err.Error(), "ws_1/conn_orphan") {
+	if !strings.Contains(err.Error(), "conn_orphan") {
 		t.Fatalf("error = %v, want the affected connection named", err)
 	}
-	stored, err := store.Get(ctx, "ws_1", "conn_orphan")
+	stored, err := store.Get(ctx, "conn_orphan")
 	if err != nil || string(stored) != string(blob) {
 		t.Fatalf("aborted rotation must leave the row untouched: err = %v", err)
 	}

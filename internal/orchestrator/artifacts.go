@@ -19,7 +19,7 @@ import (
 // from a consumer's side they are the same fact: the content is not readable
 // yet.
 type ArtifactCatalog interface {
-	ArtifactVersion(ctx context.Context, workspaceID, artifactID string) (domain.ArtifactVersion, error)
+	ArtifactVersion(ctx context.Context, artifactID string) (domain.ArtifactVersion, error)
 }
 
 // WithArtifactCatalog supplies the object store admission asks about a Run's
@@ -56,7 +56,7 @@ func (o *Orchestrator) refuseUnknowableInputs(workload domain.WorkloadRevision) 
 // holding no copy of it would still have to fetch. Size is a property of the
 // content, so it comes from the store rather than from any machine: a host that
 // does not have something cannot be asked how large it is.
-func (o *Orchestrator) consumedArtifacts(ctx context.Context, workspaceID string, workload domain.WorkloadRevision) ([]domain.ArtifactVersion, error) {
+func (o *Orchestrator) consumedArtifacts(ctx context.Context, workload domain.WorkloadRevision) ([]domain.ArtifactVersion, error) {
 	// A catalog that went away after the Run was recorded leaves a Mercator
 	// that can no longer answer a question it accepted, which is a failure to
 	// propagate rather than a Run to place.
@@ -66,7 +66,7 @@ func (o *Orchestrator) consumedArtifacts(ctx context.Context, workspaceID string
 	consumes := workload.Spec.Artifacts.Consumes
 	versions := make([]domain.ArtifactVersion, 0, len(consumes))
 	for _, artifactID := range consumes {
-		version, err := o.artifacts.ArtifactVersion(ctx, workspaceID, artifactID)
+		version, err := o.artifacts.ArtifactVersion(ctx, artifactID)
 		if err != nil {
 			return nil, fmt.Errorf("orchestrator: read Artifact %q: %w", artifactID, err)
 		}
@@ -80,8 +80,8 @@ func (o *Orchestrator) consumedArtifacts(ctx context.Context, workspaceID string
 // it waits for a publication, never for a machine. That is what makes a local
 // copy an optimisation, so losing every copy costs a fetch and never costs
 // availability.
-func (o *Orchestrator) inputsAreDurable(ctx context.Context, workspaceID string, workload domain.WorkloadRevision) (bool, error) {
-	versions, err := o.consumedArtifacts(ctx, workspaceID, workload)
+func (o *Orchestrator) inputsAreDurable(ctx context.Context, workload domain.WorkloadRevision) (bool, error) {
+	versions, err := o.consumedArtifacts(ctx, workload)
 	if err != nil {
 		return false, err
 	}

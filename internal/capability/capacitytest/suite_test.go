@@ -212,7 +212,7 @@ func everyPromiseAgainst(t *testing.T, subject capacitytest.Subject) map[string]
 
 // TestASubjectMissingWhatEveryMachineIsRentedUnderIsRefused keeps the suite from
 // renting anything against half an identity. A trial that provisioned without a
-// workspace or a reclamation backstop would leave machines nothing could find.
+// deployment or a reclamation backstop would leave machines nothing could find.
 func TestASubjectMissingWhatEveryMachineIsRentedUnderIsRefused(t *testing.T) {
 	subject := subjectFor(t, newStub(flawless))
 	subject.Lease.MaxLifetime = 0
@@ -230,8 +230,8 @@ func subjectFor(t *testing.T, provider *stub) capacitytest.Subject {
 		Name:     "stub",
 		Provider: provider,
 		Lease: capacitytest.Lease{
-			TrialID:         "trial01",
-			WorkspaceID:     "ws_trial",
+			TrialID: "trial01",
+
 			ConnectionID:    "conn_trial",
 			ControlPlaneURL: "https://reports.example.com",
 			AgentVersion:    "v0.7.1",
@@ -301,7 +301,6 @@ type stub struct {
 type stubMachine struct {
 	nativeRef      string
 	rentalID       string
-	workspaceID    string
 	ownershipToken string
 	generation     uint64
 	terminated     bool
@@ -382,8 +381,8 @@ func (s *stub) CapacitySupport() capability.CapacitySupport {
 func (s *stub) Verify(ctx context.Context) error {
 	if s.flaws[flawVerifyAllocatesAMachine] {
 		_, _ = s.ProvisionCapacity(ctx, capability.ProvisionCommand{
-			WorkspaceID: "ws_trial",
-			RentalID:    "rnt_verify",
+
+			RentalID: "rnt_verify",
 		})
 	}
 	return nil
@@ -420,7 +419,6 @@ func (s *stub) ProvisionCapacity(_ context.Context, command capability.Provision
 	held := &stubMachine{
 		nativeRef:      fmt.Sprintf("mch_%d", s.next),
 		rentalID:       command.RentalID,
-		workspaceID:    command.WorkspaceID,
 		ownershipToken: command.OwnershipToken,
 		generation:     command.Generation,
 	}
@@ -531,12 +529,12 @@ func (s *stub) ListOwnedCapacity(_ context.Context, query capability.OwnershipQu
 	}
 	var owned []capability.OwnedCapacity
 	for _, machine := range s.machines {
-		if (machine.terminated && !s.flaws[flawGoesOnOwningWhatItDestroyed]) || machine.unlisted || machine.workspaceID != query.WorkspaceID {
+		if (machine.terminated && !s.flaws[flawGoesOnOwningWhatItDestroyed]) || machine.unlisted {
 			continue
 		}
 		owned = append(owned, capability.OwnedCapacity{
-			NativeRef:      machine.nativeRef,
-			WorkspaceID:    machine.workspaceID,
+			NativeRef: machine.nativeRef,
+
 			RentalID:       machine.rentalID,
 			Generation:     machine.generation,
 			OwnershipToken: machine.ownershipToken,

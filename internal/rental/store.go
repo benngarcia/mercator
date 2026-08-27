@@ -20,7 +20,7 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
-// ErrNotFound is returned for a lease this workspace never took.
+// ErrNotFound is returned for a lease this broker never took.
 var ErrNotFound = errors.New("rental: not found")
 
 // Store is the durable record of the capacity Mercator holds. A control plane
@@ -32,15 +32,15 @@ type Store interface {
 	// returns eventlog.ErrConcurrencyConflict when something else moved first.
 	// An expected version of zero is a lease being taken for the first time.
 	Save(ctx context.Context, expectedVersion uint64, next domain.Rental) error
-	Get(ctx context.Context, workspaceID, rentalID string) (domain.Rental, error)
-	List(ctx context.Context, workspaceID string) ([]domain.Rental, error)
+	Get(ctx context.Context, rentalID string) (domain.Rental, error)
+	List(ctx context.Context) ([]domain.Rental, error)
 }
 
 // Retirer ends the working life of one runtime. It is the half of a generation's
 // end that the node registry owns: the Rental says the generation is over, and
 // only the registry can stop the machine being offered and answered as capacity.
 type Retirer interface {
-	Retire(ctx context.Context, workspaceID, nodeID string) error
+	Retire(ctx context.Context, nodeID string) error
 }
 
 // Leases is where a generation ends. It exists because that one act crosses two
@@ -79,12 +79,12 @@ func NewLeases(store Store, runtimes Retirer) *Leases {
 // still running still lands.
 func (leases *Leases) EndGeneration(
 	ctx context.Context,
-	workspaceID, rentalID string,
+	rentalID string,
 	generation uint64,
 	ending domain.RentalGenerationEnding,
 	at time.Time,
 ) (domain.Rental, error) {
-	held, err := leases.store.Get(ctx, workspaceID, rentalID)
+	held, err := leases.store.Get(ctx, rentalID)
 	if err != nil {
 		return domain.Rental{}, err
 	}
@@ -92,7 +92,7 @@ func (leases *Leases) EndGeneration(
 	if err != nil {
 		return domain.Rental{}, err
 	}
-	if err := leases.runtimes.Retire(ctx, workspaceID, ended.NodeID); err != nil {
+	if err := leases.runtimes.Retire(ctx, ended.NodeID); err != nil {
 		return domain.Rental{}, fmt.Errorf("retire the runtime of Rental %q generation %d: %w", rentalID, ended.Number, err)
 	}
 	if next.Version == held.Version {
@@ -112,12 +112,12 @@ func (leases *Leases) EndGeneration(
 // compositions. Production uses the SQLite store, because a lease the control
 // plane forgets is a machine nothing can reclaim.
 func NewMemoryStore() Store {
-	return &memoryStore{rentals: map[string]map[string]domain.Rental{}}
+	return &memoryStore{rentals: map[string]domain.Rental{}}
 }
 
 type memoryStore struct {
 	mu      sync.Mutex
-	rentals map[string]map[string]domain.Rental
+	rentals map[string]domain.Rental
 }
 
 func (store *memoryStore) Save(_ context.Context, expectedVersion uint64, next domain.Rental) error {
@@ -126,31 +126,28 @@ func (store *memoryStore) Save(_ context.Context, expectedVersion uint64, next d
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if store.rentals[next.WorkspaceID][next.ID].Version != expectedVersion {
+	if store.rentals[next.ID].Version != expectedVersion {
 		return fmt.Errorf("%w: Rental %s", eventlog.ErrConcurrencyConflict, next.ID)
 	}
-	if store.rentals[next.WorkspaceID] == nil {
-		store.rentals[next.WorkspaceID] = map[string]domain.Rental{}
-	}
-	store.rentals[next.WorkspaceID][next.ID] = next.Clone()
+	store.rentals[next.ID] = next.Clone()
 	return nil
 }
 
-func (store *memoryStore) Get(_ context.Context, workspaceID, rentalID string) (domain.Rental, error) {
+func (store *memoryStore) Get(_ context.Context, rentalID string) (domain.Rental, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	held, ok := store.rentals[workspaceID][rentalID]
+	held, ok := store.rentals[rentalID]
 	if !ok {
 		return domain.Rental{}, fmt.Errorf("%w: %s", ErrNotFound, rentalID)
 	}
 	return held.Clone(), nil
 }
 
-func (store *memoryStore) List(_ context.Context, workspaceID string) ([]domain.Rental, error) {
+func (store *memoryStore) List(_ context.Context) ([]domain.Rental, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	held := make([]domain.Rental, 0, len(store.rentals[workspaceID]))
-	for _, rental := range store.rentals[workspaceID] {
+	held := make([]domain.Rental, 0, len(store.rentals))
+	for _, rental := range store.rentals {
 		held = append(held, rental.Clone())
 	}
 	sort.Slice(held, func(i, j int) bool { return held[i].ID < held[j].ID })

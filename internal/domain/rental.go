@@ -22,13 +22,12 @@ import (
 // Generations are kept in order and never rewritten, so what a lease has been
 // through is read off the record rather than inferred from what it is now.
 type Rental struct {
-	ID          string `json:"id"`
-	WorkspaceID string `json:"workspace_id"`
+	ID string `json:"id"`
 	// ConnectionID is the provider connection this capacity was allocated
 	// through. Every later command about the machine goes back down it, so a
 	// lease that lost it is a lease nothing can observe, stop, or terminate.
 	ConnectionID string `json:"connection_id"`
-	// OwnershipToken proves the machine belongs to this workspace, so a sweep
+	// OwnershipToken proves the machine belongs to this broker, so a sweep
 	// never acts on capacity it merely resembles.
 	OwnershipToken string `json:"ownership_token"`
 	// Version counts the transitions this lease has been through. A store writes
@@ -100,11 +99,10 @@ func (ending RentalGenerationEnding) Valid() bool {
 func (ending RentalGenerationEnding) EndsTheLease() bool { return ending != RentalStopped }
 
 // RentalIdentity is everything about a lease that never changes, stated together
-// because it is one answer: which lease, whose, through which connection, and
-// with what proof that the machine behind it is this workspace's.
+// because it is one answer: which lease, through which connection, and with
+// what proof that the machine behind it is this broker's.
 type RentalIdentity struct {
 	RentalID       string
-	WorkspaceID    string
 	ConnectionID   string
 	OwnershipToken string
 }
@@ -113,8 +111,6 @@ func (identity RentalIdentity) Validate() error {
 	switch {
 	case identity.RentalID == "":
 		return fmt.Errorf("a Rental needs an identity Mercator minted before it asked a provider for anything")
-	case identity.WorkspaceID == "":
-		return fmt.Errorf("Rental %q belongs to no Workspace", identity.RentalID)
 	case identity.ConnectionID == "":
 		return fmt.Errorf("Rental %q names no connection, so nothing can observe or terminate the machine behind it", identity.RentalID)
 	case identity.OwnershipToken == "":
@@ -141,7 +137,6 @@ func OpenRental(identity RentalIdentity, nodeID string, at time.Time) (Rental, e
 	}
 	return Rental{
 		ID:             identity.RentalID,
-		WorkspaceID:    identity.WorkspaceID,
 		ConnectionID:   identity.ConnectionID,
 		OwnershipToken: identity.OwnershipToken,
 		Version:        1,
@@ -294,7 +289,6 @@ func (rental Rental) BeginGeneration(nodeID string, at time.Time) (Rental, error
 func (rental Rental) Validate() error {
 	identity := RentalIdentity{
 		RentalID:       rental.ID,
-		WorkspaceID:    rental.WorkspaceID,
 		ConnectionID:   rental.ConnectionID,
 		OwnershipToken: rental.OwnershipToken,
 	}

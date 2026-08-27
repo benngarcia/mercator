@@ -11,21 +11,8 @@ import (
 
 type principalContextKey struct{}
 
-// principalKind separates the two authorities that reach this API. The instance
-// credential is the deployment itself: it is how Mercator's own operator and
-// its automation act, and it is scoped to nothing narrower than the process. A
-// human is a subject who signed in, and a subject is only ever authorised for
-// the workspaces they are a member of.
-type principalKind string
-
-const (
-	principalInstance principalKind = "instance"
-	principalHuman    principalKind = "human"
-)
-
 type principal struct {
 	Subject string
-	Kind    principalKind
 }
 
 // requestActor marshals the request principal into the event-envelope actor
@@ -55,17 +42,6 @@ func requirePrincipal(ctx context.Context) (string, *ErrorResponse) {
 		return "", &response
 	}
 	return actor.Subject, nil
-}
-
-// requestMemberScope is the subject a listing is narrowed to. A human sees the
-// workspaces they belong to; the instance credential, and a deployment running
-// with no authentication at all, see the whole catalog.
-func requestMemberScope(ctx context.Context) string {
-	actor, ok := requestPrincipal(ctx)
-	if !ok || actor.Kind != principalHuman {
-		return ""
-	}
-	return actor.Subject
 }
 
 // maxRequestBodyBytes bounds request bodies server-wide. The largest legitimate
@@ -138,8 +114,8 @@ func (w flushingResponseWriter) Unwrap() http.ResponseWriter {
 // signed-in human session. A presented bearer credential must verify as one of
 // the two token kinds — a wrong token fails outright rather than silently
 // downgrading to cookie auth. The machine token authenticates the deployment
-// itself and is scoped to nothing narrower; the other two authenticate a human,
-// who reaches only the workspaces they are a member of.
+// itself and is scoped to nothing narrower; the other two authenticate a human
+// who reaches this deployment.
 func (s *Server) authenticate(r *http.Request) (principal, bool) {
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
@@ -148,37 +124,19 @@ func (s *Server) authenticate(r *http.Request) (principal, bool) {
 			return principal{}, false
 		}
 		if subtle.ConstantTimeCompare([]byte(token), []byte(s.security.Token)) == 1 {
-			return principal{Subject: "bearer", Kind: principalInstance}, true
+			return principal{Subject: "bearer"}, true
 		}
 		if s.webauth != nil {
 			if email, ok := s.webauth.VerifyCLIToken(token); ok {
-				return s.humanPrincipal(email), true
+				return principal{Subject: email}, true
 			}
 		}
 		return principal{}, false
 	}
 	if s.webauth != nil {
 		if email, ok := s.webauth.SessionEmail(r); ok {
-			return s.humanPrincipal(email), true
+			return principal{Subject: email}, true
 		}
 	}
 	return principal{}, false
-}
-
-// humanPrincipal is what a signed-in email acts as. Ordinarily a human, scoped
-// to the workspaces they are a member of. On a deployment whose authenticator
-// can establish exactly one identity, that person is the deployment acting as
-// itself and is scoped to nothing narrower: `mercator serve --dev` and the Lab
-// bind loopback, mint a session for whoever is at the keyboard, and print the
-// instance bearer token to their terminal, so scoping them to their memberships
-// would refuse them their own console while protecting nothing they cannot
-// already reach with the token they were just handed.
-//
-// The authenticator is asked rather than a separate option read, because the
-// authenticator is what knows.
-func (s *Server) humanPrincipal(email string) principal {
-	if sole := s.webauth.SoleOperator(); sole != "" && email == sole {
-		return principal{Subject: email, Kind: principalInstance}
-	}
-	return principal{Subject: email, Kind: principalHuman}
 }

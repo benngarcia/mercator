@@ -23,8 +23,8 @@ func TestTheSimulatedProviderKeepsEveryCapacityPromise(t *testing.T) {
 		Name:     "fake",
 		Provider: worldSellingOneProduct(t),
 		Lease: capacitytest.Lease{
-			TrialID:         "sim01",
-			WorkspaceID:     "ws_capacity_conformance",
+			TrialID: "sim01",
+
 			ConnectionID:    "conn_fake",
 			ControlPlaneURL: "https://mercator.test",
 			AgentVersion:    "v0.7.1",

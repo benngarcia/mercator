@@ -29,13 +29,6 @@ func prefetchKey(offerID, content string) string {
 // Mercator has stopped asking for, and this world stops moving it rather than
 // spending a machine's disk and bandwidth on a Run that will never run.
 //
-// A desired set speaks for one workspace. What it says nothing about is content
-// another tenant asked for, so withdrawal is decided against the union of every
-// tenant's latest set: a transfer stops when nobody wants it. A world that read
-// one set as the whole fleet's would have the second tenant's arrival cancel the
-// first tenant's transfer, which no machine does and which would hide the
-// concurrency bound this world exists to police.
-//
 // The withdrawal happens before anything new starts. A control plane that
 // started the next prefetch first would have both in flight for an instant,
 // which is exactly the moment a real launch would find the machine busy.
@@ -47,11 +40,11 @@ func (world *simulatedWorld) Prepare(_ context.Context, request adapter.PrepareR
 	for _, item := range request.Wanted {
 		wanted[prefetchKey(item.OfferSnapshotID, item.Content())] = true
 	}
-	world.desired[request.WorkspaceID] = wanted
-	receipt.Abandoned = world.abandonUnwantedPrefetches(world.everythingWanted())
+	world.desired = wanted
+	receipt.Abandoned = world.abandonUnwantedPrefetches(wanted)
 	for _, item := range request.Wanted {
-		world.noteContentCredentials(request.WorkspaceID, item)
-		outcome, started := world.startPrefetch(request.WorkspaceID, item)
+		world.noteContentCredentials(item)
+		outcome, started := world.startPrefetch(item)
 		switch outcome {
 		case prefetchStarted:
 			receipt.Started = append(receipt.Started, started)
@@ -93,7 +86,7 @@ const (
 // asking again with material that authorises the read will work. It is checked
 // before the fault, because a fetch nobody would have served is refused whether
 // or not the fixture also arranged for the link to fail.
-func (world *simulatedWorld) startPrefetch(workspaceID string, item adapter.PrepareItem) (prefetchOutcome, string) {
+func (world *simulatedWorld) startPrefetch(item adapter.PrepareItem) (prefetchOutcome, string) {
 	operation := prefetchOperationID(item)
 	if world.prepared[operation] {
 		world.recordPrefetchEffect(item, operation, EffectCommandDuplicate, map[string]any{"already_requested": true})
@@ -106,7 +99,7 @@ func (world *simulatedWorld) startPrefetch(workspaceID string, item adapter.Prep
 		})
 		return prefetchUnsupported, operation
 	}
-	if reason := world.contentRefusal(workspaceID, item); reason != "" {
+	if reason := world.contentRefusal(item); reason != "" {
 		world.recordPrefetchEffect(item, operation, EffectCommandRejected, map[string]any{"reason": reason})
 		return prefetchRefused, operation
 	}
@@ -190,19 +183,8 @@ func (world *simulatedWorld) prefetchArtifact(item adapter.PrepareItem, operatio
 	return operation
 }
 
-// everythingWanted is the content every tenant's latest desired set names
-// together, which is what this world keeps fetching.
-func (world *simulatedWorld) everythingWanted() map[string]bool {
-	wanted := map[string]bool{}
-	for _, tenant := range world.desired {
-		for key := range tenant {
-			wanted[key] = true
-		}
-	}
-	return wanted
-}
-
-// abandonUnwantedPrefetches stops every speculative transfer no tenant asks for
+// abandonUnwantedPrefetches stops every speculative transfer the deployment no
+// longer asks for
 // any more. The room goes back to the machine at once, which is the whole point:
 // a queued Run that was cancelled must stop costing the host it was queued on,
 // and nothing else in this world can give that room back.

@@ -123,7 +123,7 @@ func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			registry := readyNode(t, testCase.held)
 
-			offers, err := registry.Offers(context.Background(), nodeWorkspace)
+			offers, err := registry.Offers(context.Background())
 			if err != nil {
 				t.Fatalf("list node offers: %v", err)
 			}
@@ -163,7 +163,7 @@ func TestANodeOfferStopsBeingSelectableBeforeItsFactsGoStale(t *testing.T) {
 		State:          domain.LocalityHot,
 		ContentPresent: true,
 	}})
-	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("list node offers: %v", err)
 	}
@@ -302,13 +302,13 @@ func TestTwoMachinesOnOneLeaseOfferTwoMachines(t *testing.T) {
 	enrollOn(t, registry, clock, "nod_first", "rnt_shared")
 	enrollOn(t, registry, clock, "nod_second", "rnt_shared")
 
-	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("offers: %v", err)
 	}
 
 	if len(offers) != 2 {
-		t.Fatalf("the workspace offered %d machines, want the two enrolled nodes", len(offers))
+		t.Fatalf("the deployment offered %d machines, want the two enrolled nodes", len(offers))
 	}
 	first := domain.CandidateIdentityOf(offers[0], "sha256:image")
 	second := domain.CandidateIdentityOf(offers[1], "sha256:image")
@@ -338,13 +338,13 @@ func TestAnEnrolledMachineStatesNoPlaceAndSaysSo(t *testing.T) {
 	registry, clock := newRegistry(t)
 	enrollOn(t, registry, clock, "nod_first", "rnt_first")
 
-	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("offers: %v", err)
 	}
 
 	if len(offers) != 1 {
-		t.Fatalf("the workspace offered %d machines, want the one enrolled node", len(offers))
+		t.Fatalf("the deployment offered %d machines, want the one enrolled node", len(offers))
 	}
 	if offers[0].Region != "" {
 		t.Fatalf("an enrolled machine published the region %q, and nothing enrols one", offers[0].Region)
@@ -364,7 +364,7 @@ func TestAnEnrolledMachineStatesNoPlaceAndSaysSo(t *testing.T) {
 func enrollOn(t *testing.T, registry *node.Registry, clock *testClock, nodeID, rentalID string) {
 	t.Helper()
 	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
-		WorkspaceID: nodeWorkspace, NodeID: nodeID, RentalID: rentalID, Generation: 1,
+		NodeID: nodeID, RentalID: rentalID, Generation: 1,
 		ShadowPriceUSDPerHour: 2,
 	})
 	if err != nil {
@@ -422,12 +422,12 @@ func TestANodeWhoseWorkloadExitedOffersItsCapacityBack(t *testing.T) {
 
 func capacityOf(t *testing.T, registry *node.Registry) domain.CapacityEvidence {
 	t.Helper()
-	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("list node offers: %v", err)
 	}
 	if len(offers) != 1 {
-		t.Fatalf("the workspace offered %d machines, want the one enrolled node", len(offers))
+		t.Fatalf("the deployment offered %d machines, want the one enrolled node", len(offers))
 	}
 	return offers[0].Capacity
 }
@@ -468,8 +468,8 @@ func reportWorkload(
 // whole read for content already on its disk.
 func TestANodeOffersTheCopiesItHolds(t *testing.T) {
 	version := domain.ArtifactVersion{
-		ID:            "artifact:imagenet:v2.41",
-		WorkspaceID:   nodeWorkspace,
+		ID: "artifact:imagenet:v2.41",
+
 		ContentDigest: "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
 		SizeBytes:     40_000_000_000,
 	}
@@ -538,7 +538,7 @@ func TestANodeOffersTheCopiesItHolds(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			registry := readyNodeHolding(t, nil, testCase.held)
 
-			offers, err := registry.Offers(context.Background(), nodeWorkspace)
+			offers, err := registry.Offers(context.Background())
 			if err != nil {
 				t.Fatalf("list node offers: %v", err)
 			}
@@ -565,40 +565,35 @@ func TestANodeOffersTheCopiesItHolds(t *testing.T) {
 	}
 }
 
-// TestANodeOffersTheCachesItHoldsUnderTheWorkspaceThatOwnsThem is the mutable
-// half of the same projection. One machine is offered to every workspace, so an
-// inventory that dropped the workspace off each cache would let one tenant read
-// another's warmth off a shared disk, which is the one thing a Cache Mount's
-// identity exists to prevent.
-func TestANodeOffersTheCachesItHoldsUnderTheWorkspaceThatOwnsThem(t *testing.T) {
+// TestANodeOffersTheCachesItHolds is the mutable half of the same projection.
+// Cache names are deployment-global, so every run naming the same cache and
+// compatibility key sees the same retained content.
+func TestANodeOffersTheCachesItHolds(t *testing.T) {
 	looked := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 	wanted := domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-12.4"}
 	registry := readyNodeHoldingCaches(t, domain.CacheInventory{
 		Known:      true,
 		ObservedAt: looked,
 		Mounts: []domain.CacheMount{
-			{WorkspaceID: nodeWorkspace, Name: wanted.Name, CompatibilityKey: wanted.CompatibilityKey, CreatedAt: looked},
-			{WorkspaceID: "ws_neighbour", Name: wanted.Name, CompatibilityKey: wanted.CompatibilityKey, CreatedAt: looked},
+			{Name: wanted.Name, CompatibilityKey: wanted.CompatibilityKey, CreatedAt: looked},
+			{Name: wanted.Name, CompatibilityKey: wanted.CompatibilityKey, CreatedAt: looked},
 		},
 	})
 
-	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("list node offers: %v", err)
 	}
 
 	caches := offers[0].Caches
 	if !caches.Known || len(caches.Mounts) != 2 {
-		t.Fatalf("the offer carries %+v, and this node reported two tenants' caches", caches)
+		t.Fatalf("the offer carries %+v, and this node reported two cache records", caches)
 	}
-	if !caches.Holds(nodeWorkspace, wanted) {
-		t.Errorf("the workspace that owns a cache was not offered it: %+v", caches.Mounts)
+	if !caches.Holds(wanted) {
+		t.Errorf("the node's cache was not offered: %+v", caches.Mounts)
 	}
-	if caches.Holds("ws_stranger", wanted) {
-		t.Errorf("a workspace holding nothing here was offered someone else's cache: %+v", caches.Mounts)
-	}
-	if found := domain.CacheWarmth("ws_stranger", []domain.CacheMountRequirement{wanted}, caches); found[0].Locality != domain.LocalityCold {
-		t.Errorf("a stranger's evidence for this cache is %q, want cold", found[0].Locality)
+	if found := domain.CacheWarmth([]domain.CacheMountRequirement{wanted}, caches); found[0].Locality != domain.LocalityHot {
+		t.Errorf("the node's evidence for this cache is %q, want hot", found[0].Locality)
 	}
 }
 
@@ -608,7 +603,7 @@ func TestANodeOffersTheCachesItHoldsUnderTheWorkspaceThatOwnsThem(t *testing.T) 
 func TestANodeThatCannotEnumerateCachesOffersNoCacheClaim(t *testing.T) {
 	registry := readyNodeHoldingCaches(t, domain.CacheInventory{})
 
-	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("list node offers: %v", err)
 	}
@@ -617,7 +612,7 @@ func TestANodeThatCannotEnumerateCachesOffersNoCacheClaim(t *testing.T) {
 		t.Fatalf("the offer claims this node enumerated its caches: %+v", offers[0].Caches)
 	}
 	wanted := domain.CacheMountRequirement{Name: "compiler-cache"}
-	found := domain.CacheWarmth(nodeWorkspace, []domain.CacheMountRequirement{wanted}, offers[0].Caches)
+	found := domain.CacheWarmth([]domain.CacheMountRequirement{wanted}, offers[0].Caches)
 	if found[0].Locality != domain.LocalityUnknown {
 		t.Fatalf("a cache nothing enumerated was recorded %q, want unknown", found[0].Locality)
 	}
@@ -652,7 +647,7 @@ func readyNodeReporting(
 	t.Helper()
 	registry, clock := newRegistry(t)
 	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
-		WorkspaceID: nodeWorkspace, NodeID: "nod_offers", RentalID: "rnt_offers", Generation: 1,
+		NodeID: "nod_offers", RentalID: "rnt_offers", Generation: 1,
 		ShadowPriceUSDPerHour: 2,
 	})
 	if err != nil {
@@ -693,7 +688,7 @@ func TestANodeOffersTheTermsItWasBoughtOn(t *testing.T) {
 	registry, clock := newRegistry(t)
 	enrolledAt := clock.Now()
 	inviteWithTerms(t, registry, node.Invitation{
-		WorkspaceID:           nodeWorkspace,
+
 		NodeID:                "nod_terms",
 		RentalID:              "rnt_terms",
 		Generation:            1,
@@ -708,7 +703,7 @@ func TestANodeOffersTheTermsItWasBoughtOn(t *testing.T) {
 	// A minute in, which is as far as a node can be carried without another
 	// heartbeat: the machine has to still be inside its lease to be offered at all.
 	clock.Advance(time.Minute)
-	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("read offers: %v", err)
 	}
@@ -746,14 +741,14 @@ func TestANodeOffersTheTermsItWasBoughtOn(t *testing.T) {
 func TestAMachineBoughtInNoIncrementsOwesNoInterval(t *testing.T) {
 	registry, clock := newRegistry(t)
 	inviteWithTerms(t, registry, node.Invitation{
-		WorkspaceID:           nodeWorkspace,
+
 		NodeID:                "nod_owned",
 		RentalID:              "rnt_owned",
 		Generation:            1,
 		ShadowPriceUSDPerHour: 1.5,
 	}, clock)
 
-	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	offers, err := registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("read offers: %v", err)
 	}

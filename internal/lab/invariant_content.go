@@ -9,18 +9,18 @@ import (
 // a machine so it can fetch content. A node is a host an operator rents by the
 // hour, and every credential on it is material an attacker who takes that host
 // also has, so what crosses to it is never the registry account that can read the
-// workspace's private images or the object-store key that can read every Artifact
+// deployment's private images or the object-store key that can read every Artifact
 // ever published. What crosses is one fetch, and four things hold of it.
 //
-// It states a bound. A credential that cannot name the operation, the workspace,
-// the content and the moment it stops being accepted is the account it was minted
+// It states a bound. A credential that cannot name the operation, the content
+// and the moment it stops being accepted is the account it was minted
 // from under another name: nothing about it is narrower than the thing behind it,
 // and no reader of the record can hold Mercator to anything.
 //
 // It states this fetch's bound. A credential is checked against the command it
 // arrived on rather than against itself, because a credential minted for another
-// workspace's pull is perfectly consistent internally and is exactly the material
-// that must never be spent here.
+// pull is perfectly consistent internally and is exactly the material that must
+// never be spent here.
 //
 // It has not already lapsed. An expiry behind the moment the machine was handed
 // the credential is an expiry nothing enforces, which is the same as none.
@@ -63,8 +63,6 @@ func (credential contentCredential) statesABound() error {
 	switch {
 	case credential.Scope.Operation == "":
 		return credential.violation("names no operation, so nothing about it is narrower than the account behind it")
-	case credential.Scope.WorkspaceID == "":
-		return credential.violation("names no workspace, so nothing stops it reaching another tenant's content")
 	case credential.Scope.Content == "":
 		return credential.violation("names no content, so it reads whatever the account behind it can read")
 	case credential.Scope.ExpiresAt.IsZero():
@@ -77,8 +75,6 @@ func (credential contentCredential) matchesTheFetchItArrivedOn() error {
 	switch {
 	case credential.Scope.Operation != credential.Operation:
 		return credential.violation(fmt.Sprintf("was minted for operation %q", credential.Scope.Operation))
-	case credential.Scope.WorkspaceID != credential.WorkspaceID:
-		return credential.violation(fmt.Sprintf("was minted for workspace %q", credential.Scope.WorkspaceID))
 	case credential.Scope.Content != credential.Content:
 		return credential.violation(fmt.Sprintf("was minted for content %q", credential.Scope.Content))
 	}
@@ -107,7 +103,7 @@ func (credential contentCredential) insideTheWindow() error {
 
 func (credential contentCredential) violation(because string) error {
 	return fmt.Errorf(
-		"the %s credential handed to a machine for %q in workspace %q %s",
-		credential.Kind, credential.Content, credential.WorkspaceID, because,
+		"the %s credential handed to a machine for %q %s",
+		credential.Kind, credential.Content, because,
 	)
 }

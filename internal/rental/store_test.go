@@ -18,7 +18,6 @@ func TestMemoryStoreKeepsEveryPromiseTheCapacityLifecycleRelieson(t *testing.T) 
 }
 
 const (
-	workspaceID  = "ws_lifecycle"
 	rentalID     = "rnt_lifecycle"
 	connectionID = "con_simcloud"
 )
@@ -34,7 +33,7 @@ func TestEndingAGenerationRetiresTheRuntimeItWasServing(t *testing.T) {
 	fleet := enrolledFleet(t)
 	leases := rental.NewLeases(fleet.store, fleet.registry)
 
-	ended, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalTerminated, start.Add(time.Hour))
+	ended, err := leases.EndGeneration(context.Background(), rentalID, 1, domain.RentalTerminated, start.Add(time.Hour))
 
 	if err != nil {
 		t.Fatalf("end the generation: %v", err)
@@ -42,7 +41,7 @@ func TestEndingAGenerationRetiresTheRuntimeItWasServing(t *testing.T) {
 	if ended.Held() {
 		t.Fatal("a lease whose machine was destroyed is still held")
 	}
-	retired, err := fleet.registry.List(context.Background(), workspaceID)
+	retired, err := fleet.registry.List(context.Background())
 	if err != nil {
 		t.Fatalf("list the fleet: %v", err)
 	}
@@ -58,7 +57,7 @@ func TestEndingAGenerationRetiresTheRuntimeItWasServing(t *testing.T) {
 func TestARetiredRuntimeIsNoLongerPublishableAsCapacity(t *testing.T) {
 	fleet := enrolledFleet(t)
 	leases := rental.NewLeases(fleet.store, fleet.registry)
-	before, err := fleet.registry.Offers(context.Background(), workspaceID)
+	before, err := fleet.registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("read the offers before the generation ended: %v", err)
 	}
@@ -66,18 +65,18 @@ func TestARetiredRuntimeIsNoLongerPublishableAsCapacity(t *testing.T) {
 		t.Fatalf("offers before = %+v, want the enrolled machine published", before)
 	}
 
-	if _, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalTerminated, start.Add(time.Hour)); err != nil {
+	if _, err := leases.EndGeneration(context.Background(), rentalID, 1, domain.RentalTerminated, start.Add(time.Hour)); err != nil {
 		t.Fatalf("end the generation: %v", err)
 	}
 
-	after, err := fleet.registry.Offers(context.Background(), workspaceID)
+	after, err := fleet.registry.Offers(context.Background())
 	if err != nil {
 		t.Fatalf("read the offers after the generation ended: %v", err)
 	}
 	if len(after) != 0 {
 		t.Fatalf("offers after = %+v, want a machine Mercator gave up published to nobody", after)
 	}
-	if _, err := fleet.registry.Ref(context.Background(), workspaceID, fleet.nodeID); err == nil {
+	if _, err := fleet.registry.Ref(context.Background(), fleet.nodeID); err == nil {
 		t.Fatal("a retired runtime still resolved to a node commands could be sent to")
 	}
 }
@@ -91,12 +90,12 @@ func TestALeaseNothingCanWriteRetiresNoRuntime(t *testing.T) {
 	fleet := enrolledFleet(t)
 	leases := rental.NewLeases(fleet.store, refusingRetirer{})
 
-	_, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalTerminated, start.Add(time.Hour))
+	_, err := leases.EndGeneration(context.Background(), rentalID, 1, domain.RentalTerminated, start.Add(time.Hour))
 
 	if err == nil {
 		t.Fatal("a generation ended although the runtime serving it could not be retired")
 	}
-	held, readErr := fleet.store.Get(context.Background(), workspaceID, rentalID)
+	held, readErr := fleet.store.Get(context.Background(), rentalID)
 	if readErr != nil {
 		t.Fatalf("read the lease back: %v", readErr)
 	}
@@ -119,12 +118,12 @@ func TestALeaseNothingCanWriteRetiresNoRuntime(t *testing.T) {
 func TestAnEndingRetriedAcrossAResumeTouchesNeitherTheLiveMachineNorItsRuntime(t *testing.T) {
 	fleet := enrolledFleet(t)
 	leases := rental.NewLeases(fleet.store, fleet.registry)
-	if _, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalStopped, start.Add(time.Hour)); err != nil {
+	if _, err := leases.EndGeneration(context.Background(), rentalID, 1, domain.RentalStopped, start.Add(time.Hour)); err != nil {
 		t.Fatalf("stop the machine: %v", err)
 	}
 	resumed := fleet.resume(t, start.Add(2*time.Hour))
 
-	retried, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 1, domain.RentalStopped, start.Add(3*time.Hour))
+	retried, err := leases.EndGeneration(context.Background(), rentalID, 1, domain.RentalStopped, start.Add(3*time.Hour))
 
 	if err != nil {
 		t.Fatalf("retry the ending of generation 1: %v", err)
@@ -144,13 +143,13 @@ func TestAnEndingRefusesAGenerationTheLeaseHasNotReached(t *testing.T) {
 	fleet := enrolledFleet(t)
 	leases := rental.NewLeases(fleet.store, fleet.registry)
 
-	_, err := leases.EndGeneration(context.Background(), workspaceID, rentalID, 2, domain.RentalTerminated, start.Add(time.Hour))
+	_, err := leases.EndGeneration(context.Background(), rentalID, 2, domain.RentalTerminated, start.Add(time.Hour))
 
 	if err == nil {
 		t.Fatal("a generation this lease has never been through was ended")
 	}
 	fleet.mustNotBeRetired(t, fleet.nodeID)
-	held, readErr := fleet.store.Get(context.Background(), workspaceID, rentalID)
+	held, readErr := fleet.store.Get(context.Background(), rentalID)
 	if readErr != nil {
 		t.Fatalf("read the lease back: %v", readErr)
 	}
@@ -161,7 +160,7 @@ func TestAnEndingRefusesAGenerationTheLeaseHasNotReached(t *testing.T) {
 
 type refusingRetirer struct{}
 
-func (refusingRetirer) Retire(context.Context, string, string) error {
+func (refusingRetirer) Retire(context.Context, string) error {
 	return errors.New("the registry is unreachable")
 }
 
@@ -186,8 +185,8 @@ func enrolledFleet(t *testing.T) fleet {
 	fleet.nodeID = fleet.enrolledRuntime(t, 1)
 
 	lease, err := domain.OpenRental(domain.RentalIdentity{
-		RentalID:       rentalID,
-		WorkspaceID:    workspaceID,
+		RentalID: rentalID,
+
 		ConnectionID:   connectionID,
 		OwnershipToken: "own_lifecycle",
 	}, fleet.nodeID, start)
@@ -209,7 +208,7 @@ func enrolledFleet(t *testing.T) fleet {
 // serving it.
 func (fleet fleet) resume(t *testing.T, at time.Time) string {
 	t.Helper()
-	held, err := fleet.store.Get(context.Background(), workspaceID, rentalID)
+	held, err := fleet.store.Get(context.Background(), rentalID)
 	if err != nil {
 		t.Fatalf("read the stopped lease: %v", err)
 	}
@@ -231,7 +230,7 @@ func (fleet fleet) resume(t *testing.T, at time.Time) string {
 func (fleet fleet) enrolledRuntime(t *testing.T, generation uint64) string {
 	t.Helper()
 	bootstrap, err := fleet.registry.Invite(context.Background(), node.Invitation{
-		WorkspaceID:           workspaceID,
+
 		RentalID:              rentalID,
 		Generation:            generation,
 		ShadowPriceUSDPerHour: 1.5,
@@ -257,7 +256,7 @@ func (fleet fleet) enrolledRuntime(t *testing.T, generation uint64) string {
 
 func (fleet fleet) mustNotBeRetired(t *testing.T, nodeID string) {
 	t.Helper()
-	record, err := fleet.registry.Ref(context.Background(), workspaceID, nodeID)
+	record, err := fleet.registry.Ref(context.Background(), nodeID)
 	if err != nil {
 		t.Fatalf("a runtime nothing decided about was retired: %v", err)
 	}

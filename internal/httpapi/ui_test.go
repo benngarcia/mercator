@@ -140,11 +140,11 @@ func TestAPIRoutesUnaffectedBySPAFallback(t *testing.T) {
 	}
 
 	for _, target := range []string{
-		"/v1/runs?workspace_id=ws_1",
-		"/v1/runs/run_ui/events?workspace_id=ws_1",
-		"/v1/runs/run_ui/decision?workspace_id=ws_1",
-		"/v1/connections?workspace_id=ws_1",
-		"/v1/offers?workspace_id=ws_1",
+		"/v1/runs",
+		"/v1/runs/run_ui/events",
+		"/v1/runs/run_ui/decision",
+		"/v1/connections",
+		"/v1/offers",
 		"/openapi.json",
 		"/health/live",
 		"/health/ready",

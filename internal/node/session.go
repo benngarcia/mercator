@@ -16,8 +16,8 @@ const sessionBuffer = 64
 // Session is one node's open outbound connection. The control plane never
 // dials a node: the node opens this, and commands travel back down it.
 type Session struct {
-	NodeID       string
-	WorkspaceID  string
+	NodeID string
+
 	FencingToken uint64
 
 	commands chan Command
@@ -63,13 +63,13 @@ func (registry *Registry) OpenSession(ctx context.Context, nodeID, sessionToken 
 	if record.Retired() {
 		return nil, fmt.Errorf("%w: %s holds no session on a Rental generation that is over", ErrRetired, record.ID)
 	}
-	pending, err := registry.store.PendingOperations(ctx, record.WorkspaceID, record.ID)
+	pending, err := registry.store.PendingOperations(ctx, record.ID)
 	if err != nil {
 		return nil, err
 	}
 	session := &Session{
-		NodeID:       record.ID,
-		WorkspaceID:  record.WorkspaceID,
+		NodeID: record.ID,
+
 		FencingToken: record.FencingToken,
 		commands:     make(chan Command, max(sessionBuffer, len(pending))),
 		closed:       make(chan struct{}),
@@ -82,10 +82,10 @@ func (registry *Registry) OpenSession(ctx context.Context, nodeID, sessionToken 
 	if registry.draining {
 		return nil, fmt.Errorf("node: this control plane is shutting down and holds no session open")
 	}
-	if previous, open := registry.sessions[nodeKey(record.WorkspaceID, record.ID)]; open {
+	if previous, open := registry.sessions[nodeKey(record.ID)]; open {
 		previous.end()
 	}
-	registry.sessions[nodeKey(record.WorkspaceID, record.ID)] = session
+	registry.sessions[nodeKey(record.ID)] = session
 	return session, nil
 }
 
@@ -158,11 +158,11 @@ func (registry *Registry) CloseSession(session *Session) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	current, open := registry.sessions[nodeKey(session.WorkspaceID, session.NodeID)]
+	current, open := registry.sessions[nodeKey(session.NodeID)]
 	if !open || current != session {
 		return
 	}
-	delete(registry.sessions, nodeKey(session.WorkspaceID, session.NodeID))
+	delete(registry.sessions, nodeKey(session.NodeID))
 	session.end()
 }
 
@@ -186,7 +186,6 @@ func (registry *Registry) RecordEvents(ctx context.Context, nodeID, sessionToken
 	var latestFacts *capability.NodeFacts
 	for _, event := range events {
 		event.NodeID = record.ID
-		event.WorkspaceID = record.WorkspaceID
 		if err := event.Validate(); err != nil {
 			return err
 		}
@@ -214,7 +213,7 @@ func (registry *Registry) RecordEvents(ctx context.Context, nodeID, sessionToken
 	// the two doors facts come through, and what a node did not establish must
 	// not reach an offer or a listing as though it had.
 	established := latestFacts.Established()
-	_, err = registry.store.Heartbeat(ctx, record.WorkspaceID, record.ID, established, registry.now().UTC().Add(registry.lease))
+	_, err = registry.store.Heartbeat(ctx, record.ID, established, registry.now().UTC().Add(registry.lease))
 	return err
 }
 
@@ -238,7 +237,7 @@ func (registry *Registry) RecordResult(ctx context.Context, nodeID, sessionToken
 	if result.ReportedAt.IsZero() {
 		result.ReportedAt = registry.now().UTC()
 	}
-	return registry.store.SettleOperation(ctx, record.WorkspaceID, record.ID, result)
+	return registry.store.SettleOperation(ctx, record.ID, result)
 }
 
 // ExpireLeases marks nodes the control plane has stopped hearing from as lost
@@ -250,16 +249,16 @@ func (registry *Registry) ExpireLeases(ctx context.Context) ([]Record, error) {
 		return nil, err
 	}
 	for _, record := range expired {
-		registry.closeSession(record.WorkspaceID, record.ID)
+		registry.closeSession(record.ID)
 	}
 	return expired, nil
 }
 
-// List returns every node identity in a workspace, whatever its state, so
+// List returns every node identity in the deployment, whatever its state, so
 // operators and reconciliation can see capacity that never enrolled as readily
 // as capacity that did.
-func (registry *Registry) List(ctx context.Context, workspaceID string) ([]Record, error) {
-	return registry.store.List(ctx, workspaceID)
+func (registry *Registry) List(ctx context.Context) ([]Record, error) {
+	return registry.store.List(ctx)
 }
 
 // authenticate resolves the node a request claims to be and refuses it unless
@@ -280,9 +279,9 @@ func (registry *Registry) authenticate(ctx context.Context, nodeID, sessionToken
 	return record, nil
 }
 
-func (registry *Registry) deliver(workspaceID, nodeID string, command Command) {
+func (registry *Registry) deliver(nodeID string, command Command) {
 	registry.mu.Lock()
-	session, open := registry.sessions[nodeKey(workspaceID, nodeID)]
+	session, open := registry.sessions[nodeKey(nodeID)]
 	registry.mu.Unlock()
 	if !open {
 		return
@@ -297,14 +296,14 @@ func (registry *Registry) deliver(workspaceID, nodeID string, command Command) {
 	}
 }
 
-func (registry *Registry) closeSession(workspaceID, nodeID string) {
+func (registry *Registry) closeSession(nodeID string) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	session, open := registry.sessions[nodeKey(workspaceID, nodeID)]
+	session, open := registry.sessions[nodeKey(nodeID)]
 	if !open {
 		return
 	}
-	delete(registry.sessions, nodeKey(workspaceID, nodeID))
+	delete(registry.sessions, nodeKey(nodeID))
 	session.end()
 }
 

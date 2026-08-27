@@ -254,7 +254,7 @@ func newTestAdapter(t *testing.T, fake *fakeShadeform, config map[string]string)
 
 // rentedInstance is a machine this account is already holding for one Rental, as
 // the account listing reports it.
-func rentedInstance(id, rentalID, workspace, token, status string, createdAt time.Time) instance {
+func rentedInstance(id, rentalID, token, status string, createdAt time.Time) instance {
 	return instance{
 		ID:        id,
 		Cloud:     "hyperstack",
@@ -265,7 +265,6 @@ func rentedInstance(id, rentalID, workspace, token, status string, createdAt tim
 		Tags: []string{
 			tagRental + "=" + rentalID,
 			tagGeneration + "=1",
-			tagWorkspace + "=" + workspace,
 			tagOwnershipToken + "=" + token,
 		},
 	}

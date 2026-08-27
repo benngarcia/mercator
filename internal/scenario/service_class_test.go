@@ -44,7 +44,7 @@ func TestEveryArrivingRunStatesAClassMercatorKnows(t *testing.T) {
 			t.Fatalf("%s: expand arrivals: %v", blueprint.Name, err)
 		}
 		for _, run := range runs {
-			revision := WorkloadForRun("ws_test", run.Name, run.Request)
+			revision := WorkloadForRun(run.Name, run.Request)
 			if class := revision.Spec.Placement.Class; !class.Known() {
 				t.Errorf(
 					"%s: Run %q arrives as class %q, and every reader of a Run was promised one of %v",

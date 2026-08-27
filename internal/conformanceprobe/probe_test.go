@@ -41,7 +41,7 @@ func TestSuccessReportsReadyThenZeroExit(t *testing.T) {
 		t.Fatalf("reports = %#v, want %#v", got, want)
 	}
 	for _, request := range requests {
-		if request.Path != "/v1/runs/run_probe/report?workspace_id=ws_probe" {
+		if request.Path != "/v1/runs/run_probe/report" {
 			t.Errorf("request path = %q", request.Path)
 		}
 		if request.Authorization != "Bearer run-token" {
@@ -106,7 +106,6 @@ func TestSuccessRejectsMissingReportingEnvironment(t *testing.T) {
 	for _, missing := range []string{
 		"MERCATOR_REPORT_URL",
 		"MERCATOR_RUN_ID",
-		"MERCATOR_WORKSPACE_ID",
 		"MERCATOR_RUN_TOKEN",
 	} {
 		t.Run(missing, func(t *testing.T) {
@@ -150,10 +149,9 @@ func recordRequest(t *testing.T, request *http.Request) recordedRequest {
 
 func reportEnvironment(reportURL string) map[string]string {
 	return map[string]string{
-		"MERCATOR_REPORT_URL":   reportURL,
-		"MERCATOR_RUN_ID":       "run_probe",
-		"MERCATOR_WORKSPACE_ID": "ws_probe",
-		"MERCATOR_RUN_TOKEN":    "run-token",
+		"MERCATOR_REPORT_URL": reportURL,
+		"MERCATOR_RUN_ID":     "run_probe",
+		"MERCATOR_RUN_TOKEN":  "run-token",
 	}
 }
 

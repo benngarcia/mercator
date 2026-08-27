@@ -46,8 +46,8 @@ func TestEveryClauseOfTheEnrolledRuntimeRuleCanFail(t *testing.T) {
 		"a cache no workload wrote": func(observation *InvariantObservation) {
 			observation.World.Offers = []domain.OfferSnapshot{strandedOffer(func(offer *domain.OfferSnapshot) {
 				offer.Caches = domain.CacheInventory{Known: true, ObservedAt: now, Mounts: []domain.CacheMount{{
-					WorkspaceID: labWorkspace,
-					Name:        "compiler-cache",
+
+					Name: "compiler-cache",
 				}}}
 			})}
 		},
@@ -96,8 +96,8 @@ func TestAnEnrolledMachineAccumulatesFreely(t *testing.T) {
 	observation.World.Offers = []domain.OfferSnapshot{strandedOffer(func(offer *domain.OfferSnapshot) {
 		offer.Images = domain.ImageInventory{Known: true, LayerDigests: []string{strandedLayer}}
 		offer.Caches = domain.CacheInventory{Known: true, ObservedAt: now, Mounts: []domain.CacheMount{{
-			WorkspaceID: labWorkspace,
-			Name:        "compiler-cache",
+
+			Name: "compiler-cache",
 		}}}
 		offer.Artifacts = domain.ArtifactInventory{Known: true, ObservedAt: now, Replicas: []domain.ArtifactReplica{{
 			ArtifactID: strandedDataset,
@@ -332,7 +332,7 @@ func TestTheWorldRecordsTheGenerationTheAgentRedeems(t *testing.T) {
 			world := labWorldFor(t, "../scenario/scenarios/conformance/provisioned-capacity-becomes-a-machine-mercator-holds.json")
 			registry := labRegistryFor(world)
 			bootstrap, err := registry.Invite(ctx, node.Invitation{
-				WorkspaceID:           labWorkspace,
+
 				NodeID:                "nod_disagreeing",
 				RentalID:              strandedRental,
 				Generation:            1,
@@ -342,7 +342,7 @@ func TestTheWorldRecordsTheGenerationTheAgentRedeems(t *testing.T) {
 				t.Fatalf("invite the node: %v", err)
 			}
 			if _, err := world.ProvisionCapacity(ctx, capability.ProvisionCommand{
-				WorkspaceID:     labWorkspace,
+
 				ConnectionID:    labConnection,
 				OperationKey:    "provision_" + strandedRental,
 				RequestHash:     "sha256:provision-under-a-generation-of-its-own",

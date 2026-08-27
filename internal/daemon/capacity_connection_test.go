@@ -29,7 +29,7 @@ import (
 // shape a provider adapter can have, and until this slice the control plane could
 // not talk to one at all: aggregation and the ownership sweep both demanded an
 // EphemeralExecutor, so authorizing such a connection published no offer and
-// failed every sweep of the workspace.
+// failed every sweep of the deployment.
 //
 // What it does not do is publish a candidate. A machine no agent has enrolled on
 // cannot execute a container, so a Run is told nothing can hold it rather than
@@ -42,7 +42,7 @@ import (
 // apart from a provider that answered with nothing.
 func TestACapacityConnectionIsHeldByTheProductionControlPlane(t *testing.T) {
 	// No Docker on PATH, so the daemon seeds no local connection and this
-	// provider is the only capacity in the workspace.
+	// provider is the only capacity in the deployment.
 	t.Setenv("PATH", t.TempDir())
 	machines := &machineProvider{listed: []domain.OfferSnapshot{standingMachine()}}
 	harness, _ := startDaemonServing(t, map[string]capability.Backend{"machines": machines})
@@ -83,7 +83,7 @@ func TestACapacityConnectionIsHeldByTheProductionControlPlane(t *testing.T) {
 }
 
 // TestReconcilingAWorkspaceHoldingCapacityConvergesTheExecutionsThatLeaked drives
-// the reconcile the daemon runs every minute, over a workspace that holds both
+// the reconcile the daemon runs every minute, over a deployment that holds both
 // kinds of connection: one that rents machines and one that runs one-shot
 // executions and has leaked one.
 //
@@ -98,8 +98,8 @@ func TestReconcilingAWorkspaceHoldingCapacityConvergesTheExecutionsThatLeaked(t 
 	machines := &machineProvider{
 		listed: []domain.OfferSnapshot{standingMachine()},
 		held: []capability.OwnedCapacity{{
-			NativeRef:      "i-held",
-			WorkspaceID:    daemon.DefaultWorkspaceID,
+			NativeRef: "i-held",
+
 			OwnershipToken: "own_held",
 			State:          capability.CapacityStateActive,
 		}},
@@ -114,10 +114,10 @@ func TestReconcilingAWorkspaceHoldingCapacityConvergesTheExecutionsThatLeaked(t 
 	harness.authorize(t, "conn_machines", "machines")
 	harness.authorize(t, "conn_zpool", "zpool")
 
-	result, err := runtime.ReconcileWorkspace(t.Context(), daemon.DefaultWorkspaceID)
+	result, err := runtime.Reconcile(t.Context())
 
 	if err != nil {
-		t.Fatalf("reconcile a workspace holding a capacity connection: %v", err)
+		t.Fatalf("reconcile a deployment holding a capacity connection: %v", err)
 	}
 	if result.Reclaimed != 1 {
 		t.Fatalf("reclaimed %d, want the one leaked execution converged", result.Reclaimed)
@@ -164,12 +164,11 @@ const unreachableImage = "registry.invalid/acme/trainer@sha256:" +
 func (f *fleet) authorize(t *testing.T, connectionID, adapterType string) {
 	t.Helper()
 	f.call(t, http.MethodPost, "/v1/connections", map[string]any{
-		"workspace_id":  daemon.DefaultWorkspaceID,
 		"connection_id": connectionID,
 		"adapter_type":  adapterType,
 	}, nil, http.StatusCreated)
 	f.call(t, http.MethodPost,
-		"/v1/connections/"+connectionID+"/authorize?workspace_id="+daemon.DefaultWorkspaceID,
+		"/v1/connections/"+connectionID+"/authorize",
 		nil, nil, http.StatusOK)
 }
 
@@ -182,7 +181,7 @@ func (f *fleet) awaitDecision(t *testing.T, runID string) recordedDecision {
 		var response struct {
 			Decisions []recordedDecision `json:"decisions"`
 		}
-		status := f.get(t, "/v1/runs/"+runID+"/decision?workspace_id="+daemon.DefaultWorkspaceID, &response)
+		status := f.get(t, "/v1/runs/"+runID+"/decision", &response)
 		if status != http.StatusOK || len(response.Decisions) == 0 {
 			return false
 		}
@@ -204,7 +203,7 @@ type recordedDecision struct {
 	SelectionReasonCodes []string         `json:"selection_reason_codes"`
 	// CollectionReport is which connections Placement asked and which it did not.
 	// A capacity connection is named in the second list with the reason nobody
-	// asked it: it is still in the workspace's fleet and an operator reading this
+	// asked it: it is still in the deployment's fleet and an operator reading this
 	// decision has to be able to see it, and a census that counted it among the
 	// asked would state that a provider had been consulted about this Run when
 	// nothing had contacted it.
@@ -317,9 +316,9 @@ func (*oneShotExecutor) ListOffers(context.Context, adapter.OfferRequest) ([]dom
 
 func (executor *oneShotExecutor) ListOwned(context.Context, adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
 	return []adapter.OwnedExternalObject{{
-		ExternalID:  executor.leaked,
-		WorkspaceID: daemon.DefaultWorkspaceID,
-		LaunchKey:   "lk_" + executor.leaked,
+		ExternalID: executor.leaked,
+
+		LaunchKey: "lk_" + executor.leaked,
 	}}, nil
 }
 

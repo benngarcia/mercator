@@ -140,8 +140,8 @@ func keepEveryPromise(t *testing.T, provider capability.CapacityProvider, trialI
 // under, and the listing a promise rents from.
 func shadeformSubject(provider capability.CapacityProvider, trialID string) capacitytest.Subject {
 	lease := capacitytest.Lease{
-		TrialID:      trialID,
-		WorkspaceID:  "ws_capacity_conformance",
+		TrialID: trialID,
+
 		ConnectionID: "conn_shadeform",
 		// A machine this suite rents is expected to boot, fail to join, and be
 		// given back, so the origin it is told to report to is one that answers
@@ -159,7 +159,7 @@ func shadeformSubject(provider capability.CapacityProvider, trialID string) capa
 			listing, err := capacitytest.Affordable(
 				ctx,
 				provider,
-				capability.CapacityQuery{WorkspaceID: lease.WorkspaceID},
+				capability.CapacityQuery{},
 				maxTrialCostUSD,
 				lease.MaxLifetime,
 			)

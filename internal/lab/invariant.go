@@ -131,7 +131,6 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.monotonic_versions", check: monotonicVersions},
 		invariantRule{id: "safety.owned_external_resources", check: ownedExternalResources},
 		invariantRule{id: "safety.disk_reservation_respected", check: diskReservationRespected},
-		invariantRule{id: "safety.cache_mount_workspace_isolation", check: cacheMountWorkspaceIsolation},
 		invariantRule{id: "safety.projection_rebuild_equivalence", check: projectionRebuildEquivalence},
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
 		invariantRule{
@@ -1216,8 +1215,8 @@ func accumulationRunsThroughAnAgent(
 	}
 	if len(offer.Caches.Mounts) > 0 {
 		return fmt.Errorf(
-			"offer %q holds cache %q for workspace %q, and no agent has enrolled on machine %q, so no workload of Mercator's ever wrote it there",
-			offer.ID, offer.Caches.Mounts[0].Name, offer.Caches.Mounts[0].WorkspaceID, offer.MachineID,
+			"offer %q holds cache %q, and no agent has enrolled on machine %q, so no workload of Mercator's ever wrote it there",
+			offer.ID, offer.Caches.Mounts[0].Name, offer.MachineID,
 		)
 	}
 	for _, replica := range offer.Artifacts.Replicas {
@@ -2281,11 +2280,10 @@ func onlyKeptCapacityHoldsWhatItRan(offer domain.OfferSnapshot, seeded, seededCo
 	// would have Placement counting warmth that cannot survive its own host.
 	if len(offer.Caches.Mounts) > 0 {
 		return fmt.Errorf(
-			"offer %q %s, and holds cache %q for workspace %q",
+			"offer %q %s, and holds cache %q",
 			offer.ID,
 			reason,
 			offer.Caches.Mounts[0].Name,
-			offer.Caches.Mounts[0].WorkspaceID,
 		)
 	}
 	for _, replica := range offer.Artifacts.Replicas {
@@ -2545,73 +2543,6 @@ func everythingHeldTakesUpRoom(observation InvariantObservation, ledgers map[str
 					ledger.OfferID, item.Kind, item.Name,
 				)
 			}
-		}
-	}
-	return nil
-}
-
-// cacheMountWorkspaceIsolation is the hard rule on mutable state. A Cache
-// Mount's only identity is its workspace-scoped name, so isolation is not a
-// preference the scheduler weighs: two tenants that both call a cache
-// compiler-cache have two caches, and nothing may ever hand one of them the
-// other's bytes.
-//
-// The rule is that no cache identity is ever observed under two workspaces, read
-// over the ledger of what was touched and over what each host is holding. It is
-// deliberately not stated as "the identity equals what this workspace, name, and
-// generation derive": the world derives identities with the same function such a
-// rule would check them against, so the one error that matters, a derivation
-// that drops the workspace, would agree with itself and pass. Asking instead
-// whether two tenants ever met on one identity is a question the derivation
-// cannot answer for itself.
-//
-// Every attachment is claimed, not only the ones that wrote something: a cache
-// opened under the wrong workspace has already leaked, whatever the workload
-// went on to do with it.
-//
-// The rule reads what each execution asked for and what each host ended up
-// holding, and deliberately nothing about which storage an attachment resolved
-// to. Storage is reached by the identity itself, here and on a container runtime
-// alike: a volume is named by the workspace, the cache, and the generation
-// together, so the slot a read lands in is that string by construction and a
-// consequence restating it could never disagree with the request beside it. What
-// a wandering resolution would actually be is a derivation that stopped carrying
-// the workspace, and that shows up here as two tenants claiming one identity.
-func cacheMountWorkspaceIsolation(observation InvariantObservation) error {
-	owners := map[string]string{}
-	claim := func(offerID, identity, workspaceID, what string) error {
-		if identity == "" || workspaceID == "" {
-			return fmt.Errorf("%s on %q names cache identity %q for workspace %q", what, offerID, identity, workspaceID)
-		}
-		key := offerID + "/" + identity
-		if owner, claimed := owners[key]; claimed && owner != workspaceID {
-			return fmt.Errorf(
-				"cache %q on %q is used by workspaces %q and %q, and a cache belongs to one workspace",
-				identity, offerID, owner, workspaceID,
-			)
-		}
-		owners[key] = workspaceID
-		return nil
-	}
-	for _, effect := range observation.Effects {
-		if effect.Operation != OperationCacheMountAttach {
-			continue
-		}
-		var touched struct {
-			Identity    string `json:"identity"`
-			WorkspaceID string `json:"workspace_id"`
-			OfferID     string `json:"offer_id"`
-		}
-		if err := json.Unmarshal(effect.Request, &touched); err != nil {
-			return fmt.Errorf("decode Cache Mount access %s: %w", effect.ID, err)
-		}
-		if err := claim(touched.OfferID, touched.Identity, touched.WorkspaceID, effect.Operation); err != nil {
-			return err
-		}
-	}
-	for _, mount := range observation.World.CacheMounts {
-		if err := claim(mount.OfferID, mount.Identity, mount.WorkspaceID, "holding"); err != nil {
-			return err
 		}
 	}
 	return nil

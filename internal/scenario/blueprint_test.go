@@ -1,7 +1,6 @@
 package scenario
 
 import (
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -353,54 +352,6 @@ func TestLoadBlueprintModelsImmutableArtifactsSeparatelyFromCacheMounts(t *testi
 	}
 	if blueprint.Request.CacheMounts[0].Name == blueprint.Request.ConsumesArtifacts[0] {
 		t.Errorf("Cache Mount name must not become immutable Artifact identity")
-	}
-}
-
-// TestABlueprintStatesTheTenantEachRunBelongsTo is what makes a cross-workspace
-// claim expressible at all. Before it, every Blueprint ran in one workspace, so
-// "no cache crosses a workspace" was not merely unimplemented: no fixture could
-// build a world in which it could be false.
-func TestABlueprintStatesTheTenantEachRunBelongsTo(t *testing.T) {
-	blueprint, err := LoadBlueprint("scenarios/conformance/cache-mounts-never-cross-a-workspace.json")
-	if err != nil {
-		t.Fatalf("load Blueprint: %v", err)
-	}
-
-	workspaces := blueprint.Arrivals.Workspaces()
-
-	if !slices.Equal(workspaces, []string{"", "alpha", "beta"}) {
-		t.Fatalf("the Blueprint names workspaces %v, want the default beside its two tenants", workspaces)
-	}
-	runs, err := blueprint.Arrivals.ExpandedRuns()
-	if err != nil {
-		t.Fatalf("expand arrivals: %v", err)
-	}
-	if runs[0].Workspace != "alpha" || runs[1].Workspace != "beta" {
-		t.Fatalf("the first two Runs belong to %q and %q, want one tenant each", runs[0].Workspace, runs[1].Workspace)
-	}
-	declared := runs[0].Request.CacheRequirements()
-	if len(declared) != 1 || declared[0].CompatibilityKey != "cuda-12.4" || declared[0].SizeBytes != 8_000_000_000 {
-		t.Fatalf("the Run declares %+v, want one cache with its generation and the room it expects", declared)
-	}
-}
-
-// TestABlueprintRefusesAnArtifactOutsideTheWorkspaceThatDeclaredIt keeps one rule
-// from being quietly broken by another. An Artifact belongs to the workspace that
-// declared it, and a Blueprint's catalog is declared in the default one, so a Run
-// in another tenant naming one of those versions is a fixture implying content
-// crosses a workspace. It is refused at load rather than left to an admission
-// gate that could never be satisfied.
-func TestABlueprintRefusesAnArtifactOutsideTheWorkspaceThatDeclaredIt(t *testing.T) {
-	blueprint, err := LoadBlueprint("scenarios/conformance/artifact-must-be-durable-before-a-consumer-runs.json")
-	if err != nil {
-		t.Fatalf("load Blueprint: %v", err)
-	}
-	blueprint.Arrivals.Runs[2].Workspace = "beta"
-
-	err = blueprint.Arrivals.validate(blueprint.World)
-
-	if err == nil || !strings.Contains(err.Error(), "an Artifact belongs to the workspace that declared it") {
-		t.Fatalf("a Run in another tenant reading this catalog's Artifact gave %v", err)
 	}
 }
 

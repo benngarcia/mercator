@@ -14,7 +14,7 @@ package domain
 // RunGroup is the family this Run belongs to and how wide that family may run.
 type RunGroup struct {
 	// ID is the family's name, as its caller chose it. It is scoped to the Run's
-	// own workspace exactly as a cache name is: two tenants naming one sweep are
+	// own deployment exactly as a cache name is: two callers naming one sweep are
 	// running two sweeps, and neither may hold the other's members back.
 	ID string `json:"id,omitempty"`
 	// MaxParallel is the most members of this group that may hold capacity at

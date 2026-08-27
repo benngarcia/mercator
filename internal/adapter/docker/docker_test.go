@@ -51,7 +51,7 @@ func TestAdapterLaunchObserveReleaseAndListOwned(t *testing.T) {
 	if observation.Phase != adapter.ExternalPhaseRunning {
 		t.Fatalf("unexpected observation: %+v", observation)
 	}
-	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: req.WorkspaceID})
+	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 		t.Fatalf("the receipt was accepted at %s and this daemon made the container at %s",
 			receipt.AcceptedAt.Format(time.RFC3339Nano), stated)
 	}
-	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: req.WorkspaceID})
+	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestAdapterLaunchRejectsForeignContainerWithSameName(t *testing.T) {
 	client.objects[req.LaunchKey] = Container{
 		ID:     "docker-foreign",
 		Name:   req.LaunchKey,
-		Labels: map[string]string{"mercator.workspace_id": "ws_other"},
+		Labels: map[string]string{"mercator.run_id": "run_other"},
 		State:  "running",
 	}
 
@@ -561,9 +561,9 @@ func launchRequest() adapter.LaunchRequest {
 	entrypoint := []string{"/bin/app"}
 	literal := "info"
 	return adapter.LaunchRequest{
-		OperationKey:              "launch_1",
-		RequestHash:               "sha256:launch",
-		WorkspaceID:               "ws_1",
+		OperationKey: "launch_1",
+		RequestHash:  "sha256:launch",
+
 		RunID:                     "run_1",
 		AttemptID:                 "att_1",
 		WorkloadID:                "wrk_1",
@@ -792,7 +792,6 @@ func TestIntegrationTheJanitorConvergesOneAttemptsContainerByThatAttemptsLaunch(
 	provisioned := launchRequest()
 	provisioned.Image = image
 	provisioned.Platform = domain.Platform{OS: "linux", Architecture: runtime.GOARCH}
-	provisioned.WorkspaceID = "ws_janitor_" + stamp
 	provisioned.RunID = "run_replaced_" + stamp
 	provisioned.AttemptID = "att_one_" + stamp
 	provisioned.LaunchKey = "mercator-janitor-" + stamp
@@ -824,7 +823,7 @@ func TestIntegrationTheJanitorConvergesOneAttemptsContainerByThatAttemptsLaunch(
 	log := openLiveJanitorLog(t)
 	appendReplacedRunHistory(t, log, provisioned, replacement)
 
-	result, err := janitor.New(ad, janitor.WithEventLog(log)).Sweep(context.Background(), provisioned.WorkspaceID)
+	result, err := janitor.New(ad, janitor.WithEventLog(log)).Sweep(context.Background())
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -832,11 +831,11 @@ func TestIntegrationTheJanitorConvergesOneAttemptsContainerByThatAttemptsLaunch(
 	if result.Found != 1 || result.Terminated != 1 {
 		t.Fatalf("the sweep of this daemon reports %+v, want the first attempt's container converged by its own launch", result)
 	}
-	decision := liveConvergence(t, log, provisioned.WorkspaceID)
+	decision := liveConvergence(t, log)
 	if decision.Reason != "recorded_disposition_terminate" || decision.LaunchKey != provisioned.LaunchKey {
 		t.Fatalf("the record says %+v, want the disposition the launch that made this container recorded", decision)
 	}
-	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: provisioned.WorkspaceID})
+	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -888,7 +887,7 @@ func appendReplacedRunHistory(t *testing.T, log eventlog.EventLog, launches ...a
 		Data:          []byte(`{}`),
 	})
 	_, err := log.Append(context.Background(), eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: launches[0].WorkspaceID, Type: "run", ID: launches[0].RunID},
+		Stream:                eventlog.StreamKey{Type: "run", ID: launches[0].RunID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "seed:" + launches[0].RunID,
 		RequestHash:           "sha256:seed",
@@ -901,9 +900,9 @@ func appendReplacedRunHistory(t *testing.T, log eventlog.EventLog, launches ...a
 	}
 }
 
-func liveConvergence(t *testing.T, log eventlog.EventLog, workspaceID string) janitor.OrphanConvergence {
+func liveConvergence(t *testing.T, log eventlog.EventLog) janitor.OrphanConvergence {
 	t.Helper()
-	filter := eventlog.EventFilter{WorkspaceID: workspaceID}
+	filter := eventlog.EventFilter{}
 	head, err := log.LatestPosition(context.Background(), filter)
 	if err != nil {
 		t.Fatalf("read log head: %v", err)

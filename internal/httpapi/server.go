@@ -14,7 +14,6 @@ import (
 	"github.com/benngarcia/mercator/internal/reporting"
 	sinkspkg "github.com/benngarcia/mercator/internal/sinks"
 	"github.com/benngarcia/mercator/internal/workload"
-	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 // ImageResolver resolves a tag-form image reference to a digest-pinned one.
@@ -65,7 +64,6 @@ type Deps struct {
 	Sinks        *sinkspkg.Manager
 	Connections  *connection.Service
 	Resolver     ImageResolver
-	Workspaces   *workspace.SQLiteCatalog
 	Events       ConsoleEventLog
 }
 
@@ -77,7 +75,6 @@ type Server struct {
 	sinks        *sinkspkg.Manager
 	conns        *connection.Service
 	resolver     ImageResolver
-	workspaces   *workspace.SQLiteCatalog
 	events       ConsoleEventLog
 	offerCatalog *offerCatalog
 	verifier     connectionVerifier
@@ -92,24 +89,17 @@ type Server struct {
 // WebAuth is the human-login surface the server mounts at /auth/ when OIDC is
 // configured: it serves the login/callback/logout/session endpoints, answers
 // which signed-in human a request's session cookie belongs to, verifies the
-// bearer tokens `mercator login` mints for CLI users, and says whether the one
-// human it can authenticate is the deployment's own operator.
-//
-// SoleOperator is on this interface rather than beside it so that an
-// authenticator which can only ever establish one identity cannot be mounted
-// without saying so. Every implementation has to answer, and the answer travels
-// with the authenticator through whatever wires it.
+// bearer tokens `mercator login` mints for CLI users.
 type WebAuth interface {
 	http.Handler
 	SessionEmail(*http.Request) (string, bool)
 	VerifyCLIToken(token string) (string, bool)
-	SoleOperator() string
 }
 
 // connectionVerifier is the narrow capability the server needs from the Broker
 // to verify a connection during the authorize flow.
 type connectionVerifier interface {
-	VerifyConnection(ctx context.Context, workspaceID, connectionID string) error
+	VerifyConnection(ctx context.Context, connectionID string) error
 }
 
 type securityConfig struct {
@@ -151,15 +141,14 @@ func WithAdapterManifests(manifests func() []adapter.Manifest) Option {
 
 func New(deps Deps, options ...Option) http.Handler {
 	s := &Server{
-		mux:        http.NewServeMux(),
-		orch:       deps.Orchestrator,
-		offers:     deps.Offers,
-		workloads:  deps.Workloads,
-		sinks:      deps.Sinks,
-		conns:      deps.Connections,
-		resolver:   deps.Resolver,
-		workspaces: deps.Workspaces,
-		events:     deps.Events,
+		mux:       http.NewServeMux(),
+		orch:      deps.Orchestrator,
+		offers:    deps.Offers,
+		workloads: deps.Workloads,
+		sinks:     deps.Sinks,
+		conns:     deps.Connections,
+		resolver:  deps.Resolver,
+		events:    deps.Events,
 	}
 	if deps.Offers != nil {
 		s.offerCatalog = newOfferCatalog(deps.Offers, offerObservationInterval)

@@ -9,34 +9,29 @@ import (
 
 const compilerCache = "compiler-cache"
 
-// TestCacheWarmthAnswersPerWorkspaceAndGeneration is the whole comparison in one
-// table. A cache is warm only for the tenant that owns the name and only for the
-// generation the application says it can use, and the two ways of being cold are
+// TestCacheWarmthAnswersPerGeneration is the whole comparison in one table. A
+// cache is warm only for the generation the application says it can use, and
+// the two ways of being cold are
 // recorded differently because an operator acts on them differently: one machine
 // has never done this work, the other is holding the generation before.
-func TestCacheWarmthAnswersPerWorkspaceAndGeneration(t *testing.T) {
+func TestCacheWarmthAnswersPerGeneration(t *testing.T) {
 	looked := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	wanted := domain.CacheMountRequirement{Name: compilerCache, CompatibilityKey: "cuda-12.4"}
 	held := func(mounts ...domain.CacheMount) domain.CacheInventory {
 		return domain.CacheInventory{Known: true, ObservedAt: looked, Mounts: mounts}
 	}
-	mine := domain.CacheMount{WorkspaceID: "ws_alpha", Name: compilerCache, CompatibilityKey: "cuda-12.4", CreatedAt: looked}
-	theirs := domain.CacheMount{WorkspaceID: "ws_beta", Name: compilerCache, CompatibilityKey: "cuda-12.4", CreatedAt: looked}
-	previous := domain.CacheMount{WorkspaceID: "ws_alpha", Name: compilerCache, CompatibilityKey: "cuda-11.8", CreatedAt: looked}
+	current := domain.CacheMount{Name: compilerCache, CompatibilityKey: "cuda-12.4", CreatedAt: looked}
+	previous := domain.CacheMount{Name: compilerCache, CompatibilityKey: "cuda-11.8", CreatedAt: looked}
 
 	for name, testCase := range map[string]struct {
 		inventory    domain.CacheInventory
 		wantLocality domain.LocalityState
 		wantHeld     string
 	}{
-		"the tenant that wrote it finds it": {
-			inventory:    held(mine),
+		"the declared generation is warm": {
+			inventory:    held(current),
 			wantLocality: domain.LocalityHot,
 			wantHeld:     "cuda-12.4",
-		},
-		"a neighbour's cache of the same name is not this tenant's warmth": {
-			inventory:    held(theirs),
-			wantLocality: domain.LocalityCold,
 		},
 		"the generation the application replaced is recorded as what is there": {
 			inventory:    held(previous),
@@ -55,7 +50,7 @@ func TestCacheWarmthAnswersPerWorkspaceAndGeneration(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			found := domain.CacheWarmth("ws_alpha", []domain.CacheMountRequirement{wanted}, testCase.inventory)
+			found := domain.CacheWarmth([]domain.CacheMountRequirement{wanted}, testCase.inventory)
 
 			if len(found) != 1 {
 				t.Fatalf("recorded %d entries for one declared cache", len(found))
@@ -77,38 +72,33 @@ func TestCacheWarmthAnswersPerWorkspaceAndGeneration(t *testing.T) {
 func TestACacheStillCountsWhenTheApplicationHasMovedOn(t *testing.T) {
 	first := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	inventory := domain.CacheInventory{Known: true, ObservedAt: first.Add(time.Hour), Mounts: []domain.CacheMount{
-		{WorkspaceID: "ws_alpha", Name: compilerCache, CompatibilityKey: "cuda-12.4", CreatedAt: first},
-		{WorkspaceID: "ws_alpha", Name: compilerCache, CompatibilityKey: "cuda-13.0", CreatedAt: first.Add(time.Hour)},
+		{Name: compilerCache, CompatibilityKey: "cuda-12.4", CreatedAt: first},
+		{Name: compilerCache, CompatibilityKey: "cuda-13.0", CreatedAt: first.Add(time.Hour)},
 	}}
 
-	newest, holds := inventory.Held("ws_alpha", compilerCache)
+	newest, holds := inventory.Held(compilerCache)
 
 	if !holds || newest.CompatibilityKey != "cuda-13.0" {
 		t.Fatalf("what is under the name is %+v, want the generation written last", newest)
 	}
 	older := domain.CacheMountRequirement{Name: compilerCache, CompatibilityKey: "cuda-12.4"}
-	if !inventory.Holds("ws_alpha", older) {
+	if !inventory.Holds(older) {
 		t.Fatal("a generation the application still asks for is on this machine and was not found")
 	}
 }
 
 // TestACacheVolumeNameSeparatesEveryPartOfTheIdentity is the production half of
-// isolation, and the one place it stops being a comparison anybody has to
-// remember to make. A volume name derived from the cache's name alone would put
-// two tenants in one directory whatever the scheduler recorded.
+// cache generation isolation.
 func TestACacheVolumeNameSeparatesEveryPartOfTheIdentity(t *testing.T) {
 	cache := domain.CacheMountRequirement{Name: compilerCache, CompatibilityKey: "cuda-12.4"}
 	nextGeneration := domain.CacheMountRequirement{Name: compilerCache, CompatibilityKey: "cuda-13.0"}
 
-	mine := domain.CacheVolumeName("ws_alpha", cache)
+	mine := domain.CacheVolumeName(cache)
 
-	if mine == domain.CacheVolumeName("ws_beta", cache) {
-		t.Error("two workspaces naming one cache derive one volume")
-	}
-	if mine == domain.CacheVolumeName("ws_alpha", nextGeneration) {
+	if mine == domain.CacheVolumeName(nextGeneration) {
 		t.Error("two generations of one cache derive one volume")
 	}
-	if mine != domain.CacheVolumeName("ws_alpha", cache) {
+	if mine != domain.CacheVolumeName(cache) {
 		t.Error("one cache identity derives two volumes, so nothing would ever be found warm")
 	}
 }
@@ -144,10 +134,9 @@ func TestAWorkloadDeclaringAnUnusableCacheIsRefused(t *testing.T) {
 
 func workloadRevisionWithCaches(caches []domain.CacheMountRequirement) domain.WorkloadRevision {
 	return domain.WorkloadRevision{
-		ID:          "wrev_cache",
-		WorkspaceID: "ws_alpha",
-		WorkloadID:  "wrk_cache",
-		Digest:      "sha256:cache",
+		ID:         "wrev_cache",
+		WorkloadID: "wrk_cache",
+		Digest:     "sha256:cache",
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{
 				Name:     "main",

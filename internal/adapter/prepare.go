@@ -108,11 +108,11 @@ func (item PrepareItem) Identity() string {
 }
 
 // PrepareRequest is the whole of what Mercator wants prepared right now, for
-// one workspace. Anything a host is preparing that is absent from Wanted is
+// one deployment. Anything a host is preparing that is absent from Wanted is
 // preparation Mercator has stopped asking for, and a machine that keeps going
 // is consuming disk and bandwidth for work that will never happen.
 type PrepareRequest struct {
-	WorkspaceID string
+
 	// OperationKey is the identity of this desired state. Two requests naming
 	// one key state one desire, so a redelivered command changes nothing.
 	OperationKey string

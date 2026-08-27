@@ -24,7 +24,6 @@ import (
 type NewStore func(t *testing.T) rental.Store
 
 const (
-	workspaceID  = "ws_conformance"
 	rentalID     = "rnt_conformance"
 	connectionID = "con_simcloud"
 	firstNode    = "nod_generation_1"
@@ -44,7 +43,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if err := store.Save(context.Background(), 0, lease); err != nil {
 			t.Fatalf("take the lease: %v", err)
 		}
-		held, err := store.Get(context.Background(), workspaceID, rentalID)
+		held, err := store.Get(context.Background(), rentalID)
 		if err != nil {
 			t.Fatalf("read the lease back: %v", err)
 		}
@@ -70,7 +69,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if err := store.Save(context.Background(), 0, lease); err != nil {
 			t.Fatalf("take the lease: %v", err)
 		}
-		held, err := store.Get(context.Background(), workspaceID, rentalID)
+		held, err := store.Get(context.Background(), rentalID)
 		if err != nil {
 			t.Fatalf("read the lease back: %v", err)
 		}
@@ -106,7 +105,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if !errors.Is(err, eventlog.ErrConcurrencyConflict) {
 			t.Fatalf("second write at a spent version = %v, want a conflict", err)
 		}
-		held, readErr := store.Get(context.Background(), workspaceID, rentalID)
+		held, readErr := store.Get(context.Background(), rentalID)
 		if readErr != nil {
 			t.Fatalf("read the lease back: %v", readErr)
 		}
@@ -128,33 +127,10 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		}
 	})
 
-	t.Run("a lease is listed only to the workspace that took it", func(t *testing.T) {
-		store := newStore(t)
-		if err := store.Save(context.Background(), 0, opened(t)); err != nil {
-			t.Fatalf("take the lease: %v", err)
-		}
-
-		mine, err := store.List(context.Background(), workspaceID)
-		if err != nil {
-			t.Fatalf("list this workspace's leases: %v", err)
-		}
-		theirs, err := store.List(context.Background(), "ws_somebody_else")
-		if err != nil {
-			t.Fatalf("list another workspace's leases: %v", err)
-		}
-
-		if len(mine) != 1 || mine[0].ID != rentalID {
-			t.Fatalf("leases = %+v, want the one this workspace took", mine)
-		}
-		if len(theirs) != 0 {
-			t.Fatalf("another workspace saw %+v", theirs)
-		}
-	})
-
 	t.Run("a lease nobody took is not found rather than empty", func(t *testing.T) {
 		store := newStore(t)
 
-		_, err := store.Get(context.Background(), workspaceID, "rnt_missing")
+		_, err := store.Get(context.Background(), "rnt_missing")
 
 		if !errors.Is(err, rental.ErrNotFound) {
 			t.Fatalf("reading a lease nobody took = %v, want ErrNotFound", err)
@@ -197,7 +173,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 				if err == nil {
 					t.Fatalf("a lease Mercator could not have reached was written: %+v", invented)
 				}
-				if _, err := store.Get(context.Background(), workspaceID, rentalID); !errors.Is(err, rental.ErrNotFound) {
+				if _, err := store.Get(context.Background(), rentalID); !errors.Is(err, rental.ErrNotFound) {
 					t.Fatalf("after the refusal the store held %v, want nothing", err)
 				}
 			})
@@ -211,8 +187,8 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 func opened(t *testing.T) domain.Rental {
 	t.Helper()
 	lease, err := domain.OpenRental(domain.RentalIdentity{
-		RentalID:       rentalID,
-		WorkspaceID:    workspaceID,
+		RentalID: rentalID,
+
 		ConnectionID:   connectionID,
 		OwnershipToken: "own_conformance",
 	}, firstNode, start)

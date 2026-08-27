@@ -29,7 +29,7 @@ func TestServerDrivesTheRealControlPlaneThroughLabOnlyRoutes(t *testing.T) {
 	if checkpoint.Transitions != 1 {
 		t.Fatalf("transitions = %d, want 1", checkpoint.Transitions)
 	}
-	response := labRequest(t, http.MethodGet, httpServer.URL+"/v1/runs?workspace_id="+WorkspaceID, nil)
+	response := labRequest(t, http.MethodGet, httpServer.URL+"/v1/runs", nil)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("normal Run API = %s, want 200 OK", response.Status)
@@ -81,7 +81,7 @@ func TestWatchingTheConsoleDoesNotChangeTheExportedBundle(t *testing.T) {
 
 	// Act: an operator leaves the Offers page open, which polls the catalog.
 	for range 3 {
-		response := labRequest(t, http.MethodGet, httpServer.URL+"/v1/offers?workspace_id="+WorkspaceID, nil)
+		response := labRequest(t, http.MethodGet, httpServer.URL+"/v1/offers", nil)
 		if response.StatusCode != http.StatusOK {
 			t.Fatalf("observe Offers = %s", response.Status)
 		}
@@ -107,7 +107,7 @@ func TestObservingOffersBeforeTheFirstDriveSucceeds(t *testing.T) {
 	t.Cleanup(httpServer.Close)
 
 	// Act
-	response := labRequest(t, http.MethodGet, httpServer.URL+"/v1/offers?workspace_id="+WorkspaceID, nil)
+	response := labRequest(t, http.MethodGet, httpServer.URL+"/v1/offers", nil)
 	defer response.Body.Close()
 
 	// Assert

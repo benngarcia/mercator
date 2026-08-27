@@ -13,7 +13,7 @@ import (
 // for the person who decides which machines Mercator may use.
 type NodeRegistry interface {
 	Invite(ctx context.Context, invitation node.Invitation) (capability.NodeBootstrap, error)
-	List(ctx context.Context, workspaceID string) ([]node.Record, error)
+	List(ctx context.Context) ([]node.Record, error)
 }
 
 // WithNodes enables the node endpoints. A Mercator without a node registry
@@ -25,22 +25,11 @@ func WithNodes(registry NodeRegistry) Option {
 // InviteNode reserves a node identity and returns the material one machine
 // needs to enroll. The enrollment token is returned exactly this once: it is
 // short-lived, redeemable once, and never stored in a readable form.
-//
-// A node belongs to a workspace, so the workspace named in the body is resolved
-// through the same membership check every other workspace-scoped route uses.
-// Neither node operation declares 403 in the contract, so a refusal answers the
-// 400 they do declare, carrying the WORKSPACE_FORBIDDEN code that says what
-// really happened. Making it the 403 it is regenerates the contract, which is
-// #222.
 func (s *Server) InviteNode(ctx context.Context, request InviteNodeRequestObject) (InviteNodeResponseObject, error) {
 	if s.nodes == nil {
 		return InviteNode500JSONResponse{Code: "NODES_UNAVAILABLE", Message: "This Mercator has no node registry."}, nil
 	}
 	body := request.Body
-	workspaceID, workspaceErr := s.resolveWorkspace(ctx, body.WorkspaceId, "")
-	if workspaceErr != nil {
-		return InviteNode400JSONResponse(workspaceErr.Response), nil
-	}
 	if body.ShadowPriceUsdPerHour <= 0 {
 		return InviteNode400JSONResponse{
 			Code: "INVALID_REQUEST",
@@ -65,10 +54,10 @@ func (s *Server) InviteNode(ctx context.Context, request InviteNodeRequestObject
 		}
 	}
 	invitation := node.Invitation{
-		WorkspaceID: workspaceID,
-		NodeID:      body.NodeId,
-		RentalID:    body.RentalId,
-		Generation:  1,
+
+		NodeID:     body.NodeId,
+		RentalID:   body.RentalId,
+		Generation: 1,
 		// What this machine costs and the rest of what it is bought on. The rate is one
 		// term of what a placement here spends: a machine billed in whole hours costs
 		// the hour whatever a Run uses of it, a machine an operator holds for watched
@@ -98,21 +87,14 @@ func (s *Server) InviteNode(ctx context.Context, request InviteNodeRequestObject
 	}, nil
 }
 
-// ListNodes reports every node identity in a workspace, whatever its state, so
+// ListNodes reports every node identity in this deployment, whatever its state, so
 // an operator sees capacity that never enrolled as readily as capacity that
-// did. A fleet's size, machine identities, liveness and shadow prices are the
-// workspace's own facts, so this asks the same membership question every other
-// workspace-scoped read asks, and refuses with the 400 the contract declares
-// (see InviteNode).
+// did.
 func (s *Server) ListNodes(ctx context.Context, request ListNodesRequestObject) (ListNodesResponseObject, error) {
 	if s.nodes == nil {
 		return ListNodes500JSONResponse{Code: "NODES_UNAVAILABLE", Message: "This Mercator has no node registry."}, nil
 	}
-	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		return ListNodes400JSONResponse(workspaceErr.Response), nil
-	}
-	records, err := s.nodes.List(ctx, workspaceID)
+	records, err := s.nodes.List(ctx)
 	if err != nil {
 		return ListNodes500JSONResponse{Code: "NODE_LIST_FAILED", Message: err.Error()}, nil
 	}

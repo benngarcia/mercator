@@ -30,19 +30,16 @@ const DefaultObjectStoreDownloadMbps = 500.0
 // determines the address: a version is immutable, so there is exactly one place
 // its bytes can be, and deriving it is what keeps two records from naming
 // different homes for the same content.
-func ArtifactLocation(workspaceID, artifactID string) string {
-	return "mercator://" + workspaceID + "/artifacts/" + artifactID
+func ArtifactLocation(artifactID string) string {
+	return "mercator://artifacts/" + artifactID
 }
 
 // ArtifactVersion is the catalog entry for one immutable version of an
 // Artifact. The version is the identity: content never changes under a version
 // ID, so a consumer that names one names exactly the bytes it will read.
 type ArtifactVersion struct {
-	// ID is the version identity a workload declares, unique in its workspace.
+	// ID is the version identity a workload declares, unique in this broker.
 	ID string `json:"id"`
-	// WorkspaceID is the scope this version belongs to. Artifacts are never
-	// shared across workspaces, whatever their content.
-	WorkspaceID string `json:"workspace_id"`
 	// ContentDigest is what the bytes hash to. It is what a local copy is
 	// checked against, which is the only thing that makes a copy trustworthy.
 	ContentDigest string `json:"content_digest"`

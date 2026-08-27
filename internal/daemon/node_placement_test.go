@@ -88,7 +88,6 @@ func TestInvitingAnIdentityTwiceNamesTheCollisionThroughTheProductionStack(t *te
 		Message string `json:"message"`
 	}
 	fleet.call(t, http.MethodPost, "/v1/nodes", map[string]any{
-		"workspace_id":              daemon.DefaultWorkspaceID,
 		"node_id":                   taken.NodeID,
 		"rental_id":                 taken.RentalID,
 		"shadow_price_usd_per_hour": 2.5,
@@ -262,10 +261,6 @@ func TestANodeThatCannotEnumerateCopiesOffersNoArtifactClaim(t *testing.T) {
 // one runs with no storage attached while the fleet keeps advertising
 // cache_mounts and every decision keeps recording cache evidence: a permanently
 // cold cache, and no fault reported anywhere.
-//
-// The workspace is asserted beside the mounts because it is half of a cache's
-// identity. A command carrying the right cache under the wrong tenant is the
-// leak this whole slice exists to make impossible.
 func TestANodeIsAskedToAttachTheCachesTheWorkloadDeclared(t *testing.T) {
 	fleet := startFleet(t)
 	declared := domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-12.4", SizeBytes: 8 << 30}
@@ -277,9 +272,6 @@ func TestANodeIsAskedToAttachTheCachesTheWorkloadDeclared(t *testing.T) {
 	attached := fleet.runtime.attachedCaches(runID)
 	if !slices.Equal(attached, []domain.CacheMountRequirement{declared}) {
 		t.Fatalf("the node was asked to attach %+v, and the workload declared %+v", attached, declared)
-	}
-	if workspace := fleet.runtime.launchWorkspace(runID); workspace != daemon.DefaultWorkspaceID {
-		t.Fatalf("the launch reached the node under workspace %q, and the Run belongs to %q", workspace, daemon.DefaultWorkspaceID)
 	}
 }
 
@@ -709,7 +701,6 @@ func (f *fleet) invite(t *testing.T, priceUSDPerHour float64) capability.NodeBoo
 		AgentVersion    string `json:"agent_version"`
 	}
 	body := map[string]any{
-		"workspace_id":              daemon.DefaultWorkspaceID,
 		"shadow_price_usd_per_hour": priceUSDPerHour,
 	}
 	for field, value := range f.soldOn {
@@ -903,8 +894,7 @@ func (f *fleet) submitWorkload(t *testing.T, revision func(name string) map[stri
 	// shorthand resolves a digest against the broker host's Docker daemon, and
 	// this case is about where a Run lands, not about resolution.
 	f.call(t, http.MethodPost, "/v1/runs", map[string]any{
-		"workspace_id": daemon.DefaultWorkspaceID,
-		"workload":     revision(name),
+		"workload": revision(name),
 	}, &created, http.StatusAccepted)
 	if created.Run.ID == "" {
 		t.Fatal("create run returned no run id")
@@ -924,7 +914,7 @@ func (f *fleet) completeWorkload(t *testing.T, runID string, exitCode int) {
 				Outcome string `json:"outcome"`
 			} `json:"run"`
 		}
-		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &refreshed, http.StatusOK)
+		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh", nil, &refreshed, http.StatusOK)
 		return refreshed.Run.Outcome != ""
 	}, "the run never reached a terminal outcome after the node reported its exit")
 }
@@ -938,7 +928,7 @@ func (f *fleet) awaitOutcome(t *testing.T, runID, want string) {
 		} `json:"run"`
 	}
 	f.waitFor(t, func() bool {
-		f.call(t, http.MethodGet, "/v1/runs/"+runID+"?workspace_id="+daemon.DefaultWorkspaceID, nil, &run, http.StatusOK)
+		f.call(t, http.MethodGet, "/v1/runs/"+runID+"", nil, &run, http.StatusOK)
 		return run.Run.Outcome == want
 	}, fmt.Sprintf("Run %s never reached outcome %q (last outcome %q)", runID, want, run.Run.Outcome))
 }
@@ -955,7 +945,7 @@ func (f *fleet) awaitAdmission(t *testing.T, runID string) {
 		} `json:"run"`
 	}
 	f.waitFor(t, func() bool {
-		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
+		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh", nil, &response, http.StatusOK)
 		return response.Run.Phase != "queued"
 	}, "Run "+runID+" was never admitted after the capacity it was waiting for came back")
 }
@@ -973,7 +963,7 @@ func (f *fleet) awaitStartMoment(t *testing.T, runID string) time.Time {
 		// The refresh is an advance, which is what asks the node what its container
 		// is doing. Waiting for the minute reconcile sweep instead would make this a
 		// case about the sweep's cadence.
-		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &run, http.StatusOK)
+		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh", nil, &run, http.StatusOK)
 		return run.Run.StartedAt != nil
 	}, "Run "+runID+" never recorded the moment its workload began")
 	return run.Run.StartedAt.UTC()
@@ -989,7 +979,7 @@ func (f *fleet) startMoment(t *testing.T, runID string) *time.Time {
 			StartedAt *time.Time `json:"started_at"`
 		} `json:"run"`
 	}
-	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &run, http.StatusOK)
+	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh", nil, &run, http.StatusOK)
 	return run.Run.StartedAt
 }
 
@@ -998,10 +988,9 @@ func (f *fleet) startMoment(t *testing.T, runID string) *time.Time {
 // Run rather than an idempotent replay of the first.
 func workloadRevision(name, image string) map[string]any {
 	return map[string]any{
-		"id":           "wlr_" + name,
-		"workspace_id": daemon.DefaultWorkspaceID,
-		"workload_id":  "wl_" + name,
-		"digest":       "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		"id":          "wlr_" + name,
+		"workload_id": "wl_" + name,
+		"digest":      "sha256:1111111111111111111111111111111111111111111111111111111111111111",
 		"spec": map[string]any{
 			"containers": []map[string]any{{
 				"name":     "main",
@@ -1085,7 +1074,7 @@ func (decision bookingDecision) stageEstimate(stage domain.LaunchStage) domain.E
 // expects the daemon to have taken it.
 func (f *fleet) advance(t *testing.T, runID string) {
 	t.Helper()
-	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusOK)
+	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh", nil, nil, http.StatusOK)
 }
 
 // queueForWantOfCapacity drives one Run forward the way the reconcile sweep does
@@ -1118,7 +1107,7 @@ func (f *fleet) queueWaitingFor(t *testing.T, runID, reason string) {
 			} `json:"admission"`
 		} `json:"run"`
 	}
-	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
+	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh", nil, &response, http.StatusOK)
 	if response.Run.Phase != "queued" || response.Run.Admission.Reason != reason {
 		t.Fatalf("run %q is %q waiting for %q, want a Run queued waiting for %q",
 			runID, response.Run.Phase, response.Run.Admission.Reason, reason)
@@ -1135,7 +1124,7 @@ func (f *fleet) nodes(t *testing.T) []nodeSummary {
 	var response struct {
 		Nodes []json.RawMessage `json:"nodes"`
 	}
-	f.call(t, http.MethodGet, "/v1/nodes?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
+	f.call(t, http.MethodGet, "/v1/nodes", nil, &response, http.StatusOK)
 	summaries := make([]nodeSummary, 0, len(response.Nodes))
 	for _, listed := range response.Nodes {
 		var summary nodeSummary
@@ -1202,7 +1191,7 @@ func (f *fleet) decisions(t *testing.T, runID string) []bookingDecision {
 	var response struct {
 		Decisions []bookingDecision `json:"decisions"`
 	}
-	f.call(t, http.MethodGet, "/v1/runs/"+runID+"/decision?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
+	f.call(t, http.MethodGet, "/v1/runs/"+runID+"/decision", nil, &response, http.StatusOK)
 	if len(response.Decisions) == 0 {
 		t.Fatalf("the decision route answered with no decisions for Run %q", runID)
 	}
@@ -1235,7 +1224,7 @@ func (f *fleet) offers(t *testing.T) []offerSnapshot {
 	var response struct {
 		Offers []offerSnapshot `json:"offers"`
 	}
-	f.call(t, http.MethodGet, "/v1/offers?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
+	f.call(t, http.MethodGet, "/v1/offers", nil, &response, http.StatusOK)
 	return response.Offers
 }
 
@@ -1407,7 +1396,7 @@ type scriptedRuntime struct {
 	observations map[string]capability.WorkloadObservation
 	// launches is the command each Run arrived with, kept whole so a case can
 	// ask what this machine was actually told to attach and under whose
-	// workspace. Everything a container runtime mounts has to be in there:
+	// deployment. Everything a container runtime mounts has to be in there:
 	// nothing below the control plane can derive a cache.
 	launches map[string]capability.LaunchWorkloadCommand
 	// disk is what this machine's agent established about the filesystem its
@@ -1668,14 +1657,6 @@ func (runtime *scriptedRuntime) attachedCaches(runID string) []domain.CacheMount
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	return runtime.launches[runID].CacheMounts
-}
-
-// launchWorkspace is the tenant the command reached this node under, which is
-// the other half of every cache identity it would derive.
-func (runtime *scriptedRuntime) launchWorkspace(runID string) string {
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	return runtime.launches[runID].WorkspaceID
 }
 
 func (runtime *scriptedRuntime) launchedRuns() []string {
@@ -2013,7 +1994,7 @@ func TestTheNodeListingTellsAnUnmeasurableDiskFromANodeNobodyHasHeardFrom(t *tes
 // about a machine it measured. The offer states no room and states that nobody
 // measured it, so the wait names the silence, and a Run in it keeps its place in
 // the queue. Read as a machine with no room, one failed statfs on the only node
-// in a workspace made every Run in that workspace a Run no machine can ever
+// in a deployment made every Run in that deployment a Run no machine can ever
 // hold, and every one of them then lost its standing to the next arrival.
 func TestANodeThatCannotMeasureItsDiskWinsNoPlacement(t *testing.T) {
 	fleet := startFleet(t, reporting(capability.DiskFacts{}))
@@ -2161,7 +2142,7 @@ func TestTheDecisionRouteAnswersWithTheWholeChain(t *testing.T) {
 }
 
 // TestAnImpossibleAskLeavesThisFleetRunning is what queueing a Run nothing can
-// place does to the rest of the workspace, end to end through the public API. It
+// place does to the rest of the deployment, end to end through the public API. It
 // is the order that makes the case: the impossible Run is queued first, so it is
 // the older wait and it outranks every later arrival of its own class, and the
 // queue's whole job is to make later work respect a wait like that.
@@ -2191,7 +2172,7 @@ func TestAnImpossibleAskLeavesThisFleetRunning(t *testing.T) {
 }
 
 // TestAnImpossibleAskLeavesABusyFleetRunning is the same claim about the fleet
-// every real workspace has, which is one with something already running on it. The
+// every real deployment has, which is one with something already running on it. The
 // case above starts from an idle machine, and an idle machine is the one state in
 // which a classification read off the Bookings Mercator holds happens to agree with
 // what the machines actually refused.
@@ -2476,7 +2457,7 @@ func TestAFamilyIsHeldToItsWidthWhileAMachineStandsIdle(t *testing.T) {
 	// And no machine was weighed for it either. A family already as wide as it
 	// declared asks the fleet nothing, because no answer the fleet could give would
 	// change what is holding the member.
-	fleet.call(t, http.MethodGet, "/v1/runs/"+second+"/decision?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusNotFound)
+	fleet.call(t, http.MethodGet, "/v1/runs/"+second+"/decision", nil, nil, http.StatusNotFound)
 	// The other machine was standing idle throughout, as its own heartbeat reports it
 	// over the same catalog Placement reads. That is what makes this a bound on the
 	// family rather than on a fleet that ran out.

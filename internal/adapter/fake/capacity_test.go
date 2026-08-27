@@ -55,7 +55,7 @@ func listedWorld(t *testing.T) (*World, *acceptingRegistry) {
 func provisionAndEnrol(t *testing.T, world *World, rentalID, ownershipToken string) {
 	t.Helper()
 	if _, err := world.ProvisionCapacity(context.Background(), capability.ProvisionCommand{
-		WorkspaceID:     "ws_fake",
+
 		RentalID:        rentalID,
 		OfferSnapshotID: "reusable-4090",
 		OwnershipToken:  ownershipToken,
@@ -102,7 +102,7 @@ func TestWorldPublishesTheMachineOneListingBecameBesideTheListing(t *testing.T) 
 		t.Errorf("the listing names Rental %q, and a listing is a product rather than a lease", listing.RentalID)
 	}
 	if listing.Capacity.Available {
-		t.Errorf("the listing still sells machine %q, which this workspace is already leasing", listing.MachineID)
+		t.Errorf("the listing still sells machine %q, which this deployment is already leasing", listing.MachineID)
 	}
 }
 
@@ -125,7 +125,7 @@ func TestWorldRefusesToSellOneMachineTwice(t *testing.T) {
 	world.Clock().Advance(time.Hour)
 
 	_, err := world.ProvisionCapacity(context.Background(), capability.ProvisionCommand{
-		WorkspaceID:     "ws_fake",
+
 		RentalID:        "rnt_second",
 		OfferSnapshotID: "reusable-4090",
 		OwnershipToken:  "own-second",
@@ -169,7 +169,7 @@ func TestWorldMintsAHandleForTheMachineAProductYields(t *testing.T) {
 
 	for _, rentalID := range []string{"rnt_first", "rnt_second"} {
 		if _, err := world.ProvisionCapacity(context.Background(), capability.ProvisionCommand{
-			WorkspaceID:     "ws_fake",
+
 			RentalID:        rentalID,
 			OfferSnapshotID: "fresh-4090",
 			OwnershipToken:  "own-" + rentalID,
@@ -250,7 +250,7 @@ func TestARepeatedTerminateWithdrawsNothingTheNextLeaseBought(t *testing.T) {
 	if _, published := worldOffers(t, world)[listedMachine]; !published {
 		t.Errorf("giving Rental %q back a second time destroyed the machine Rental %q is holding", "rnt_first", "rnt_second")
 	}
-	owned, err := world.ListOwnedCapacity(context.Background(), capability.OwnershipQuery{WorkspaceID: "ws_fake"})
+	owned, err := world.ListOwnedCapacity(context.Background(), capability.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
@@ -292,12 +292,12 @@ func TestWorldRefusesToSellAMachineThatAlreadyExists(t *testing.T) {
 		t.Fatalf("add host: %v", err)
 	}
 
-	forSale, err := world.ListCapacity(context.Background(), capability.CapacityQuery{WorkspaceID: "ws_fake"})
+	forSale, err := world.ListCapacity(context.Background(), capability.CapacityQuery{})
 	if err != nil {
 		t.Fatalf("list capacity: %v", err)
 	}
 	_, refused := world.ProvisionCapacity(context.Background(), capability.ProvisionCommand{
-		WorkspaceID: "ws_fake", RentalID: "rnt_host", OfferSnapshotID: "a-host-mercator-does-not-control",
+		RentalID: "rnt_host", OfferSnapshotID: "a-host-mercator-does-not-control",
 		OwnershipToken: "own-host",
 		Bootstrap:      capability.NodeBootstrap{NodeID: "nod_host", RentalID: "rnt_host", Generation: 1},
 	})
@@ -316,13 +316,13 @@ func TestWorldRefusesToSellAMachineThatAlreadyExists(t *testing.T) {
 // TestWorldSellsNoCapacityItHasAlreadyLeased holds ListCapacity to what it is.
 // The fleet and the catalogue are two questions: ListOffers answers what this
 // world can be asked to run work on, and ListCapacity answers what is for sale.
-// Returning the fleet from both offered a workspace a machine it is already
+// Returning the fleet from both offered a deployment a machine it is already
 // paying for, under a lease it already holds.
 func TestWorldSellsNoCapacityItHasAlreadyLeased(t *testing.T) {
 	world, _ := listedWorld(t)
 	provisionAndEnrol(t, world, "rnt_first", "own-first")
 
-	forSale, err := world.ListCapacity(context.Background(), capability.CapacityQuery{WorkspaceID: "ws_fake"})
+	forSale, err := world.ListCapacity(context.Background(), capability.CapacityQuery{})
 	if err != nil {
 		t.Fatalf("list capacity: %v", err)
 	}

@@ -359,7 +359,7 @@ func TestCrashHelperRenamesObjectivesThenStops(t *testing.T) {
 func appendOf(eventID string, version uint64, payload int) eventlog.AppendRequest {
 	data, _ := json.Marshal(map[string]string{"payload": strings.Repeat("a", payload)})
 	return eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"},
+		Stream:                eventlog.StreamKey{Type: "run", ID: "run_1"},
 		ExpectedStreamVersion: version,
 		CommandKey:            "crash:" + eventID,
 		RequestHash:           "sha256:" + eventID,

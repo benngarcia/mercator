@@ -15,24 +15,24 @@ import (
 
 // TestAdministrativeOperationsAnswerOnlyOnTheAdministrativeListener puts one
 // running daemon behind two addresses and asks the same question at both. The
-// public address does not serve workspace creation at all, so it answers what
+// public address does not serve node invitation at all, so it answers what
 // it answers for any path it does not have.
 func TestAdministrativeOperationsAnswerOnlyOnTheAdministrativeListener(t *testing.T) {
 	// Arrange
 	public, admin := startRuntimeWithAdminListener(t)
 
 	// Act
-	onThePublicListener := createWorkspace(t, public)
-	onTheAdministrativeListener := createWorkspace(t, admin)
+	onThePublicListener := inviteNode(t, public)
+	onTheAdministrativeListener := inviteNode(t, admin)
 	aPathThisDeploymentDoesNotHave := getWithToken(t, public, "/v1/no-such-operation")
-	withNoCredentials := call(t, newRequest(t, http.MethodPost, public, "/v1/workspaces", `{"display_name":"Production"}`))
+	withNoCredentials := call(t, newRequest(t, http.MethodPost, public, "/v1/nodes", `{"shadow_price_usd_per_hour":1}`))
 
 	// Assert
 	if onTheAdministrativeListener.status != http.StatusCreated {
-		t.Fatalf("create workspace on the administrative listener = %d: %s", onTheAdministrativeListener.status, onTheAdministrativeListener.body)
+		t.Fatalf("invite node on the administrative listener = %d: %s", onTheAdministrativeListener.status, onTheAdministrativeListener.body)
 	}
 	if onThePublicListener.status != http.StatusNotFound {
-		t.Fatalf("create workspace on the public listener = %d, want 404: %s", onThePublicListener.status, onThePublicListener.body)
+		t.Fatalf("invite node on the public listener = %d, want 404: %s", onThePublicListener.status, onThePublicListener.body)
 	}
 	if onThePublicListener.body != aPathThisDeploymentDoesNotHave.body {
 		t.Fatalf("the public listener distinguishes an administrative route from a path it does not have:\n administrative: %q\n absent:         %q",
@@ -46,18 +46,17 @@ func TestAdministrativeOperationsAnswerOnlyOnTheAdministrativeListener(t *testin
 	}
 }
 
-// TestOrdinaryOperationsStillAnswerOnThePublicListener is the other half: only
-// the administrative operations moved.
+// TestOrdinaryOperationsStillAnswerOnThePublicListener is the other half.
 func TestOrdinaryOperationsStillAnswerOnThePublicListener(t *testing.T) {
 	// Arrange
 	public, _ := startRuntimeWithAdminListener(t)
 
 	// Act
-	listed := getWithToken(t, public, "/v1/workspaces")
+	listed := getWithToken(t, public, "/v1/runs")
 
 	// Assert
 	if listed.status != http.StatusOK {
-		t.Fatalf("list workspaces on the public listener = %d: %s", listed.status, listed.body)
+		t.Fatalf("list runs on the public listener = %d: %s", listed.status, listed.body)
 	}
 }
 
@@ -105,9 +104,9 @@ func startRuntimeWithAdminListener(t *testing.T) (string, string) {
 	return publicListener.Addr().String(), adminListener.Addr().String()
 }
 
-func createWorkspace(t *testing.T, address string) httpAnswer {
+func inviteNode(t *testing.T, address string) httpAnswer {
 	t.Helper()
-	return postJSON(t, address, "/v1/workspaces", `{"display_name":"Production"}`)
+	return postJSON(t, address, "/v1/nodes", `{"shadow_price_usd_per_hour":1}`)
 }
 
 func postJSON(t *testing.T, address, path, body string) httpAnswer {

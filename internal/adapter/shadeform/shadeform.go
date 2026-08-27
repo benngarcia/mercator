@@ -33,7 +33,6 @@ import (
 const (
 	tagRental         = "mercator:rental"
 	tagGeneration     = "mercator:generation"
-	tagWorkspace      = "mercator:workspace"
 	tagOwnershipToken = "mercator:ownership-token"
 )
 

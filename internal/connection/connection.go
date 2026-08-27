@@ -26,31 +26,28 @@ var ErrSecretStoreDisabled = errors.New("connection: secret store disabled")
 var ErrSecretStore = errors.New("connection: secret store failure")
 
 type CredentialWrite struct {
-	WorkspaceID  string
 	ConnectionID string
 	Secret       []byte
 }
 
 type CredentialRef struct {
-	WorkspaceID  string
 	ConnectionID string
 }
 
 type CredentialRepository interface {
-	eventlog.WorkspaceEventLog
+	eventlog.EventLog
 	CreateCredential(context.Context, eventlog.AppendRequest, CredentialWrite) (eventlog.AppendResult, error)
 	DeleteCredential(context.Context, eventlog.AppendRequest, CredentialRef) (eventlog.AppendResult, error)
 }
 
 type Service struct {
-	log         eventlog.WorkspaceEventLog
+	log         eventlog.EventLog
 	credentials CredentialRepository
 	now         func() time.Time
 }
 
 type Record struct {
 	ID                  string                `json:"id"`
-	WorkspaceID         string                `json:"workspace_id"`
 	AdapterType         string                `json:"adapter_type"`
 	AuthorizationSchema map[string]string     `json:"authorization_schema,omitempty"`
 	Authorized          bool                  `json:"authorized"`
@@ -64,7 +61,6 @@ type Record struct {
 }
 
 type CreateRequest struct {
-	WorkspaceID         string
 	ConnectionID        string
 	AdapterType         string
 	AuthorizationSchema map[string]string
@@ -78,7 +74,6 @@ type CreateRequest struct {
 }
 
 type UpdateAuthorizationRequest struct {
-	WorkspaceID  string
 	ConnectionID string
 	Authorized   bool
 	// Actor is the event-envelope principal recorded on the authorization fact.
@@ -86,13 +81,12 @@ type UpdateAuthorizationRequest struct {
 }
 
 type DeleteRequest struct {
-	WorkspaceID  string
 	ConnectionID string
 	// Actor is the event-envelope principal recorded on the deleted fact.
 	Actor json.RawMessage
 }
 
-func New(log eventlog.WorkspaceEventLog) *Service {
+func New(log eventlog.EventLog) *Service {
 	return &Service{log: log, now: time.Now}
 }
 
@@ -101,12 +95,11 @@ func NewWithCredentials(repository CredentialRepository) *Service {
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error) {
-	if req.WorkspaceID == "" || req.ConnectionID == "" || req.AdapterType == "" {
-		return Record{}, fmt.Errorf("connection: workspace_id, connection_id, and adapter_type are required")
+	if req.ConnectionID == "" || req.AdapterType == "" {
+		return Record{}, fmt.Errorf("connection: connection_id and adapter_type are required")
 	}
 	record := Record{
 		ID:                  req.ConnectionID,
-		WorkspaceID:         req.WorkspaceID,
 		AdapterType:         req.AdapterType,
 		AuthorizationSchema: maps.Clone(req.AuthorizationSchema),
 		Config:              maps.Clone(req.Config),
@@ -120,19 +113,20 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 	if err != nil {
 		return Record{}, err
 	}
-	requestHashes, err := createRequestHashes(record)
+	requestHash, err := domain.CanonicalHash(record)
 	if err != nil {
 		return Record{}, err
 	}
 	appendRequest := eventlog.AppendRequest{
-		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
+		Stream:                connectionStream(req.ConnectionID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            "connection:create:" + req.ConnectionID,
+		RequestHash:           requestHash,
 		Actor:                 req.Actor,
 		CorrelationID:         req.ConnectionID,
 		CausationID:           "connection:create:" + req.ConnectionID,
 		Events: []eventlog.NewEvent{{
-			ID:            fmt.Sprintf("evt_connection_%s_%s_created", req.WorkspaceID, req.ConnectionID),
+			ID:            fmt.Sprintf("evt_connection_%s_created", req.ConnectionID),
 			Type:          EventConnectionCreated,
 			SchemaVersion: 1,
 			OccurredAt:    s.now().UTC(),
@@ -140,13 +134,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 			Data:          data,
 		}},
 	}
-	for _, requestHash := range requestHashes {
-		appendRequest.RequestHash = requestHash
-		err = s.appendCreate(ctx, appendRequest, credentialWrite)
-		if !errors.Is(err, eventlog.ErrIdempotencyConflict) {
-			break
-		}
-	}
+	err = s.appendCreate(ctx, appendRequest, credentialWrite)
 	if err != nil {
 		return Record{}, err
 	}
@@ -155,46 +143,11 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 
 func (s *Service) appendCreate(ctx context.Context, request eventlog.AppendRequest, credentialWrite CredentialWrite) error {
 	if len(credentialWrite.Secret) == 0 {
-		_, err := s.log.AppendIfWorkspaceActive(ctx, request)
+		_, err := s.log.Append(ctx, request)
 		return err
 	}
 	_, err := s.credentials.CreateCredential(ctx, request, credentialWrite)
 	return err
-}
-
-// createRequestHashes keeps the durable command hash independent of Record's
-// presentation tags. v0.4.0 briefly hashed Record after its zero credential
-// changed from `omitempty` to `omitzero`, so accept that transitional hash
-// after trying the stable pre-v0.4 shape used for new commands.
-func createRequestHashes(record Record) ([]string, error) {
-	stable, err := domain.CanonicalHash(struct {
-		ID                  string                `json:"id"`
-		WorkspaceID         string                `json:"workspace_id"`
-		AdapterType         string                `json:"adapter_type"`
-		AuthorizationSchema map[string]string     `json:"authorization_schema,omitempty"`
-		Authorized          bool                  `json:"authorized"`
-		Config              map[string]string     `json:"config,omitempty"`
-		Credential          credential.Credential `json:"credential"`
-	}{
-		ID:                  record.ID,
-		WorkspaceID:         record.WorkspaceID,
-		AdapterType:         record.AdapterType,
-		AuthorizationSchema: record.AuthorizationSchema,
-		Authorized:          record.Authorized,
-		Config:              record.Config,
-		Credential:          record.Credential,
-	})
-	if err != nil {
-		return nil, err
-	}
-	transitional, err := domain.CanonicalHash(record)
-	if err != nil {
-		return nil, err
-	}
-	if stable == transitional {
-		return []string{stable}, nil
-	}
-	return []string{stable, transitional}, nil
 }
 
 func (s *Service) prepareCredential(record *Record, secret []byte) (CredentialWrite, error) {
@@ -206,7 +159,6 @@ func (s *Service) prepareCredential(record *Record, secret []byte) (CredentialWr
 	}
 	record.Credential.Ref = record.ID
 	return CredentialWrite{
-		WorkspaceID:  record.WorkspaceID,
 		ConnectionID: record.ID,
 		Secret:       secret,
 	}, nil
@@ -216,11 +168,11 @@ func credentialRef(record Record) (CredentialRef, bool) {
 	if record.Credential.Source != credential.SourceMercator || record.Credential.Ref == "" {
 		return CredentialRef{}, false
 	}
-	return CredentialRef{WorkspaceID: record.WorkspaceID, ConnectionID: record.ID}, true
+	return CredentialRef{ConnectionID: record.ID}, true
 }
 
 func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizationRequest) error {
-	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(req.WorkspaceID, req.ConnectionID))
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(req.ConnectionID))
 	if err != nil {
 		return err
 	}
@@ -236,15 +188,14 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 	// bootstrap) must replay, not conflict. The anonymous struct keeps the hash
 	// byte-identical to logs written before the Actor field existed.
 	hash, err := domain.CanonicalHash(struct {
-		WorkspaceID  string
 		ConnectionID string
 		Authorized   bool
-	}{req.WorkspaceID, req.ConnectionID, req.Authorized})
+	}{req.ConnectionID, req.Authorized})
 	if err != nil {
 		return err
 	}
 	appendRequest := eventlog.AppendRequest{
-		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
+		Stream:                connectionStream(req.ConnectionID),
 		ExpectedStreamVersion: history.LastVersion,
 		CommandKey:            fmt.Sprintf("connection:authorization:%s:%t", req.ConnectionID, req.Authorized),
 		RequestHash:           hash,
@@ -252,7 +203,7 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 		CorrelationID:         req.ConnectionID,
 		CausationID:           "connection:authorization:" + req.ConnectionID,
 		Events: []eventlog.NewEvent{{
-			ID:            fmt.Sprintf("evt_connection_%s_%s_authorized_%t", req.WorkspaceID, req.ConnectionID, req.Authorized),
+			ID:            fmt.Sprintf("evt_connection_%s_authorized_%t", req.ConnectionID, req.Authorized),
 			Type:          EventConnectionAuthorizationUpdated,
 			SchemaVersion: 1,
 			OccurredAt:    s.now().UTC(),
@@ -269,7 +220,7 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 // idempotent replay. A deleted connection's id cannot be reused: recreate
 // under a fresh id.
 func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
-	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(req.WorkspaceID, req.ConnectionID))
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(req.ConnectionID))
 	if err != nil {
 		return err
 	}
@@ -281,14 +232,13 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 		return nil
 	}
 	hash, err := domain.CanonicalHash(struct {
-		WorkspaceID  string
 		ConnectionID string
-	}{req.WorkspaceID, req.ConnectionID})
+	}{req.ConnectionID})
 	if err != nil {
 		return err
 	}
 	appendRequest := eventlog.AppendRequest{
-		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
+		Stream:                connectionStream(req.ConnectionID),
 		ExpectedStreamVersion: history.LastVersion,
 		CommandKey:            "connection:delete:" + req.ConnectionID,
 		RequestHash:           hash,
@@ -296,7 +246,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 		CorrelationID:         req.ConnectionID,
 		CausationID:           "connection:delete:" + req.ConnectionID,
 		Events: []eventlog.NewEvent{{
-			ID:            fmt.Sprintf("evt_connection_%s_%s_deleted", req.WorkspaceID, req.ConnectionID),
+			ID:            fmt.Sprintf("evt_connection_%s_deleted", req.ConnectionID),
 			Type:          EventConnectionDeleted,
 			SchemaVersion: 1,
 			OccurredAt:    s.now().UTC(),
@@ -315,8 +265,8 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 	return err
 }
 
-func (s *Service) Get(ctx context.Context, workspaceID, connectionID string) (Record, error) {
-	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(workspaceID, connectionID))
+func (s *Service) Get(ctx context.Context, connectionID string) (Record, error) {
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(connectionID))
 	if err != nil {
 		return Record{}, err
 	}
@@ -334,17 +284,17 @@ func (s *Service) Get(ctx context.Context, workspaceID, connectionID string) (Re
 // since deleted. A deleted connection's id cannot be reused, so callers that
 // must never resurrect a removed connection (bootstrap seeding) guard on this
 // rather than on Get, which reports a deleted connection as absent.
-func (s *Service) IDInUse(ctx context.Context, workspaceID, connectionID string) (bool, error) {
-	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(workspaceID, connectionID))
+func (s *Service) IDInUse(ctx context.Context, connectionID string) (bool, error) {
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(connectionID))
 	if err != nil {
 		return false, err
 	}
 	return len(history.Events) > 0, nil
 }
 
-func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error) {
+func (s *Service) List(ctx context.Context) ([]Record, error) {
 	states := make(map[string]*connectionState)
-	filter := eventlog.EventFilter{WorkspaceID: workspaceID, StreamTypes: []string{"connection"}}
+	filter := eventlog.EventFilter{StreamTypes: []string{"connection"}}
 	head, err := s.log.LatestPosition(ctx, filter)
 	if err != nil {
 		return nil, err
@@ -443,6 +393,6 @@ func actorSubject(raw json.RawMessage) string {
 	return actor.Subject
 }
 
-func connectionStream(workspaceID, connectionID string) eventlog.StreamKey {
-	return eventlog.StreamKey{WorkspaceID: workspaceID, Type: "connection", ID: connectionID}
+func connectionStream(connectionID string) eventlog.StreamKey {
+	return eventlog.StreamKey{Type: "connection", ID: connectionID}
 }
