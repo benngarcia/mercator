@@ -42,13 +42,12 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	}
 	if len(args) > 1 && args[1] != "serve" {
 		return cli.Run(ctx, cli.Config{
-			BaseURL:     envValue(env, "MERCATOR_API_URL", ""),
-			Token:       envValue(env, "MERCATOR_API_TOKEN", ""),
-			WorkspaceID: envValue(env, "MERCATOR_WORKSPACE_ID", ""),
-			ConfigPath:  cli.DefaultConfigPath(env),
-			Args:        args[1:],
-			Stdout:      stdout,
-			Stderr:      stderr,
+			BaseURL:    envValue(env, "MERCATOR_API_URL", ""),
+			Token:      envValue(env, "MERCATOR_API_TOKEN", ""),
+			ConfigPath: cli.DefaultConfigPath(env),
+			Args:       args[1:],
+			Stdout:     stdout,
+			Stderr:     stderr,
 		})
 	}
 	options, err := parseServeOptions(args)
@@ -98,13 +97,14 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		return 1
 	}
 	runtime, err := daemon.New(ctx, daemon.Config{
-		SQLiteDSN:      dsn,
-		OperatorToken:  apiToken,
-		MasterKey:      masterKey,
-		PublicURL:      env["MERCATOR_PUBLIC_URL"],
-		Getenv:         func(name string) string { return env[name] },
-		WebAuth:        webauthCfg,
-		LocalAuthEmail: options.localAuthEmail,
+		SQLiteDSN:            dsn,
+		OperatorToken:        apiToken,
+		MasterKey:            masterKey,
+		PublicURL:            env["MERCATOR_PUBLIC_URL"],
+		Getenv:               func(name string) string { return env[name] },
+		WebAuth:              webauthCfg,
+		LocalAuthEmail:       options.localAuthEmail,
+		BootstrapLocalDocker: options.localAuthEmail != "",
 	})
 	if err != nil {
 		_ = listener.Close()

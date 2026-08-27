@@ -33,7 +33,7 @@ func TestContextCommandsRoundTrip(t *testing.T) {
 	cfg := Config{ConfigPath: path}
 
 	code, out, errOut := runCLI(t, cfg, "context", "set", "staging",
-		"--api-url", "https://staging.example.com", "--workspace-id", "ws_stage", "--token", "static-token")
+		"--api-url", "https://staging.example.com", "--token", "static-token")
 	if code != 0 {
 		t.Fatalf("context set failed: %s", errOut)
 	}
@@ -101,11 +101,11 @@ func TestContextSuppliesCredentialsAndEnvWins(t *testing.T) {
 	path := tempConfigPath(t)
 	cfg := Config{ConfigPath: path}
 	if code, _, errOut := runCLI(t, cfg, "context", "set", "test",
-		"--api-url", server.URL, "--workspace-id", "ws_ctx", "--token", "ctx-token"); code != 0 {
+		"--api-url", server.URL, "--token", "ctx-token"); code != 0 {
 		t.Fatalf("context set failed: %s", errOut)
 	}
 
-	// With no env at all, the context supplies url, token, and workspace.
+	// With no env at all, the context supplies the URL and token.
 	code, _, errOut := runCLI(t, cfg, "run", "list")
 	if code != 0 {
 		t.Fatalf("run list via context failed: %s", errOut)
@@ -113,22 +113,21 @@ func TestContextSuppliesCredentialsAndEnvWins(t *testing.T) {
 	if gotAuth != "Bearer ctx-token" {
 		t.Fatalf("expected context token, got %q", gotAuth)
 	}
-	if gotPath != "/v1/runs?workspace_id=ws_ctx" {
-		t.Fatalf("expected context workspace, got %q", gotPath)
+	if gotPath != "/v1/runs" {
+		t.Fatalf("expected deployment-global run list, got %q", gotPath)
 	}
 
 	// Environment values (Config fields) win over the context.
 	envCfg := cfg
 	envCfg.Token = "env-token"
-	envCfg.WorkspaceID = "ws_env"
 	if code, _, errOut := runCLI(t, envCfg, "run", "list"); code != 0 {
 		t.Fatalf("run list via env failed: %s", errOut)
 	}
 	if gotAuth != "Bearer env-token" {
 		t.Fatalf("env token must win, got %q", gotAuth)
 	}
-	if gotPath != "/v1/runs?workspace_id=ws_env" {
-		t.Fatalf("env workspace must win, got %q", gotPath)
+	if gotPath != "/v1/runs" {
+		t.Fatalf("expected deployment-global run list, got %q", gotPath)
 	}
 }
 
@@ -222,7 +221,7 @@ func TestLoginStoresCredentialAndAuthenticatesAPICommands(t *testing.T) {
 	if code, _, errOut := runCLI(t, cfg, "context", "set", "default", "--api-url", api.URL); code != 0 {
 		t.Fatalf("repoint context: %s", errOut)
 	}
-	if code, _, errOut := runCLI(t, cfg, "run", "list", "--workspace-id", "ws_1"); code != 0 {
+	if code, _, errOut := runCLI(t, cfg, "run", "list"); code != 0 {
 		t.Fatalf("run list failed: %s", errOut)
 	}
 	if gotAuth != "Bearer cli-token-1" {
@@ -271,7 +270,6 @@ func TestExpiredLoginWarnsAndFallsBack(t *testing.T) {
 		Contexts: map[string]*ContextConfig{
 			"stale": {
 				APIURL:            server.URL,
-				WorkspaceID:       "ws_1",
 				CLIToken:          "expired-token",
 				CLITokenEmail:     "operator@example.com",
 				CLITokenExpiresAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),

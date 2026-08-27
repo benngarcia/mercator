@@ -13,7 +13,6 @@ import (
 func launchRequest() adapter.LaunchRequest {
 	val := "v"
 	return adapter.LaunchRequest{
-		WorkspaceID:            "ws_1",
 		RunID:                  "run_1",
 		AttemptID:              "att_1",
 		LaunchKey:              "lk1",
@@ -93,7 +92,6 @@ func TestLaunchCreatesInstanceWithDockerConfigTagsAndAutoDelete(t *testing.T) {
 	}
 	for _, want := range []string{
 		"mercator:launch-key=lk1",
-		"mercator:workspace=ws_1",
 		"mercator:run=run_1",
 		"mercator:attempt=att_1",
 		"mercator:ownership-token=own1",
@@ -123,10 +121,8 @@ func TestLaunchEmitsEachEnvironmentNameOnce(t *testing.T) {
 	a := newTestAdapter(t, fake, nil)
 	request := launchRequest()
 	staleRunID := "stale_run"
-	staleWorkspaceID := "stale_workspace"
 	request.Environment = append(request.Environment,
 		adapter.EnvironmentBinding{Name: "MERCATOR_RUN_ID", Value: &staleRunID},
-		adapter.EnvironmentBinding{Name: "MERCATOR_WORKSPACE_ID", Value: &staleWorkspaceID},
 	)
 
 	_, err := a.Launch(context.Background(), request)
@@ -143,9 +139,6 @@ func TestLaunchEmitsEachEnvironmentNameOnce(t *testing.T) {
 	}
 	if counts["MERCATOR_RUN_ID"] != 1 || values["MERCATOR_RUN_ID"] != request.RunID {
 		t.Fatalf("run identity environment = %v, values = %v", counts, values)
-	}
-	if counts["MERCATOR_WORKSPACE_ID"] != 1 || values["MERCATOR_WORKSPACE_ID"] != request.WorkspaceID {
-		t.Fatalf("workspace identity environment = %v, values = %v", counts, values)
 	}
 }
 
@@ -292,7 +285,7 @@ func TestLaunchOSOverrideBypassesShadeOSRequirement(t *testing.T) {
 func TestLaunchIsIdempotentAcrossRetries(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
-	fake.addInstance(ownedInstance("inst_9", "lk1", "ws_1", "own1", "active", fake.base))
+	fake.addInstance(ownedInstance("inst_9", "lk1", "own1", "active", fake.base))
 	a := newTestAdapter(t, fake, nil)
 
 	receipt, err := a.Launch(context.Background(), launchRequest())
@@ -310,7 +303,7 @@ func TestLaunchIsIdempotentAcrossRetries(t *testing.T) {
 func TestLaunchIgnoresDeletedInstancesInPreScan(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
-	fake.addInstance(ownedInstance("inst_9", "lk1", "ws_1", "own1", "deleting", fake.base))
+	fake.addInstance(ownedInstance("inst_9", "lk1", "own1", "deleting", fake.base))
 	a := newTestAdapter(t, fake, nil)
 
 	receipt, err := a.Launch(context.Background(), launchRequest())
@@ -325,7 +318,7 @@ func TestLaunchIgnoresDeletedInstancesInPreScan(t *testing.T) {
 func TestLaunchOwnershipMismatchIsConflict(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
-	fake.addInstance(ownedInstance("inst_9", "lk1", "ws_1", "someone-else", "active", fake.base))
+	fake.addInstance(ownedInstance("inst_9", "lk1", "someone-else", "active", fake.base))
 	a := newTestAdapter(t, fake, nil)
 
 	if _, err := a.Launch(context.Background(), launchRequest()); err != adapter.ErrIdempotencyConflict {
@@ -339,7 +332,7 @@ func TestLaunchReconcilesConcurrentDuplicateKeepingOldest(t *testing.T) {
 	// A concurrent launcher's instance appears between our pre-scan and our
 	// create landing; it is OLDER than ours so it must win.
 	fake.beforeCreateReturns = func(f *fakeShadeform) {
-		f.instances = append(f.instances, ownedInstance("inst_0", "lk1", "ws_1", "own1", "creating", f.base.Add(-time.Hour)))
+		f.instances = append(f.instances, ownedInstance("inst_0", "lk1", "own1", "creating", f.base.Add(-time.Hour)))
 	}
 	a := newTestAdapter(t, fake, nil)
 
@@ -422,7 +415,7 @@ func TestObserveMapsVMStatusToPhase(t *testing.T) {
 	}
 	for status, want := range cases {
 		fake := newFakeShadeform()
-		fake.addInstance(ownedInstance("inst_1", "lk1", "ws_1", "own1", status, fake.base))
+		fake.addInstance(ownedInstance("inst_1", "lk1", "own1", status, fake.base))
 		a := newTestAdapter(t, fake, nil)
 		obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
 		if err != nil {
@@ -452,8 +445,8 @@ func TestObserveTerminalIDIsDeterministic(t *testing.T) {
 	fake := newFakeShadeform()
 	// API list order is newest-first here; the reported terminal ID must be
 	// the deterministic oldest, not whatever the API lists first.
-	fake.addInstance(ownedInstance("inst_2", "lk1", "ws_1", "own1", "deleting", fake.base.Add(time.Minute)))
-	fake.addInstance(ownedInstance("inst_1", "lk1", "ws_1", "own1", "deleted", fake.base))
+	fake.addInstance(ownedInstance("inst_2", "lk1", "own1", "deleting", fake.base.Add(time.Minute)))
+	fake.addInstance(ownedInstance("inst_1", "lk1", "own1", "deleted", fake.base))
 	a := newTestAdapter(t, fake, nil)
 
 	obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
@@ -467,7 +460,7 @@ func TestObserveTerminalIDIsDeterministic(t *testing.T) {
 
 func TestObserveOwnershipMismatchIsConflict(t *testing.T) {
 	fake := newFakeShadeform()
-	fake.addInstance(ownedInstance("inst_1", "lk1", "ws_1", "someone-else", "active", fake.base))
+	fake.addInstance(ownedInstance("inst_1", "lk1", "someone-else", "active", fake.base))
 	a := newTestAdapter(t, fake, nil)
 	if _, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"}); err != adapter.ErrIdempotencyConflict {
 		t.Fatalf("want ErrIdempotencyConflict, got %v", err)
@@ -476,11 +469,11 @@ func TestObserveOwnershipMismatchIsConflict(t *testing.T) {
 
 func TestTerminateDeletesEveryLiveMatch(t *testing.T) {
 	fake := newFakeShadeform()
-	fake.addInstance(ownedInstance("inst_1", "lk1", "ws_1", "own1", "active", fake.base))
+	fake.addInstance(ownedInstance("inst_1", "lk1", "own1", "active", fake.base))
 	// A stray duplicate from a failed reconciliation: cleanup converges on zero.
-	fake.addInstance(ownedInstance("inst_2", "lk1", "ws_1", "own1", "creating", fake.base.Add(time.Minute)))
+	fake.addInstance(ownedInstance("inst_2", "lk1", "own1", "creating", fake.base.Add(time.Minute)))
 	// Already deleting: never re-deleted.
-	fake.addInstance(ownedInstance("inst_3", "lk1", "ws_1", "own1", "deleting", fake.base))
+	fake.addInstance(ownedInstance("inst_3", "lk1", "own1", "deleting", fake.base))
 	a := newTestAdapter(t, fake, nil)
 
 	rec, err := a.Terminate(context.Background(), adapter.TerminateRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
@@ -505,7 +498,7 @@ func TestTerminateMissingInstanceIsIdempotent(t *testing.T) {
 
 func TestReleaseDeletesLikeTerminate(t *testing.T) {
 	fake := newFakeShadeform()
-	fake.addInstance(ownedInstance("inst_1", "lk1", "ws_1", "own1", "active", fake.base))
+	fake.addInstance(ownedInstance("inst_1", "lk1", "own1", "active", fake.base))
 	a := newTestAdapter(t, fake, nil)
 
 	rec, err := a.Release(context.Background(), adapter.ReleaseRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
@@ -514,20 +507,20 @@ func TestReleaseDeletesLikeTerminate(t *testing.T) {
 	}
 }
 
-func TestListOwnedFiltersTagsWorkspaceAndDeleting(t *testing.T) {
+func TestListOwnedFiltersTagsAndDeleting(t *testing.T) {
 	fake := newFakeShadeform()
-	fake.addInstance(ownedInstance("inst_1", "lk1", "ws_1", "own1", "active", fake.base))
-	fake.addInstance(ownedInstance("inst_2", "lk2", "ws_1", "own2", "deleting", fake.base))
-	fake.addInstance(ownedInstance("inst_3", "lk3", "ws_2", "own3", "active", fake.base))
+	fake.addInstance(ownedInstance("inst_1", "lk1", "own1", "active", fake.base))
+	fake.addInstance(ownedInstance("inst_2", "lk2", "own2", "deleting", fake.base))
+	fake.addInstance(ownedInstance("inst_3", "lk3", "own3", "active", fake.base))
 	fake.addInstance(instance{ID: "inst_4", Name: "someone-elses-vm", Status: "active", CreatedAt: fake.base})
 	a := newTestAdapter(t, fake, nil)
 
-	owned, err := a.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	owned, err := a.ListOwned(context.Background(), adapter.OwnershipQuery{})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
-	if len(owned) != 1 {
-		t.Fatalf("owned = %+v, want only the live ws_1 instance", owned)
+	if len(owned) != 2 {
+		t.Fatalf("owned = %+v, want both live tagged instances", owned)
 	}
 	o := owned[0]
 	if o.ExternalID != "inst_1" || o.LaunchKey != "lk1" || o.OwnershipToken != "own1" ||
@@ -537,10 +530,10 @@ func TestListOwnedFiltersTagsWorkspaceAndDeleting(t *testing.T) {
 	}
 }
 
-func TestListOwnedWithoutWorkspaceFilterReturnsAllOurs(t *testing.T) {
+func TestListOwnedReturnsAllOurs(t *testing.T) {
 	fake := newFakeShadeform()
-	fake.addInstance(ownedInstance("inst_1", "lk1", "ws_1", "own1", "active", fake.base))
-	fake.addInstance(ownedInstance("inst_3", "lk3", "ws_2", "own3", "error", fake.base))
+	fake.addInstance(ownedInstance("inst_1", "lk1", "own1", "active", fake.base))
+	fake.addInstance(ownedInstance("inst_3", "lk3", "own3", "error", fake.base))
 	fake.addInstance(instance{ID: "inst_4", Name: "someone-elses-vm", Status: "active", CreatedAt: fake.base})
 	a := newTestAdapter(t, fake, nil)
 

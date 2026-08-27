@@ -33,7 +33,7 @@ func TestListOffersExposesPartialResultsAndConnectionFailures(t *testing.T) {
 		Offers:   []domain.OfferSnapshot{offer},
 		Failures: broker.ConnectionErrors{failure},
 	}}})
-	req := httptest.NewRequest(http.MethodGet, "/v1/offers?workspace_id=ws_1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/offers", nil)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -60,9 +60,9 @@ func TestPreviewPlacementRejectsOfferQueryFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = log.Close() })
 	ad := fake.New(fake.WithListOffersError(errors.New("provider unavailable")))
-	orch := orchestrator.New(workspaceTestLog{EventLog: log}, scheduler.New(), ad)
+	orch := orchestrator.New(log, scheduler.New(), ad)
 	handler := New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}})
-	body := mustMarshal(t, PlacementPreviewRequest{RunId: "run_1", WorkspaceId: "ws_1", Workload: httpRevision()})
+	body := mustMarshal(t, PlacementPreviewRequest{RunId: "run_1", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/placements:preview", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 

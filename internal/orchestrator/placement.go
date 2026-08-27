@@ -21,15 +21,7 @@ var ErrNoFeasibleOffers = errors.New("orchestrator: no feasible offers")
 
 // PreviewPlacement evaluates placement for a workload without recording a run.
 // It uses the same offer query and scheduler path as live placement (decide).
-func (o *Orchestrator) PreviewPlacement(ctx context.Context, workspaceID, runID string, workload domain.WorkloadRevision) (domain.BookingDecision, error) {
-	if workspaceID == "" {
-		return domain.BookingDecision{}, fmt.Errorf("orchestrator: workspace_id is required")
-	}
-	if workload.WorkspaceID == "" {
-		workload.WorkspaceID = workspaceID
-	} else if workload.WorkspaceID != workspaceID {
-		return domain.BookingDecision{}, fmt.Errorf("WORKSPACE_MISMATCH: request workspace_id must match workload workspace_id")
-	}
+func (o *Orchestrator) PreviewPlacement(ctx context.Context, runID string, workload domain.WorkloadRevision) (domain.BookingDecision, error) {
 	workload = domain.NormalizeWorkloadRevision(workload)
 	if violations := domain.ValidateWorkloadRevision(workload); len(violations) > 0 {
 		return domain.BookingDecision{}, &ValidationError{Violations: violations}
@@ -50,7 +42,7 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Violations[0].Code, e.Violations[0].Message)
 }
 
-func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string, attemptNumber int, excludedOfferSnapshotIDs []string) (domain.BookingDecision, attemptData, domain.OfferSnapshot, domain.RentalSchedule, error) {
+func (o *Orchestrator) decide(ctx context.Context, requested runRequestedData, runID string, attemptNumber int, excludedOfferSnapshotIDs []string) (domain.BookingDecision, attemptData, domain.OfferSnapshot, domain.RentalSchedule, error) {
 	decision, offers, schedules, err := o.evaluatePlacement(ctx, runID, requested.Workload, excludedOfferSnapshotIDs)
 	if err != nil {
 		return domain.BookingDecision{}, attemptData{}, domain.OfferSnapshot{}, domain.RentalSchedule{}, err
@@ -66,20 +58,17 @@ func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested
 	if schedule.RentalID == "" {
 		schedule = domain.NewRentalSchedule(decision.Booking.RentalID)
 	}
-	return decision, newAttempt(workspaceID, runID, attemptNumber), selectedOffer, schedule, nil
+	return decision, newAttempt(runID, attemptNumber), selectedOffer, schedule, nil
 }
 
 // evaluatePlacement is the shared placement path for preview and live decide:
 // fail-closed offer list, then scheduler.Evaluate.
 func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, workload domain.WorkloadRevision, excludedOfferSnapshotIDs []string) (domain.BookingDecision, []domain.OfferSnapshot, map[string]domain.RentalSchedule, error) {
-	schedules, err := o.schedules.List(ctx, workload.WorkspaceID)
+	schedules, err := o.schedules.List(ctx)
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
 	}
-	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{
-		WorkspaceID: workload.WorkspaceID,
-		Resources:   workload.Spec.Resources,
-	})
+	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{Resources: workload.Spec.Resources})
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, fmt.Errorf("%w: %v", ErrOfferQuery, err)
 	}

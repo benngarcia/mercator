@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils";
 import type {
   ScenarioPlaybackSnapshot,
   ScenarioPlaybackSpeed,
-} from "@/lib/workspace/playback";
-import type { WorkspacePlaybackControls } from "@/lib/workspace/react";
+} from "@/lib/deployment/playback";
+import type { DeploymentPlaybackControls } from "@/lib/deployment/react";
 
 const SPEEDS: readonly ScenarioPlaybackSpeed[] = [1, 2, 4];
 const SCENARIOS = [
@@ -19,7 +19,7 @@ export function ScenarioControls({
   controls,
   playback,
 }: {
-  controls: WorkspacePlaybackControls;
+  controls: DeploymentPlaybackControls;
   playback: ScenarioPlaybackSnapshot;
 }) {
   const playing = playback.status === "playing";

@@ -398,19 +398,19 @@ func TestDestroyTolerates404(t *testing.T) {
 	}
 }
 
-func TestListOwnedFiltersByLabelPrefixAndWorkspace(t *testing.T) {
+func TestListOwnedFiltersByLabelPrefix(t *testing.T) {
 	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(200, `{"instances":[
-			{"id":1,"label":"mercator-lk1","actual_status":"running","extra_env":[["MERCATOR_WORKSPACE_ID","ws_1"],["MERCATOR_RUN_ID","run_1"],["MERCATOR_OWNERSHIP_TOKEN","own1"],["MERCATOR_LAUNCH_KEY","lk1"],["MERCATOR_REQUEST_HASH","rh1"]]},
-			{"id":2,"label":"mercator-lk2","actual_status":"running","extra_env":[["MERCATOR_WORKSPACE_ID","ws_2"]]},
+			{"id":1,"label":"mercator-lk1","actual_status":"running","extra_env":[["MERCATOR_RUN_ID","run_1"],["MERCATOR_OWNERSHIP_TOKEN","own1"],["MERCATOR_LAUNCH_KEY","lk1"],["MERCATOR_REQUEST_HASH","rh1"]]},
+			{"id":2,"label":"mercator-lk2","actual_status":"running","extra_env":[["MERCATOR_RUN_ID","run_2"],["MERCATOR_LAUNCH_KEY","lk2"]]},
 			{"id":3,"label":"someone-elses-instance","actual_status":"running","extra_env":[]}
 		]}`), nil
 	})
-	owned, err := a.ListOwned(context.Background(), ownershipQuery("ws_1"))
+	owned, err := a.ListOwned(context.Background(), ownershipQuery())
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
-	if len(owned) != 1 || owned[0].RunID != "run_1" || owned[0].OwnershipToken != "own1" || owned[0].LaunchKey != "lk1" {
+	if len(owned) != 2 || owned[0].RunID != "run_1" || owned[0].OwnershipToken != "own1" || owned[0].LaunchKey != "lk1" {
 		t.Fatalf("owned = %+v", owned)
 	}
 }

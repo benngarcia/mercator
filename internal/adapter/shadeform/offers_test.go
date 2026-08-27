@@ -13,7 +13,7 @@ func TestListOffersMapsCatalogTriplesToOffers(t *testing.T) {
 	fake.types = []instanceType{vmType()}
 	a := newTestAdapter(t, fake, nil)
 
-	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}

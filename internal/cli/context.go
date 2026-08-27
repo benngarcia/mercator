@@ -40,11 +40,10 @@ func runContext(cfg Config, flagURL string, args []string) int {
 // contextSummary is the JSON shape context commands print. Credentials are
 // summarized, never echoed.
 type contextSummary struct {
-	Name        string `json:"name"`
-	Current     bool   `json:"current"`
-	APIURL      string `json:"api_url,omitempty"`
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	Credential  string `json:"credential"`
+	Name       string `json:"name"`
+	Current    bool   `json:"current"`
+	APIURL     string `json:"api_url,omitempty"`
+	Credential string `json:"credential"`
 }
 
 func summarize(name string, current bool, c *ContextConfig) contextSummary {
@@ -58,11 +57,10 @@ func summarize(name string, current bool, c *ContextConfig) contextSummary {
 		credential = "api-token"
 	}
 	return contextSummary{
-		Name:        name,
-		Current:     current,
-		APIURL:      c.APIURL,
-		WorkspaceID: c.WorkspaceID,
-		Credential:  credential,
+		Name:       name,
+		Current:    current,
+		APIURL:     c.APIURL,
+		Credential: credential,
 	}
 }
 
@@ -100,7 +98,6 @@ func contextUse(cfg Config, file FileConfig, args []string) int {
 func contextSet(cfg Config, file FileConfig, flagURL string, args []string) int {
 	fs := flag.NewFlagSet("context set", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workspaceID := fs.String("workspace-id", "", "default workspace id for this context")
 	token := fs.String("token", "", "static API token for this context")
 	positional, err := parseFlagsAnywhere(fs, args)
 	if err != nil {
@@ -108,7 +105,7 @@ func contextSet(cfg Config, file FileConfig, flagURL string, args []string) int 
 		return 2
 	}
 	if len(positional) != 1 || positional[0] == "" {
-		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", "usage: mercator context set <name> [--api-url URL] [--workspace-id ID] [--token TOKEN]")
+		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", "usage: mercator context set <name> [--api-url URL] [--token TOKEN]")
 		return 2
 	}
 	name := positional[0]
@@ -119,9 +116,6 @@ func contextSet(cfg Config, file FileConfig, flagURL string, args []string) int 
 	}
 	if flagURL != "" {
 		current.APIURL = flagURL
-	}
-	if *workspaceID != "" {
-		current.WorkspaceID = *workspaceID
 	}
 	if *token != "" {
 		current.APIToken = *token

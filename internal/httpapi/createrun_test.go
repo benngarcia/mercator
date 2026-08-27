@@ -28,7 +28,7 @@ func TestCreateRunMinimalImageShorthandSucceeds(t *testing.T) {
 	handler := newMinimalCreateServer(t, adapter.ExternalPhaseSucceeded)
 
 	body := []byte(`{"image":"busybox","args":["echo","hi"]}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_minimal")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -51,7 +51,7 @@ func TestCreateRunMinimalImageShorthandSucceeds(t *testing.T) {
 	}
 
 	// The stored revision image must be digest-pinned (resolved server-side).
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/"+created.Run.ID+"/events?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/"+created.Run.ID+"/events", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if !strings.Contains(rec.Body.String(), "@sha256:") {
@@ -67,7 +67,7 @@ func TestCreateRunReplaySameKeyReturnsOriginalRunID(t *testing.T) {
 
 	post := func() RunResponse {
 		body := []byte(`{"image":"busybox"}`)
-		req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 		req.Header.Set("Idempotency-Key", "idem_replay_http")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -97,7 +97,7 @@ func TestCreateRunFailedExitPath(t *testing.T) {
 	handler := newMinimalCreateServer(t, adapter.ExternalPhaseFailed, fake.WithExitCode(42))
 
 	body := []byte(`{"run_id":"run_failed","image":"busybox"}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_failed")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -105,7 +105,7 @@ func TestCreateRunFailedExitPath(t *testing.T) {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_failed?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_failed", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -135,7 +135,7 @@ func TestCreateRunFullWorkloadTakesPrecedenceOverShorthand(t *testing.T) {
 		"workload": rev,
 	}
 	body := mustMarshal(t, payload)
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_precedence")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -143,7 +143,7 @@ func TestCreateRunFullWorkloadTakesPrecedenceOverShorthand(t *testing.T) {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_precedence/events?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_precedence/events", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if strings.Contains(rec.Body.String(), "ignored-shorthand") {
@@ -172,7 +172,7 @@ func newMinimalCreateServer(t *testing.T, outcome adapter.ExternalPhase, extra .
 	}, extra...)
 	ad := fake.New(opts...)
 	sched := scheduler.New()
-	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
+	orch := orchestrator.New(log, sched, ad)
 	resolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests(), ociresolver.WithAssumedPlatform("linux/amd64"))
-	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: resolver})
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver})
 }

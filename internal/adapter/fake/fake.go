@@ -159,7 +159,6 @@ func (a *Adapter) Launch(_ context.Context, req adapter.LaunchRequest) (adapter.
 	phase := a.launchOutcome
 	object := adapter.OwnedExternalObject{
 		ExternalID:     externalID,
-		WorkspaceID:    req.WorkspaceID,
 		RunID:          req.RunID,
 		AttemptID:      req.AttemptID,
 		OwnershipToken: req.OwnershipToken,
@@ -308,14 +307,12 @@ func (a *Adapter) TerminateCount() int {
 
 func (a *Adapter) Verify(context.Context) error { return a.verifyErr }
 
-func (a *Adapter) ListOwned(_ context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
+func (a *Adapter) ListOwned(_ context.Context, _ adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	var objects []adapter.OwnedExternalObject
 	for _, object := range a.objects {
-		if req.WorkspaceID == "" || object.WorkspaceID == req.WorkspaceID {
-			objects = append(objects, object)
-		}
+		objects = append(objects, object)
 	}
 	return objects, nil
 }

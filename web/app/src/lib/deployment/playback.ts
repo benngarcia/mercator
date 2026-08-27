@@ -1,4 +1,4 @@
-import type { WorkspaceMessage } from "./reducer";
+import type { DeploymentMessage } from "./reducer";
 
 export type ScenarioPlaybackSpeed = 1 | 2 | 4;
 export type ScenarioPlaybackStatus = "playing" | "paused" | "finished";
@@ -30,7 +30,6 @@ export type ScenarioPlaybackCommand =
     };
 
 export async function sendScenarioPlaybackCommand(
-  workspaceId: string,
   token: string | null,
   command: ScenarioPlaybackCommand,
 ): Promise<void> {
@@ -39,15 +38,12 @@ export async function sendScenarioPlaybackCommand(
     "Content-Type": "application/json",
   });
   if (token !== null) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(
-    `/v1/dev/scenario-sessions/${encodeURIComponent(workspaceId)}/commands`,
-    {
-      method: "POST",
-      credentials: "same-origin",
-      headers,
-      body: JSON.stringify(command),
-    },
-  );
+  const response = await fetch("/v1/dev/scenario-session/commands", {
+    method: "POST",
+    credentials: "same-origin",
+    headers,
+    body: JSON.stringify(command),
+  });
   if (!response.ok) {
     throw new Error(`Scenario command failed with HTTP ${response.status}.`);
   }
@@ -65,11 +61,11 @@ export async function sendScenarioPlaybackCommand(
 export type ScenarioPlaybackEmission =
   | {
       readonly type: "reset";
-      readonly messages: readonly WorkspaceMessage[];
+      readonly messages: readonly DeploymentMessage[];
       readonly playback: ScenarioPlaybackSnapshot;
       readonly fidelity: ScenarioFidelity;
     }
-  | { readonly type: "message"; readonly message: WorkspaceMessage }
+  | { readonly type: "message"; readonly message: DeploymentMessage }
   | {
       readonly type: "playback";
       readonly playback: ScenarioPlaybackSnapshot;

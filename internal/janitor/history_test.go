@@ -19,7 +19,6 @@ func TestJanitorSeesCleanupRequestedBeyondOneStreamPage(t *testing.T) {
 	_, err := provider.Launch(ctx, adapter.LaunchRequest{
 		OperationKey:       "launch_history",
 		RequestHash:        "sha256:history",
-		WorkspaceID:        "ws_1",
 		RunID:              "run_history",
 		AttemptID:          "att_history",
 		OwnershipToken:     "own_history",
@@ -63,7 +62,7 @@ func TestJanitorSeesCleanupRequestedBeyondOneStreamPage(t *testing.T) {
 		Data:          json.RawMessage(`{}`),
 	}
 	if _, err := log.Append(ctx, eventlog.AppendRequest{
-		Stream:                eventlog.StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_history"},
+		Stream:                eventlog.StreamKey{Type: "run", ID: "run_history"},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "seed:janitor-history",
 		RequestHash:           "sha256:janitor-history",
@@ -72,7 +71,7 @@ func TestJanitorSeesCleanupRequestedBeyondOneStreamPage(t *testing.T) {
 		t.Fatalf("append run history: %v", err)
 	}
 
-	result, err := New(provider, WithEventLog(log)).Sweep(ctx, "ws_1")
+	result, err := New(provider, WithEventLog(log)).Sweep(ctx)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}

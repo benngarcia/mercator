@@ -12,18 +12,18 @@ import { duration, usd } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type {
   Rental,
-  Workspace,
-  WorkspaceBooking,
-  WorkspaceRun,
-} from "@/lib/workspace";
+  Deployment,
+  DeploymentBooking,
+  DeploymentRun,
+} from "@/lib/deployment";
 import type {
   ScenarioFidelity,
   ScenarioPlaybackSnapshot,
-} from "@/lib/workspace/playback";
-import type { WorkspacePlaybackControls } from "@/lib/workspace/react";
+} from "@/lib/deployment/playback";
+import type { DeploymentPlaybackControls } from "@/lib/deployment/react";
 
 import { ScenarioControls } from "./ScenarioControls";
-import { WorkspaceEventFeed } from "./WorkspaceEventFeed";
+import { DeploymentEventFeed } from "./DeploymentEventFeed";
 
 const BASE_PIXELS_PER_MINUTE = 24;
 const MINIMUM_RUN_WIDTH = 72;
@@ -31,47 +31,42 @@ const MINIMUM_HORIZON_MINUTES = 60;
 const QUEUE_CAPACITY = 4;
 const LANE_LABEL_WIDTH = 224;
 
-export function WorkspaceCanvas({
+export function DeploymentCanvas({
   controls,
   events,
   fidelity,
   playback,
-  workspace,
+  deployment,
 }: {
-  controls: WorkspacePlaybackControls | null;
+  controls: DeploymentPlaybackControls | null;
   events: readonly CloudEvent[];
   fidelity: ScenarioFidelity | null;
   playback: ScenarioPlaybackSnapshot | null;
-  workspace: Workspace;
+  deployment: Deployment;
 }) {
   const now = Date.now();
-  const rentals = Object.values(workspace.rentals).sort((a, b) => {
+  const rentals = Object.values(deployment.rentals).sort((a, b) => {
     const sourceOrder = sourceRank(a) - sourceRank(b);
     return sourceOrder || a.id.localeCompare(b.id);
   });
-  const incoming = Object.values(workspace.runs)
+  const incoming = Object.values(deployment.runs)
     .filter((run) => run.phase === "requested" && !run.bookingID)
     .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
-  const marketplace = workspace.offers.filter(
+  const marketplace = deployment.offers.filter(
     (offer) => offer.kind === "provisionable",
   );
-  const pixelsPerMinute = readablePixelsPerMinute(workspace);
-  const horizonMinutes = workspaceHorizon(workspace, now);
+  const pixelsPerMinute = readablePixelsPerMinute(deployment);
+  const horizonMinutes = deploymentHorizon(deployment, now);
   const timelineWidth = horizonMinutes * pixelsPerMinute;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b px-5 py-4">
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-base font-semibold tracking-tight">Workspace</h1>
-          <div className="flex items-center gap-5">
-            {playback && controls ? (
-              <ScenarioControls playback={playback} controls={controls} />
-            ) : null}
-            <span className="font-mono text-xs text-muted-foreground">
-              {workspace.id}
-            </span>
-          </div>
+          <h1 className="text-base font-semibold tracking-tight">Deployment</h1>
+          {playback && controls ? (
+            <ScenarioControls playback={playback} controls={controls} />
+          ) : null}
         </div>
       </div>
 
@@ -115,7 +110,7 @@ export function WorkspaceCanvas({
               <RentalLane
                 key={rental.id}
                 rental={rental}
-                workspace={workspace}
+                deployment={deployment}
                 horizonMinutes={horizonMinutes}
                 pixelsPerMinute={pixelsPerMinute}
                 now={now}
@@ -125,10 +120,10 @@ export function WorkspaceCanvas({
 
           <Marketplace
             offers={marketplace}
-            available={workspace.offersAvailable}
+            available={deployment.offersAvailable}
           />
         </div>
-        <WorkspaceEventFeed events={events} fidelity={fidelity} />
+        <DeploymentEventFeed events={events} fidelity={fidelity} />
       </div>
     </div>
   );
@@ -203,21 +198,21 @@ function RentalLane({
   now,
   pixelsPerMinute,
   rental,
-  workspace,
+  deployment,
 }: {
   horizonMinutes: number;
   now: number;
   pixelsPerMinute: number;
   rental: Rental;
-  workspace: Workspace;
+  deployment: Deployment;
 }) {
   const running = rental.runningBookingID
-    ? workspace.bookings[rental.runningBookingID]
+    ? deployment.bookings[rental.runningBookingID]
     : undefined;
   const queued = rental.queuedBookingIDs
-    .map((id) => workspace.bookings[id])
-    .filter((booking): booking is WorkspaceBooking => Boolean(booking));
-  const runningRun = running ? workspace.runs[running.runID] : undefined;
+    .map((id) => deployment.bookings[id])
+    .filter((booking): booking is DeploymentBooking => Boolean(booking));
+  const runningRun = running ? deployment.runs[running.runID] : undefined;
   const provision = rental.phase === "provisioning" ? rental.offer?.provisioning : undefined;
   const { expected: provisionExpected, max: provisionMax } =
     provisioningWindow(provision);
@@ -278,7 +273,7 @@ function RentalLane({
           />
         ) : null}
         {queued.map((booking) => {
-          const run = workspace.runs[booking.runID];
+          const run = deployment.runs[booking.runID];
           if (!run) return null;
           const left =
             secondsUntil(booking.projectedStartAt, now) || nextStartSeconds;
@@ -368,7 +363,7 @@ function RunBlock({
   maxSeconds: number;
   pixelsPerMinute: number;
   queued?: boolean;
-  run: WorkspaceRun;
+  run: DeploymentRun;
 }) {
   const maxWidth = Math.max(24, (maxSeconds / 60) * pixelsPerMinute);
   const expectedWidth =
@@ -589,17 +584,17 @@ function hourlyRate(offer: OfferSnapshot): string {
     : "—";
 }
 
-function readablePixelsPerMinute(workspace: Workspace): number {
+function readablePixelsPerMinute(deployment: Deployment): number {
   let shortestExpectedSeconds = Number.POSITIVE_INFINITY;
-  for (const rental of Object.values(workspace.rentals)) {
+  for (const rental of Object.values(deployment.rentals)) {
     for (const bookingID of [
       rental.runningBookingID,
       ...rental.queuedBookingIDs,
     ]) {
       if (!bookingID) continue;
-      const booking = workspace.bookings[bookingID];
+      const booking = deployment.bookings[bookingID];
       const expected = booking
-        ? workspace.runs[booking.runID]?.expectedRuntimeSeconds
+        ? deployment.runs[booking.runID]?.expectedRuntimeSeconds
         : null;
       if (expected && expected > 0) {
         shortestExpectedSeconds = Math.min(shortestExpectedSeconds, expected);
@@ -615,15 +610,15 @@ function readablePixelsPerMinute(workspace: Workspace): number {
   );
 }
 
-function workspaceHorizon(workspace: Workspace, now: number): number {
+function deploymentHorizon(deployment: Deployment, now: number): number {
   let seconds = MINIMUM_HORIZON_MINUTES * 60;
-  for (const rental of Object.values(workspace.rentals)) {
+  for (const rental of Object.values(deployment.rentals)) {
     const provision = rental.offer?.provisioning;
     if (rental.phase === "provisioning" && provision) {
       const booking = rental.runningBookingID
-        ? workspace.bookings[rental.runningBookingID]
+        ? deployment.bookings[rental.runningBookingID]
         : undefined;
-      const run = booking ? workspace.runs[booking.runID] : undefined;
+      const run = booking ? deployment.runs[booking.runID] : undefined;
       seconds = Math.max(
         seconds,
         provisioningWindow(provision).max + (run?.maxRuntimeSeconds ?? 0),
@@ -634,8 +629,8 @@ function workspaceHorizon(workspace: Workspace, now: number): number {
       ...rental.queuedBookingIDs,
     ]) {
       if (!bookingID) continue;
-      const booking = workspace.bookings[bookingID];
-      const run = booking ? workspace.runs[booking.runID] : undefined;
+      const booking = deployment.bookings[bookingID];
+      const run = booking ? deployment.runs[booking.runID] : undefined;
       if (!booking || !run) continue;
       seconds = Math.max(
         seconds,
@@ -646,16 +641,16 @@ function workspaceHorizon(workspace: Workspace, now: number): number {
   return Math.ceil(seconds / 60 / 10) * 10;
 }
 
-function remainingExpected(run: WorkspaceRun | undefined, now: number): number {
+function remainingExpected(run: DeploymentRun | undefined, now: number): number {
   if (!run || run.expectedRuntimeSeconds === null) return 0;
   return Math.max(0, run.expectedRuntimeSeconds - elapsedSeconds(run, now));
 }
 
-function remainingMax(run: WorkspaceRun, now: number): number {
+function remainingMax(run: DeploymentRun, now: number): number {
   return Math.max(1, run.maxRuntimeSeconds - elapsedSeconds(run, now));
 }
 
-function elapsedSeconds(run: WorkspaceRun, now: number): number {
+function elapsedSeconds(run: DeploymentRun, now: number): number {
   if (!run.runningAt) return 0;
   return Math.max(0, (now - new Date(run.runningAt).getTime()) / 1000);
 }

@@ -15,7 +15,6 @@ import (
 // first advance. Workload revision lookup (stored revisions) stays with the
 // caller — pass the resolved Workload here.
 type IntakeRequest struct {
-	WorkspaceID    string
 	RunID          string
 	IdempotencyKey string
 	Actor          json.RawMessage
@@ -38,17 +37,13 @@ type IntakeResult struct {
 // acceptance point: provider failures are represented by the Run's recorded
 // state and do not replace the accepted result with an error.
 func (o *Orchestrator) Intake(ctx context.Context, req IntakeRequest) (IntakeResult, error) {
-	if req.WorkspaceID == "" {
-		return IntakeResult{}, fmt.Errorf("orchestrator: workspace_id is required")
-	}
 	workload := req.Workload
 	if !hasWorkloadSpec(workload) && req.Image != "" {
 		// Top-level image shorthand: synthesize the single container from the
 		// top-level fields. Defaulting is applied during CreateRun's normalize
 		// pass. An explicit full workload spec always takes precedence.
 		workload = domain.WorkloadRevision{
-			WorkspaceID: req.WorkspaceID,
-			WorkloadID:  req.WorkloadID,
+			WorkloadID: req.WorkloadID,
 			Spec: domain.WorkloadSpec{
 				Containers: []domain.ContainerSpec{{
 					Image: req.Image,
@@ -68,7 +63,6 @@ func (o *Orchestrator) Intake(ctx context.Context, req IntakeRequest) (IntakeRes
 	}
 
 	result, err := o.CreateRun(ctx, CreateRunRequest{
-		WorkspaceID:    req.WorkspaceID,
 		RunID:          runID,
 		GeneratedRunID: generated,
 		IdempotencyKey: req.IdempotencyKey,
@@ -79,8 +73,8 @@ func (o *Orchestrator) Intake(ctx context.Context, req IntakeRequest) (IntakeRes
 	if err != nil {
 		return IntakeResult{}, err
 	}
-	_ = o.AdvanceRun(ctx, req.WorkspaceID, result.RunID)
-	record, err := o.GetRun(ctx, req.WorkspaceID, result.RunID)
+	_ = o.AdvanceRun(ctx, result.RunID)
+	record, err := o.GetRun(ctx, result.RunID)
 	if err != nil {
 		return IntakeResult{}, fmt.Errorf("%w: %w", ErrAcceptedRunUnavailable, err)
 	}

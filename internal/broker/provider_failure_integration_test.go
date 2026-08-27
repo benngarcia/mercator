@@ -52,7 +52,6 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	})
 	connections := fakeConns{recs: []connection.Record{{
 		ID:          "conn_shadeform",
-		WorkspaceID: "ws_1",
 		AdapterType: "shadeform",
 		Authorized:  true,
 		Config: map[string]string{
@@ -62,7 +61,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		},
 		Credential: credential.Credential{Source: credential.SourceEnv, Ref: "SHADEFORM_API_KEY"},
 	}}}
-	broker := NewBroker(connections, factory, resolverFunc(func(context.Context, string, credential.Credential) (string, error) {
+	broker := NewBroker(connections, factory, resolverFunc(func(context.Context, credential.Credential) (string, error) {
 		return apiKey, nil
 	}), WithLogger(logger))
 	log, err := eventlog.OpenSQLite(t.Context(), "file:"+t.Name()+"?mode=memory&cache=shared")
@@ -70,20 +69,19 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		t.Fatalf("open event log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	orch := orchestrator.New(activeWorkspaceLog{EventLog: log}, scheduler.New(), broker)
+	orch := orchestrator.New(log, scheduler.New(), broker)
 	value := workloadSecret
 	workload := providerFailureWorkload(&value)
 
 	_, err = orch.CreateRun(t.Context(), orchestrator.CreateRunRequest{
-		WorkspaceID: "ws_1",
-		RunID:       "run_out_of_stock",
-		CommandKey:  "create_run_out_of_stock",
-		Workload:    workload,
+		RunID:      "run_out_of_stock",
+		CommandKey: "create_run_out_of_stock",
+		Workload:   workload,
 	})
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_out_of_stock"); err != nil {
+	if err := orch.AdvanceRun(t.Context(), "run_out_of_stock"); err != nil {
 		t.Fatalf("capacity rejection should be handled by replacement policy: %v", err)
 	}
 
@@ -96,7 +94,6 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		t.Fatalf("decode private diagnostic: %v", err)
 	}
 	for key, want := range map[string]any{
-		"workspace_id":       "ws_1",
 		"run_id":             "run_out_of_stock",
 		"connection_id":      "conn_shadeform",
 		"adapter_type":       "shadeform",
@@ -124,7 +121,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		}
 	}
 
-	events, err := orch.GetRunEvents(t.Context(), "ws_1", "run_out_of_stock")
+	events, err := orch.GetRunEvents(t.Context(), "run_out_of_stock")
 	if err != nil {
 		t.Fatalf("get run events: %v", err)
 	}
@@ -150,7 +147,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	if _, exposed := publicFailure["provider_kind"]; exposed {
 		t.Fatalf("public failure exposed canonical private classification: %#v", publicFailure)
 	}
-	record, err := orch.GetRun(t.Context(), "ws_1", "run_out_of_stock")
+	record, err := orch.GetRun(t.Context(), "run_out_of_stock")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}
@@ -168,14 +165,6 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	}
 }
 
-type activeWorkspaceLog struct {
-	eventlog.EventLog
-}
-
-func (l activeWorkspaceLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
-	return l.Append(ctx, request)
-}
-
 func readFixture(t *testing.T, path string) []byte {
 	t.Helper()
 	fixture, err := os.ReadFile(path)
@@ -185,17 +174,16 @@ func readFixture(t *testing.T, path string) []byte {
 	return fixture
 }
 
-type resolverFunc func(context.Context, string, credential.Credential) (string, error)
+type resolverFunc func(context.Context, credential.Credential) (string, error)
 
-func (f resolverFunc) Resolve(ctx context.Context, workspaceID string, ref credential.Credential) (string, error) {
-	return f(ctx, workspaceID, ref)
+func (f resolverFunc) Resolve(ctx context.Context, ref credential.Credential) (string, error) {
+	return f(ctx, ref)
 }
 
 func providerFailureWorkload(secret *string) domain.WorkloadRevision {
 	return domain.WorkloadRevision{
-		ID:          "wrev_provider_failure",
-		WorkspaceID: "ws_1",
-		WorkloadID:  "wrk_provider_failure",
+		ID:         "wrev_provider_failure",
+		WorkloadID: "wrk_provider_failure",
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{
 				Name:     "main",

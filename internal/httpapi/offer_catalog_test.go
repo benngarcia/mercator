@@ -13,14 +13,14 @@ import (
 // Subscribe, Refresh, and unsubscribe with it.
 func TestOfferCatalogPublishSurvivesConcurrentSubscriberDrain(t *testing.T) {
 	catalog := newOfferCatalog(nil, time.Hour)
-	workspace := &offerCatalogWorkspace{
+	state := &offerCatalogState{
 		cancel:      func() {},
 		refresh:     make(chan struct{}, 1),
 		subscribers: map[chan offerCatalogSnapshot]struct{}{},
 	}
-	catalog.workspaces["ws_drain"] = workspace
+	catalog.state = state
 	updates := make(chan offerCatalogSnapshot, 1)
-	workspace.subscribers[updates] = struct{}{}
+	state.subscribers[updates] = struct{}{}
 
 	stop := make(chan struct{})
 	var drainer sync.WaitGroup
@@ -40,9 +40,8 @@ func TestOfferCatalogPublishSurvivesConcurrentSubscriberDrain(t *testing.T) {
 	go func() {
 		defer close(published)
 		for i := range 500_000 {
-			catalog.publish("ws_drain", workspace, offerCatalogSnapshot{
-				WorkspaceID: "ws_drain",
-				Revision:    strconv.Itoa(i),
+			catalog.publish(state, offerCatalogSnapshot{
+				Revision: strconv.Itoa(i),
 			})
 		}
 	}()

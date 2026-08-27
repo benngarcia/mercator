@@ -28,7 +28,7 @@ func TestRunPrintsVerifyHelpWithoutAnAPIBaseURL(t *testing.T) {
 
 func TestRunDelegatesJSONCLICommands(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1/runs" || request.URL.Query().Get("workspace_id") != "ws_1" {
+		if request.URL.Path != "/v1/runs" || request.URL.RawQuery != "" {
 			t.Fatalf("request = %s %s", request.Method, request.URL.String())
 		}
 		if request.Header.Get("Authorization") != "Bearer cli-token" {
@@ -39,7 +39,7 @@ func TestRunDelegatesJSONCLICommands(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	var stdout, stderr bytes.Buffer
-	exitCode := run(context.Background(), []string{"mercator", "run", "list", "--workspace-id", "ws_1"}, map[string]string{
+	exitCode := run(context.Background(), []string{"mercator", "run", "list"}, map[string]string{
 		"MERCATOR_API_URL": server.URL, "MERCATOR_API_TOKEN": "cli-token",
 	}, &stdout, &stderr)
 	if exitCode != 0 {

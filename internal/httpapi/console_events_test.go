@@ -31,7 +31,7 @@ func TestConsoleEventStreamRunsTheGoDashboardScenario(t *testing.T) {
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/console/events?workspace_id=ws_scenario&scenario="+scenario.DashboardScenarioName+"&play=1", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/console/events?scenario="+scenario.DashboardScenarioName+"&play=1", nil)
 	if err != nil {
 		t.Fatalf("new scenario stream request: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestConsoleEventStreamRunsTheGoDashboardScenario(t *testing.T) {
 	}
 
 	commandBody := bytes.NewBufferString(`{"type":"pause"}`)
-	command, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/dev/scenario-sessions/ws_scenario/commands", commandBody)
+	command, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/dev/scenario-session/commands", commandBody)
 	if err != nil {
 		t.Fatalf("new scenario command: %v", err)
 	}
@@ -85,15 +85,15 @@ func TestConsoleEventStreamSnapsThenDeliversActualRunEvents(t *testing.T) {
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
 	handler := New(Deps{
-		Orchestrator: orchestrator.New(workspaceTestLog{EventLog: logStore}, scheduler.New(), provider),
+		Orchestrator: orchestrator.New(logStore, scheduler.New(), provider),
 		Offers:       singleProviderOffers{provider: provider},
-		Workloads:    workload.New(workspaceTestLog{EventLog: logStore}),
+		Workloads:    workload.New(logStore),
 		Events:       logStore,
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/console/events?workspace_id=ws_1", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/console/events", nil)
 	if err != nil {
 		t.Fatalf("new stream request: %v", err)
 	}
@@ -157,8 +157,8 @@ func TestOfferCatalogSharesOneObservationAcrossSubscribers(t *testing.T) {
 	secondContext, cancelSecond := context.WithCancel(context.Background())
 	defer cancelSecond()
 
-	first := catalog.Subscribe(firstContext, "ws_1")
-	second := catalog.Subscribe(secondContext, "ws_1")
+	first := catalog.Subscribe(firstContext)
+	second := catalog.Subscribe(secondContext)
 	firstSnapshot := <-first
 	secondSnapshot := <-second
 
@@ -172,7 +172,7 @@ func TestOfferCatalogSharesOneObservationAcrossSubscribers(t *testing.T) {
 
 func TestOfferCatalogEncodesEmptyOffersAsAnArray(t *testing.T) {
 	catalog := newOfferCatalog(emptyOfferAggregator{}, time.Hour)
-	snapshot := catalog.snapshot(t.Context(), "ws_1")
+	snapshot := catalog.snapshot(t.Context())
 	var wire bytes.Buffer
 
 	err := writeConsoleMessage(&wire, "offers_replaced", "", snapshot)

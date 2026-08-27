@@ -15,7 +15,6 @@ func TestServiceListsMoreThanOnePageOfConnections(t *testing.T) {
 	svc := New(openConnectionTestLog(t))
 	for i := 1; i <= 1001; i++ {
 		_, err := svc.Create(ctx, CreateRequest{
-			WorkspaceID:  "ws_1",
 			ConnectionID: fmt.Sprintf("conn_%04d", i),
 			AdapterType:  "docker",
 		})
@@ -24,7 +23,7 @@ func TestServiceListsMoreThanOnePageOfConnections(t *testing.T) {
 		}
 	}
 
-	records, err := svc.List(ctx, "ws_1")
+	records, err := svc.List(ctx)
 	if err != nil {
 		t.Fatalf("list connections: %v", err)
 	}
@@ -38,22 +37,22 @@ func TestServiceListsMoreThanOnePageOfConnections(t *testing.T) {
 
 func TestServiceListsConnectionsWithoutReadingEveryStream(t *testing.T) {
 	ctx := context.Background()
-	log := &streamReadCountingLog{WorkspaceEventLog: openConnectionTestLog(t)}
+	log := &streamReadCountingLog{EventLog: openConnectionTestLog(t)}
 	svc := New(log)
 	for _, connectionID := range []string{"conn_1", "conn_2"} {
-		if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: connectionID, AdapterType: "docker"}); err != nil {
+		if _, err := svc.Create(ctx, CreateRequest{ConnectionID: connectionID, AdapterType: "docker"}); err != nil {
 			t.Fatalf("create %s: %v", connectionID, err)
 		}
 	}
-	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{WorkspaceID: "ws_1", ConnectionID: "conn_1", Authorized: true}); err != nil {
+	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{ConnectionID: "conn_1", Authorized: true}); err != nil {
 		t.Fatalf("authorize conn_1: %v", err)
 	}
-	if err := svc.Delete(ctx, DeleteRequest{WorkspaceID: "ws_1", ConnectionID: "conn_2"}); err != nil {
+	if err := svc.Delete(ctx, DeleteRequest{ConnectionID: "conn_2"}); err != nil {
 		t.Fatalf("delete conn_2: %v", err)
 	}
 	log.streamReads = 0
 
-	records, err := svc.List(ctx, "ws_1")
+	records, err := svc.List(ctx)
 	if err != nil {
 		t.Fatalf("list connections: %v", err)
 	}
@@ -69,7 +68,7 @@ func TestServiceReadsAndUpdatesConnectionPastOneStreamPage(t *testing.T) {
 	ctx := context.Background()
 	log := openConnectionTestLog(t)
 	svc := New(log)
-	if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: "conn_history", AdapterType: "docker"}); err != nil {
+	if _, err := svc.Create(ctx, CreateRequest{ConnectionID: "conn_history", AdapterType: "docker"}); err != nil {
 		t.Fatalf("create connection: %v", err)
 	}
 
@@ -84,7 +83,7 @@ func TestServiceReadsAndUpdatesConnectionPastOneStreamPage(t *testing.T) {
 		}
 	}
 	if _, err := log.Append(ctx, eventlog.AppendRequest{
-		Stream:                connectionStream("ws_1", "conn_history"),
+		Stream:                connectionStream("conn_history"),
 		ExpectedStreamVersion: 1,
 		CommandKey:            "seed:connection-history",
 		RequestHash:           "sha256:connection-history",
@@ -93,20 +92,20 @@ func TestServiceReadsAndUpdatesConnectionPastOneStreamPage(t *testing.T) {
 		t.Fatalf("append connection history: %v", err)
 	}
 
-	if _, err := svc.Get(ctx, "ws_1", "conn_history"); err != nil {
+	if _, err := svc.Get(ctx, "conn_history"); err != nil {
 		t.Fatalf("get connection past one page: %v", err)
 	}
-	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{WorkspaceID: "ws_1", ConnectionID: "conn_history", Authorized: true}); err != nil {
+	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{ConnectionID: "conn_history", Authorized: true}); err != nil {
 		t.Fatalf("update connection past one page: %v", err)
 	}
 }
 
 type streamReadCountingLog struct {
-	eventlog.WorkspaceEventLog
+	eventlog.EventLog
 	streamReads int
 }
 
 func (l *streamReadCountingLog) ReadStream(ctx context.Context, stream eventlog.StreamKey, afterVersion uint64, limit int) ([]eventlog.StoredEvent, error) {
 	l.streamReads++
-	return l.WorkspaceEventLog.ReadStream(ctx, stream, afterVersion, limit)
+	return l.EventLog.ReadStream(ctx, stream, afterVersion, limit)
 }

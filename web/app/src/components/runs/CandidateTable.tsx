@@ -2,7 +2,7 @@ import * as React from "react";
 import { ChevronRight, Star } from "lucide-react";
 
 import type { Estimate } from "@/lib/api/types";
-import type { StoredCandidateDecision } from "@/lib/workspace/contracts";
+import type { StoredCandidateDecision } from "@/lib/deployment/contracts";
 import { cn } from "@/lib/utils";
 import { duration, usd } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";

@@ -131,15 +131,10 @@ func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidenc
 	if err := client.ready(trialCtx); err != nil {
 		return evidence, err
 	}
-	identity.workspaceID, err = client.createWorkspace(trialCtx, "Conformance "+identity.trialID)
-	if err != nil {
-		return evidence, err
-	}
-	evidence.WorkspaceID = identity.workspaceID
 	if err := client.createAndAuthorizeConnection(trialCtx, identity, trial); err != nil {
 		return evidence, err
 	}
-	offer, failure, err := client.affordableOffer(trialCtx, identity.workspaceID, trial)
+	offer, failure, err := client.affordableOffer(trialCtx, trial)
 	if err != nil {
 		return evidence, err
 	}
@@ -156,7 +151,7 @@ func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidenc
 		return evidence, err
 	}
 	evidence.Run.ID = runID
-	run, err := client.createRun(trialCtx, identity.workspaceID, runID, trial, offer)
+	run, err := client.createRun(trialCtx, runID, trial, offer)
 	if err != nil {
 		evidence.Verdict = VerdictFailed
 		evidence.Failure = &TrialFailure{Code: "RUN_CREATE_FAILED", Message: err.Error()}
@@ -164,15 +159,15 @@ func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidenc
 	}
 	evidence.Run.ID = run.Run.ID
 	if trial.Mode == ModeLaunchCancel {
-		if cancelErr := client.cancelRun(trialCtx, identity.workspaceID, run.Run.ID); cancelErr != nil {
+		if cancelErr := client.cancelRun(trialCtx, run.Run.ID); cancelErr != nil {
 			evidence.Verdict = VerdictFailed
 			evidence.Failure = &TrialFailure{Code: "RUN_CANCEL_FAILED", Message: cancelErr.Error()}
 			return runner.finish(runtime, client, evidence, runStarted, trial.Timeout)
 		}
 	}
-	run, waitErr := client.waitClosed(trialCtx, identity.workspaceID, run.Run.ID)
+	run, waitErr := client.waitClosed(trialCtx, run.Run.ID)
 	if waitErr == nil {
-		evidence.Run, waitErr = client.captureRunEvidence(trialCtx, identity.workspaceID, run, runStarted)
+		evidence.Run, waitErr = client.captureRunEvidence(trialCtx, run, runStarted)
 	}
 	if waitErr != nil {
 		evidence.Verdict = VerdictFailed
@@ -220,14 +215,14 @@ func (runner *Runner) finish(runtime *daemon.Runtime, client trialClient, eviden
 func reconcileCleanup(ctx context.Context, runtime *daemon.Runtime, client trialClient, evidence *Evidence, runStarted time.Time) (bool, error) {
 	var cancelErr error
 	if evidence.Run.ID != "" && !evidence.Run.Closed {
-		cancelErr = client.cancelRun(ctx, evidence.WorkspaceID, evidence.Run.ID)
+		cancelErr = client.cancelRun(ctx, evidence.Run.ID)
 	}
-	reconciled, reconcileErr := runtime.ReconcileWorkspace(ctx, evidence.WorkspaceID)
+	reconciled, reconcileErr := runtime.Reconcile(ctx)
 	evidence.Inventory.Owned = len(reconciled.Owned)
 	var evidenceErr error
 	if evidence.Run.ID != "" {
-		if run, getErr := client.getRun(ctx, evidence.WorkspaceID, evidence.Run.ID); getErr == nil {
-			evidence.Run, evidenceErr = client.captureRunEvidence(ctx, evidence.WorkspaceID, run, runStarted)
+		if run, getErr := client.getRun(ctx, evidence.Run.ID); getErr == nil {
+			evidence.Run, evidenceErr = client.captureRunEvidence(ctx, run, runStarted)
 		} else {
 			evidenceErr = getErr
 		}

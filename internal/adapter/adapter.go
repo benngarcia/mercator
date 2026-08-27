@@ -77,14 +77,12 @@ type Provider interface {
 }
 
 type OfferRequest struct {
-	WorkspaceID string
-	Resources   domain.ResourceRequirements
+	Resources domain.ResourceRequirements
 }
 
 type LaunchRequest struct {
 	OperationKey       string                      `json:"operation_key"`
 	RequestHash        string                      `json:"request_hash"`
-	WorkspaceID        string                      `json:"workspace_id"`
 	RunID              string                      `json:"run_id"`
 	AttemptID          string                      `json:"attempt_id"`
 	WorkloadID         string                      `json:"workload_id"`
@@ -130,7 +128,6 @@ type LaunchReceipt struct {
 }
 
 type ObserveRequest struct {
-	WorkspaceID    string
 	ConnectionID   string
 	LaunchKey      string
 	OwnershipToken string
@@ -147,7 +144,6 @@ type ExternalObservation struct {
 }
 
 type ReleaseRequest struct {
-	WorkspaceID       string
 	ConnectionID      string
 	OperationKey      string
 	RequestHash       string
@@ -166,7 +162,6 @@ type ReleaseReceipt struct {
 // ownership material (OwnershipToken/LaunchRequestHash) as ReleaseRequest so
 // the no-orphan reconciliation path is identical.
 type TerminateRequest struct {
-	WorkspaceID       string
 	ConnectionID      string
 	OperationKey      string
 	RequestHash       string
@@ -180,13 +175,10 @@ type TerminateReceipt struct {
 	Duplicate  bool
 }
 
-type OwnershipQuery struct {
-	WorkspaceID string
-}
+type OwnershipQuery struct{}
 
 type OwnedExternalObject struct {
-	ExternalID  string
-	WorkspaceID string
+	ExternalID string
 	// ConnectionID names the connection the object was listed through.
 	// Individual adapters may leave it empty; the Broker stamps it during
 	// aggregation so callers (e.g. the janitor) can route Release/Terminate

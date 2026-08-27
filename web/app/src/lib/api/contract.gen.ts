@@ -68,7 +68,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/dev/scenario-sessions/{workspace_id}/commands": {
+    "/v1/dev/scenario-session/commands": {
         parameters: {
             query?: never;
             header?: never;
@@ -212,38 +212,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listWorkspaces"];
-        put?: never;
-        post: operations["createWorkspace"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/workspaces/{workspace_id}/archive": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["archiveWorkspace"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/connections": {
         parameters: {
             query?: never;
@@ -300,7 +268,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Registered provider adapters' onboarding manifests: display metadata, config fields, credential expectations, and ordered setup steps. Static per process; no workspace scoping. */
+        /** @description Registered provider adapters' onboarding manifests: display metadata, config fields, credential expectations, and ordered setup steps. Static per deployment. */
         get: operations["listAdapters"];
         put?: never;
         post?: never;
@@ -461,7 +429,6 @@ export interface components {
     schemas: {
         /** @description Create a run. The only required input is an image (top-level shorthand) or a full workload spec. run_id is optional and server-generated (uuidv7) when omitted; an Idempotency-Key header is required for retry-safe replay. */
         CreateRunRequest: {
-            workspace_id?: string;
             /** @description Optional. When omitted the server generates a uuidv7-based run id and returns it. */
             run_id?: string;
             workload_id?: string;
@@ -486,7 +453,6 @@ export interface components {
         };
         Run: {
             id: string;
-            workspace_id: string;
             workload_revision_id: string;
             phase: string;
             /** @enum {string} */
@@ -502,7 +468,6 @@ export interface components {
             cancelled_by?: string;
         };
         CreateWorkloadRequest: {
-            workspace_id: string;
             workload_id: string;
             name: string;
         };
@@ -547,7 +512,6 @@ export interface components {
         };
         PlacementPreviewRequest: {
             run_id?: string;
-            workspace_id?: string;
             workload: components["schemas"]["WorkloadRevision"];
         };
         PlacementPreviewResponse: {
@@ -595,8 +559,6 @@ export interface components {
             connections: components["schemas"]["ConnectionRecord"][];
         };
         CreateConnectionRequest: {
-            /** @description Optional. Defaults to the request's authorized workspace. */
-            workspace_id?: string;
             connection_id: string;
             adapter_type: string;
             config?: {
@@ -747,7 +709,6 @@ export interface components {
         };
         WorkloadRevision: {
             id: string;
-            workspace_id: string;
             workload_id: string;
             digest: string;
             spec: components["schemas"]["WorkloadSpec"];
@@ -965,7 +926,6 @@ export interface components {
             subject: string;
             /** Format: date-time */
             time: string;
-            workspaceid: string;
             /** Format: int64 */
             streamversion: number;
             /** Format: int64 */
@@ -979,27 +939,8 @@ export interface components {
             source: "env" | "mercator";
             ref: string;
         };
-        CreateWorkspaceRequest: {
-            display_name: string;
-        };
-        Workspace: {
-            id: string;
-            display_name: string;
-            /** Format: date-time */
-            created_at: string;
-            created_by: string;
-            /** Format: date-time */
-            archived_at?: string;
-        };
-        WorkspaceResponse: {
-            workspace: components["schemas"]["Workspace"];
-        };
-        WorkspaceListResponse: {
-            workspaces: components["schemas"]["Workspace"][];
-        };
         ConnectionRecord: {
             id: string;
-            workspace_id: string;
             adapter_type: string;
             authorization_schema?: {
                 [key: string]: string;
@@ -1095,8 +1036,7 @@ export interface operations {
     };
     streamConsoleEvents: {
         parameters: {
-            query: {
-                workspace_id: string;
+            query?: {
                 scenario?: string;
                 play?: "0" | "1";
             };
@@ -1108,7 +1048,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Replay-complete public Workspace event feed followed by live events */
+            /** @description Replay-complete public deployment event feed followed by live events */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1168,9 +1108,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                workspace_id: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody: {
@@ -1230,9 +1168,7 @@ export interface operations {
     };
     listRuns: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -1288,9 +1224,7 @@ export interface operations {
     };
     createRun: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header: {
                 "Idempotency-Key": string;
             };
@@ -1379,9 +1313,7 @@ export interface operations {
     };
     getRun: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -1439,9 +1371,7 @@ export interface operations {
     };
     waitRun: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -1517,9 +1447,7 @@ export interface operations {
     };
     refreshRun: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -1577,9 +1505,7 @@ export interface operations {
     };
     cancelRun: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -1637,9 +1563,7 @@ export interface operations {
     };
     listRunEvents: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -1697,9 +1621,7 @@ export interface operations {
     };
     getRunDecision: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: string;
@@ -1757,9 +1679,7 @@ export interface operations {
     };
     previewPlacement: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -1826,169 +1746,9 @@ export interface operations {
             };
         };
     };
-    listWorkspaces: {
-        parameters: {
-            query?: {
-                include_archived?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Saved workspace list */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkspaceListResponse"];
-                };
-            };
-            /** @description Authentication failed */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Workspace catalog failed */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    createWorkspace: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateWorkspaceRequest"];
-            };
-        };
-        responses: {
-            /** @description Workspace created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkspaceResponse"];
-                };
-            };
-            /** @description Invalid request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Authentication failed */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Workspace ID conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Workspace catalog failed */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    archiveWorkspace: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                workspace_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Workspace archived */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkspaceResponse"];
-                };
-            };
-            /** @description Invalid request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Authentication failed */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Workspace not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Workspace catalog failed */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
     listConnections: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -2044,9 +1804,7 @@ export interface operations {
     };
     createConnection: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header: {
                 "Idempotency-Key": string;
             };
@@ -2135,9 +1893,7 @@ export interface operations {
     };
     deleteConnection: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 connection_id: string;
@@ -2215,9 +1971,7 @@ export interface operations {
     };
     authorizeConnection: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 connection_id: string;
@@ -2322,9 +2076,7 @@ export interface operations {
     };
     reportRun: {
         parameters: {
-            query: {
-                workspace_id: string;
-            };
+            query?: never;
             header?: {
                 /** @description Per-run bearer token issued in the launch reporting environment. */
                 Authorization?: string;
@@ -2418,9 +2170,7 @@ export interface operations {
     };
     listOffers: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -2549,9 +2299,7 @@ export interface operations {
     };
     listWorkloadRevisions: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 workload_id: string;
@@ -2618,9 +2366,7 @@ export interface operations {
     };
     createWorkloadRevision: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header: {
                 "Idempotency-Key": string;
             };
@@ -2693,9 +2439,7 @@ export interface operations {
     };
     getWorkloadRevision: {
         parameters: {
-            query?: {
-                workspace_id?: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 workload_id: string;

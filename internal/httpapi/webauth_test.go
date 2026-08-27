@@ -36,14 +36,14 @@ func TestSessionGrantsAPIAccessAlongsideBearer(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
 		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
 
-	unauthenticated := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+	unauthenticated := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, unauthenticated)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no credentials expected 401, got %d", rec.Code)
 	}
 
-	viaSession := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+	viaSession := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
 	viaSession.Header.Set("X-Test-Session", "operator@example.com")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, viaSession)
@@ -51,7 +51,7 @@ func TestSessionGrantsAPIAccessAlongsideBearer(t *testing.T) {
 		t.Fatalf("session expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	viaBearer := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+	viaBearer := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
 	viaBearer.Header.Set("Authorization", "Bearer secret-token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, viaBearer)
@@ -64,7 +64,7 @@ func TestCLITokenAuthenticatesAsItsEmail(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
 		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
 	req.Header.Set("Authorization", "Bearer cli:operator@example.com")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -94,7 +94,7 @@ func TestWrongBearerDoesNotDowngradeToSession(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
 		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
 	req.Header.Set("X-Test-Session", "operator@example.com")
 	rec := httptest.NewRecorder()
@@ -108,13 +108,13 @@ func TestUnauthenticatedConsoleLoadRedirectsToLogin(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
 		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
 
-	req := httptest.NewRequest(http.MethodGet, "/runs?workspace_id=ws_1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/runs", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
 		t.Fatalf("unauthenticated console load expected 302, got %d", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/auth/login?next=%2Fruns%3Fworkspace_id%3Dws_1" {
+	if got := rec.Header().Get("Location"); got != "/auth/login?next=%2Fruns" {
 		t.Fatalf("redirect should carry the deep link, got %q", got)
 	}
 
@@ -166,7 +166,7 @@ func TestRunRecordsActingPrincipals(t *testing.T) {
 	}
 
 	// A signed-in human's cancel records their email.
-	cancel := httptest.NewRequest(http.MethodPost, "/v1/runs/run_audit/cancel?workspace_id=ws_1", nil)
+	cancel := httptest.NewRequest(http.MethodPost, "/v1/runs/run_audit/cancel", nil)
 	cancel.Header.Set("X-Test-Session", "operator@example.com")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, cancel)
@@ -202,7 +202,7 @@ func TestPublicRunEventsDoNotLeakActorEmails(t *testing.T) {
 		t.Fatalf("create expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	events := httptest.NewRequest(http.MethodGet, "/v1/runs/run_actor_leak/events?workspace_id=ws_1", nil)
+	events := httptest.NewRequest(http.MethodGet, "/v1/runs/run_actor_leak/events", nil)
 	events.Header.Set("Authorization", "Bearer secret-token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, events)

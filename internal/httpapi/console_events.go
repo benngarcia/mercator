@@ -20,15 +20,8 @@ const (
 )
 
 func (s *Server) StreamConsoleEvents(ctx context.Context, request StreamConsoleEventsRequestObject) (StreamConsoleEventsResponseObject, error) {
-	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
-	if workspaceErr != nil {
-		if workspaceErr.Forbidden {
-			return StreamConsoleEvents403JSONResponse(workspaceErr.Response), nil
-		}
-		return StreamConsoleEvents400JSONResponse(workspaceErr.Response), nil
-	}
 	if request.Params.Scenario != "" {
-		return s.streamDashboardScenario(ctx, workspaceID, request.Params)
+		return s.streamDashboardScenario(ctx, request.Params)
 	}
 	if s.events == nil || s.offerCatalog == nil {
 		return StreamConsoleEvents501JSONResponse(apiError("CONSOLE_EVENT_FEED_DISABLED", "Console event feed is not configured.")), nil
@@ -37,15 +30,15 @@ func (s *Server) StreamConsoleEvents(ctx context.Context, request StreamConsoleE
 	if err != nil {
 		return StreamConsoleEvents400JSONResponse(apiError("INVALID_EVENT_CURSOR", err.Error())), nil
 	}
-	filter := eventlog.EventFilter{WorkspaceID: workspaceID, Visibility: eventlog.VisibilityPublic}
+	filter := eventlog.EventFilter{Visibility: eventlog.VisibilityPublic}
 	head, err := s.events.LatestPosition(ctx, filter)
 	if err != nil {
 		return StreamConsoleEvents501JSONResponse(internalAPIError(501, "EVENT_LOG_UNAVAILABLE", err)), nil
 	}
 	if after > head {
-		return StreamConsoleEvents400JSONResponse(apiError("EVENT_CURSOR_AHEAD", "Last-Event-ID is ahead of this Workspace event feed.")), nil
+		return StreamConsoleEvents400JSONResponse(apiError("EVENT_CURSOR_AHEAD", "Last-Event-ID is ahead of this deployment event feed.")), nil
 	}
-	catalogUpdates := s.offerCatalog.Subscribe(ctx, workspaceID)
+	catalogUpdates := s.offerCatalog.Subscribe(ctx)
 	initialCatalog, ok := <-catalogUpdates
 	if !ok {
 		return StreamConsoleEvents502JSONResponse(apiError("OFFER_CATALOG_UNAVAILABLE", "Offer catalog closed before its initial observation.")), nil
@@ -56,19 +49,19 @@ func (s *Server) StreamConsoleEvents(ctx context.Context, request StreamConsoleE
 
 	reader, writer := io.Pipe()
 	go func() {
-		if err := s.writeConsoleStream(ctx, writer, workspaceID, after, head, filter, initialCatalog, catalogUpdates); err != nil && ctx.Err() == nil {
-			log.Printf("httpapi: console event feed for %s closed: %v", workspaceID, err)
+		if err := s.writeConsoleStream(ctx, writer, after, head, filter, initialCatalog, catalogUpdates); err != nil && ctx.Err() == nil {
+			log.Printf("httpapi: console event feed closed: %v", err)
 		}
 		_ = writer.Close()
 	}()
 	return StreamConsoleEvents200TexteventStreamResponse{Body: reader}, nil
 }
 
-func (s *Server) streamDashboardScenario(ctx context.Context, workspaceID string, params StreamConsoleEventsParams) (StreamConsoleEventsResponseObject, error) {
+func (s *Server) streamDashboardScenario(ctx context.Context, params StreamConsoleEventsParams) (StreamConsoleEventsResponseObject, error) {
 	if s.scenarios == nil {
 		return StreamConsoleEvents501JSONResponse(apiError("DASHBOARD_SCENARIOS_DISABLED", "Dashboard scenarios are available only from the local development server.")), nil
 	}
-	emissions, err := s.scenarios.Open(ctx, workspaceID, params.Scenario, params.Play == StreamConsoleEventsParamsPlayN1)
+	emissions, err := s.scenarios.Open(ctx, params.Scenario, params.Play == StreamConsoleEventsParamsPlayN1)
 	if err != nil {
 		return StreamConsoleEvents400JSONResponse(apiError("INVALID_DASHBOARD_SCENARIO", err.Error())), nil
 	}
@@ -78,7 +71,7 @@ func (s *Server) streamDashboardScenario(ctx context.Context, workspaceID string
 		for emission := range emissions {
 			if err := writeConsoleMessage(writer, emission.Type, "", emission.Data()); err != nil {
 				if ctx.Err() == nil {
-					log.Printf("httpapi: dashboard scenario feed for %s closed: %v", workspaceID, err)
+					log.Printf("httpapi: dashboard scenario feed closed: %v", err)
 				}
 				return
 			}
@@ -101,7 +94,6 @@ func consoleCursor(value string) (eventlog.GlobalPosition, error) {
 func (s *Server) writeConsoleStream(
 	ctx context.Context,
 	writer io.Writer,
-	workspaceID string,
 	after eventlog.GlobalPosition,
 	head eventlog.GlobalPosition,
 	filter eventlog.EventFilter,
@@ -118,7 +110,7 @@ func (s *Server) writeConsoleStream(
 		return err
 	}
 	deliveries, err := s.events.Subscribe(ctx, eventlog.SubscriptionRequest{
-		SubscriptionID: "console:" + workspaceID + ":" + uuid.NewString(),
+		SubscriptionID: "console:" + uuid.NewString(),
 		After:          head,
 		Filter:         filter,
 	})
@@ -139,14 +131,14 @@ func (s *Server) writeConsoleStream(
 				return err
 			}
 			if strings.HasPrefix(delivery.Event.Type, "compute.connection.") {
-				s.offerCatalog.Refresh(workspaceID)
+				s.offerCatalog.Refresh()
 			}
 		case snapshot, open := <-catalogUpdates:
 			if !open {
 				return nil
 			}
 			if snapshot.Err != nil {
-				if err := writeConsoleMessage(writer, "offers_unavailable", "", map[string]string{"workspace_id": workspaceID}); err != nil {
+				if err := writeConsoleMessage(writer, "offers_unavailable", "", map[string]string{}); err != nil {
 					return err
 				}
 				continue

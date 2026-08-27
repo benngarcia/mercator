@@ -34,8 +34,6 @@ export interface AddConnectionDialogProps {
   trigger?: React.ReactNode;
   /** Called with the created connection id on success. */
   onCreated?: (connectionId: string) => void;
-  /** Workspace override; defaults to the session workspace (implicit). */
-  workspaceId?: string;
 }
 
 // Internal key/value row for config entries.
@@ -93,7 +91,6 @@ export function AddConnectionDialog({
   onOpenChange,
   trigger,
   onCreated,
-  workspaceId,
 }: AddConnectionDialogProps) {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
@@ -120,7 +117,7 @@ export function AddConnectionDialog({
   >({});
   const [otherViolations, setOtherViolations] = React.useState<Violation[]>([]);
 
-  const createConnection = useCreateConnection(workspaceId);
+  const createConnection = useCreateConnection();
 
   const reset = React.useCallback(() => {
     setAdapterType("");
@@ -175,7 +172,6 @@ export function AddConnectionDialog({
 
       createConnection.mutate(
         {
-          workspace_id: workspaceId ?? "",
 			connection_id: connectionId.trim(),
           adapter_type: adapterType,
           config: rowsToRecord(configRows),
@@ -223,7 +219,6 @@ export function AddConnectionDialog({
       handleOpenChange,
       onCreated,
       secret,
-      workspaceId,
     ],
   );
 
@@ -237,7 +232,7 @@ export function AddConnectionDialog({
         <DialogHeader>
           <DialogTitle>Add connection</DialogTitle>
           <DialogDescription>
-            Register a new adapter connection for this workspace. Credentials
+            Register a new adapter connection for this deployment. Credentials
             are stored out-of-band and never appear in the event log.
           </DialogDescription>
         </DialogHeader>

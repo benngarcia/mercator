@@ -15,16 +15,12 @@ import (
 )
 
 type Config struct {
-	// BaseURL, Token, and WorkspaceID are the environment-derived values
-	// (MERCATOR_API_URL / MERCATOR_API_TOKEN / MERCATOR_WORKSPACE_ID). They
+	// BaseURL and Token are the environment-derived values
+	// (MERCATOR_API_URL / MERCATOR_API_TOKEN). They
 	// win over the config file's current context, so CI setups keep working
 	// with no config file at all.
 	BaseURL string
 	Token   string
-	// WorkspaceID is the default workspace applied to run subcommands when
-	// --workspace-id is not passed. An explicit --workspace-id flag always
-	// overrides it.
-	WorkspaceID string
 	// ConfigPath is where named contexts live (see DefaultConfigPath).
 	ConfigPath string
 	Args       []string
@@ -81,7 +77,7 @@ func Run(ctx context.Context, cfg Config) int {
 	// API commands: env wins, then the config file's current context.
 	resolvedCfg := cfg
 	resolvedCfg.BaseURL = globalBaseURL
-	baseURL, token, workspaceID, warnings := resolveCredentials(resolvedCfg, time.Now())
+	baseURL, token, warnings := resolveCredentials(resolvedCfg, time.Now())
 	for _, warning := range warnings {
 		fmt.Fprintln(cfg.Stderr, "warning: "+warning)
 	}
@@ -91,7 +87,7 @@ func Run(ctx context.Context, cfg Config) int {
 	if baseURL == "" {
 		baseURL = LocalBrokerURL
 	}
-	current := &session{baseURL: baseURL, token: token, client: cfg.Client, workspaceID: workspaceID}
+	current := &session{baseURL: baseURL, token: token, client: cfg.Client}
 	req, err := buildRequest(ctx, current, cfg.Stdin, args)
 	if err != nil {
 		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())
@@ -163,8 +159,8 @@ func parseGlobalFlags(baseURL string, args []string) (apiURL string, explicit bo
 
 // parseFlagsAnywhere parses fs against args accepting flags in any position:
 // each positional token is set aside and parsing resumes after it, so
-// `run create busybox --workspace-id ws_1` and
-// `run create --workspace-id ws_1 busybox` are the same command. An unknown
+// `run create busybox --run-id run_1` and
+// `run create --run-id run_1 busybox` are the same command. An unknown
 // flag-looking token errors loudly instead of silently becoming a positional;
 // literal arguments that begin with "-" belong after a bare "--".
 func parseFlagsAnywhere(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -211,7 +207,6 @@ func buildRunRequest(ctx context.Context, s *session, args []string) (*http.Requ
 
 	fs := flag.NewFlagSet("run "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workspaceID := fs.String("workspace-id", "", "workspace id (defaults to the broker's only workspace)")
 	runID := fs.String("run-id", "", "run id (optional on create; server generates one when omitted)")
 	idempotencyKey := fs.String("idempotency-key", "", "idempotency key (optional on create; derived from the run when omitted)")
 	workloadJSON := fs.String("workload-json", "", "workload revision json")
@@ -225,19 +220,10 @@ func buildRunRequest(ctx context.Context, s *session, args []string) (*http.Requ
 	if command != "create" && len(positional) > 0 {
 		return nil, fmt.Errorf("unexpected argument %q", positional[0])
 	}
-	// Every run command is workspace-scoped, so resolve it once here rather
-	// than making each branch restate the requirement.
-	if *workspaceID == "" {
-		resolved, err := s.workspace(ctx)
-		if err != nil {
-			return nil, err
-		}
-		*workspaceID = resolved
-	}
 	// Commands that read or act on one run default to the most recent one,
 	// which is the run you just started.
 	if *runID == "" && runCommandTargetsOneRun(command) {
-		resolved, err := s.latestRun(ctx, *workspaceID)
+		resolved, err := s.latestRun(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -264,7 +250,7 @@ func buildRunRequest(ctx context.Context, s *session, args []string) (*http.Requ
 			return nil, fmt.Errorf("create requires exactly one of an image (positional arg or --image) or --workload-json")
 		}
 
-		payload := map[string]any{"workspace_id": *workspaceID}
+		payload := map[string]any{}
 		// run_id is optional: omit it so the server generates one and returns it.
 		if *runID != "" {
 			payload["run_id"] = *runID
@@ -305,7 +291,7 @@ func buildRunRequest(ctx context.Context, s *session, args []string) (*http.Requ
 		req.Header.Set("Idempotency-Key", key)
 		return req, nil
 	case "list":
-		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, "/v1/runs", query("workspace_id", *workspaceID)), nil)
+		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, "/v1/runs", nil), nil)
 	case "get", "wait", "events", "decision":
 		path := "/v1/runs/" + url.PathEscape(*runID)
 		if command == "wait" {
@@ -314,10 +300,10 @@ func buildRunRequest(ctx context.Context, s *session, args []string) (*http.Requ
 		if command == "events" || command == "decision" {
 			path += "/" + command
 		}
-		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
+		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, path, nil), nil)
 	case "refresh", "cancel":
 		path := "/v1/runs/" + url.PathEscape(*runID) + "/" + command
-		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
+		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, path, nil), nil)
 	default:
 		return nil, fmt.Errorf("unknown run command %q", command)
 	}

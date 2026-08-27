@@ -54,7 +54,7 @@ func TestCreateRunAndListEvents(t *testing.T) {
 		t.Fatalf("unexpected create response: %+v", created)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_1/events?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_1/events", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -81,7 +81,7 @@ func TestCreateRunDrivesFakeAdapterFastPath(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_fast/events?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_fast/events", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -107,7 +107,7 @@ func TestCreateRunReturnsAcceptedTerminalRunAfterLaunchFailure(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusAccepted {
-		getReq := httptest.NewRequest(http.MethodGet, "/v1/runs/run_launch_failed?workspace_id=ws_1", nil)
+		getReq := httptest.NewRequest(http.MethodGet, "/v1/runs/run_launch_failed", nil)
 		getRec := httptest.NewRecorder()
 		handler.ServeHTTP(getRec, getReq)
 		t.Fatalf("expected 202, got %d body=%s; follow-up GET got %d body=%s", rec.Code, rec.Body.String(), getRec.Code, getRec.Body.String())
@@ -165,7 +165,7 @@ func TestCreateRunReturnsAcceptedOpenRunAfterIndeterminateLaunch(t *testing.T) {
 	if accepted.Run.Closed || accepted.Run.Phase != "running" {
 		t.Fatalf("expected open reconciling run, got %+v", accepted.Run)
 	}
-	eventsReq := httptest.NewRequest(http.MethodGet, "/v1/runs/run_launch_indeterminate/events?workspace_id=ws_1", nil)
+	eventsReq := httptest.NewRequest(http.MethodGet, "/v1/runs/run_launch_indeterminate/events", nil)
 	eventsRec := httptest.NewRecorder()
 	handler.ServeHTTP(eventsRec, eventsReq)
 	if eventsRec.Code != http.StatusOK {
@@ -183,7 +183,7 @@ func TestCreateRunReturnsAcceptedOpenRunAfterIndeterminateLaunch(t *testing.T) {
 func TestCreateRunRejectsInvalidWorkloadBeforeAcceptance(t *testing.T) {
 	provider := newLaunchErrorAdapter(errors.New("provider must not be called"))
 	handler := newHTTPTestServerForAdapter(t, provider)
-	body := mustMarshal(t, CreateRunRequest{RunId: "run_invalid", Workload: domain.WorkloadRevision{WorkspaceID: "ws_1"}})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_invalid", Workload: domain.WorkloadRevision{}})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_invalid")
 	rec := httptest.NewRecorder()
@@ -193,7 +193,7 @@ func TestCreateRunRejectsInvalidWorkloadBeforeAcceptance(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	getReq := httptest.NewRequest(http.MethodGet, "/v1/runs/run_invalid?workspace_id=ws_1", nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/runs/run_invalid", nil)
 	getRec := httptest.NewRecorder()
 	handler.ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusNotFound {
@@ -212,9 +212,9 @@ func TestCreateRunReturnsInternalErrorWhenInitialPersistenceFails(t *testing.T) 
 	}
 	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", time.Now().UTC())}))
 	handler := New(Deps{
-		Orchestrator: orchestrator.New(workspaceTestLog{EventLog: log}, scheduler.New(), provider),
+		Orchestrator: orchestrator.New(log, scheduler.New(), provider),
 		Offers:       singleProviderOffers{provider: provider},
-		Workloads:    workload.New(workspaceTestLog{EventLog: log}),
+		Workloads:    workload.New(log),
 	})
 	if err := log.Close(); err != nil {
 		t.Fatalf("close event log: %v", err)
@@ -243,10 +243,10 @@ func TestRunReadListWaitDecisionAndRefreshEndpoints(t *testing.T) {
 	}
 
 	for _, target := range []string{
-		"/v1/runs/run_read?workspace_id=ws_1",
-		"/v1/runs?workspace_id=ws_1",
-		"/v1/runs/run_read/wait?workspace_id=ws_1",
-		"/v1/runs/run_read/decision?workspace_id=ws_1",
+		"/v1/runs/run_read",
+		"/v1/runs",
+		"/v1/runs/run_read/wait",
+		"/v1/runs/run_read/decision",
 	} {
 		req = httptest.NewRequest(http.MethodGet, target, nil)
 		rec = httptest.NewRecorder()
@@ -256,7 +256,7 @@ func TestRunReadListWaitDecisionAndRefreshEndpoints(t *testing.T) {
 		}
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/v1/runs/run_read/refresh?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodPost, "/v1/runs/run_read/refresh", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -264,42 +264,22 @@ func TestRunReadListWaitDecisionAndRefreshEndpoints(t *testing.T) {
 	}
 }
 
-func TestRunEndpointsRequireExplicitWorkspace(t *testing.T) {
-	handler := newHTTPTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/v1/runs/run_1/events", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected explicit workspace 400, got %d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestBearerAuthProtectsEveryExplicitWorkspace(t *testing.T) {
+func TestBearerAuthProtectsTheDeployment(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("test-token"))
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("missing token expected 401, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("authorized workspace expected 200, got %d body=%s", rec.Code, rec.Body.String())
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_2", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("second explicit workspace expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("authorized deployment expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -350,7 +330,7 @@ func TestRunEventsRedactEnvironmentBindings(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_redacted_events/events?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_redacted_events/events", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -369,7 +349,6 @@ func TestCreateRunRejectsSecretRefEnvironmentBinding(t *testing.T) {
 		"run_id":"run_secret_ref_rejected",
 		"workload":{
 			"id":"wrev_1",
-			"workspace_id":"ws_1",
 			"workload_id":"wrk_1",
 			"digest":"sha256:revision",
 			"spec":{
@@ -422,23 +401,6 @@ func TestCreateRunValidationErrorDoesNotEchoEnvironmentValues(t *testing.T) {
 
 func ptr(value string) *string {
 	return &value
-}
-
-func TestCreateRunRejectsWorkspaceMismatch(t *testing.T) {
-	handler := newHTTPTestServer(t)
-	body := mustMarshal(t, CreateRunRequest{WorkspaceId: "ws_other", RunId: "run_workspace_mismatch", Workload: httpRevision()})
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "idem_workspace_mismatch")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "WORKSPACE_MISMATCH") {
-		t.Fatalf("workspace mismatch should include stable code, got %s", rec.Body.String())
-	}
 }
 
 func TestPlacementPreviewAndOpenAPI(t *testing.T) {
@@ -504,7 +466,7 @@ func TestPlacementPreviewValidatesWorkload(t *testing.T) {
 
 func TestWorkloadRevisionAndImageResolverEndpoints(t *testing.T) {
 	handler := newHTTPTestServer(t)
-	createBody := mustMarshal(t, CreateWorkloadRequest{WorkspaceId: "ws_1", WorkloadId: "wrk_1", Name: "trainer"})
+	createBody := mustMarshal(t, CreateWorkloadRequest{WorkloadId: "wrk_1", Name: "trainer"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(createBody))
 	req.Header.Set("Idempotency-Key", "idem_workload")
 	rec := httptest.NewRecorder()
@@ -515,7 +477,7 @@ func TestWorkloadRevisionAndImageResolverEndpoints(t *testing.T) {
 
 	rev := httpRevision()
 	body := mustMarshal(t, CreateRevisionRequest{Revision: rev})
-	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_1/revisions?workspace_id=ws_1", bytes.NewReader(body))
+	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_1/revisions", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_revision")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -523,8 +485,8 @@ func TestWorkloadRevisionAndImageResolverEndpoints(t *testing.T) {
 		t.Fatalf("create revision expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	for _, target := range []string{
-		"/v1/workloads/wrk_1/revisions?workspace_id=ws_1",
-		"/v1/workloads/wrk_1/revisions/wrev_1?workspace_id=ws_1",
+		"/v1/workloads/wrk_1/revisions",
+		"/v1/workloads/wrk_1/revisions/wrev_1",
 	} {
 		req = httptest.NewRequest(http.MethodGet, target, nil)
 		rec = httptest.NewRecorder()
@@ -543,33 +505,16 @@ func TestWorkloadRevisionAndImageResolverEndpoints(t *testing.T) {
 	}
 }
 
-func TestCreateWorkloadRequiresWorkspaceInTheGeneratedBody(t *testing.T) {
-	handler := newHTTPTestServer(t)
-	body := mustMarshal(t, CreateWorkloadRequest{WorkloadId: "wrk_missing_workspace", Name: "trainer"})
-	request := httptest.NewRequest(http.MethodPost, "/v1/workloads?workspace_id=ws_1", bytes.NewReader(body))
-	request.Header.Set("Idempotency-Key", "idem_missing_workspace")
-	response := httptest.NewRecorder()
-
-	handler.ServeHTTP(response, request)
-
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d body=%s", response.Code, response.Body.String())
-	}
-	if !strings.Contains(response.Body.String(), "WORKSPACE_ID_REQUIRED") {
-		t.Fatalf("expected WORKSPACE_ID_REQUIRED, got %s", response.Body.String())
-	}
-}
-
 func TestCreateRunCanReferenceStoredWorkloadRevision(t *testing.T) {
 	handler := newHTTPTestServer(t)
-	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(mustMarshal(t, CreateWorkloadRequest{WorkspaceId: "ws_1", WorkloadId: "wrk_1", Name: "trainer"})))
+	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(mustMarshal(t, CreateWorkloadRequest{WorkloadId: "wrk_1", Name: "trainer"})))
 	req.Header.Set("Idempotency-Key", "idem_workload_ref")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create workload expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_1/revisions?workspace_id=ws_1", bytes.NewReader(mustMarshal(t, CreateRevisionRequest{Revision: httpRevision()})))
+	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_1/revisions", bytes.NewReader(mustMarshal(t, CreateRevisionRequest{Revision: httpRevision()})))
 	req.Header.Set("Idempotency-Key", "idem_revision_ref")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -577,7 +522,7 @@ func TestCreateRunCanReferenceStoredWorkloadRevision(t *testing.T) {
 		t.Fatalf("create revision expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	body := mustMarshal(t, CreateRunRequest{WorkspaceId: "ws_1", RunId: "run_from_revision", WorkloadId: "wrk_1", WorkloadRevisionId: "wrev_1"})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_from_revision", WorkloadId: "wrk_1", WorkloadRevisionId: "wrev_1"})
 	req = httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_run_from_revision")
 	rec = httptest.NewRecorder()
@@ -590,7 +535,7 @@ func TestCreateRunCanReferenceStoredWorkloadRevision(t *testing.T) {
 
 func TestSecretVaultRoutesAreNotRegistered(t *testing.T) {
 	handler := newHTTPTestServer(t)
-	for _, target := range []string{"/v1/secrets?workspace_id=ws_1", "/v1/secrets/sec_path/versions", "/v1/secrets/sec_path/grants"} {
+	for _, target := range []string{"/v1/secrets", "/v1/secrets/sec_path/versions", "/v1/secrets/sec_path/grants"} {
 		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{}`))
 		if strings.Contains(target, "?") {
 			req = httptest.NewRequest(http.MethodGet, target, nil)
@@ -615,10 +560,10 @@ func TestCreateRunEnvOverridesStoredWorkloadRevision(t *testing.T) {
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)}
 	sched := scheduler.New()
-	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
-	handler := New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: ociresolver.NewStaticResolver(nil)})
+	orch := orchestrator.New(log, sched, ad)
+	handler := New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: ociresolver.NewStaticResolver(nil)})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(mustMarshal(t, CreateWorkloadRequest{WorkspaceId: "ws_1", WorkloadId: "wrk_env", Name: "env"})))
+	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(mustMarshal(t, CreateWorkloadRequest{WorkloadId: "wrk_env", Name: "env"})))
 	req.Header.Set("Idempotency-Key", "idem_workload_env")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -631,7 +576,7 @@ func TestCreateRunEnvOverridesStoredWorkloadRevision(t *testing.T) {
 		"LOG_LEVEL": {Value: ptr("info")},
 		"KEEP":      {Value: ptr("base")},
 	}
-	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_env/revisions?workspace_id=ws_1", bytes.NewReader(mustMarshal(t, CreateRevisionRequest{Revision: rev})))
+	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_env/revisions", bytes.NewReader(mustMarshal(t, CreateRevisionRequest{Revision: rev})))
 	req.Header.Set("Idempotency-Key", "idem_revision_env")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -643,7 +588,7 @@ func TestCreateRunEnvOverridesStoredWorkloadRevision(t *testing.T) {
 		"LOG_LEVEL": {Value: ptr("debug")},
 		"RUN_INPUT": {Value: ptr("s3://bucket/object")},
 	}
-	body := mustMarshal(t, CreateRunRequest{WorkspaceId: "ws_1", RunId: "run_env_override", WorkloadId: "wrk_env", WorkloadRevisionId: "wrev_1", Env: runEnv})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_env_override", WorkloadId: "wrk_env", WorkloadRevisionId: "wrev_1", Env: runEnv})
 	req = httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_run_env_override")
 	rec = httptest.NewRecorder()
@@ -709,7 +654,7 @@ func newHTTPTestServerWithOptions(t *testing.T, options ...Option) http.Handler 
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
 	sched := scheduler.New()
-	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
+	orch := orchestrator.New(log, sched, ad)
 	resolver := ociresolver.NewStaticResolver(map[string]ociresolver.ResolvedImage{
 		"ghcr.io/acme/trainer:latest|linux/amd64": {
 			Image:    "ghcr.io/acme/trainer@sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -717,7 +662,7 @@ func newHTTPTestServerWithOptions(t *testing.T, options ...Option) http.Handler 
 			Platform: "linux/amd64",
 		},
 	})
-	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: resolver}, options...)
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver}, options...)
 }
 
 func newHTTPTestServerForAdapter(t *testing.T, provider adapter.Provider) http.Handler {
@@ -732,18 +677,17 @@ func newHTTPTestServerForAdapter(t *testing.T, provider adapter.Provider) http.H
 		}
 	})
 	return New(Deps{
-		Orchestrator: orchestrator.New(workspaceTestLog{EventLog: log}, scheduler.New(), provider),
+		Orchestrator: orchestrator.New(log, scheduler.New(), provider),
 		Offers:       singleProviderOffers{provider: provider},
-		Workloads:    workload.New(workspaceTestLog{EventLog: log}),
+		Workloads:    workload.New(log),
 	})
 }
 
 func httpRevision() domain.WorkloadRevision {
 	return domain.WorkloadRevision{
-		ID:          "wrev_1",
-		WorkspaceID: "ws_1",
-		WorkloadID:  "wrk_1",
-		Digest:      "sha256:revision",
+		ID:         "wrev_1",
+		WorkloadID: "wrk_1",
+		Digest:     "sha256:revision",
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{
 				Name:     "main",

@@ -2,7 +2,6 @@ package scenario
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/domain"
@@ -24,7 +23,7 @@ func TestDashboardScenariosExerciseRealPlacementPaths(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			transcript, err := BuildDashboardScenarioTranscript(t.Context(), "ws_scenario", test.name)
+			transcript, err := BuildDashboardScenarioTranscript(t.Context(), test.name)
 			if err != nil {
 				t.Fatalf("build dashboard transcript: %v", err)
 			}
@@ -68,19 +67,19 @@ func TestDashboardScenariosExerciseRealPlacementPaths(t *testing.T) {
 	}
 }
 
-func TestBuildDashboardTranscriptIsolatesConcurrentWorkspaces(t *testing.T) {
-	const workspaceCount = 8
+func TestBuildDashboardTranscriptSupportsConcurrentBuilds(t *testing.T) {
+	const buildCount = 8
 	start := make(chan struct{})
-	results := make(chan error, workspaceCount)
-	for index := range workspaceCount {
+	results := make(chan error, buildCount)
+	for range buildCount {
 		go func() {
 			<-start
-			_, err := BuildDashboardTranscript(t.Context(), fmt.Sprintf("ws_concurrent_%d", index))
+			_, err := BuildDashboardTranscript(t.Context())
 			results <- err
 		}()
 	}
 	close(start)
-	for range workspaceCount {
+	for range buildCount {
 		if err := <-results; err != nil {
 			t.Errorf("build concurrent dashboard transcript: %v", err)
 		}

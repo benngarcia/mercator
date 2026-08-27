@@ -1,5 +1,5 @@
 // Application entry: mounts one Effect Atom registry for session, remote
-// resources, mutations, clocks, and the live Workspace projection.
+// resources, mutations, clocks, and the live Deployment projection.
 // The dark-first theme class is applied before first paint via
 // applyInitialTheme() so there is no light flash.
 

@@ -19,7 +19,7 @@ func TestAdvanceRunSerializesConcurrentLaunchForSameRun(t *testing.T) {
 
 	firstErr := make(chan error, 1)
 	go func() {
-		firstErr <- orch.AdvanceRun(ctx, "ws_1", "run_1")
+		firstErr <- orch.AdvanceRun(ctx, "run_1")
 	}()
 
 	select {
@@ -30,7 +30,7 @@ func TestAdvanceRunSerializesConcurrentLaunchForSameRun(t *testing.T) {
 
 	secondErr := make(chan error, 1)
 	go func() {
-		secondErr <- orch.AdvanceRun(ctx, "ws_1", "run_1")
+		secondErr <- orch.AdvanceRun(ctx, "run_1")
 	}()
 
 	select {
@@ -53,7 +53,7 @@ func TestAdvanceRunSerializesConcurrentLaunchForSameRun(t *testing.T) {
 		t.Fatal("concurrent AdvanceRun calls overlapped inside adapter Launch")
 	}
 
-	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	events, err := orch.GetRunEvents(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestTerminalReportWaitsForRunAdvancement(t *testing.T) {
 
 	advanceErr := make(chan error, 1)
 	go func() {
-		advanceErr <- orch.AdvanceRun(ctx, "ws_1", "run_1")
+		advanceErr <- orch.AdvanceRun(ctx, "run_1")
 	}()
 	select {
 	case <-ad.firstLaunchStarted:
@@ -85,7 +85,7 @@ func TestTerminalReportWaitsForRunAdvancement(t *testing.T) {
 	reportErr := make(chan error, 1)
 	go func() {
 		close(reportStarted)
-		reportErr <- orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(0)))
+		reportErr <- orch.RecordReport(ctx, "run_1", mustRunReport(t, "exit", nil, intPtr(0)))
 	}()
 	<-reportStarted
 	select {
@@ -101,10 +101,10 @@ func TestTerminalReportWaitsForRunAdvancement(t *testing.T) {
 	if err := <-reportErr; err != nil {
 		t.Fatalf("record terminal report: %v", err)
 	}
-	if _, err := orch.AdvanceOpenRuns(ctx, "ws_1"); err != nil {
+	if _, err := orch.AdvanceOpenRuns(ctx); err != nil {
 		t.Fatalf("reconcile terminal report: %v", err)
 	}
-	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	record, err := orch.GetRun(ctx, "run_1")
 	if err != nil {
 		t.Fatalf("get run: %v", err)
 	}

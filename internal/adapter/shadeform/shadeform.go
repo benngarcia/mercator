@@ -31,7 +31,6 @@ import (
 // tag.
 const (
 	tagLaunchKey      = "mercator:launch-key"
-	tagWorkspace      = "mercator:workspace"
 	tagRun            = "mercator:run"
 	tagAttempt        = "mercator:attempt"
 	tagOwnershipToken = "mercator:ownership-token"
@@ -363,7 +362,7 @@ func (a *Adapter) Terminate(ctx context.Context, req adapter.TerminateRequest) (
 // carrying our launch-key tag. Instances already in deleting/deleted are
 // excluded — Shadeform stops billing at deleting and re-deleting them is
 // noise.
-func (a *Adapter) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
+func (a *Adapter) ListOwned(ctx context.Context, _ adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
 	instances, err := a.client.listInstances(ctx)
 	if err != nil {
 		return nil, err
@@ -374,10 +373,6 @@ func (a *Adapter) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]
 		if !ok || !live(inst) {
 			continue
 		}
-		workspace, _ := tagValue(inst.Tags, tagWorkspace)
-		if req.WorkspaceID != "" && workspace != req.WorkspaceID {
-			continue
-		}
 		runID, _ := tagValue(inst.Tags, tagRun)
 		attemptID, _ := tagValue(inst.Tags, tagAttempt)
 		token, _ := tagValue(inst.Tags, tagOwnershipToken)
@@ -385,7 +380,6 @@ func (a *Adapter) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]
 		requestHash, _ := tagValue(inst.Tags, tagRequestHash)
 		owned = append(owned, adapter.OwnedExternalObject{
 			ExternalID:     inst.ID,
-			WorkspaceID:    workspace,
 			RunID:          runID,
 			AttemptID:      attemptID,
 			OwnershipToken: token,
@@ -430,7 +424,6 @@ func chooseOS(override string, options []string) (string, error) {
 func ownershipTags(req adapter.LaunchRequest) []string {
 	return []string{
 		tagLaunchKey + "=" + req.LaunchKey,
-		tagWorkspace + "=" + req.WorkspaceID,
 		tagRun + "=" + req.RunID,
 		tagAttempt + "=" + req.AttemptID,
 		tagOwnershipToken + "=" + req.OwnershipToken,
@@ -449,7 +442,6 @@ func launchEnvs(req adapter.LaunchRequest) []envVar {
 			values[b.Name] = *b.Value
 		}
 	}
-	values["MERCATOR_WORKSPACE_ID"] = req.WorkspaceID
 	values["MERCATOR_RUN_ID"] = req.RunID
 	values["MERCATOR_ATTEMPT_ID"] = req.AttemptID
 	values["MERCATOR_LAUNCH_KEY"] = req.LaunchKey

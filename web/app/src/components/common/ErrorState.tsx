@@ -40,7 +40,7 @@ function present(
         icon: KeyRound,
         title: "Authentication required",
         message:
-          "Set a valid bearer token in the topbar to access this workspace.",
+          "Set a valid bearer token in the topbar to access this deployment.",
       };
     }
     if (error.notFound) {

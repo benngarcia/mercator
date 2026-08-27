@@ -9,7 +9,6 @@ import (
 
 type trialIdentity struct {
 	trialID      string
-	workspaceID  string
 	connectionID string
 }
 

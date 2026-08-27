@@ -10,17 +10,14 @@ import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 
-import { useSession } from "@/hooks/useSession";
 import {
   adaptersAtom,
-  archiveWorkspaceAtom,
   authSessionAtom,
   authorizeConnectionAtom,
   cancelRunAtom,
   connectionsAtom,
   createConnectionAtom,
   createRunAtom,
-  createWorkspaceAtom,
   deleteConnectionAtom,
   deliverSinkAtom,
   logoutAtom,
@@ -33,7 +30,6 @@ import {
   runEventsAtom,
   runsAtom,
   sinkStatusAtom,
-  workspacesAtom,
 } from "./atoms";
 import { ApiError } from "./client";
 import type {
@@ -52,7 +48,6 @@ import type {
   RunResponse,
   SinkResult,
   SinkStatus,
-  Workspace,
 } from "./types";
 
 interface ResourceResultBase<A> {
@@ -91,12 +86,9 @@ function inactiveResource<A>() {
   return Atom.make(AsyncResult.initial<A, ApiError>());
 }
 
-const inactiveRunsAtom = inactiveResource<Run[]>();
 const inactiveRunAtom = inactiveResource<Run>();
 const inactiveRunEventsAtom = inactiveResource<CloudEvent[]>();
 const inactiveRunDecisionAtom = inactiveResource<BookingDecision | null>();
-const inactiveOffersAtom = inactiveResource<OfferSnapshot[]>();
-const inactiveConnectionsAtom = inactiveResource<ConnectionRecord[]>();
 const inactiveSinkStatusAtom = inactiveResource<SinkStatus>();
 
 function resultError<A>(result: AsyncResult.AsyncResult<A, ApiError>) {
@@ -181,11 +173,6 @@ function useMutation<A, Input, Variables>(
   };
 }
 
-function useWorkspaceId(override?: string): string | null {
-  const { workspace } = useSession();
-  return override ?? workspace;
-}
-
 export function useAuthSession(): ResourceResult<AuthSessionState> {
   return useResource(authSessionAtom);
 }
@@ -194,84 +181,31 @@ export function useLogout(): MutationResult<void, void> {
   return useMutation(logoutAtom, () => undefined);
 }
 
-export function useWorkspaces(
-  includeArchived = false,
-): ResourceResult<Workspace[]> {
-  return useResource(workspacesAtom(includeArchived));
+export function useRuns(): ResourceResult<Run[]> {
+  return useResource(runsAtom);
 }
 
-export function useCreateWorkspace(): MutationResult<Workspace, string> {
-  return useMutation(createWorkspaceAtom, (displayName) => displayName);
+export function useRun(runId: string | undefined): ResourceResult<Run> {
+  const enabled = runId !== undefined;
+  return useResource(enabled ? runAtom(runId) : inactiveRunAtom, enabled);
 }
 
-export function useArchiveWorkspace(): MutationResult<Workspace, string> {
-  return useMutation(archiveWorkspaceAtom, (workspaceId) => workspaceId);
+export function useRunEvents(runId: string | undefined): ResourceResult<CloudEvent[]> {
+  const enabled = runId !== undefined;
+  return useResource(enabled ? runEventsAtom(runId) : inactiveRunEventsAtom, enabled);
 }
 
-export function useRuns(workspaceOverride?: string): ResourceResult<Run[]> {
-  const workspaceId = useWorkspaceId(workspaceOverride);
-  return useResource(
-    workspaceId === null ? inactiveRunsAtom : runsAtom(workspaceId),
-    workspaceId !== null,
-  );
+export function useRunDecision(runId: string | undefined): ResourceResult<BookingDecision | null> {
+  const enabled = runId !== undefined;
+  return useResource(enabled ? runDecisionAtom(runId) : inactiveRunDecisionAtom, enabled);
 }
 
-export function useRun(
-  runId: string | undefined,
-  workspaceOverride?: string,
-): ResourceResult<Run> {
-  const workspaceId = useWorkspaceId(workspaceOverride);
-  const enabled = workspaceId !== null && runId !== undefined;
-  return useResource(
-    enabled ? runAtom(workspaceId, runId) : inactiveRunAtom,
-    enabled,
-  );
+export function useOffers(): ResourceResult<OfferSnapshot[]> {
+  return useResource(offersAtom);
 }
 
-export function useRunEvents(
-  runId: string | undefined,
-  workspaceOverride?: string,
-): ResourceResult<CloudEvent[]> {
-  const workspaceId = useWorkspaceId(workspaceOverride);
-  const enabled = workspaceId !== null && runId !== undefined;
-  return useResource(
-    enabled ? runEventsAtom(workspaceId, runId) : inactiveRunEventsAtom,
-    enabled,
-  );
-}
-
-export function useRunDecision(
-  runId: string | undefined,
-  workspaceOverride?: string,
-): ResourceResult<BookingDecision | null> {
-  const workspaceId = useWorkspaceId(workspaceOverride);
-  const enabled = workspaceId !== null && runId !== undefined;
-  return useResource(
-    enabled ? runDecisionAtom(workspaceId, runId) : inactiveRunDecisionAtom,
-    enabled,
-  );
-}
-
-export function useOffers(
-  workspaceOverride?: string,
-): ResourceResult<OfferSnapshot[]> {
-  const workspaceId = useWorkspaceId(workspaceOverride);
-  return useResource(
-    workspaceId === null ? inactiveOffersAtom : offersAtom(workspaceId),
-    workspaceId !== null,
-  );
-}
-
-export function useConnections(
-  workspaceOverride?: string,
-): ResourceResult<ConnectionRecord[]> {
-  const workspaceId = useWorkspaceId(workspaceOverride);
-  return useResource(
-    workspaceId === null
-      ? inactiveConnectionsAtom
-      : connectionsAtom(workspaceId),
-    workspaceId !== null,
-  );
+export function useConnections(): ResourceResult<ConnectionRecord[]> {
+  return useResource(connectionsAtom);
 }
 
 export function useAdapters(): ResourceResult<AdapterManifest[]> {
@@ -287,25 +221,16 @@ export function useSinkStatus(
   );
 }
 
-export function useCreateRun(
-  workspaceOverride?: string,
-): MutationResult<RunResponse, CreateRunRequest> {
-  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
-  return useMutation(createRunAtom, (body) => ({ body, workspaceId }));
+export function useCreateRun(): MutationResult<RunResponse, CreateRunRequest> {
+  return useMutation(createRunAtom, (body) => ({ body }));
 }
 
-export function useCancelRun(
-  workspaceOverride?: string,
-): MutationResult<RunResponse, string> {
-  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
-  return useMutation(cancelRunAtom, (runId) => ({ runId, workspaceId }));
+export function useCancelRun(): MutationResult<RunResponse, string> {
+  return useMutation(cancelRunAtom, (runId) => ({ runId }));
 }
 
-export function useRefreshRun(
-  workspaceOverride?: string,
-): MutationResult<RunResponse, string> {
-  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
-  return useMutation(refreshRunAtom, (runId) => ({ runId, workspaceId }));
+export function useRefreshRun(): MutationResult<RunResponse, string> {
+  return useMutation(refreshRunAtom, (runId) => ({ runId }));
 }
 
 export function useResolveImage(): MutationResult<
@@ -331,29 +256,18 @@ export function useReplaySink(): MutationResult<
   return useMutation(replaySinkAtom, (variables) => variables);
 }
 
-export function useCreateConnection(
-  workspaceOverride?: string,
-): MutationResult<ConnectionRecord, CreateConnectionRequest> {
-  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
-  return useMutation(createConnectionAtom, (body) => ({ body, workspaceId }));
+export function useCreateConnection(): MutationResult<ConnectionRecord, CreateConnectionRequest> {
+  return useMutation(createConnectionAtom, (body) => ({ body }));
 }
 
-export function useDeleteConnection(
-  workspaceOverride?: string,
-): MutationResult<void, string> {
-  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
+export function useDeleteConnection(): MutationResult<void, string> {
   return useMutation(deleteConnectionAtom, (connectionId) => ({
     connectionId,
-    workspaceId,
   }));
 }
 
-export function useAuthorizeConnection(
-  workspaceOverride?: string,
-): MutationResult<ConnectionRecord, string> {
-  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
+export function useAuthorizeConnection(): MutationResult<ConnectionRecord, string> {
   return useMutation(authorizeConnectionAtom, (connectionId) => ({
     connectionId,
-    workspaceId,
   }));
 }

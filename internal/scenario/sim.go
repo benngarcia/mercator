@@ -23,8 +23,6 @@ const (
 	defaultHostDiskBytes   = int64(200e9)
 )
 
-const simWorkspace = "ws_scenario"
-
 // SimBackend executes scenarios against simulated capacity: the fake
 // adapter's World under the real orchestrator, scheduler, and a real SQLite
 // event log. Decision correctness only; no network, no daemons.
@@ -72,7 +70,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	}
 	session.log = log
 	session.orch = orchestrator.New(
-		alwaysActiveWorkspaceLog{log},
+		log,
 		scheduler.New(),
 		world,
 		orchestrator.WithClock(clock.Now),
@@ -218,7 +216,6 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 	s.runs[name] = runID
 	s.images[name] = req.Image
 	_, err := s.orch.CreateRun(context.Background(), orchestrator.CreateRunRequest{
-		WorkspaceID:    simWorkspace,
 		RunID:          runID,
 		IdempotencyKey: "create:" + runID,
 		Workload:       simWorkload(runID, req),
@@ -226,7 +223,7 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 	if err != nil {
 		return err
 	}
-	return s.orch.AdvanceRun(context.Background(), simWorkspace, runID)
+	return s.orch.AdvanceRun(context.Background(), runID)
 }
 
 func (s *simSession) Reconcile(name string) error {
@@ -237,7 +234,7 @@ func (s *simSession) Reconcile(name string) error {
 	if err := s.preparePlacement(s.images[name]); err != nil {
 		return err
 	}
-	return s.orch.AdvanceRun(context.Background(), simWorkspace, runID)
+	return s.orch.AdvanceRun(context.Background(), runID)
 }
 
 // preparePlacement declares which image the coming evaluation is for, so the
@@ -262,7 +259,7 @@ func (s *simSession) RunEvents(name string) ([]eventlog.StoredEvent, error) {
 	if !ok {
 		return nil, fmt.Errorf("run %q was never submitted", name)
 	}
-	return s.orch.GetRunEvents(context.Background(), simWorkspace, runID)
+	return s.orch.GetRunEvents(context.Background(), runID)
 }
 
 func (s *simSession) Notes() []string { return s.notes }
@@ -308,20 +305,9 @@ func simWorkload(runID string, req RequestSpec) domain.WorkloadRevision {
 		spec.Execution.MaxRuntimeSeconds = int64(req.MaxRuntime.Duration().Seconds())
 	}
 	return domain.WorkloadRevision{
-		ID:          "wrev_" + runID,
-		WorkspaceID: simWorkspace,
-		WorkloadID:  "wrk_" + runID,
-		Digest:      "sha256:" + runID,
-		Spec:        spec,
+		ID:         "wrev_" + runID,
+		WorkloadID: "wrk_" + runID,
+		Digest:     "sha256:" + runID,
+		Spec:       spec,
 	}
-}
-
-// alwaysActiveWorkspaceLog treats every workspace as active: scenarios have
-// no workspace lifecycle.
-type alwaysActiveWorkspaceLog struct {
-	eventlog.EventLog
-}
-
-func (l alwaysActiveWorkspaceLog) AppendIfWorkspaceActive(ctx context.Context, req eventlog.AppendRequest) (eventlog.AppendResult, error) {
-	return l.EventLog.Append(ctx, req)
 }

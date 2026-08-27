@@ -38,7 +38,7 @@ func TestGetRunRejectsInvalidPersistedEvents(t *testing.T) {
 
 			eventID := "evt_run_1_invalid"
 			_, err := log.Append(ctx, eventlog.AppendRequest{
-				Stream:                runStream("ws_1", "run_1"),
+				Stream:                runStream("run_1"),
 				ExpectedStreamVersion: 1,
 				CommandKey:            "inject-invalid-event",
 				RequestHash:           "invalid-event-fixture",
@@ -54,7 +54,7 @@ func TestGetRunRejectsInvalidPersistedEvents(t *testing.T) {
 				t.Fatalf("append invalid event fixture: %v", err)
 			}
 
-			_, err = orch.GetRun(ctx, "ws_1", "run_1")
+			_, err = orch.GetRun(ctx, "run_1")
 			if err == nil {
 				t.Fatal("GetRun() accepted an invalid persisted event")
 			}
@@ -74,7 +74,7 @@ func TestGetRunRejectsClosedRunWithoutOutcome(t *testing.T) {
 	createRun(t, ctx, orch)
 
 	_, err := log.Append(ctx, eventlog.AppendRequest{
-		Stream:                runStream("ws_1", "run_1"),
+		Stream:                runStream("run_1"),
 		ExpectedStreamVersion: 1,
 		CommandKey:            "inject-invalid-close",
 		RequestHash:           "invalid-close-fixture",
@@ -90,7 +90,7 @@ func TestGetRunRejectsClosedRunWithoutOutcome(t *testing.T) {
 		t.Fatalf("append invalid close fixture: %v", err)
 	}
 
-	_, err = orch.GetRun(ctx, "ws_1", "run_1")
+	_, err = orch.GetRun(ctx, "run_1")
 	if err == nil || !strings.Contains(err.Error(), "closed without a recorded outcome") {
 		t.Fatalf("GetRun() error = %v, want closed-without-outcome invariant failure", err)
 	}
@@ -145,7 +145,7 @@ func assertGetRunRejectsStoredEventPayloads(t *testing.T, eventType string, data
 
 	eventID := "evt_run_1_invalid_" + strings.ReplaceAll(eventType, ".", "_")
 	_, err := log.Append(ctx, eventlog.AppendRequest{
-		Stream:                runStream("ws_1", "run_1"),
+		Stream:                runStream("run_1"),
 		ExpectedStreamVersion: 1,
 		CommandKey:            "inject-invalid-event-" + eventType,
 		RequestHash:           "invalid-event-fixture-" + eventType,
@@ -162,7 +162,7 @@ func assertGetRunRejectsStoredEventPayloads(t *testing.T, eventType string, data
 		t.Fatalf("append invalid event fixture: %v", err)
 	}
 
-	_, err = orch.GetRun(ctx, "ws_1", "run_1")
+	_, err = orch.GetRun(ctx, "run_1")
 	if err == nil {
 		t.Fatal("GetRun() accepted an invalid persisted event")
 	}

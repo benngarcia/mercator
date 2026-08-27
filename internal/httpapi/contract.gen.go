@@ -20,7 +20,6 @@ import (
 	eventlog "github.com/benngarcia/mercator/internal/eventlog"
 	ociresolver "github.com/benngarcia/mercator/internal/ociresolver"
 	sinks "github.com/benngarcia/mercator/internal/sinks"
-	workspace "github.com/benngarcia/mercator/internal/workspace"
 	"github.com/oapi-codegen/runtime"
 	strictnethttp "github.com/oapi-codegen/runtime/strictmiddleware/nethttp"
 )
@@ -428,9 +427,6 @@ type CreateConnectionRequest struct {
 
 	// Secret Write-only: accepted on create, sealed at rest, never echoed in any response.
 	Secret string `json:"secret,omitempty"`
-
-	// WorkspaceId Optional. Defaults to the request's authorized workspace.
-	WorkspaceId string `json:"workspace_id,omitempty"`
 }
 
 // CreateRevisionRequest defines model for CreateRevisionRequest.
@@ -454,19 +450,12 @@ type CreateRunRequest struct {
 	Workload           WorkloadRevision `json:"workload,omitempty"`
 	WorkloadId         string           `json:"workload_id,omitempty"`
 	WorkloadRevisionId string           `json:"workload_revision_id,omitempty"`
-	WorkspaceId        string           `json:"workspace_id,omitempty"`
 }
 
 // CreateWorkloadRequest defines model for CreateWorkloadRequest.
 type CreateWorkloadRequest struct {
-	Name        string `json:"name"`
-	WorkloadId  string `json:"workload_id"`
-	WorkspaceId string `json:"workspace_id"`
-}
-
-// CreateWorkspaceRequest defines model for CreateWorkspaceRequest.
-type CreateWorkspaceRequest struct {
-	DisplayName string `json:"display_name"`
+	Name       string `json:"name"`
+	WorkloadId string `json:"workload_id"`
 }
 
 // Credential defines model for Credential.
@@ -609,9 +598,8 @@ type PlacementPolicyObjective string
 
 // PlacementPreviewRequest defines model for PlacementPreviewRequest.
 type PlacementPreviewRequest struct {
-	RunId       string           `json:"run_id,omitempty"`
-	Workload    WorkloadRevision `json:"workload"`
-	WorkspaceId string           `json:"workspace_id,omitempty"`
+	RunId    string           `json:"run_id,omitempty"`
+	Workload WorkloadRevision `json:"workload"`
 }
 
 // PlacementPreviewResponse defines model for PlacementPreviewResponse.
@@ -784,43 +772,13 @@ type WorkloadSpec struct {
 	Resources  ResourceRequirements   `json:"resources"`
 }
 
-// Workspace defines model for Workspace.
-type Workspace = workspace.Workspace
-
-// WorkspaceListResponse defines model for WorkspaceListResponse.
-type WorkspaceListResponse struct {
-	Workspaces []Workspace `json:"workspaces"`
-}
-
-// WorkspaceResponse defines model for WorkspaceResponse.
-type WorkspaceResponse struct {
-	Workspace Workspace `json:"workspace"`
-}
-
-// ListConnectionsParams defines parameters for ListConnections.
-type ListConnectionsParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
 // CreateConnectionParams defines parameters for CreateConnection.
 type CreateConnectionParams struct {
-	WorkspaceId    string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 	IdempotencyKey string `json:"Idempotency-Key"`
-}
-
-// DeleteConnectionParams defines parameters for DeleteConnection.
-type DeleteConnectionParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
-// AuthorizeConnectionParams defines parameters for AuthorizeConnection.
-type AuthorizeConnectionParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // StreamConsoleEventsParams defines parameters for StreamConsoleEvents.
 type StreamConsoleEventsParams struct {
-	WorkspaceId string                        `form:"workspace_id" json:"workspace_id"`
 	Scenario    string                        `form:"scenario,omitempty" json:"scenario,omitempty"`
 	Play        StreamConsoleEventsParamsPlay `form:"play,omitempty" json:"play,omitempty"`
 	LastEventID string                        `json:"Last-Event-ID,omitempty"`
@@ -829,63 +787,15 @@ type StreamConsoleEventsParams struct {
 // StreamConsoleEventsParamsPlay defines parameters for StreamConsoleEvents.
 type StreamConsoleEventsParamsPlay string
 
-// ListOffersParams defines parameters for ListOffers.
-type ListOffersParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
-// PreviewPlacementParams defines parameters for PreviewPlacement.
-type PreviewPlacementParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
-// ListRunsParams defines parameters for ListRuns.
-type ListRunsParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
 // CreateRunParams defines parameters for CreateRun.
 type CreateRunParams struct {
-	WorkspaceId    string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 	IdempotencyKey string `json:"Idempotency-Key"`
-}
-
-// GetRunParams defines parameters for GetRun.
-type GetRunParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
-// CancelRunParams defines parameters for CancelRun.
-type CancelRunParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
-// GetRunDecisionParams defines parameters for GetRunDecision.
-type GetRunDecisionParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
-// ListRunEventsParams defines parameters for ListRunEvents.
-type ListRunEventsParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
-// RefreshRunParams defines parameters for RefreshRun.
-type RefreshRunParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // ReportRunParams defines parameters for ReportRun.
 type ReportRunParams struct {
-	WorkspaceId string `form:"workspace_id" json:"workspace_id"`
-
 	// Authorization Per-run bearer token issued in the launch reporting environment.
 	Authorization string `json:"Authorization,omitempty"`
-}
-
-// WaitRunParams defines parameters for WaitRun.
-type WaitRunParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // CreateWorkloadParams defines parameters for CreateWorkload.
@@ -893,25 +803,9 @@ type CreateWorkloadParams struct {
 	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
-// ListWorkloadRevisionsParams defines parameters for ListWorkloadRevisions.
-type ListWorkloadRevisionsParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
 // CreateWorkloadRevisionParams defines parameters for CreateWorkloadRevision.
 type CreateWorkloadRevisionParams struct {
-	WorkspaceId    string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 	IdempotencyKey string `json:"Idempotency-Key"`
-}
-
-// GetWorkloadRevisionParams defines parameters for GetWorkloadRevision.
-type GetWorkloadRevisionParams struct {
-	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-}
-
-// ListWorkspacesParams defines parameters for ListWorkspaces.
-type ListWorkspacesParams struct {
-	IncludeArchived bool `form:"include_archived,omitempty" json:"include_archived,omitempty"`
 }
 
 // CreateConnectionJSONRequestBody defines body for CreateConnection for application/json ContentType.
@@ -941,9 +835,6 @@ type CreateWorkloadJSONRequestBody = CreateWorkloadRequest
 // CreateWorkloadRevisionJSONRequestBody defines body for CreateWorkloadRevision for application/json ContentType.
 type CreateWorkloadRevisionJSONRequestBody = CreateRevisionRequest
 
-// CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
-type CreateWorkspaceJSONRequestBody = CreateWorkspaceRequest
-
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 
@@ -960,58 +851,58 @@ type ServerInterface interface {
 	ListAdapters(w http.ResponseWriter, r *http.Request)
 
 	// (GET /v1/connections)
-	ListConnections(w http.ResponseWriter, r *http.Request, params ListConnectionsParams)
+	ListConnections(w http.ResponseWriter, r *http.Request)
 
 	// (POST /v1/connections)
 	CreateConnection(w http.ResponseWriter, r *http.Request, params CreateConnectionParams)
 
 	// (DELETE /v1/connections/{connection_id})
-	DeleteConnection(w http.ResponseWriter, r *http.Request, connectionId string, params DeleteConnectionParams)
+	DeleteConnection(w http.ResponseWriter, r *http.Request, connectionId string)
 
 	// (POST /v1/connections/{connection_id}/authorize)
-	AuthorizeConnection(w http.ResponseWriter, r *http.Request, connectionId string, params AuthorizeConnectionParams)
+	AuthorizeConnection(w http.ResponseWriter, r *http.Request, connectionId string)
 
 	// (GET /v1/console/events)
 	StreamConsoleEvents(w http.ResponseWriter, r *http.Request, params StreamConsoleEventsParams)
 
-	// (POST /v1/dev/scenario-sessions/{workspace_id}/commands)
-	CommandScenarioPlayback(w http.ResponseWriter, r *http.Request, workspaceId string)
+	// (POST /v1/dev/scenario-session/commands)
+	CommandScenarioPlayback(w http.ResponseWriter, r *http.Request)
 
 	// (POST /v1/images:resolve)
 	ResolveImage(w http.ResponseWriter, r *http.Request)
 
 	// (GET /v1/offers)
-	ListOffers(w http.ResponseWriter, r *http.Request, params ListOffersParams)
+	ListOffers(w http.ResponseWriter, r *http.Request)
 
 	// (POST /v1/placements:preview)
-	PreviewPlacement(w http.ResponseWriter, r *http.Request, params PreviewPlacementParams)
+	PreviewPlacement(w http.ResponseWriter, r *http.Request)
 
 	// (GET /v1/runs)
-	ListRuns(w http.ResponseWriter, r *http.Request, params ListRunsParams)
+	ListRuns(w http.ResponseWriter, r *http.Request)
 
 	// (POST /v1/runs)
 	CreateRun(w http.ResponseWriter, r *http.Request, params CreateRunParams)
 
 	// (GET /v1/runs/{run_id})
-	GetRun(w http.ResponseWriter, r *http.Request, runId string, params GetRunParams)
+	GetRun(w http.ResponseWriter, r *http.Request, runId string)
 
 	// (POST /v1/runs/{run_id}/cancel)
-	CancelRun(w http.ResponseWriter, r *http.Request, runId string, params CancelRunParams)
+	CancelRun(w http.ResponseWriter, r *http.Request, runId string)
 
 	// (GET /v1/runs/{run_id}/decision)
-	GetRunDecision(w http.ResponseWriter, r *http.Request, runId string, params GetRunDecisionParams)
+	GetRunDecision(w http.ResponseWriter, r *http.Request, runId string)
 
 	// (GET /v1/runs/{run_id}/events)
-	ListRunEvents(w http.ResponseWriter, r *http.Request, runId string, params ListRunEventsParams)
+	ListRunEvents(w http.ResponseWriter, r *http.Request, runId string)
 
 	// (POST /v1/runs/{run_id}/refresh)
-	RefreshRun(w http.ResponseWriter, r *http.Request, runId string, params RefreshRunParams)
+	RefreshRun(w http.ResponseWriter, r *http.Request, runId string)
 
 	// (POST /v1/runs/{run_id}/report)
 	ReportRun(w http.ResponseWriter, r *http.Request, runId string, params ReportRunParams)
 
 	// (GET /v1/runs/{run_id}/wait)
-	WaitRun(w http.ResponseWriter, r *http.Request, runId string, params WaitRunParams)
+	WaitRun(w http.ResponseWriter, r *http.Request, runId string)
 
 	// (GET /v1/sinks/{sink_id})
 	GetSinkStatus(w http.ResponseWriter, r *http.Request, sinkId string)
@@ -1026,22 +917,13 @@ type ServerInterface interface {
 	CreateWorkload(w http.ResponseWriter, r *http.Request, params CreateWorkloadParams)
 
 	// (GET /v1/workloads/{workload_id}/revisions)
-	ListWorkloadRevisions(w http.ResponseWriter, r *http.Request, workloadId string, params ListWorkloadRevisionsParams)
+	ListWorkloadRevisions(w http.ResponseWriter, r *http.Request, workloadId string)
 
 	// (POST /v1/workloads/{workload_id}/revisions)
 	CreateWorkloadRevision(w http.ResponseWriter, r *http.Request, workloadId string, params CreateWorkloadRevisionParams)
 
 	// (GET /v1/workloads/{workload_id}/revisions/{revision_id})
-	GetWorkloadRevision(w http.ResponseWriter, r *http.Request, workloadId string, revisionId string, params GetWorkloadRevisionParams)
-
-	// (GET /v1/workspaces)
-	ListWorkspaces(w http.ResponseWriter, r *http.Request, params ListWorkspacesParams)
-
-	// (POST /v1/workspaces)
-	CreateWorkspace(w http.ResponseWriter, r *http.Request)
-
-	// (POST /v1/workspaces/{workspace_id}/archive)
-	ArchiveWorkspace(w http.ResponseWriter, r *http.Request, workspaceId string)
+	GetWorkloadRevision(w http.ResponseWriter, r *http.Request, workloadId string, revisionId string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1118,27 +1000,14 @@ func (siw *ServerInterfaceWrapper) ListAdapters(w http.ResponseWriter, r *http.R
 // ListConnections operation middleware
 func (siw *ServerInterfaceWrapper) ListConnections(w http.ResponseWriter, r *http.Request) {
 
-	var err error
-
 	ctx := r.Context()
 
 	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params ListConnectionsParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListConnections(w, r, params)
+		siw.Handler.ListConnections(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1161,14 +1030,6 @@ func (siw *ServerInterfaceWrapper) CreateConnection(w http.ResponseWriter, r *ht
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params CreateConnectionParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
 
 	headers := r.Header
 
@@ -1226,19 +1087,8 @@ func (siw *ServerInterfaceWrapper) DeleteConnection(w http.ResponseWriter, r *ht
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params DeleteConnectionParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteConnection(w, r, connectionId, params)
+		siw.Handler.DeleteConnection(w, r, connectionId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1268,19 +1118,8 @@ func (siw *ServerInterfaceWrapper) AuthorizeConnection(w http.ResponseWriter, r 
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params AuthorizeConnectionParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.AuthorizeConnection(w, r, connectionId, params)
+		siw.Handler.AuthorizeConnection(w, r, connectionId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1303,21 +1142,6 @@ func (siw *ServerInterfaceWrapper) StreamConsoleEvents(w http.ResponseWriter, r 
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params StreamConsoleEventsParams
-
-	// ------------- Required query parameter "workspace_id" -------------
-
-	if paramValue := r.URL.Query().Get("workspace_id"); paramValue != "" {
-
-	} else {
-		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "workspace_id"})
-		return
-	}
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
 
 	// ------------- Optional query parameter "scenario" -------------
 
@@ -1370,17 +1194,6 @@ func (siw *ServerInterfaceWrapper) StreamConsoleEvents(w http.ResponseWriter, r 
 // CommandScenarioPlayback operation middleware
 func (siw *ServerInterfaceWrapper) CommandScenarioPlayback(w http.ResponseWriter, r *http.Request) {
 
-	var err error
-
-	// ------------- Path parameter "workspace_id" -------------
-	var workspaceId string
-
-	err = runtime.BindStyledParameterWithOptions("simple", "workspace_id", r.PathValue("workspace_id"), &workspaceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	ctx := r.Context()
 
 	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
@@ -1388,7 +1201,7 @@ func (siw *ServerInterfaceWrapper) CommandScenarioPlayback(w http.ResponseWriter
 	r = r.WithContext(ctx)
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CommandScenarioPlayback(w, r, workspaceId)
+		siw.Handler.CommandScenarioPlayback(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1421,27 +1234,14 @@ func (siw *ServerInterfaceWrapper) ResolveImage(w http.ResponseWriter, r *http.R
 // ListOffers operation middleware
 func (siw *ServerInterfaceWrapper) ListOffers(w http.ResponseWriter, r *http.Request) {
 
-	var err error
-
 	ctx := r.Context()
 
 	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params ListOffersParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListOffers(w, r, params)
+		siw.Handler.ListOffers(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1454,27 +1254,14 @@ func (siw *ServerInterfaceWrapper) ListOffers(w http.ResponseWriter, r *http.Req
 // PreviewPlacement operation middleware
 func (siw *ServerInterfaceWrapper) PreviewPlacement(w http.ResponseWriter, r *http.Request) {
 
-	var err error
-
 	ctx := r.Context()
 
 	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params PreviewPlacementParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.PreviewPlacement(w, r, params)
+		siw.Handler.PreviewPlacement(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1487,27 +1274,14 @@ func (siw *ServerInterfaceWrapper) PreviewPlacement(w http.ResponseWriter, r *ht
 // ListRuns operation middleware
 func (siw *ServerInterfaceWrapper) ListRuns(w http.ResponseWriter, r *http.Request) {
 
-	var err error
-
 	ctx := r.Context()
 
 	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params ListRunsParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListRuns(w, r, params)
+		siw.Handler.ListRuns(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1530,14 +1304,6 @@ func (siw *ServerInterfaceWrapper) CreateRun(w http.ResponseWriter, r *http.Requ
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params CreateRunParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
 
 	headers := r.Header
 
@@ -1595,19 +1361,8 @@ func (siw *ServerInterfaceWrapper) GetRun(w http.ResponseWriter, r *http.Request
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params GetRunParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetRun(w, r, runId, params)
+		siw.Handler.GetRun(w, r, runId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1637,19 +1392,8 @@ func (siw *ServerInterfaceWrapper) CancelRun(w http.ResponseWriter, r *http.Requ
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params CancelRunParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CancelRun(w, r, runId, params)
+		siw.Handler.CancelRun(w, r, runId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1679,19 +1423,8 @@ func (siw *ServerInterfaceWrapper) GetRunDecision(w http.ResponseWriter, r *http
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params GetRunDecisionParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetRunDecision(w, r, runId, params)
+		siw.Handler.GetRunDecision(w, r, runId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1721,19 +1454,8 @@ func (siw *ServerInterfaceWrapper) ListRunEvents(w http.ResponseWriter, r *http.
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params ListRunEventsParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListRunEvents(w, r, runId, params)
+		siw.Handler.ListRunEvents(w, r, runId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1763,19 +1485,8 @@ func (siw *ServerInterfaceWrapper) RefreshRun(w http.ResponseWriter, r *http.Req
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params RefreshRunParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.RefreshRun(w, r, runId, params)
+		siw.Handler.RefreshRun(w, r, runId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1801,21 +1512,6 @@ func (siw *ServerInterfaceWrapper) ReportRun(w http.ResponseWriter, r *http.Requ
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params ReportRunParams
-
-	// ------------- Required query parameter "workspace_id" -------------
-
-	if paramValue := r.URL.Query().Get("workspace_id"); paramValue != "" {
-
-	} else {
-		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "workspace_id"})
-		return
-	}
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
 
 	headers := r.Header
 
@@ -1869,19 +1565,8 @@ func (siw *ServerInterfaceWrapper) WaitRun(w http.ResponseWriter, r *http.Reques
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params WaitRunParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.WaitRun(w, r, runId, params)
+		siw.Handler.WaitRun(w, r, runId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2054,19 +1739,8 @@ func (siw *ServerInterfaceWrapper) ListWorkloadRevisions(w http.ResponseWriter, 
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params ListWorkloadRevisionsParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListWorkloadRevisions(w, r, workloadId, params)
+		siw.Handler.ListWorkloadRevisions(w, r, workloadId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2098,14 +1772,6 @@ func (siw *ServerInterfaceWrapper) CreateWorkloadRevision(w http.ResponseWriter,
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params CreateWorkloadRevisionParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
 
 	headers := r.Header
 
@@ -2172,103 +1838,8 @@ func (siw *ServerInterfaceWrapper) GetWorkloadRevision(w http.ResponseWriter, r 
 
 	r = r.WithContext(ctx)
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params GetWorkloadRevisionParams
-
-	// ------------- Optional query parameter "workspace_id" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetWorkloadRevision(w, r, workloadId, revisionId, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ListWorkspaces operation middleware
-func (siw *ServerInterfaceWrapper) ListWorkspaces(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params ListWorkspacesParams
-
-	// ------------- Optional query parameter "include_archived" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "include_archived", r.URL.Query(), &params.IncludeArchived, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "include_archived", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListWorkspaces(w, r, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// CreateWorkspace operation middleware
-func (siw *ServerInterfaceWrapper) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
-
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CreateWorkspace(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ArchiveWorkspace operation middleware
-func (siw *ServerInterfaceWrapper) ArchiveWorkspace(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-
-	// ------------- Path parameter "workspace_id" -------------
-	var workspaceId string
-
-	err = runtime.BindStyledParameterWithOptions("simple", "workspace_id", r.PathValue("workspace_id"), &workspaceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
-		return
-	}
-
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ArchiveWorkspace(w, r, workspaceId)
+		siw.Handler.GetWorkloadRevision(w, r, workloadId, revisionId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2407,7 +1978,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("DELETE "+options.BaseURL+"/v1/connections/{connection_id}", wrapper.DeleteConnection)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/connections/{connection_id}/authorize", wrapper.AuthorizeConnection)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/console/events", wrapper.StreamConsoleEvents)
-	m.HandleFunc("POST "+options.BaseURL+"/v1/dev/scenario-sessions/{workspace_id}/commands", wrapper.CommandScenarioPlayback)
+	m.HandleFunc("POST "+options.BaseURL+"/v1/dev/scenario-session/commands", wrapper.CommandScenarioPlayback)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/images:resolve", wrapper.ResolveImage)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/offers", wrapper.ListOffers)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/placements:preview", wrapper.PreviewPlacement)
@@ -2427,9 +1998,6 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("GET "+options.BaseURL+"/v1/workloads/{workload_id}/revisions", wrapper.ListWorkloadRevisions)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/workloads/{workload_id}/revisions", wrapper.CreateWorkloadRevision)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/workloads/{workload_id}/revisions/{revision_id}", wrapper.GetWorkloadRevision)
-	m.HandleFunc("GET "+options.BaseURL+"/v1/workspaces", wrapper.ListWorkspaces)
-	m.HandleFunc("POST "+options.BaseURL+"/v1/workspaces", wrapper.CreateWorkspace)
-	m.HandleFunc("POST "+options.BaseURL+"/v1/workspaces/{workspace_id}/archive", wrapper.ArchiveWorkspace)
 
 	return m
 }
@@ -2512,7 +2080,6 @@ func (response ListAdapters401JSONResponse) VisitListAdaptersResponse(w http.Res
 }
 
 type ListConnectionsRequestObject struct {
-	Params ListConnectionsParams
 }
 
 type ListConnectionsResponseObject interface {
@@ -2647,7 +2214,6 @@ func (response CreateConnection501JSONResponse) VisitCreateConnectionResponse(w 
 
 type DeleteConnectionRequestObject struct {
 	ConnectionId string `json:"connection_id"`
-	Params       DeleteConnectionParams
 }
 
 type DeleteConnectionResponseObject interface {
@@ -2721,7 +2287,6 @@ func (response DeleteConnection501JSONResponse) VisitDeleteConnectionResponse(w 
 
 type AuthorizeConnectionRequestObject struct {
 	ConnectionId string `json:"connection_id"`
-	Params       AuthorizeConnectionParams
 }
 
 type AuthorizeConnectionResponseObject interface {
@@ -2864,8 +2429,7 @@ func (response StreamConsoleEvents502JSONResponse) VisitStreamConsoleEventsRespo
 }
 
 type CommandScenarioPlaybackRequestObject struct {
-	WorkspaceId string `json:"workspace_id"`
-	Body        *CommandScenarioPlaybackJSONRequestBody
+	Body *CommandScenarioPlaybackJSONRequestBody
 }
 
 type CommandScenarioPlaybackResponseObject interface {
@@ -2973,7 +2537,6 @@ func (response ResolveImage501JSONResponse) VisitResolveImageResponse(w http.Res
 }
 
 type ListOffersRequestObject struct {
-	Params ListOffersParams
 }
 
 type ListOffersResponseObject interface {
@@ -3026,8 +2589,7 @@ func (response ListOffers502JSONResponse) VisitListOffersResponse(w http.Respons
 }
 
 type PreviewPlacementRequestObject struct {
-	Params PreviewPlacementParams
-	Body   *PreviewPlacementJSONRequestBody
+	Body *PreviewPlacementJSONRequestBody
 }
 
 type PreviewPlacementResponseObject interface {
@@ -3089,7 +2651,6 @@ func (response PreviewPlacement502JSONResponse) VisitPreviewPlacementResponse(w 
 }
 
 type ListRunsRequestObject struct {
-	Params ListRunsParams
 }
 
 type ListRunsResponseObject interface {
@@ -3223,8 +2784,7 @@ func (response CreateRun500JSONResponse) VisitCreateRunResponse(w http.ResponseW
 }
 
 type GetRunRequestObject struct {
-	RunId  string `json:"run_id"`
-	Params GetRunParams
+	RunId string `json:"run_id"`
 }
 
 type GetRunResponseObject interface {
@@ -3277,8 +2837,7 @@ func (response GetRun404JSONResponse) VisitGetRunResponse(w http.ResponseWriter)
 }
 
 type CancelRunRequestObject struct {
-	RunId  string `json:"run_id"`
-	Params CancelRunParams
+	RunId string `json:"run_id"`
 }
 
 type CancelRunResponseObject interface {
@@ -3331,8 +2890,7 @@ func (response CancelRun502JSONResponse) VisitCancelRunResponse(w http.ResponseW
 }
 
 type GetRunDecisionRequestObject struct {
-	RunId  string `json:"run_id"`
-	Params GetRunDecisionParams
+	RunId string `json:"run_id"`
 }
 
 type GetRunDecisionResponseObject interface {
@@ -3385,8 +2943,7 @@ func (response GetRunDecision404JSONResponse) VisitGetRunDecisionResponse(w http
 }
 
 type ListRunEventsRequestObject struct {
-	RunId  string `json:"run_id"`
-	Params ListRunEventsParams
+	RunId string `json:"run_id"`
 }
 
 type ListRunEventsResponseObject interface {
@@ -3439,8 +2996,7 @@ func (response ListRunEvents500JSONResponse) VisitListRunEventsResponse(w http.R
 }
 
 type RefreshRunRequestObject struct {
-	RunId  string `json:"run_id"`
-	Params RefreshRunParams
+	RunId string `json:"run_id"`
 }
 
 type RefreshRunResponseObject interface {
@@ -3577,8 +3133,7 @@ func (response ReportRun502JSONResponse) VisitReportRunResponse(w http.ResponseW
 }
 
 type WaitRunRequestObject struct {
-	RunId  string `json:"run_id"`
-	Params WaitRunParams
+	RunId string `json:"run_id"`
 }
 
 type WaitRunResponseObject interface {
@@ -3866,7 +3421,6 @@ func (response CreateWorkload501JSONResponse) VisitCreateWorkloadResponse(w http
 
 type ListWorkloadRevisionsRequestObject struct {
 	WorkloadId string `json:"workload_id"`
-	Params     ListWorkloadRevisionsParams
 }
 
 type ListWorkloadRevisionsResponseObject interface {
@@ -3994,7 +3548,6 @@ func (response CreateWorkloadRevision501JSONResponse) VisitCreateWorkloadRevisio
 type GetWorkloadRevisionRequestObject struct {
 	WorkloadId string `json:"workload_id"`
 	RevisionId string `json:"revision_id"`
-	Params     GetWorkloadRevisionParams
 }
 
 type GetWorkloadRevisionResponseObject interface {
@@ -4055,147 +3608,6 @@ func (response GetWorkloadRevision501JSONResponse) VisitGetWorkloadRevisionRespo
 	return json.NewEncoder(w).Encode(response)
 }
 
-type ListWorkspacesRequestObject struct {
-	Params ListWorkspacesParams
-}
-
-type ListWorkspacesResponseObject interface {
-	VisitListWorkspacesResponse(w http.ResponseWriter) error
-}
-
-type ListWorkspaces200JSONResponse WorkspaceListResponse
-
-func (response ListWorkspaces200JSONResponse) VisitListWorkspacesResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ListWorkspaces401JSONResponse ErrorResponse
-
-func (response ListWorkspaces401JSONResponse) VisitListWorkspacesResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ListWorkspaces500JSONResponse ErrorResponse
-
-func (response ListWorkspaces500JSONResponse) VisitListWorkspacesResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateWorkspaceRequestObject struct {
-	Body *CreateWorkspaceJSONRequestBody
-}
-
-type CreateWorkspaceResponseObject interface {
-	VisitCreateWorkspaceResponse(w http.ResponseWriter) error
-}
-
-type CreateWorkspace201JSONResponse WorkspaceResponse
-
-func (response CreateWorkspace201JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateWorkspace400JSONResponse ErrorResponse
-
-func (response CreateWorkspace400JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateWorkspace401JSONResponse ErrorResponse
-
-func (response CreateWorkspace401JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateWorkspace409JSONResponse ErrorResponse
-
-func (response CreateWorkspace409JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type CreateWorkspace500JSONResponse ErrorResponse
-
-func (response CreateWorkspace500JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ArchiveWorkspaceRequestObject struct {
-	WorkspaceId string `json:"workspace_id"`
-}
-
-type ArchiveWorkspaceResponseObject interface {
-	VisitArchiveWorkspaceResponse(w http.ResponseWriter) error
-}
-
-type ArchiveWorkspace200JSONResponse WorkspaceResponse
-
-func (response ArchiveWorkspace200JSONResponse) VisitArchiveWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ArchiveWorkspace400JSONResponse ErrorResponse
-
-func (response ArchiveWorkspace400JSONResponse) VisitArchiveWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ArchiveWorkspace401JSONResponse ErrorResponse
-
-func (response ArchiveWorkspace401JSONResponse) VisitArchiveWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ArchiveWorkspace404JSONResponse ErrorResponse
-
-func (response ArchiveWorkspace404JSONResponse) VisitArchiveWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type ArchiveWorkspace500JSONResponse ErrorResponse
-
-func (response ArchiveWorkspace500JSONResponse) VisitArchiveWorkspaceResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
@@ -4226,7 +3638,7 @@ type StrictServerInterface interface {
 	// (GET /v1/console/events)
 	StreamConsoleEvents(ctx context.Context, request StreamConsoleEventsRequestObject) (StreamConsoleEventsResponseObject, error)
 
-	// (POST /v1/dev/scenario-sessions/{workspace_id}/commands)
+	// (POST /v1/dev/scenario-session/commands)
 	CommandScenarioPlayback(ctx context.Context, request CommandScenarioPlaybackRequestObject) (CommandScenarioPlaybackResponseObject, error)
 
 	// (POST /v1/images:resolve)
@@ -4285,15 +3697,6 @@ type StrictServerInterface interface {
 
 	// (GET /v1/workloads/{workload_id}/revisions/{revision_id})
 	GetWorkloadRevision(ctx context.Context, request GetWorkloadRevisionRequestObject) (GetWorkloadRevisionResponseObject, error)
-
-	// (GET /v1/workspaces)
-	ListWorkspaces(ctx context.Context, request ListWorkspacesRequestObject) (ListWorkspacesResponseObject, error)
-
-	// (POST /v1/workspaces)
-	CreateWorkspace(ctx context.Context, request CreateWorkspaceRequestObject) (CreateWorkspaceResponseObject, error)
-
-	// (POST /v1/workspaces/{workspace_id}/archive)
-	ArchiveWorkspace(ctx context.Context, request ArchiveWorkspaceRequestObject) (ArchiveWorkspaceResponseObject, error)
 }
 
 type StrictHandlerFunc = strictnethttp.StrictHTTPHandlerFunc
@@ -4422,10 +3825,8 @@ func (sh *strictHandler) ListAdapters(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListConnections operation middleware
-func (sh *strictHandler) ListConnections(w http.ResponseWriter, r *http.Request, params ListConnectionsParams) {
+func (sh *strictHandler) ListConnections(w http.ResponseWriter, r *http.Request) {
 	var request ListConnectionsRequestObject
-
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListConnections(ctx, request.(ListConnectionsRequestObject))
@@ -4481,11 +3882,10 @@ func (sh *strictHandler) CreateConnection(w http.ResponseWriter, r *http.Request
 }
 
 // DeleteConnection operation middleware
-func (sh *strictHandler) DeleteConnection(w http.ResponseWriter, r *http.Request, connectionId string, params DeleteConnectionParams) {
+func (sh *strictHandler) DeleteConnection(w http.ResponseWriter, r *http.Request, connectionId string) {
 	var request DeleteConnectionRequestObject
 
 	request.ConnectionId = connectionId
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteConnection(ctx, request.(DeleteConnectionRequestObject))
@@ -4508,11 +3908,10 @@ func (sh *strictHandler) DeleteConnection(w http.ResponseWriter, r *http.Request
 }
 
 // AuthorizeConnection operation middleware
-func (sh *strictHandler) AuthorizeConnection(w http.ResponseWriter, r *http.Request, connectionId string, params AuthorizeConnectionParams) {
+func (sh *strictHandler) AuthorizeConnection(w http.ResponseWriter, r *http.Request, connectionId string) {
 	var request AuthorizeConnectionRequestObject
 
 	request.ConnectionId = connectionId
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.AuthorizeConnection(ctx, request.(AuthorizeConnectionRequestObject))
@@ -4561,10 +3960,8 @@ func (sh *strictHandler) StreamConsoleEvents(w http.ResponseWriter, r *http.Requ
 }
 
 // CommandScenarioPlayback operation middleware
-func (sh *strictHandler) CommandScenarioPlayback(w http.ResponseWriter, r *http.Request, workspaceId string) {
+func (sh *strictHandler) CommandScenarioPlayback(w http.ResponseWriter, r *http.Request) {
 	var request CommandScenarioPlaybackRequestObject
-
-	request.WorkspaceId = workspaceId
 
 	var body CommandScenarioPlaybackJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -4625,10 +4022,8 @@ func (sh *strictHandler) ResolveImage(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListOffers operation middleware
-func (sh *strictHandler) ListOffers(w http.ResponseWriter, r *http.Request, params ListOffersParams) {
+func (sh *strictHandler) ListOffers(w http.ResponseWriter, r *http.Request) {
 	var request ListOffersRequestObject
-
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListOffers(ctx, request.(ListOffersRequestObject))
@@ -4651,10 +4046,8 @@ func (sh *strictHandler) ListOffers(w http.ResponseWriter, r *http.Request, para
 }
 
 // PreviewPlacement operation middleware
-func (sh *strictHandler) PreviewPlacement(w http.ResponseWriter, r *http.Request, params PreviewPlacementParams) {
+func (sh *strictHandler) PreviewPlacement(w http.ResponseWriter, r *http.Request) {
 	var request PreviewPlacementRequestObject
-
-	request.Params = params
 
 	var body PreviewPlacementJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -4684,10 +4077,8 @@ func (sh *strictHandler) PreviewPlacement(w http.ResponseWriter, r *http.Request
 }
 
 // ListRuns operation middleware
-func (sh *strictHandler) ListRuns(w http.ResponseWriter, r *http.Request, params ListRunsParams) {
+func (sh *strictHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 	var request ListRunsRequestObject
-
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListRuns(ctx, request.(ListRunsRequestObject))
@@ -4743,11 +4134,10 @@ func (sh *strictHandler) CreateRun(w http.ResponseWriter, r *http.Request, param
 }
 
 // GetRun operation middleware
-func (sh *strictHandler) GetRun(w http.ResponseWriter, r *http.Request, runId string, params GetRunParams) {
+func (sh *strictHandler) GetRun(w http.ResponseWriter, r *http.Request, runId string) {
 	var request GetRunRequestObject
 
 	request.RunId = runId
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.GetRun(ctx, request.(GetRunRequestObject))
@@ -4770,11 +4160,10 @@ func (sh *strictHandler) GetRun(w http.ResponseWriter, r *http.Request, runId st
 }
 
 // CancelRun operation middleware
-func (sh *strictHandler) CancelRun(w http.ResponseWriter, r *http.Request, runId string, params CancelRunParams) {
+func (sh *strictHandler) CancelRun(w http.ResponseWriter, r *http.Request, runId string) {
 	var request CancelRunRequestObject
 
 	request.RunId = runId
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.CancelRun(ctx, request.(CancelRunRequestObject))
@@ -4797,11 +4186,10 @@ func (sh *strictHandler) CancelRun(w http.ResponseWriter, r *http.Request, runId
 }
 
 // GetRunDecision operation middleware
-func (sh *strictHandler) GetRunDecision(w http.ResponseWriter, r *http.Request, runId string, params GetRunDecisionParams) {
+func (sh *strictHandler) GetRunDecision(w http.ResponseWriter, r *http.Request, runId string) {
 	var request GetRunDecisionRequestObject
 
 	request.RunId = runId
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.GetRunDecision(ctx, request.(GetRunDecisionRequestObject))
@@ -4824,11 +4212,10 @@ func (sh *strictHandler) GetRunDecision(w http.ResponseWriter, r *http.Request, 
 }
 
 // ListRunEvents operation middleware
-func (sh *strictHandler) ListRunEvents(w http.ResponseWriter, r *http.Request, runId string, params ListRunEventsParams) {
+func (sh *strictHandler) ListRunEvents(w http.ResponseWriter, r *http.Request, runId string) {
 	var request ListRunEventsRequestObject
 
 	request.RunId = runId
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListRunEvents(ctx, request.(ListRunEventsRequestObject))
@@ -4851,11 +4238,10 @@ func (sh *strictHandler) ListRunEvents(w http.ResponseWriter, r *http.Request, r
 }
 
 // RefreshRun operation middleware
-func (sh *strictHandler) RefreshRun(w http.ResponseWriter, r *http.Request, runId string, params RefreshRunParams) {
+func (sh *strictHandler) RefreshRun(w http.ResponseWriter, r *http.Request, runId string) {
 	var request RefreshRunRequestObject
 
 	request.RunId = runId
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.RefreshRun(ctx, request.(RefreshRunRequestObject))
@@ -4912,11 +4298,10 @@ func (sh *strictHandler) ReportRun(w http.ResponseWriter, r *http.Request, runId
 }
 
 // WaitRun operation middleware
-func (sh *strictHandler) WaitRun(w http.ResponseWriter, r *http.Request, runId string, params WaitRunParams) {
+func (sh *strictHandler) WaitRun(w http.ResponseWriter, r *http.Request, runId string) {
 	var request WaitRunRequestObject
 
 	request.RunId = runId
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.WaitRun(ctx, request.(WaitRunRequestObject))
@@ -5057,11 +4442,10 @@ func (sh *strictHandler) CreateWorkload(w http.ResponseWriter, r *http.Request, 
 }
 
 // ListWorkloadRevisions operation middleware
-func (sh *strictHandler) ListWorkloadRevisions(w http.ResponseWriter, r *http.Request, workloadId string, params ListWorkloadRevisionsParams) {
+func (sh *strictHandler) ListWorkloadRevisions(w http.ResponseWriter, r *http.Request, workloadId string) {
 	var request ListWorkloadRevisionsRequestObject
 
 	request.WorkloadId = workloadId
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.ListWorkloadRevisions(ctx, request.(ListWorkloadRevisionsRequestObject))
@@ -5118,12 +4502,11 @@ func (sh *strictHandler) CreateWorkloadRevision(w http.ResponseWriter, r *http.R
 }
 
 // GetWorkloadRevision operation middleware
-func (sh *strictHandler) GetWorkloadRevision(w http.ResponseWriter, r *http.Request, workloadId string, revisionId string, params GetWorkloadRevisionParams) {
+func (sh *strictHandler) GetWorkloadRevision(w http.ResponseWriter, r *http.Request, workloadId string, revisionId string) {
 	var request GetWorkloadRevisionRequestObject
 
 	request.WorkloadId = workloadId
 	request.RevisionId = revisionId
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.GetWorkloadRevision(ctx, request.(GetWorkloadRevisionRequestObject))
@@ -5138,89 +4521,6 @@ func (sh *strictHandler) GetWorkloadRevision(w http.ResponseWriter, r *http.Requ
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetWorkloadRevisionResponseObject); ok {
 		if err := validResponse.VisitGetWorkloadRevisionResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// ListWorkspaces operation middleware
-func (sh *strictHandler) ListWorkspaces(w http.ResponseWriter, r *http.Request, params ListWorkspacesParams) {
-	var request ListWorkspacesRequestObject
-
-	request.Params = params
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.ListWorkspaces(ctx, request.(ListWorkspacesRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "ListWorkspaces")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(ListWorkspacesResponseObject); ok {
-		if err := validResponse.VisitListWorkspacesResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// CreateWorkspace operation middleware
-func (sh *strictHandler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
-	var request CreateWorkspaceRequestObject
-
-	var body CreateWorkspaceJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.CreateWorkspace(ctx, request.(CreateWorkspaceRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "CreateWorkspace")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(CreateWorkspaceResponseObject); ok {
-		if err := validResponse.VisitCreateWorkspaceResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// ArchiveWorkspace operation middleware
-func (sh *strictHandler) ArchiveWorkspace(w http.ResponseWriter, r *http.Request, workspaceId string) {
-	var request ArchiveWorkspaceRequestObject
-
-	request.WorkspaceId = workspaceId
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.ArchiveWorkspace(ctx, request.(ArchiveWorkspaceRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "ArchiveWorkspace")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(ArchiveWorkspaceResponseObject); ok {
-		if err := validResponse.VisitArchiveWorkspaceResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
