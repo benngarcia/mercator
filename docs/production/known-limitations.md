@@ -101,10 +101,11 @@ limits.
   including its terminal verdict. Let in-flight runs finish before rotating;
   there is no drain command
   ([#215](https://github.com/benngarcia/mercator/issues/215)).
-- `MERCATOR_TLS_TERMINATION=proxy` is an operator assertion. Mercator verifies
-  that the announced public URL is HTTPS, but it cannot verify the container
-  network or host publication policy. Publishing that plaintext service port
-  bypasses the proxy and violates the deployment contract.
+- `MERCATOR_TRANSPORT_BOUNDARY=tls-proxy|private-network` is an operator
+  assertion. Mercator verifies that a proxy announces HTTPS and that a private
+  network announces no public URL, but it cannot verify the container network
+  or host publication policy. Publishing that plaintext service port bypasses
+  the declared boundary and violates the deployment contract.
 - No Mercator-managed secret vault, grant API, or KMS integration exists.
   Workloads and runtimes own their secret-management backend. Master-key
   rotation does exist: `mercator rekey` re-seals every stored connection

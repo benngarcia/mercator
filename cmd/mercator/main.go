@@ -100,7 +100,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("configure TLS: %v", err)
 		return 1
 	}
-	if err := validateTLSExposure(addr, tlsFiles.Configured(), env[tlsTerminationVar], env[publicURLVar]); err != nil {
+	if err := validateTLSExposure(addr, tlsFiles.Configured(), env[transportBoundaryVar], env[publicURLVar]); err != nil {
 		stdlog.Printf("configure TLS: %v", err)
 		return 1
 	}
@@ -220,25 +220,32 @@ const adminAddrVar = "MERCATOR_ADMIN_ADDR"
 // Nodes dial it and workloads report to it, and an operator behind a proxy or a
 // tunnel sets it while binding loopback.
 const publicURLVar = "MERCATOR_PUBLIC_URL"
-const tlsTerminationVar = "MERCATOR_TLS_TERMINATION"
+const transportBoundaryVar = "MERCATOR_TRANSPORT_BOUNDARY"
 
-func validateTLSExposure(addr string, configured bool, termination, publicURL string) error {
-	termination = strings.TrimSpace(termination)
-	switch termination {
+func validateTLSExposure(addr string, configured bool, boundary, publicURL string) error {
+	boundary = strings.TrimSpace(boundary)
+	switch boundary {
 	case "":
-	case "proxy":
+	case "tls-proxy":
 		if configured {
-			return fmt.Errorf("%s=proxy cannot be combined with process TLS material", tlsTerminationVar)
+			return fmt.Errorf("%s=tls-proxy cannot be combined with process TLS material", transportBoundaryVar)
 		}
 		parsed, err := url.Parse(strings.TrimSpace(publicURL))
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-			return fmt.Errorf("%s=proxy requires %s to be an absolute https:// URL", tlsTerminationVar, publicURLVar)
+			return fmt.Errorf("%s=tls-proxy requires %s to be an absolute https:// URL", transportBoundaryVar, publicURLVar)
+		}
+	case "private-network":
+		if configured {
+			return fmt.Errorf("%s=private-network cannot be combined with process TLS material", transportBoundaryVar)
+		}
+		if strings.TrimSpace(publicURL) != "" {
+			return fmt.Errorf("%s=private-network cannot announce %s", transportBoundaryVar, publicURLVar)
 		}
 	default:
-		return fmt.Errorf("%s must be proxy or unset, got %q", tlsTerminationVar, termination)
+		return fmt.Errorf("%s must be tls-proxy, private-network, or unset, got %q", transportBoundaryVar, boundary)
 	}
-	if !isLoopback(addr) && !configured && termination != "proxy" {
-		return fmt.Errorf("MERCATOR_ADDR %s is not loopback and no TLS material is configured; set %s and %s, declare %s=proxy, or bind a loopback address", addr, tlsmaterial.CertFileVar, tlsmaterial.KeyFileVar, tlsTerminationVar)
+	if !isLoopback(addr) && !configured && boundary == "" {
+		return fmt.Errorf("MERCATOR_ADDR %s is not loopback and no TLS material is configured; set %s and %s, declare %s, or bind a loopback address", addr, tlsmaterial.CertFileVar, tlsmaterial.KeyFileVar, transportBoundaryVar)
 	}
 	return nil
 }
