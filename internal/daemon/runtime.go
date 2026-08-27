@@ -65,6 +65,10 @@ type Config struct {
 	Getenv         func(string) string
 	WebAuth        webauth.Config
 	LocalAuthEmail string
+	// BootstrapLocalDocker enables the zero-configuration Docker connection for
+	// a developer-only deployment. Public and proxied deployments leave it
+	// false and expose only Connections an operator explicitly created.
+	BootstrapLocalDocker bool
 	// AgentVersion is the node agent build a bootstrapped machine is asked to
 	// run. It is recorded on every invitation, so an operator can see which
 	// build a node was told to be and which one it turned out to be, and a
@@ -177,8 +181,10 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		return nil, fmt.Errorf("daemon: init connection storage: %w", err)
 	}
 	connectionService := connection.NewWithCredentials(connections)
-	if err := seedDockerConnection(ctx, connectionService, localDockerReachable); err != nil {
-		return nil, fmt.Errorf("daemon: seed docker connection: %w", err)
+	if cfg.BootstrapLocalDocker {
+		if err := seedDockerConnection(ctx, connectionService, localDockerReachable); err != nil {
+			return nil, fmt.Errorf("daemon: seed docker connection: %w", err)
+		}
 	}
 	factory := cfg.ProviderFactory
 	if factory == nil {

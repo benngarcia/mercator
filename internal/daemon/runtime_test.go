@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -18,6 +20,78 @@ import (
 	"github.com/benngarcia/mercator/internal/runprojection"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 )
+
+func TestRuntimeBootstrapsLocalDockerOnlyWhenEnabled(t *testing.T) {
+	dir := t.TempDir()
+	docker := filepath.Join(dir, "docker")
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake Docker executable is a POSIX shell script")
+	}
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\nprintf '%s\\n' '{\"Architecture\":\"amd64\",\"OSType\":\"linux\",\"NCPU\":4,\"ID\":\"fake-docker\",\"MemTotal\":8589934592}'\n"), 0o700); err != nil {
+		t.Fatalf("write fake Docker: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			runtime, err := daemon.New(t.Context(), daemon.Config{
+				SQLiteDSN:            "file:" + filepath.Join(t.TempDir(), "mercator.db"),
+				OperatorToken:        "operator-token",
+				MasterKey:            []byte("0123456789abcdef0123456789abcdef"),
+				BootstrapLocalDocker: enabled,
+			})
+			if err != nil {
+				t.Fatalf("new runtime: %v", err)
+			}
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			served := make(chan error, 1)
+			go func() { served <- runtime.Serve(listener) }()
+
+			request, err := http.NewRequest(http.MethodGet, "http://"+listener.Addr().String()+"/v1/connections", nil)
+			if err != nil {
+				t.Fatalf("build connection request: %v", err)
+			}
+			request.Header.Set("Authorization", "Bearer operator-token")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatalf("list connections: %v", err)
+			}
+			var body struct {
+				Connections []struct {
+					ID string `json:"id"`
+				} `json:"connections"`
+			}
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatalf("decode connections: %v", err)
+			}
+			_ = response.Body.Close()
+
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			if err := runtime.Shutdown(shutdownCtx); err != nil {
+				cancel()
+				t.Fatalf("shutdown runtime: %v", err)
+			}
+			cancel()
+			if err := <-served; err != nil && !errors.Is(err, http.ErrServerClosed) {
+				t.Fatalf("serve returned: %v", err)
+			}
+
+			want := 0
+			if enabled {
+				want = 1
+			}
+			if len(body.Connections) != want {
+				t.Fatalf("connections = %+v, want %d", body.Connections, want)
+			}
+			if enabled && body.Connections[0].ID != daemon.DefaultDockerConnectionID {
+				t.Fatalf("connection = %+v, want local Docker bootstrap", body.Connections[0])
+			}
+		})
+	}
+}
 
 func TestRuntimeServesProductionHandlerOnCallerListener(t *testing.T) {
 	// Arrange: a production runtime backed by private, temporary SQLite and a

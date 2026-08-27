@@ -140,15 +140,16 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	}
 	defer claim.release()
 	runtime, err := daemon.New(ctx, daemon.Config{
-		SQLiteDSN:      dsn,
-		OperatorToken:  apiToken,
-		MasterKey:      masterKey,
-		TLS:            tlsFiles,
-		AdminAddr:      listeners.adminAddress(),
-		PublicURL:      env[publicURLVar],
-		Getenv:         func(name string) string { return env[name] },
-		WebAuth:        webauthCfg,
-		LocalAuthEmail: options.localAuthEmail,
+		SQLiteDSN:            dsn,
+		OperatorToken:        apiToken,
+		MasterKey:            masterKey,
+		TLS:                  tlsFiles,
+		AdminAddr:            listeners.adminAddress(),
+		PublicURL:            env[publicURLVar],
+		Getenv:               func(name string) string { return env[name] },
+		WebAuth:              webauthCfg,
+		LocalAuthEmail:       options.localAuthEmail,
+		BootstrapLocalDocker: bootstrapLocalDocker(addr, announced),
 		// The node agent build every invitation asks for. A capacity provider
 		// substitutes it into the download URL an operator hosts the binary at, so
 		// it is the operator's statement of which build that URL serves and nothing
@@ -268,6 +269,10 @@ func publicExposure(addr, announced string) string {
 		return fmt.Sprintf("%s %s announces this deployment at an address that is not this machine", publicURLVar, announced)
 	}
 	return ""
+}
+
+func bootstrapLocalDocker(addr, announced string) bool {
+	return publicExposure(addr, announced) == ""
 }
 
 // announcedHost is the host MERCATOR_PUBLIC_URL announces this deployment at.
